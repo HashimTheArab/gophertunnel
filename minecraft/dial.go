@@ -15,6 +15,8 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"net/http"
+
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +101,10 @@ type Dialer struct {
 	// the client when an XUID is present without logging in.
 	// For getting this to work with BDS, authentication should be disabled.
 	KeepXBLIdentityData bool
+
+	// RequestClient is the HTTP client used to make requests to the Microsoft authentication servers. If nil,
+	// http.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
+	RequestClient *http.Client
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -146,12 +152,29 @@ func (d Dialer) DialTimeout(network, address string, timeout time.Duration) (*Co
 	return d.DialContext(ctx, network, address)
 }
 
+type DialOption func(*dialOptions)
+
+type dialOptions struct {
+	chainData string
+	key       *ecdsa.PrivateKey
+}
+
+func WithChainData(chainData string, key *ecdsa.PrivateKey) DialOption {
+	return func(opts *dialOptions) {
+		opts.chainData = chainData
+		opts.key = key
+	}
+}
+
 // DialContext dials a Minecraft connection to the address passed over the network passed. The network is
 // typically "raknet". A Conn is returned which may be used to receive packets from and send packets to.
 // If a connection is not established before the context passed is cancelled, DialContext returns an error.
-func (d Dialer) DialContext(ctx context.Context, network, address string) (conn *Conn, err error) {
+func (d Dialer) DialContext(ctx context.Context, network, address string, opts ...DialOption) (conn *Conn, err error) {
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
+	}
+	if d.RequestClient == nil {
+		d.RequestClient = http.DefaultClient
 	}
 	d.ErrorLog = d.ErrorLog.With("src", "dialer")
 	if d.Protocol == nil {
@@ -161,13 +184,30 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		d.FlushRate = time.Second / 20
 	}
 
-	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
-	if err != nil {
-		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("generating ECDSA key: %w", err)}
+	options := &dialOptions{}
+	for _, opt := range opts {
+		opt(options)
 	}
+
+	var key *ecdsa.PrivateKey
+	if options.key != nil {
+		key = options.key
+	} else {
+		key, err = ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
+		if err != nil {
+			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("generating ECDSA key: %w", err)}
+		}
+	}
+
 	var chainData string
-	if d.TokenSource != nil {
-		chainData, err = authChain(ctx, d.TokenSource, key)
+	if options.chainData != "" {
+		identityData, err := readChainIdentityData([]byte(options.chainData))
+		if err != nil {
+			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
+		}
+		d.IdentityData = identityData
+	} else if d.TokenSource != nil {
+		chainData, err = AuthChain(ctx, d.TokenSource, key, d.RequestClient)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
@@ -333,21 +373,24 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 	}
 }
 
-// authChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
+// AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
-func authChain(ctx context.Context, src oauth2.TokenSource, key *ecdsa.PrivateKey) (string, error) {
+func AuthChain(ctx context.Context, src oauth2.TokenSource, key *ecdsa.PrivateKey, c *http.Client) (string, error) {
+	if c.Transport == nil {
+		c.Transport = &http.Transport{}
+	}
 	// Obtain the Live token, and using that the XSTS token.
 	liveToken, err := src.Token()
 	if err != nil {
 		return "", fmt.Errorf("request Live Connect token: %w", err)
 	}
-	xsts, err := auth.RequestXBLToken(ctx, liveToken, "https://multiplayer.minecraft.net/")
+	xsts, err := auth.RequestXBLToken(ctx, liveToken, "https://multiplayer.minecraft.net/", c)
 	if err != nil {
 		return "", fmt.Errorf("request XBOX Live token: %w", err)
 	}
 
 	// Obtain the raw chain data using the
-	chain, err := auth.RequestMinecraftChain(ctx, xsts, key)
+	chain, err := auth.RequestMinecraftChain(ctx, xsts, key, c)
 	if err != nil {
 		return "", fmt.Errorf("request Minecraft auth chain: %w", err)
 	}
@@ -362,7 +405,9 @@ var skinGeometry []byte
 
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
-	d.ServerAddress = address
+	if d.ServerAddress == "" {
+		d.ServerAddress = address
+	}
 	d.ThirdPartyName = username
 	if d.DeviceOS == 0 {
 		d.DeviceOS = protocol.DeviceAndroid
@@ -423,7 +468,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	data.DeviceOS = protocol.DeviceAndroid
+	//data.DeviceOS = protocol.DeviceAndroid this is also not good for lunar
 	data.GameVersion = protocol.CurrentVersion
 }
 
