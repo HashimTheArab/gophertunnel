@@ -239,8 +239,8 @@ func (listener *Listener) listen() {
 		}
 	}()
 	defer func() {
-		close(listener.incoming)
 		close(listener.close)
+		close(listener.incoming)
 		_ = listener.Close()
 	}()
 	for {
