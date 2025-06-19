@@ -106,8 +106,8 @@ type Dialer struct {
 	// (pre-1.21.90) when connecting to the server. This should only be used for outdated
 	// servers, as enabling it will cause compatibility issues with updated servers.
 	EnableLegacyAuth bool
-	
-  // RequestClient is the HTTP client used to make requests to the Microsoft authentication servers. If nil,
+
+	// RequestClient is the HTTP client used to make requests to the Microsoft authentication servers. If nil,
 	// http.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
 	RequestClient *http.Client
 }
