@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -40,18 +41,25 @@ func (t XBLToken) SetAuthHeader(r *http.Request) {
 }
 
 // RequestXBLToken requests an XBOX Live auth token using the passed Live token pair.
-func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string, c *http.Client) (*XBLToken, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Renegotiation:      tls.RenegotiateOnceAsClient,
-				InsecureSkipVerify: true,
-			},
-		},
+
+	if c == nil {
+		c = http.DefaultClient
 	}
+	transport := c.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+
+	if t, ok := transport.(*http.Transport); ok {
+		t.TLSClientConfig = &tls.Config{
+			Renegotiation: tls.RenegotiateOnceAsClient,
+		}
+	}
+
 	defer c.CloseIdleConnections()
 
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
@@ -60,8 +68,11 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 	if err != nil {
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
+
+	start := time.Now()
 	deviceToken, err := obtainDeviceToken(ctx, c, key)
 	if err != nil {
+		slog.ErrorContext(ctx, "device token request failed", "time", time.Since(start).String(), "error", err)
 		return nil, err
 	}
 	return obtainXBLToken(ctx, c, key, liveToken, deviceToken, relyingParty)
@@ -70,7 +81,7 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
-		"AppId":             "0000000048183522",
+		"AppId":             AppID,
 		"deviceToken":       device.Token,
 		"Sandbox":           "RETAIL",
 		"UseModernGamertag": true,
@@ -127,7 +138,7 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 		"Properties": map[string]any{
 			"AuthMethod": "ProofOfPossession",
 			"Id":         "{" + uuid.New().String() + "}",
-			"DeviceType": "Android",
+			"DeviceType": DeviceType,
 			"Version":    "10",
 			"ProofKey": map[string]any{
 				"crv": "P-256",
@@ -147,6 +158,8 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 	if err != nil {
 		return nil, fmt.Errorf("POST %v: %w", "https://device.auth.xboxlive.com/device/authenticate", err)
 	}
+
+	request.Header.Set("Cache-Control", "no-store, must-revalidate, no-cache")
 	request.Header.Set("x-xbl-contract-version", "1")
 	sign(request, data, key)
 
