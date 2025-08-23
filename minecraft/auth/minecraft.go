@@ -47,7 +47,11 @@ func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.Priv
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("POST %v: %v", minecraftAuthURL, resp.Status)
+		var body []byte
+		if resp.Body != nil {
+			body, _ = io.ReadAll(resp.Body)
+		}
+		return "", fmt.Errorf("POST %v: %v, body: %s", minecraftAuthURL, resp.Status, string(body))
 	}
 	data, err = io.ReadAll(resp.Body)
 	c.CloseIdleConnections()
