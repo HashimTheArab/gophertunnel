@@ -71,23 +71,12 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 
-	start := time.Now()
 	deviceToken, err := obtainDeviceToken(ctx, c, key)
 	if err != nil {
-		var body []byte
-		if xboxErr, ok := err.(*XboxError); ok {
-			body = []byte(xboxErr.ResponseBody)
-		}
-		slog.ErrorContext(ctx, "device token request failed", "time", time.Since(start).String(), "error", err, "body", string(body))
 		return nil, fmt.Errorf("device token request failed: %w", err)
 	}
 	xblToken, err := obtainXBLToken(ctx, c, key, liveToken, deviceToken, relyingParty)
 	if err != nil {
-		var body []byte
-		if xboxErr, ok := err.(*XboxError); ok {
-			body = []byte(xboxErr.ResponseBody)
-		}
-		slog.ErrorContext(ctx, "xbl token request failed", "time", time.Since(start).String(), "error", err, "body", string(body))
 		return nil, fmt.Errorf("xbl token request failed: %w", err)
 	}
 	return xblToken, nil
