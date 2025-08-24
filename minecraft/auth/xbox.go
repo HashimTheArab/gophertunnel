@@ -119,6 +119,11 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 		return nil, newXboxNetworkError("POST", "https://sisu.xboxlive.com/authorize", err, body)
 	}
 	defer resp.Body.Close()
+
+	if d := getDateHeader(resp.Header); !d.IsZero() {
+		setServerDate(d)
+	}
+
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, newXboxHTTPError("POST", "https://sisu.xboxlive.com/authorize", resp, body)
@@ -175,6 +180,11 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 		}
 		return nil, newXboxNetworkError("POST", "https://device.auth.xboxlive.com/device/authenticate", err, body)
 	}
+
+	if d := getDateHeader(resp.Header); !d.IsZero() {
+		setServerDate(d)
+	}
+
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -187,7 +197,13 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
 func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
-	currentTime := windowsTimestamp()
+	var currentTime int64
+	if !serverDate.IsZero() {
+		currentTime = windowsTimestamp(serverDate)
+	} else { // Should never happen
+		currentTime = windowsTimestamp(time.Now())
+	}
+
 	hash := sha256.New()
 
 	// Signature policy version (0, 0, 0, 1) + 0 byte.
@@ -235,8 +251,8 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 
 // windowsTimestamp returns a Windows specific timestamp. It has a certain offset from Unix time which must be
 // accounted for.
-func windowsTimestamp() int64 {
-	return (time.Now().Unix() + 11644473600) * 10000000
+func windowsTimestamp(t time.Time) int64 {
+	return (t.Unix() + 11644473600) * 10000000
 }
 
 // padTo32Bytes converts a big.Int into a fixed 32-byte, zero-padded slice.
