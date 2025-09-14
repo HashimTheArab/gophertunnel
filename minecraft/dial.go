@@ -16,7 +16,6 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"net/http"
 
 	"strconv"
 	"strings"
@@ -112,9 +111,9 @@ type Dialer struct {
 	// servers, as enabling it will cause compatibility issues with updated servers.
 	EnableLegacyAuth bool
 
-	// RequestClient is the HTTP client used to make requests to the Microsoft authentication servers. If nil,
-	// http.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
-	RequestClient *http.Client
+	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
+	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
+	AuthClient *auth.AuthClient
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -183,11 +182,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
-	if d.RequestClient == nil {
-		d.RequestClient = http.DefaultClient
-	}
-	if d.RequestClient.Transport == nil {
-		d.RequestClient.Transport = http.DefaultTransport
+	if d.AuthClient == nil {
+		d.AuthClient = auth.DefaultClient
 	}
 	d.ErrorLog = d.ErrorLog.With("src", "dialer")
 	if d.Protocol == nil {
@@ -225,7 +221,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
-		chainData, err = AuthChain(ctx, xblToken, key, d.RequestClient)
+		chainData, err = AuthChain(ctx, xblToken, key, d.AuthClient)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
@@ -402,7 +398,7 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 		return nil, fmt.Errorf("request Live Connect token: %w", err)
 	}
 
-	xblToken, err := auth.RequestXBLToken(ctx, liveToken, "https://multiplayer.minecraft.net/", dialer.RequestClient)
+	xblToken, err := dialer.AuthClient.RequestXBLToken(ctx, liveToken, "https://multiplayer.minecraft.net/")
 	if err != nil {
 		return nil, fmt.Errorf("request XBOX Live token: %w", err)
 	}
@@ -412,9 +408,9 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 
 // AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
-func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey, c *http.Client) (string, error) {
+func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey, authClient *auth.AuthClient) (string, error) {
 	// Obtain the raw chain data using the XBL token.
-	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key, c)
+	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key, authClient)
 	if err != nil {
 		return "", fmt.Errorf("request Minecraft auth chain: %w", err)
 	}

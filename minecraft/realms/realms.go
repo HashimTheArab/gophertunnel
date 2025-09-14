@@ -16,18 +16,18 @@ import (
 type Client struct {
 	tokenSrc   oauth2.TokenSource
 	xblToken   *auth.XBLToken
-	httpClient *http.Client
+	authClient *auth.AuthClient
 }
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
-func NewClient(src oauth2.TokenSource, httpClient *http.Client) *Client {
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+func NewClient(src oauth2.TokenSource, authClient *auth.AuthClient) *Client {
+	if authClient == nil {
+		authClient = auth.DefaultClient
 	}
 	return &Client{
 		tokenSrc:   src,
-		httpClient: httpClient,
+		authClient: authClient,
 	}
 }
 
@@ -151,7 +151,7 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 		return nil, err
 	}
 
-	r.xblToken, err = auth.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/", r.httpClient)
+	r.xblToken, err = r.authClient.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
 	return r.xblToken, err
 }
 
@@ -172,7 +172,7 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := r.authClient.Do(ctx, req)
 	if err != nil {
 		return nil, 0, err
 	}

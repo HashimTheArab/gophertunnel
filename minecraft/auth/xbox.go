@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -23,6 +22,28 @@ import (
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
+	TitleToken struct {
+		DisplayClaims struct {
+			Xti struct {
+				TitleID string `json:"tid"`
+			} `json:"xti"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	} `json:"TitleToken"`
+
+	UserToken struct {
+		DisplayClaims struct {
+			Xui []struct {
+				UserHash string `json:"uhs"`
+			} `json:"xui"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	} `json:"UserToken"`
+
 	AuthorizationToken struct {
 		DisplayClaims struct {
 			UserInfo []struct {
@@ -31,8 +52,18 @@ type XBLToken struct {
 				UserHash string `json:"uhs"`
 			} `json:"xui"`
 		}
-		Token string
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
 	}
+
+	WebPage              string
+	Sandbox              string
+	UseModernGamertag    bool
+	UcsMigrationResponse struct {
+		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
+	}
+	Flow string
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
@@ -42,26 +73,10 @@ func (t XBLToken) SetAuthHeader(r *http.Request) {
 }
 
 // RequestXBLToken requests an XBOX Live auth token using the passed Live token pair.
-func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string, c *http.Client) (*XBLToken, error) {
+func (c *AuthClient) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-
-	if c == nil {
-		c = http.DefaultClient
-	}
-	transport := c.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-
-	if t, ok := transport.(*http.Transport); ok {
-		t.TLSClientConfig = &tls.Config{
-			Renegotiation: tls.RenegotiateOnceAsClient,
-		}
-	}
-
-	defer c.CloseIdleConnections()
 
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
 	// requests, and to sign these requests.
@@ -70,18 +85,18 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 
-	deviceToken, err := obtainDeviceToken(ctx, c, key)
+	deviceToken, err := c.obtainDeviceToken(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("device token request failed: %w", err)
 	}
-	xblToken, err := obtainXBLToken(ctx, c, key, liveToken, deviceToken, relyingParty)
+	xblToken, err := c.obtainXBLToken(ctx, key, liveToken, deviceToken, relyingParty)
 	if err != nil {
 		return nil, fmt.Errorf("xbl token request failed: %w", err)
 	}
 	return xblToken, nil
 }
 
-func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
+func (c *AuthClient) obtainXBLToken(ctx context.Context, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
 		"AppId":             AppID,
@@ -110,7 +125,7 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 	req.Header.Set("x-xbl-contract-version", "1")
 	sign(req, data, key)
 
-	resp, err := c.Do(req)
+	resp, err := c.DoWithOptions(ctx, req, RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -135,12 +150,22 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 // deviceToken is the token obtained by requesting a device token by posting to xblDeviceAuthURL. Its Token
 // field may be used in a request to obtain the XSTS token.
 type deviceToken struct {
-	Token string
+	// IssueInstant is the time the token was issued at.
+	IssueInstant time.Time
+	// NotAfter is the expiration time of the device token.
+	NotAfter      time.Time
+	Token         string
+	DisplayClaims struct {
+		XDI struct {
+			DID string `json:"did"`
+			DCS string `json:"dcs"`
+		} `json:"xdi"`
+	}
 }
 
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
-func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
+func (c *AuthClient) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
@@ -172,7 +197,7 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 	request.Header.Set("x-xbl-contract-version", "1")
 	sign(request, data, key)
 
-	resp, err := c.Do(request)
+	resp, err := c.DoWithOptions(ctx, request, RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -190,7 +215,7 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 		body, _ := io.ReadAll(resp.Body)
 		return nil, newXboxHTTPError("POST", "https://device.auth.xboxlive.com/device/authenticate", resp, body)
 	}
-	token = &deviceToken{}
+	token = new(deviceToken)
 	return token, json.NewDecoder(resp.Body).Decode(token)
 }
 
@@ -198,8 +223,11 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
 func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 	var currentTime int64
-	if !serverDate.IsZero() {
-		currentTime = windowsTimestamp(serverDate)
+	serverDateMu.Lock()
+	currentServerDate := serverDate
+	serverDateMu.Unlock()
+	if !currentServerDate.IsZero() {
+		currentTime = windowsTimestamp(currentServerDate)
 	} else { // Should never happen
 		currentTime = windowsTimestamp(time.Now())
 	}

@@ -1,12 +1,15 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -101,7 +104,10 @@ func RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
 	panic("unreachable")
 }
 
-var serverDate time.Time
+var (
+	serverDate   time.Time
+	serverDateMu sync.Mutex
+)
 
 func getDateHeader(headers http.Header) time.Time {
 	date := headers.Get("Date")
@@ -116,24 +122,34 @@ func getDateHeader(headers http.Header) time.Time {
 
 func setServerDate(d time.Time) {
 	if !d.IsZero() {
+		serverDateMu.Lock()
 		serverDate = d
+		serverDateMu.Unlock()
 	}
 }
 
 // StartDeviceAuth starts the device auth, retrieving a login URI for the user and a code the user needs to
 // enter.
 func StartDeviceAuth() (*deviceAuthConnect, error) {
-	resp, err := http.PostForm("https://login.live.com/oauth20_connect.srf", url.Values{
+	const connectURL = "https://login.live.com/oauth20_connect.srf"
+	form := url.Values{
 		"client_id":     {AppID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"response_type": {"device_code"},
-	})
+	}
+	req, err := http.NewRequest("POST", connectURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_connect.srf: %w", err)
+		return nil, fmt.Errorf("create request for POST %s: %w", connectURL, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := sendRequestWithRetries(context.Background(), DefaultClient.httpClient, req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", connectURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_connect.srf: %v", resp.Status)
+		return nil, fmt.Errorf("POST %s: %v", connectURL, resp.Status)
 	}
 	data := new(deviceAuthConnect)
 	return data, json.NewDecoder(resp.Body).Decode(data)
@@ -142,13 +158,20 @@ func StartDeviceAuth() (*deviceAuthConnect, error) {
 // PollDeviceAuth polls the token endpoint for the device code. A token is returned if the user authenticated
 // successfully. If the user has not yet authenticated, err is nil but the token is nil too.
 func PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error) {
-	resp, err := http.PostForm(microsoft.LiveConnectEndpoint.TokenURL, url.Values{
+	form := url.Values{
 		"client_id":   {AppID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {deviceCode},
-	})
+	}
+	req, err := http.NewRequest("POST", microsoft.LiveConnectEndpoint.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_token.srf: %w", err)
+		return nil, fmt.Errorf("create request for POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := sendRequestWithRetries(context.Background(), DefaultClient.httpClient, req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -158,7 +181,7 @@ func PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error) {
 
 	poll := new(deviceAuthPoll)
 	if err := json.NewDecoder(resp.Body).Decode(poll); err != nil {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_token.srf: json decode: %w", err)
+		return nil, fmt.Errorf("POST %s: json decode: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
 	switch poll.Error {
 	case "authorization_pending":
@@ -179,14 +202,21 @@ func PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error) {
 func refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
 	// This function unfortunately needs to exist because golang.org/x/oauth2 does not pass the scope to this
 	// request, which Microsoft Connect enforces.
-	resp, err := http.PostForm(microsoft.LiveConnectEndpoint.TokenURL, url.Values{
+	form := url.Values{
 		"client_id":     {AppID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {t.RefreshToken},
-	})
+	}
+	req, err := http.NewRequest("POST", microsoft.LiveConnectEndpoint.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_token.srf: %w", err)
+		return nil, fmt.Errorf("create request for POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := sendRequestWithRetries(context.Background(), DefaultClient.httpClient, req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -196,10 +226,10 @@ func refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
 
 	poll := new(deviceAuthPoll)
 	if err := json.NewDecoder(resp.Body).Decode(poll); err != nil {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_token.srf: json decode: %w", err)
+		return nil, fmt.Errorf("POST %s: json decode: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("POST https://login.live.com/oauth20_token.srf: refresh error: %v", poll.Error)
+		return nil, fmt.Errorf("POST %s: refresh error: %v", microsoft.LiveConnectEndpoint.TokenURL, poll.Error)
 	}
 	return &oauth2.Token{
 		AccessToken:  poll.AccessToken,
