@@ -19,8 +19,11 @@ const minecraftAuthURL = `https://multiplayer.minecraft.net/authentication`
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using the XSTS token passed, and the
 // ECDSA private key of the client. This key will later be used to initialise encryption, and must be saved
 // for when packets need to be decrypted/encrypted.
-func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.PrivateKey) (string, error) {
-	data, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.PrivateKey, authClient *AuthClient) (string, error) {
+	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("marshal public key: %w", err)
+	}
 
 	// The body of the requests holds a JSON object with one key in it, the 'identityPublicKey', which holds
 	// the public key data of the private key passed.
@@ -37,16 +40,18 @@ func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.Priv
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
 
-	c := &http.Client{}
-	resp, err := c.Do(request)
+	resp, err := authClient.DoWithOptions(ctx, request, RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("POST %v: %v", minecraftAuthURL, resp.Status)
+		var body []byte
+		if resp.Body != nil {
+			body, _ = io.ReadAll(resp.Body)
+		}
+		return "", fmt.Errorf("POST %v: %v, body: %s", minecraftAuthURL, resp.Status, string(body))
 	}
 	data, err = io.ReadAll(resp.Body)
-	c.CloseIdleConnections()
 	return string(data), err
 }

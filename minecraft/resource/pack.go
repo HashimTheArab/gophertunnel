@@ -297,6 +297,7 @@ func createTempArchive(path string) (*os.File, error) {
 		return nil, err
 	}
 	writer := zip.NewWriter(temp)
+	defer writer.Close()
 	if err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -328,17 +329,16 @@ func createTempArchive(path string) (*os.File, error) {
 		if err != nil {
 			return fmt.Errorf("open resource pack file %v: %w", filePath, err)
 		}
+		defer file.Close()
 		data, _ := io.ReadAll(file)
 		// Write the original content into the 'zip file' so that we write compressed data to the file.
 		if _, err := f.Write(data); err != nil {
 			return fmt.Errorf("write file data to zip: %w", err)
 		}
-		_ = file.Close()
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("build zip archive: %w", err)
 	}
-	_ = writer.Close()
 	return temp, nil
 }
 
@@ -410,7 +410,7 @@ func readManifest(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("read manifest file: %w", err)
 	}
 	manifest := &Manifest{}
-	if err := jsonc.Unmarshal(allData, manifest); err != nil {
+	if err := unmarshalJSON(allData, manifest); err != nil {
 		return nil, fmt.Errorf("decode manifest JSON: %w (data: %v)", err, string(allData))
 	}
 
@@ -419,4 +419,13 @@ func readManifest(path string) (*Manifest, error) {
 	}
 
 	return manifest, nil
+}
+
+// unmarshalJSON unmarshals JSON data into a struct and removes trailing comments.
+func unmarshalJSON(data []byte, v any) error {
+	clean := jsonc.ToJSON([]byte(data))
+	if idx := bytes.LastIndex(clean, []byte("}")); idx != -1 {
+		clean = clean[:idx+1]
+	}
+	return jsonc.Unmarshal(clean, v)
 }

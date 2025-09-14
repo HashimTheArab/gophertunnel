@@ -7,11 +7,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"time"
@@ -22,6 +22,28 @@ import (
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
+	TitleToken struct {
+		DisplayClaims struct {
+			Xti struct {
+				TitleID string `json:"tid"`
+			} `json:"xti"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	} `json:"TitleToken"`
+
+	UserToken struct {
+		DisplayClaims struct {
+			Xui []struct {
+				UserHash string `json:"uhs"`
+			} `json:"xui"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	} `json:"UserToken"`
+
 	AuthorizationToken struct {
 		DisplayClaims struct {
 			UserInfo []struct {
@@ -30,8 +52,18 @@ type XBLToken struct {
 				UserHash string `json:"uhs"`
 			} `json:"xui"`
 		}
-		Token string
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
 	}
+
+	WebPage              string
+	Sandbox              string
+	UseModernGamertag    bool
+	UcsMigrationResponse struct {
+		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
+	}
+	Flow string
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
@@ -41,19 +73,10 @@ func (t XBLToken) SetAuthHeader(r *http.Request) {
 }
 
 // RequestXBLToken requests an XBOX Live auth token using the passed Live token pair.
-func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+func (c *AuthClient) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Renegotiation:      tls.RenegotiateOnceAsClient,
-				InsecureSkipVerify: true,
-			},
-		},
-	}
-	defer c.CloseIdleConnections()
 
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
 	// requests, and to sign these requests.
@@ -61,18 +84,23 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 	if err != nil {
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
-	deviceToken, err := obtainDeviceToken(ctx, c, key)
+
+	deviceToken, err := c.obtainDeviceToken(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("device token request failed: %w", err)
 	}
-	return obtainXBLToken(ctx, c, key, liveToken, deviceToken, relyingParty)
+	xblToken, err := c.obtainXBLToken(ctx, key, liveToken, deviceToken, relyingParty)
+	if err != nil {
+		return nil, fmt.Errorf("xbl token request failed: %w", err)
+	}
+	return xblToken, nil
 }
 
-func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
+func (c *AuthClient) obtainXBLToken(ctx context.Context, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
-		"AppId":             "0000000048183522",
-		"deviceToken":       device.Token,
+		"AppId":             AppID,
+		"DeviceToken":       device.Token,
 		"Sandbox":           "RETAIL",
 		"UseModernGamertag": true,
 		"SiteName":          "user.auth.xboxlive.com",
@@ -97,17 +125,23 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 	req.Header.Set("x-xbl-contract-version", "1")
 	sign(req, data, key)
 
-	resp, err := c.Do(req)
+	resp, err := c.DoWithOptions(ctx, req, RetryOptions{Attempts: 5})
 	if err != nil {
-		return nil, fmt.Errorf("POST %v: %w", "https://sisu.xboxlive.com/authorize", err)
+		var body []byte
+		if resp != nil && resp.Body != nil {
+			body, _ = io.ReadAll(resp.Body)
+		}
+		return nil, newXboxNetworkError("POST", "https://sisu.xboxlive.com/authorize", err, body)
 	}
 	defer resp.Body.Close()
+
+	if d := getDateHeader(resp.Header); !d.IsZero() {
+		setServerDate(d)
+	}
+
 	if resp.StatusCode != 200 {
-		// Xbox Live returns a custom error code in the x-err header.
-		if errorCode := resp.Header.Get("x-err"); errorCode != "" {
-			return nil, fmt.Errorf("POST %v: %v", "https://sisu.xboxlive.com/authorize", parseXboxErrorCode(errorCode))
-		}
-		return nil, fmt.Errorf("POST %v: %v", "https://sisu.xboxlive.com/authorize", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, newXboxHTTPError("POST", "https://sisu.xboxlive.com/authorize", resp, body)
 	}
 	info := new(XBLToken)
 	return info, json.NewDecoder(resp.Body).Decode(info)
@@ -116,19 +150,29 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 // deviceToken is the token obtained by requesting a device token by posting to xblDeviceAuthURL. Its Token
 // field may be used in a request to obtain the XSTS token.
 type deviceToken struct {
-	Token string
+	// IssueInstant is the time the token was issued at.
+	IssueInstant time.Time
+	// NotAfter is the expiration time of the device token.
+	NotAfter      time.Time
+	Token         string
+	DisplayClaims struct {
+		XDI struct {
+			DID string `json:"did"`
+			DCS string `json:"dcs"`
+		} `json:"xdi"`
+	}
 }
 
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
-func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
+func (c *AuthClient) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
 		"Properties": map[string]any{
 			"AuthMethod": "ProofOfPossession",
 			"Id":         "{" + uuid.New().String() + "}",
-			"DeviceType": "Android",
+			"DeviceType": DeviceType,
 			"Version":    "10",
 			"ProofKey": map[string]any{
 				"crv": "P-256",
@@ -148,25 +192,46 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 	if err != nil {
 		return nil, fmt.Errorf("POST %v: %w", "https://device.auth.xboxlive.com/device/authenticate", err)
 	}
+
+	request.Header.Set("Cache-Control", "no-store, must-revalidate, no-cache")
 	request.Header.Set("x-xbl-contract-version", "1")
 	sign(request, data, key)
 
-	resp, err := c.Do(request)
+	resp, err := c.DoWithOptions(ctx, request, RetryOptions{Attempts: 5})
 	if err != nil {
-		return nil, fmt.Errorf("POST %v: %w", "https://device.auth.xboxlive.com/device/authenticate", err)
+		var body []byte
+		if resp != nil && resp.Body != nil {
+			body, _ = io.ReadAll(resp.Body)
+		}
+		return nil, newXboxNetworkError("POST", "https://device.auth.xboxlive.com/device/authenticate", err, body)
 	}
+
+	if d := getDateHeader(resp.Header); !d.IsZero() {
+		setServerDate(d)
+	}
+
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("POST %v: %v", "https://device.auth.xboxlive.com/device/authenticate", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, newXboxHTTPError("POST", "https://device.auth.xboxlive.com/device/authenticate", resp, body)
 	}
-	token = &deviceToken{}
+	token = new(deviceToken)
 	return token, json.NewDecoder(resp.Body).Decode(token)
 }
 
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
 func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
-	currentTime := windowsTimestamp()
+	var currentTime int64
+	serverDateMu.Lock()
+	currentServerDate := serverDate
+	serverDateMu.Unlock()
+	if !currentServerDate.IsZero() {
+		currentTime = windowsTimestamp(currentServerDate)
+	} else { // Should never happen
+		currentTime = windowsTimestamp(time.Now())
+	}
+
 	hash := sha256.New()
 
 	// Signature policy version (0, 0, 0, 1) + 0 byte.
@@ -214,8 +279,8 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 
 // windowsTimestamp returns a Windows specific timestamp. It has a certain offset from Unix time which must be
 // accounted for.
-func windowsTimestamp() int64 {
-	return (time.Now().Unix() + 11644473600) * 10000000
+func windowsTimestamp(t time.Time) int64 {
+	return (t.Unix() + 11644473600) * 10000000
 }
 
 // padTo32Bytes converts a big.Int into a fixed 32-byte, zero-padded slice.

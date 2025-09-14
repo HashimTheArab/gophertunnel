@@ -9,6 +9,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+
+	"regexp"
+
 	"io"
 	"log/slog"
 	"net"
@@ -1209,6 +1212,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
+	if matched, _ := regexp.MatchString(`.*\.hivebedrock\.network.*`, conn.clientData.ServerAddress); matched {
+		pk.BaseGameVersion = "1.17.0" // temp fix for hive
+	}
 	conn.gameData = GameData{
 		Difficulty:                   pk.Difficulty,
 		WorldName:                    pk.WorldName,
