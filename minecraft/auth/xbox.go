@@ -44,6 +44,7 @@ type XBLToken struct {
 		Token        string
 	} `json:"UserToken"`
 
+	// AuthorizationToken is the token used for the authorization header for Xbox API requests.
 	AuthorizationToken struct {
 		DisplayClaims struct {
 			UserInfo []struct {
