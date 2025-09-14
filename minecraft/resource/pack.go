@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/df-mc/jsonc"
 	"github.com/google/uuid"
-	"github.com/muhammadmuzzammil1998/jsonc"
 )
 
 // Pack is a container of a resource pack parsed from a directory or a .zip archive (or .mcpack). It holds
