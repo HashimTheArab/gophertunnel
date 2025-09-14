@@ -265,7 +265,7 @@ func (pack *Pack) String() string {
 	return fmt.Sprintf("%v v%v (%v): %v", pack.Name(), pack.Version(), pack.UUID(), pack.Description())
 }
 
-// compileDir: fail-fast on directory, then zip in-memory and reuse the parsed manifest.
+// compileDir compiles a resource pack from a directory.
 func compileDir(root string) (*Pack, error) {
 	pr := dirPackReader{base: root}
 	m, err := readManifest(pr)
@@ -286,7 +286,7 @@ func compileDir(root string) (*Pack, error) {
 	}, nil
 }
 
-// compileZipPath: fail-fast on zip path, then read full bytes and reuse the parsed manifest.
+// compileZipPath compiles a resource pack from a zip file.
 func compileZipPath(p string) (*Pack, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
