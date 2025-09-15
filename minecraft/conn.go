@@ -883,7 +883,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		if pack.DownloadURL != "" {
 			newPack, err := resource.ReadURL(pack.DownloadURL)
 			if err != nil {
-				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "err", err)
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
 			} else {
 				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
 				continue
