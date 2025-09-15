@@ -14,20 +14,21 @@ import (
 
 // Client is an instance of the realms api with a token.
 type Client struct {
-	tokenSrc   oauth2.TokenSource
-	xblToken   *auth.XBLToken
-	authClient *auth.AuthClient
+	getTokenSrc func() oauth2.TokenSource
+	getAuthCl   func() *auth.AuthClient
+
+	xblToken *auth.XBLToken
 }
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
-func NewClient(src oauth2.TokenSource, authClient *auth.AuthClient) *Client {
-	if authClient == nil {
-		authClient = auth.DefaultClient
+func NewClient(getTS func() oauth2.TokenSource, getAC func() *auth.AuthClient) *Client {
+	if getAC == nil {
+		getAC = func() *auth.AuthClient { return auth.DefaultClient }
 	}
 	return &Client{
-		tokenSrc:   src,
-		authClient: authClient,
+		getTokenSrc: getTS,
+		getAuthCl:   getAC,
 	}
 }
 
@@ -141,17 +142,27 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 }
 
 // xboxToken returns the xbox token used for the api.
-func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
-	if r.xblToken != nil && time.Now().Before(r.xblToken.AuthorizationToken.NotAfter) {
+func (r *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
+	if !forceRefresh && r.xblToken != nil && time.Now().Before(r.xblToken.AuthorizationToken.NotAfter) {
 		return r.xblToken, nil
 	}
 
-	t, err := r.tokenSrc.Token()
+	tokenSrc := r.getTokenSrc()
+	if tokenSrc == nil {
+		return nil, fmt.Errorf("token source is nil")
+	}
+
+	authClient := r.getAuthCl()
+	if authClient == nil {
+		return nil, fmt.Errorf("auth client is nil")
+	}
+
+	t, err := tokenSrc.Token()
 	if err != nil {
 		return nil, err
 	}
 
-	r.xblToken, err = r.authClient.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
+	r.xblToken, err = authClient.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
 	return r.xblToken, err
 }
 
@@ -166,13 +177,18 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 	req.Header.Set("User-Agent", "MCPE/UWP")
 	req.Header.Set("Client-Version", "1.10.1")
-	xbl, err := r.xboxToken(ctx)
+	xbl, err := r.xboxToken(ctx, false)
 	if err != nil {
 		return nil, 0, err
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := r.authClient.Do(ctx, req)
+	authClient := r.getAuthCl()
+	if authClient == nil {
+		return nil, 0, fmt.Errorf("auth client is nil")
+	}
+
+	resp, err := authClient.Do(ctx, req)
 	if err != nil {
 		return nil, 0, err
 	}

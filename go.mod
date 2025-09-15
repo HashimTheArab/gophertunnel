@@ -9,6 +9,7 @@ require (
 	github.com/golang/snappy v0.0.4
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
+	github.com/kr/pretty v0.3.1
 	github.com/pelletier/go-toml v1.9.5
 	github.com/sandertv/go-raknet v1.14.3-0.20250512165509-89e6591f84c0
 	golang.org/x/net v0.35.0
@@ -16,4 +17,8 @@ require (
 	golang.org/x/text v0.22.0
 )
 
-require golang.org/x/image v0.21.0 // indirect
+require (
+	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.9.0 // indirect
+	golang.org/x/image v0.21.0 // indirect
+)
