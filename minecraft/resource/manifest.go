@@ -8,7 +8,8 @@ import "github.com/google/uuid"
 // Manifest contains all the basic information about the pack that Minecraft needs to identify it.
 type Manifest struct {
 	// FormatVersion defines the current version of the manifest. This is currently always 2.
-	FormatVersion int `json:"format_version"`
+	// The real value should be a float but sometimes people will put 1.0 instead of 1.
+	FormatVersion float64 `json:"format_version"`
 	// Header is the header of a resource pack. It contains information that applies to the entire resource
 	// pack, such as the name of the resource pack.
 	Header Header `json:"header"`
