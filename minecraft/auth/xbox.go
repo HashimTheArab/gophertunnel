@@ -45,18 +45,7 @@ type XBLToken struct {
 	} `json:"UserToken"`
 
 	// AuthorizationToken is the token used for the authorization header for Xbox API requests.
-	AuthorizationToken struct {
-		DisplayClaims struct {
-			UserInfo []struct {
-				GamerTag string `json:"gtg"`
-				XUID     string `json:"xid"`
-				UserHash string `json:"uhs"`
-			} `json:"xui"`
-		}
-		IssueInstant time.Time
-		NotAfter     time.Time
-		Token        string
-	}
+	AuthorizationToken authorizationToken
 
 	WebPage              string
 	Sandbox              string
@@ -65,6 +54,23 @@ type XBLToken struct {
 		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
 	}
 	Flow string
+}
+
+type authorizationToken struct {
+	DisplayClaims struct {
+		UserInfo []struct {
+			GamerTag string `json:"gtg"`
+			XUID     string `json:"xid"`
+			UserHash string `json:"uhs"`
+		} `json:"xui"`
+	}
+	IssueInstant time.Time
+	NotAfter     time.Time
+	Token        string
+}
+
+func (t authorizationToken) Expired() bool {
+	return time.Now().After(t.NotAfter.Add(-time.Minute*5))
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft

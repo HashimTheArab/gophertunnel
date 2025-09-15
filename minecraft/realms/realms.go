@@ -143,7 +143,7 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 
 // xboxToken returns the xbox token used for the api.
 func (r *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
-	if !forceRefresh && r.xblToken != nil && time.Now().Before(r.xblToken.AuthorizationToken.NotAfter) {
+	if !forceRefresh && r.xblToken != nil && !r.xblToken.AuthorizationToken.Expired() {
 		return r.xblToken, nil
 	}
 

@@ -389,7 +389,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 }
 
 func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
-	if dialer.XBLToken != nil {
+	if dialer.XBLToken != nil && !dialer.XBLToken.AuthorizationToken.Expired() {
 		return dialer.XBLToken, nil
 	}
 
