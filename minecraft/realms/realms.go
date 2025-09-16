@@ -166,31 +166,6 @@ func (c *Client) OnlinePlayers(ctx context.Context, realmID int) (players []Play
 	return response.Players, nil
 }
 
-// xboxToken returns the xbox token used for the api.
-func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
-	if !forceRefresh && c.xblToken != nil && !c.xblToken.AuthorizationToken.Expired() {
-		return c.xblToken, nil
-	}
-
-	tokenSrc := c.getTokenSrc()
-	if tokenSrc == nil {
-		return nil, fmt.Errorf("token source is nil")
-	}
-
-	authClient := c.getAuthCl()
-	if authClient == nil {
-		return nil, fmt.Errorf("auth client is nil")
-	}
-
-	t, err := tokenSrc.Token()
-	if err != nil {
-		return nil, err
-	}
-
-	c.xblToken, err = authClient.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
-	return c.xblToken, err
-}
-
 // RealmByInviteCode gets a realm by its invite code.
 func (c *Client) RealmByInviteCode(ctx context.Context, code string) (Realm, error) {
 	body, _, err := c.request(ctx, fmt.Sprintf("/worlds/v1/link/%s", code))
@@ -225,6 +200,31 @@ func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
 	}
 
 	return resp.Servers, nil
+}
+
+// xboxToken returns the xbox token used for the api.
+func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
+	if !forceRefresh && c.xblToken != nil && !c.xblToken.AuthorizationToken.Expired() {
+		return c.xblToken, nil
+	}
+
+	tokenSrc := c.getTokenSrc()
+	if tokenSrc == nil {
+		return nil, fmt.Errorf("token source is nil")
+	}
+
+	authClient := c.getAuthCl()
+	if authClient == nil {
+		return nil, fmt.Errorf("auth client is nil")
+	}
+
+	t, err := tokenSrc.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	c.xblToken, err = authClient.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
+	return c.xblToken, err
 }
 
 // request sends an http get request to path with the right headers for the api set.
