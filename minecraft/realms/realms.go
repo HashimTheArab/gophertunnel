@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,11 @@ type realmService interface {
 }
 
 const realmsBaseURL = "https://pocket.realms.minecraft.net"
+
+var (
+	ErrPlayerNotInRealm = errors.New("player not in realm")
+	ErrRealmNotFound    = errors.New("realm not found")
+)
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
@@ -132,7 +138,9 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 				case 503:
 					continue
 				case 404:
-					return "", fmt.Errorf("realm not found")
+					return "", ErrRealmNotFound
+				case 403:
+					return "", ErrPlayerNotInRealm
 				}
 				return "", err
 			}
@@ -159,8 +167,14 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 // OnlinePlayers returns all the online players of a realm.
 // Returns a 403 error if the current user is not the owner of the Realm.
 func (c *Client) OnlinePlayers(ctx context.Context, realmID int) (players []Player, err error) {
-	body, _, err := c.requestGet(ctx, fmt.Sprintf("/worlds/%d", realmID))
+	body, status, err := c.requestGet(ctx, fmt.Sprintf("/worlds/%d", realmID))
 	if err != nil {
+		switch status {
+		case 403:
+			return nil, ErrPlayerNotInRealm
+		case 404:
+			return nil, ErrRealmNotFound
+		}
 		return nil, err
 	}
 
@@ -247,7 +261,7 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return nil, err
 	}
 
-	c.xblToken, err = authClient.RequestXBLToken(ctx, t, realmsBaseURL + "/")
+	c.xblToken, err = authClient.RequestXBLToken(ctx, t, realmsBaseURL+"/")
 	return c.xblToken, err
 }
 
