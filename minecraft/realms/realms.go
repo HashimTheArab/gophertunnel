@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
@@ -104,25 +106,36 @@ type Realm struct {
 func (r *Realm) Address(ctx context.Context) (address string, err error) {
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
-	for range ticker.C {
-		body, status, err := r.client.request(ctx, fmt.Sprintf("/worlds/%d/join", r.ID))
-		if err != nil {
-			if status == 503 && ctx.Err() == nil {
-				continue
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+			body, status, err := r.client.request(ctx, fmt.Sprintf("/worlds/%d/join", r.ID))
+			if err != nil {
+				if status == 503 {
+					continue
+				}
+				return "", err
 			}
-			return "", err
-		}
 
-		var data struct {
-			Address       string `json:"address"`
-			PendingUpdate bool   `json:"pendingUpdate"`
+			var data struct {
+				Address       string `json:"address"`
+				PendingUpdate bool   `json:"pendingUpdate"`
+			}
+			if err := json.Unmarshal(body, &data); err != nil {
+				return "", err
+			}
+
+			ap, err := netip.ParseAddrPort(data.Address)
+			if err != nil || !ap.Addr().Is4() || ap.Port() == 0 {
+				// TODO: remove this or just return err instead of slog
+				slog.ErrorContext(ctx, "invalid realm address", "addr", data.Address, "err", err, "response_body", string(body))
+			}
+
+			return data.Address, nil
 		}
-		if err := json.Unmarshal(body, &data); err != nil {
-			return "", err
-		}
-		return data.Address, nil
 	}
-	panic("unreachable")
 }
 
 // OnlinePlayers gets all the players currently on this realm,
