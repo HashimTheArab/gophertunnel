@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/netip"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
@@ -34,6 +33,8 @@ const realmsBaseURL = "https://pocket.realms.minecraft.net"
 var (
 	ErrPlayerNotInRealm = errors.New("player not in realm")
 	ErrRealmNotFound    = errors.New("realm not found")
+	// Nethernet does not return a ip:port address format, gophertunnel doesn't support nethernet yet
+	ErrRealmNethernet = errors.New("realm runs on nethernet which is not supported yet")
 )
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
@@ -146,17 +147,21 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 			}
 
 			var data struct {
-				Address       string `json:"address"`
-				PendingUpdate bool   `json:"pendingUpdate"`
+				Address           string `json:"address"`
+				NetworkProtocol   string `json:"networkProtocol"`
+				PendingUpdate     bool   `json:"pendingUpdate"`
+				SessionRegionData struct {
+					RegionName     string `json:"regionName"`
+					ServiceQuality int    `json:"serviceQuality"`
+				} `json:"sessionRegionData"`
 			}
 			if err := json.Unmarshal(body, &data); err != nil {
 				return "", err
 			}
 
-			ap, err := netip.ParseAddrPort(data.Address)
-			if err != nil || !ap.Addr().Is4() || ap.Port() == 0 {
-				// TODO: remove this or just return err instead of slog
-				slog.ErrorContext(ctx, "invalid realm address", "addr", data.Address, "err", err, "response_body", string(body))
+			if data.NetworkProtocol == "NETHERNET" {
+				slog.ErrorContext(ctx, "nethernet realm", "realm_id", realmID, "response_body", string(body))
+				return "", ErrRealmNethernet
 			}
 
 			return data.Address, nil
