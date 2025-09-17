@@ -239,7 +239,12 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 
 	var pong []byte
 	var netConn net.Conn
-	if pong, err = n.PingContext(ctx, address); err == nil {
+	// Try pinging first with a short timeout so we don't block the dial
+	// if the server has pinging blocked.
+	pingCtx, pingCancel := context.WithTimeout(ctx, time.Second*3)
+	pong, err = n.PingContext(pingCtx, address)
+	pingCancel()
+	if err == nil {
 		netConn, err = n.DialContext(ctx, addressWithPongPort(pong, address))
 	} else {
 		netConn, err = n.DialContext(ctx, address)
