@@ -457,7 +457,7 @@ func readManifest(pr packReader) (*Manifest, error) {
 		return nil, fmt.Errorf("read manifest file: %w", err)
 	}
 	manifest := &Manifest{}
-	if err := jsonc.Unmarshal(allData, manifest); err != nil {
+	if err := jsonc.UnmarshalLenient(allData, manifest); err != nil {
 		return nil, fmt.Errorf("decode manifest JSON: %w (data: %v)", err, string(allData))
 	}
 
