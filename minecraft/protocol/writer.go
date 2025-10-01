@@ -3,15 +3,16 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"image/color"
 	"io"
 	"math/big"
 	"reflect"
 	"sort"
 	"unsafe"
+
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
 )
 
 // Writer implements writing methods for data types from Minecraft packets. Each Packet implementation has one
@@ -475,6 +476,7 @@ func (w *Writer) AbilityValue(x *any) {
 
 var varintMaxByteValue = big.NewInt(0x80)
 
+// Bitset writes a Bitset x to the underlying buffer.
 func (w *Writer) Bitset(x *Bitset, size int) {
 	if x.size != size {
 		w.panicf("bitset size mismatch: expected %v, got %v", size, x.size)
@@ -494,6 +496,7 @@ func (w *Writer) Bitset(x *Bitset, size int) {
 	_ = w.w.WriteByte(byte(u.Bits()[0]))
 }
 
+// PackSetting writes a PackSetting x to the underlying buffer.
 func (w *Writer) PackSetting(x *PackSetting) {
 	w.String(&x.Name)
 	var id uint32

@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"image/color"
 	"io"
 	"math"
 	"math/big"
 	"math/bits"
 	"unsafe"
+
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
 )
 
 // Reader implements reading operations for reading types from Minecraft packets. Each Packet implementation
@@ -587,6 +588,7 @@ func (r *Reader) AbilityValue(x *any) {
 	}
 }
 
+// Bitset reads a Bitset from the reader.
 func (r *Reader) Bitset(x *Bitset, size int) {
 	*x = NewBitset(size)
 	for i := 0; i < size; i += 7 {
@@ -607,6 +609,7 @@ func (r *Reader) Bitset(x *Bitset, size int) {
 	r.panic(errBitsetOverflow)
 }
 
+// PackSetting reads a PackSetting from the reader.
 func (r *Reader) PackSetting(x *PackSetting) {
 	r.String(&x.Name)
 	var t uint32
