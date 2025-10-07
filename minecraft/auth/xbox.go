@@ -22,18 +22,55 @@ import (
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
-	AuthorizationToken struct {
+	TitleToken struct {
 		DisplayClaims struct {
-			UserInfo []struct {
-				GamerTag string `json:"gtg"`
-				XUID     string `json:"xid"`
+			Xti struct {
+				TitleID string `json:"tid"`
+			} `json:"xti"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	} `json:"TitleToken"`
+
+	UserToken struct {
+		DisplayClaims struct {
+			Xui []struct {
 				UserHash string `json:"uhs"`
 			} `json:"xui"`
 		}
 		IssueInstant time.Time
 		NotAfter     time.Time
 		Token        string
+	} `json:"UserToken"`
+
+	// AuthorizationToken is the token used for the authorization header for Xbox API requests.
+	AuthorizationToken authorizationToken
+
+	WebPage              string
+	Sandbox              string
+	UseModernGamertag    bool
+	UcsMigrationResponse struct {
+		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
 	}
+	Flow string
+}
+
+type authorizationToken struct {
+	DisplayClaims struct {
+		UserInfo []struct {
+			GamerTag string `json:"gtg"`
+			XUID     string `json:"xid"`
+			UserHash string `json:"uhs"`
+		} `json:"xui"`
+	}
+	IssueInstant time.Time
+	NotAfter     time.Time
+	Token        string
+}
+
+func (t authorizationToken) Expired() bool {
+	return time.Now().After(t.NotAfter.Add(-time.Minute * 5))
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
