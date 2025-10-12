@@ -1,6 +1,8 @@
 package auth
 
-import "github.com/df-mc/go-playfab"
+import (
+	"github.com/df-mc/go-playfab"
+)
 
 type XBOXPlayfabLoginConfig struct {
 	playfab.LoginConfig
@@ -8,6 +10,9 @@ type XBOXPlayfabLoginConfig struct {
 }
 
 func (l XBOXPlayfabLoginConfig) Login(x *XBLToken) (*playfab.Identity, error) {
+	if len(x.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+		panic("xbox token has no user info (malformed response from Microsoft)")
+	}
 	l.XBOXToken = "XBL3.0 x=" + x.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash + ";" + x.AuthorizationToken.Token
 	return l.LoginConfig.Login("/Client/LoginWithXbox", l)
 }

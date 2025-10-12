@@ -77,6 +77,9 @@ func (t authorizationToken) Expired() bool {
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
 // related endpoints that need an XBOX Live authenticated caller.
 func (t XBLToken) SetAuthHeader(r *http.Request) {
+	if len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+		panic("xbox: authorization token has no user info (malformed response from Microsoft)")
+	}
 	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
 }
 
@@ -178,7 +181,9 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 		return nil, fmt.Errorf("POST %v: %w", "https://sisu.xboxlive.com/authorize", err)
 	}
 	req.Header.Set("x-xbl-contract-version", "1")
-	sign(req, data, key)
+	if err := sign(req, data, key); err != nil {
+		return nil, fmt.Errorf("signing XBL auth request: %w", err)
+	}
 
 	resp, err := c.DoWithOptions(ctx, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -250,7 +255,9 @@ func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa
 
 	request.Header.Set("Cache-Control", "no-store, must-revalidate, no-cache")
 	request.Header.Set("x-xbl-contract-version", "1")
-	sign(request, data, key)
+	if err := sign(request, data, key); err != nil {
+		return nil, fmt.Errorf("signing device auth request: %w", err)
+	}
 
 	resp, err := c.DoWithOptions(ctx, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -276,7 +283,7 @@ func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa
 
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
-func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
+func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) error {
 	var currentTime int64
 	serverDateMu.Lock()
 	currentServerDate := serverDate
@@ -292,7 +299,9 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 	// Signature policy version (0, 0, 0, 1) + 0 byte.
 	buf := bytes.NewBuffer([]byte{0, 0, 0, 1, 0})
 	// Timestamp + 0 byte.
-	_ = binary.Write(buf, binary.BigEndian, currentTime)
+	if err := binary.Write(buf, binary.BigEndian, currentTime); err != nil {
+		return fmt.Errorf("writing current time: %w", err)
+	}
 	buf.Write([]byte{0})
 	hash.Write(buf.Bytes())
 
@@ -317,7 +326,10 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 
 	// Sign the checksum produced, and combine the 'r' and 's' into a single signature.
 	// Encode r and s as 32-byte, zero-padded big-endian values so the P-256 signature is always exactly 64 bytes long.
-	r, s, _ := ecdsa.Sign(rand.Reader, key, hash.Sum(nil))
+	r, s, err := ecdsa.Sign(rand.Reader, key, hash.Sum(nil))
+	if err != nil {
+		return fmt.Errorf("signing hash: %w", err)
+	}
 	signature := make([]byte, 64)
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
@@ -325,11 +337,14 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 	// The signature begins with 12 bytes, the first being the signature policy version (0, 0, 0, 1) again,
 	// and the other 8 the timestamp again.
 	buf = bytes.NewBuffer([]byte{0, 0, 0, 1})
-	_ = binary.Write(buf, binary.BigEndian, currentTime)
+	if err := binary.Write(buf, binary.BigEndian, currentTime); err != nil {
+		return fmt.Errorf("writing current time: %w", err)
+	}
 
 	// Append the signature to the other 12 bytes, and encode the signature with standard base64 encoding.
 	sig := append(buf.Bytes(), signature...)
 	request.Header.Set("Signature", base64.StdEncoding.EncodeToString(sig))
+	return nil
 }
 
 // windowsTimestamp returns a Windows specific timestamp. It has a certain offset from Unix time which must be
@@ -345,28 +360,4 @@ func padTo32Bytes(b *big.Int) []byte {
 	out := make([]byte, 32)
 	b.FillBytes(out)
 	return out
-}
-
-// parseXboxError returns the message associated with an Xbox Live error code.
-func parseXboxErrorCode(code string) string {
-	switch code {
-	case "2148916227":
-		return "Your account was banned by Xbox for violating one or more Community Standards for Xbox and is unable to be used."
-	case "2148916229":
-		return "Your account is currently restricted and your guardian has not given you permission to play online. Login to https://account.microsoft.com/family/ and have your guardian change your permissions."
-	case "2148916233":
-		return "Your account currently does not have an Xbox profile. Please create one at https://signup.live.com/signup"
-	case "2148916234":
-		return "Your account has not accepted Xbox's Terms of Service. Please login and accept them."
-	case "2148916235":
-		return "Your account resides in a region that Xbox has not authorized use from. Xbox has blocked your attempt at logging in."
-	case "2148916236":
-		return "Your account requires proof of age. Please login to https://login.live.com/login.srf and provide proof of age."
-	case "2148916237":
-		return "Your account has reached its limit for playtime. Your account has been blocked from logging in."
-	case "2148916238":
-		return "The account date of birth is under 18 years and cannot proceed unless the account is added to a family by an adult."
-	default:
-		return fmt.Sprintf("unknown error code: %v", code)
-	}
 }

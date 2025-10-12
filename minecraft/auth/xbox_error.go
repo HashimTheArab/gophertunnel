@@ -96,3 +96,27 @@ func newXboxHTTPError(method, url string, resp *http.Response, responseBody []by
 
 	return xboxErr
 }
+
+// parseXboxError returns the message associated with an Xbox Live error code.
+func parseXboxErrorCode(code string) string {
+	switch code {
+	case "2148916227":
+		return "Your account was banned by Xbox for violating one or more Community Standards for Xbox and is unable to be used."
+	case "2148916229":
+		return "Your account is currently restricted and your guardian has not given you permission to play online. Login to https://account.microsoft.com/family/ and have your guardian change your permissions."
+	case "2148916233":
+		return "Your account currently does not have an Xbox profile. Please create one at https://signup.live.com/signup"
+	case "2148916234":
+		return "Your account has not accepted Xbox's Terms of Service. Please login and accept them."
+	case "2148916235":
+		return "Your account resides in a region that Xbox has not authorized use from. Xbox has blocked your attempt at logging in."
+	case "2148916236":
+		return "Your account requires proof of age. Please login to https://login.live.com/login.srf and provide proof of age."
+	case "2148916237":
+		return "Your account has reached its limit for playtime. Your account has been blocked from logging in."
+	case "2148916238":
+		return "The account date of birth is under 18 years and cannot proceed unless the account is added to a family by an adult."
+	default:
+		return fmt.Sprintf("unknown error code: %v", code)
+	}
+}
