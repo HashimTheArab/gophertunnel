@@ -71,7 +71,7 @@ type authorizationToken struct {
 }
 
 func (t authorizationToken) Expired() bool {
-	return time.Now().After(t.NotAfter.Add(-time.Minute*5))
+	return time.Now().After(t.NotAfter.Add(-time.Minute * 5))
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
@@ -138,18 +138,18 @@ func RequestXBLTokenDevice(ctx context.Context, authClient *authclient.AuthClien
 	if err != nil {
 		return nil, fmt.Errorf("device token request failed: %w", err)
 	}
-  xblToken, err := obtainXBLToken(ctx, authClient, key, liveToken, deviceToken, deviceType, relyingParty)
-  if err != nil {
-    return nil, fmt.Errorf("xbl token request failed: %w", err)
-  }
-  return xblToken, nil
+	xblToken, err := obtainXBLToken(ctx, authClient, key, liveToken, deviceToken, deviceType, relyingParty)
+	if err != nil {
+		return nil, fmt.Errorf("xbl token request failed: %w", err)
+	}
+	return xblToken, nil
 }
 
 func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, deviceType Device, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
 		"AppId":             deviceType.ClientID,
-		"deviceToken":       device.Token,
+		"DeviceToken":       device.Token,
 		"Sandbox":           "RETAIL",
 		"UseModernGamertag": true,
 		"SiteName":          "user.auth.xboxlive.com",
