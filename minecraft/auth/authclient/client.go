@@ -23,13 +23,18 @@ func NewAuthClient(httpClient *http.Client) *AuthClient {
 	}
 
 	var transport *http.Transport
-	if httpClient.Transport == nil {
-		if t, ok := http.DefaultTransport.(*http.Transport); ok {
-			transport = t.Clone()
+	if httpClient.Transport != nil {
+		if t, ok := httpClient.Transport.(*http.Transport); ok {
+			transport = t
 		} else {
 			transport = &http.Transport{}
 		}
+	} else if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = t.Clone()
+	} else {
+		transport = &http.Transport{}
 	}
+
 	transport.TLSClientConfig = &tls.Config{
 		Renegotiation: tls.RenegotiateOnceAsClient,
 	}
