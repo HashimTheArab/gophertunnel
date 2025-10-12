@@ -20,15 +20,16 @@ import (
 // TokenSource holds an oauth2.TokenSource which uses device auth to get a code. The user authenticates using
 // a code. TokenSource prints the authentication code and URL to os.Stdout and uses DeviceAndroid.
 // TokenSource automatically refreshes tokens.
-var TokenSource oauth2.TokenSource = &tokenSource{w: os.Stdout, d: DeviceAndroid}
+var TokenSource oauth2.TokenSource = &tokenSource{w: os.Stdout, d: DeviceAndroid, a: authclient.DefaultClient}
 
 // TokenSourceOption is a functional option for configuring token sources.
 type TokenSourceOption func(*tokenSourceConfig)
 
 type tokenSourceConfig struct {
-	writer io.Writer
-	device Device
-	token  *oauth2.Token
+	authClient *authclient.AuthClient
+	writer     io.Writer
+	device     Device
+	token      *oauth2.Token
 }
 
 // WithWriter configures the token source to write authentication prompts to the specified writer.
@@ -52,23 +53,37 @@ func WithToken(t *oauth2.Token) TokenSourceOption {
 	}
 }
 
+// WithAuthClient configures the token source to use the specified auth client.
+func WithAuthClient(ac *authclient.AuthClient) TokenSourceOption {
+	return func(c *tokenSourceConfig) {
+		c.authClient = ac
+	}
+}
+
+func newTokenSourceConfig(opts ...TokenSourceOption) *tokenSourceConfig {
+	config := &tokenSourceConfig{
+		authClient: authclient.DefaultClient,
+		writer:     os.Stdout,
+		device:     DeviceAndroid,
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+	return config
+}
+
 // NewTokenSource creates a new oauth2.TokenSource with the given options.
 // If no token is provided, it will use device auth to get a new token.
 // If a token is provided, it will refresh that token when expired.
 // Default writer is os.Stdout, default device is DeviceAndroid.
 func NewTokenSource(opts ...TokenSourceOption) oauth2.TokenSource {
-	config := &tokenSourceConfig{
-		writer: os.Stdout,
-		device: DeviceAndroid,
-	}
-	for _, opt := range opts {
-		opt(config)
-	}
+	config := newTokenSourceConfig(opts...)
 
 	ts := &tokenSource{
 		w: config.writer,
 		d: config.device,
 		t: config.token,
+		a: config.authClient,
 	}
 
 	if config.token != nil {
@@ -81,6 +96,7 @@ func NewTokenSource(opts ...TokenSourceOption) oauth2.TokenSource {
 // tokenSource implements the oauth2.TokenSource interface. It provides a method to get an oauth2.Token using
 // device auth through a call to RequestLiveToken.
 type tokenSource struct {
+	a *authclient.AuthClient
 	w io.Writer
 	t *oauth2.Token
 	d Device
@@ -89,11 +105,11 @@ type tokenSource struct {
 // Token attempts to return a Live Connect token using the RequestLiveToken function.
 func (src *tokenSource) Token() (*oauth2.Token, error) {
 	if src.t == nil {
-		t, err := RequestLiveToken(WithWriter(src.w), WithDevice(src.d))
+		t, err := RequestLiveToken(WithWriter(src.w), WithDevice(src.d), WithAuthClient(src.a))
 		src.t = t
 		return t, err
 	}
-	tok, err := refreshToken(context.Background(), authclient.DefaultClient, src.t, src.d)
+	tok, err := refreshToken(context.Background(), src.a, src.t, src.d)
 	if err != nil {
 		return nil, err
 	}
@@ -115,19 +131,12 @@ func RefreshTokenSource(t *oauth2.Token) oauth2.TokenSource {
 // Once fully authenticated, an oauth2 token is returned which may be used to login to XBOX Live.
 // Default writer is os.Stdout, default device is DeviceAndroid.
 func RequestLiveToken(opts ...TokenSourceOption) (*oauth2.Token, error) {
-	config := &tokenSourceConfig{
-		writer: os.Stdout,
-		device: DeviceAndroid,
-	}
-	for _, opt := range opts {
-		opt(config)
-	}
-	return requestLiveTokenWithConfig(config)
+	return requestLiveTokenWithConfig(newTokenSourceConfig(opts...))
 }
 
 func requestLiveTokenWithConfig(config *tokenSourceConfig) (*oauth2.Token, error) {
 	ctx := context.Background()
-	d, err := StartDeviceAuth(ctx, config.device)
+	d, err := StartDeviceAuth(ctx, config.authClient, config.device)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +146,7 @@ func requestLiveTokenWithConfig(config *tokenSourceConfig) (*oauth2.Token, error
 	defer ticker.Stop()
 
 	for range ticker.C {
-		t, err := PollDeviceAuth(ctx, d.DeviceCode, config.device)
+		t, err := PollDeviceAuth(ctx, config.authClient, d.DeviceCode, config.device)
 		if err != nil {
 			return nil, fmt.Errorf("error polling for device auth: %w", err)
 		}
@@ -148,7 +157,8 @@ func requestLiveTokenWithConfig(config *tokenSourceConfig) (*oauth2.Token, error
 			return t, nil
 		}
 	}
-	panic("unreachable")
+	// this case should never be reached
+	return nil, fmt.Errorf("authentication timeout or cancelled")
 }
 
 var (
@@ -177,7 +187,7 @@ func setServerDate(d time.Time) {
 
 // StartDeviceAuth starts the device auth, retrieving a login URI for the user and a code the user needs to
 // enter.
-func StartDeviceAuth(ctx context.Context, deviceType Device) (*deviceAuthConnect, error) {
+func StartDeviceAuth(ctx context.Context, authClient *authclient.AuthClient, deviceType Device) (*deviceAuthConnect, error) {
 	const connectURL = "https://login.live.com/oauth20_connect.srf"
 	form := url.Values{
 		"client_id":     {deviceType.ClientID},
@@ -189,7 +199,7 @@ func StartDeviceAuth(ctx context.Context, deviceType Device) (*deviceAuthConnect
 		return nil, fmt.Errorf("create request for POST %s: %w", connectURL, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := authclient.SendRequestWithRetries(ctx, authclient.DefaultClient.HTTPClient(), req)
+	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", connectURL, err)
 	}
@@ -201,9 +211,18 @@ func StartDeviceAuth(ctx context.Context, deviceType Device) (*deviceAuthConnect
 	return data, json.NewDecoder(resp.Body).Decode(data)
 }
 
+func newOAuth2Token(poll *deviceAuthPoll) *oauth2.Token {
+	return &oauth2.Token{
+		AccessToken:  poll.AccessToken,
+		TokenType:    poll.TokenType,
+		RefreshToken: poll.RefreshToken,
+		Expiry:       time.Now().Add(time.Duration(poll.ExpiresIn) * time.Second),
+	}
+}
+
 // PollDeviceAuth polls the token endpoint for the device code. A token is returned if the user authenticated
 // successfully. If the user has not yet authenticated, err is nil but the token is nil too.
-func PollDeviceAuth(ctx context.Context, deviceCode string, deviceType Device) (t *oauth2.Token, err error) {
+func PollDeviceAuth(ctx context.Context, authClient *authclient.AuthClient, deviceCode string, deviceType Device) (t *oauth2.Token, err error) {
 	form := url.Values{
 		"client_id":   {deviceType.ClientID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -216,7 +235,7 @@ func PollDeviceAuth(ctx context.Context, deviceCode string, deviceType Device) (
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := authclient.SendRequestWithRetries(ctx, authclient.DefaultClient.HTTPClient(), req)
+	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
@@ -234,12 +253,7 @@ func PollDeviceAuth(ctx context.Context, deviceCode string, deviceType Device) (
 	case "authorization_pending":
 		return nil, nil
 	case "":
-		return &oauth2.Token{
-			AccessToken:  poll.AccessToken,
-			TokenType:    poll.TokenType,
-			RefreshToken: poll.RefreshToken,
-			Expiry:       time.Now().Add(time.Duration(poll.ExpiresIn) * time.Second),
-		}, nil
+		return newOAuth2Token(poll), nil
 	default:
 		return nil, fmt.Errorf("%v: %v", poll.Error, poll.ErrorDescription)
 	}
@@ -279,12 +293,7 @@ func refreshToken(ctx context.Context, authClient *authclient.AuthClient, t *oau
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("POST %s: refresh error: %v", microsoft.LiveConnectEndpoint.TokenURL, poll.Error)
 	}
-	return &oauth2.Token{
-		AccessToken:  poll.AccessToken,
-		TokenType:    poll.TokenType,
-		RefreshToken: poll.RefreshToken,
-		Expiry:       time.Now().Add(time.Duration(poll.ExpiresIn) * time.Second),
-	}, nil
+	return newOAuth2Token(poll), nil
 }
 
 type deviceAuthConnect struct {
