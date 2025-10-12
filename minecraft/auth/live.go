@@ -49,7 +49,7 @@ func (src *tokenSource) Token() (*oauth2.Token, error) {
 		src.t = t
 		return t, err
 	}
-	tok, err := refreshToken(authclient.DefaultClient, src.t, src.d)
+	tok, err := refreshToken(context.Background(), authclient.DefaultClient, src.t, src.d)
 	if err != nil {
 		return nil, err
 	}
@@ -68,11 +68,6 @@ func RefreshTokenSource(t *oauth2.Token) oauth2.TokenSource {
 // due to that function not refreshing with the correct scopes.
 func RefreshTokenSourceDevice(t *oauth2.Token, d Device) oauth2.TokenSource {
 	return RefreshTokenSourceWriterDevice(t, os.Stdout, d)
-}
-
-// RefreshTokenSourceWriter calls [RefreshTokenSourceWriterDevice] with the default device info.
-func RefreshTokenSourceWriter(t *oauth2.Token, w io.Writer) oauth2.TokenSource {
-	return RefreshTokenSourceWriterDevice(t, w, DeviceAndroid)
 }
 
 // RefreshTokenSourceWriterDevice returns a new oauth2.TokenSource using the oauth2.Token passed that automatically
@@ -225,7 +220,7 @@ func PollDeviceAuth(ctx context.Context, deviceCode string, deviceType Device) (
 
 // refreshToken refreshes the oauth2.Token passed and returns a new oauth2.Token. An error is returned if
 // refreshing was not successful.
-func refreshToken(authClient *authclient.AuthClient, t *oauth2.Token, deviceType Device) (*oauth2.Token, error) {
+func refreshToken(ctx context.Context, authClient *authclient.AuthClient, t *oauth2.Token, deviceType Device) (*oauth2.Token, error) {
 	// This function unfortunately needs to exist because golang.org/x/oauth2 does not pass the scope to this
 	// request, which Microsoft Connect enforces.
 	form := url.Values{
@@ -240,7 +235,7 @@ func refreshToken(authClient *authclient.AuthClient, t *oauth2.Token, deviceType
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := authclient.SendRequestWithRetries(context.Background(), authClient.HTTPClient(), req)
+	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}

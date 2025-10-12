@@ -77,7 +77,7 @@ func (s *Session) login(ctx context.Context) error {
 	}
 
 	if err = s.loginWithPlayfab(ctx); err != nil {
-		return err
+		return fmt.Errorf("login with playfab: %w", err)
 	}
 
 	return s.obtainMcToken(ctx)
@@ -109,7 +109,7 @@ func (s *Session) loginWithPlayfab(ctx context.Context) (err error) {
 		},
 	}.Login(playfabXBL)
 	if err != nil {
-		return fmt.Errorf("error logging in to playfab: %w", err)
+		return fmt.Errorf("logging in: %w", err)
 	}
 
 	return nil
