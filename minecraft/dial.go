@@ -114,7 +114,7 @@ type Dialer struct {
 
 	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
 	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
-	AuthClient *auth.AuthClient
+	AuthClient *authclient.AuthClient
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -184,7 +184,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
 	if d.AuthClient == nil {
-		d.AuthClient = auth.DefaultClient
+		d.AuthClient = authclient.DefaultClient
 	}
 	d.ErrorLog = d.ErrorLog.With("src", "dialer")
 	if d.Protocol == nil {
@@ -225,7 +225,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
 		multiplayerToken = multiplayerTok.SignedToken
-		chainData, err = authChain(ctx, xblToken, key)
+		chainData, err = AuthChain(ctx, xblToken, key, d.AuthClient)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
@@ -407,7 +407,7 @@ func getAuthSession(ctx context.Context, dialer Dialer) (*auth.Session, error) {
 
 // AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
-func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey, authClient *auth.AuthClient) (string, error) {
+func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey, authClient *authclient.AuthClient) (string, error) {
 	// Obtain the raw chain data using the XBL token.
 	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key, authClient)
 	if err != nil {
