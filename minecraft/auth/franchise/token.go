@@ -110,15 +110,17 @@ type DeviceConfig struct {
 	Type               string    `json:"type,omitempty"`
 }
 
-const ApplicationTypeMinecraftPE = "MinecraftPE"
+const (
+	ApplicationTypeMinecraftPE = "MinecraftPE"
 
-const CapabilityRayTracing = "RayTracing"
+	CapabilityRayTracing = "RayTracing"
 
-const PlatformWindows10 = "Windows10"
+	PlatformWindows10 = "Windows10"
 
-const StorePlatformUWPStore = "uwp.store"
+	StorePlatformUWPStore = "uwp.store"
 
-const DeviceTypeWindows10 = "Windows10"
+	DeviceTypeWindows10 = "Windows10"
+)
 
 type UserConfig struct {
 	Language     language.Tag `json:"language,omitempty"`
