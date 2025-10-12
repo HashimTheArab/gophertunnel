@@ -20,7 +20,7 @@ import (
 // TokenSource holds an oauth2.TokenSource which uses device auth to get a code. The user authenticates using
 // a code. TokenSource prints the authentication code and URL to os.Stdout and uses DeviceAndroid.
 // TokenSource automatically refreshes tokens.
-var TokenSource oauth2.TokenSource = &tokenSource{w: os.Stdout, d: DeviceAndroid, a: authclient.DefaultClient}
+var TokenSource oauth2.TokenSource = &tokenSource{a: authclient.DefaultClient, w: os.Stdout, d: DeviceAndroid}
 
 // TokenSourceOption is a functional option for configuring token sources.
 type TokenSourceOption func(*tokenSourceConfig)
@@ -80,10 +80,10 @@ func NewTokenSource(opts ...TokenSourceOption) oauth2.TokenSource {
 	config := newTokenSourceConfig(opts...)
 
 	ts := &tokenSource{
+		a: config.authClient,
 		w: config.writer,
 		d: config.device,
 		t: config.token,
-		a: config.authClient,
 	}
 
 	if config.token != nil {
