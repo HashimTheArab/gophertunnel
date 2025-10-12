@@ -1,7 +1,9 @@
 package auth
 
 type Device struct {
-	ClientID   string
+	// ClientID is the client id used to authenticate with minecraft.
+	ClientID string
+	// DeviceType is the corresponding type given to minecraft, it needs to match the client id.
 	DeviceType string
 	Version    string
 }
