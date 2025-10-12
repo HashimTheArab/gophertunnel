@@ -9,6 +9,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+
+	"regexp"
+
 	"io"
 	"log/slog"
 	"net"
@@ -780,7 +783,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		texturePack := protocol.TexturePackInfo{
 			UUID:        pack.UUID(),
 			Version:     pack.Version(),
-			Size:        uint64(pack.Len()),
+			Size:        uint64(pack.Size()),
 			DownloadURL: pack.DownloadURL(),
 		}
 		if pack.Encrypted() {
@@ -878,6 +881,18 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			conn.packQueue.packAmount--
 			continue
 		}
+
+		// Try to use the Download URL if set
+		if pack.DownloadURL != "" {
+			newPack, err := resource.ReadURL(pack.DownloadURL)
+			if err != nil {
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
+			} else {
+				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				continue
+			}
+		}
+
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
 		conn.packQueue.downloadingPacks[id] = downloadingPack{
@@ -1085,7 +1100,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	if pack.size != pk.Size {
 		// Size mismatch: The ResourcePacksInfo packet had a size for the pack that did not match with the
 		// size sent here.
-		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id)
+		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id, "packs_info_size", pack.size, "data_info_size", pk.Size)
 		pack.size = pk.Size
 	}
 
@@ -1209,6 +1224,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
+	if matched, _ := regexp.MatchString(`.*\.hivebedrock\.network.*`, conn.clientData.ServerAddress); matched {
+		pk.BaseGameVersion = "1.17.0" // temp fix for hive
+	}
 	conn.gameData = GameData{
 		Difficulty:                   pk.Difficulty,
 		WorldName:                    pk.WorldName,

@@ -142,7 +142,7 @@ func FuncIOSliceUint32Length[T any, S ~*[]T](r IO, x S, f func(IO, *T)) {
 	FuncIOSliceOfLen(r, count, x, f)
 }
 
-const maxSliceLength = 1024
+const maxSliceLength = 4096
 
 // SliceOfLen reads/writes the elements of a slice of type T with length l.
 func SliceOfLen[T any, S ~*[]T, A PtrMarshaler[T]](r IO, l uint32, x S) {

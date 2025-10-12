@@ -11,7 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.17.11
 	github.com/pelletier/go-toml v1.9.5
-	github.com/sandertv/go-raknet v1.14.3-0.20250305181847-6af3e95113d6
+	github.com/sandertv/go-raknet v1.14.3-0.20250512165509-89e6591f84c0
 	golang.org/x/net v0.35.0
 	golang.org/x/oauth2 v0.25.0
 	golang.org/x/text v0.22.0

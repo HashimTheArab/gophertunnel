@@ -3,15 +3,16 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"image/color"
 	"io"
 	"math/big"
 	"reflect"
 	"sort"
 	"unsafe"
+
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
 )
 
 // Writer implements writing methods for data types from Minecraft packets. Each Packet implementation has one
@@ -326,7 +327,7 @@ func (w *Writer) ItemDescriptorCount(i *ItemDescriptorCount) {
 func (w *Writer) ItemInstance(i *ItemInstance) {
 	x := &i.Stack
 	w.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there's no more data to follow. Return immediately.
 		return
 	}
@@ -373,7 +374,7 @@ func (w *Writer) ItemInstance(i *ItemInstance) {
 // Item writes an ItemStack x to the underlying buffer.
 func (w *Writer) Item(x *ItemStack) {
 	w.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there's no more data to follow. Return immediately.
 		return
 	}

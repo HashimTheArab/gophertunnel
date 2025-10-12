@@ -80,7 +80,7 @@ func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok 
 			UUID:          pack.UUID().String(),
 			DataChunkSize: packChunkSize,
 			ChunkCount:    uint32(pack.DataChunkCount(packChunkSize)),
-			Size:          uint64(pack.Len()),
+			Size:          uint64(pack.Size()),
 			Hash:          checksum[:],
 			PackType:      packType,
 		}, true

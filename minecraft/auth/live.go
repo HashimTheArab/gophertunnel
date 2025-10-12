@@ -109,7 +109,8 @@ func RequestLiveTokenWriterDevice(w io.Writer, deviceType Device) (*oauth2.Token
 	if err != nil {
 		return nil, err
 	}
-	_, _ = w.Write([]byte(fmt.Sprintf("Authenticate at %v using the code %v.\n", d.VerificationURI, d.UserCode)))
+
+	_, _ = fmt.Fprintf(w, "Authenticate at %v using the code %v.\n", d.VerificationURI, d.UserCode)
 	ticker := time.NewTicker(time.Second * time.Duration(d.Interval))
 	defer ticker.Stop()
 
