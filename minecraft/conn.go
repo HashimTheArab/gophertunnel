@@ -48,6 +48,59 @@ var exemptedPacks = []exemptedResourcePack{
 	},
 }
 
+var disconnectReasons = map[int32]string{
+	packet.DisconnectReasonCantConnectNoInternet:            "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonNoPermissions:                    "You're not invited to play on this server.",
+	packet.DisconnectReasonUnrecoverableError:               "An unrecoverable error has occurred.",
+	packet.DisconnectReasonThirdPartyBlocked:                "Third-party server is blocked.",
+	packet.DisconnectReasonThirdPartyNoInternet:             "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonThirdPartyBadIP:                  "Invalid IP address.",
+	packet.DisconnectReasonThirdPartyNoServerOrServerLocked: "The server you are attempting to join may not exist or be locked.",
+	packet.DisconnectReasonVersionMismatch:                  "Version mismatch",
+	packet.DisconnectReasonSkinIssue:                        "There is an issue with your skin.",
+	packet.DisconnectReasonInviteSessionNotFound:            "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonEduLevelSettingsMissing:          "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLocalServerNotFound:              "Local server not found.",
+	packet.DisconnectReasonUserLeaveGameAttempted:           "Quitting",
+	packet.DisconnectReasonPlatformLockedSkinsError:         "Platform Restricted Skin!",
+	packet.DisconnectReasonRealmsWorldUnassigned:            "This Realm has no world assigned.",
+	packet.DisconnectReasonRealmsServerCantConnect:          "Unable to connect to Realm.",
+	packet.DisconnectReasonRealmsServerHidden:               "Multiplayer Invitation",
+	packet.DisconnectReasonRealmsServerDisabledBeta:         "Realms are disabled for the beta.",
+	packet.DisconnectReasonRealmsServerDisabled:             "Realms are disabled.",
+	packet.DisconnectReasonCrossPlatformDisabled:            "Cross-Platform Play Disabled.",
+	packet.DisconnectReasonCantConnect:                      "Unable to connect to world.",
+	packet.DisconnectReasonSessionNotFound:                  "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonServerFull:                       "Server Full",
+	packet.DisconnectReasonInvalidPlatformSkin:              "Invalid or corrupt skin!",
+	packet.DisconnectReasonEditionVersionMismatch:           "Unable to load world.",
+	packet.DisconnectReasonEditionMismatch:                  "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLevelNewerThanExeVersion:         "A newer version of the game has saved this world. It cannot be loaded.",
+	packet.DisconnectReasonBannedSkin:                       "Skin Not Allowed In Multiplayer",
+	packet.DisconnectReasonTimeout:                          "Timed out",
+	packet.DisconnectReasonServerNotFound:                   "Server not found.",
+	packet.DisconnectReasonOutdatedServer:                   "The host is using an older version of Minecraft. Everyone should update to the latest version of Minecraft and try again.",
+	packet.DisconnectReasonOutdatedClient:                   "Could not connect: Outdated client!",
+	packet.DisconnectReasonMultiplayerDisabled:              "The world has been set to single player mode.",
+	packet.DisconnectReasonNoWiFi:                           "No WiFi Connection",
+	packet.DisconnectReasonDisconnected:                     "Disconnected by Server",
+	packet.DisconnectReasonInvalidPlayer:                    "This world's multiplayer setting is set to friends only. You must be friends with the host of this world to join.",
+	packet.DisconnectReasonLoggedInOtherLocation:            "Logged in from other location",
+	packet.DisconnectReasonServerIdConflict:                 "Cannot join world. The account you are signed in to is currently playing in this world on a different device.",
+	packet.DisconnectReasonNotAllowed:                       "You're not invited to play on this server.",
+	packet.DisconnectReasonNotAuthenticated:                 "You need to authenticate to Microsoft services.",
+	packet.DisconnectReasonInvalidTenant:                    "Unable to connect to the world. Please check your join code and try again.",
+	packet.DisconnectReasonKicked:                           "You were kicked from the game",
+	packet.DisconnectReasonResourcePackProblem:              "Encountered a problem while downloading or applying resource pack.",
+	packet.DisconnectReasonIncompatiblePack:                 "You are unable to join the world because you have an incompatible pack.",
+	packet.DisconnectReasonOutOfStorage:                     "Out of storage space",
+	packet.DisconnectReasonInvalidLevel:                     "Invalid Level!",
+	packet.DisconnectReasonShutdown:                         "Quitting",
+	packet.DisconnectReasonBadPacket:                        "Server sent broken packet.",
+	packet.DisconnectReasonEditorMismatchEditorWorld:        "This world is in Editor Mode. It cannot be loaded.",
+	packet.DisconnectReasonEditorMismatchVanillaWorld:       "This world is a not in Editor Mode. It cannot be loaded.",
+}
+
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket
 // must not be called on multiple goroutines simultaneously.
@@ -594,7 +647,16 @@ func (conn *Conn) receive(data []byte) error {
 		if err != nil {
 			return err
 		}
-		_ = conn.close(conn.closeErr(pks[0].(*packet.Disconnect).Message))
+		disconnectPacket := pks[0].(*packet.Disconnect)
+		disconnectMessage := disconnectPacket.Message
+		if disconnectPacket.Message == "" {
+			if reason, ok := disconnectReasons[disconnectPacket.Reason]; ok {
+				disconnectMessage = reason
+			} else {
+				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
+			}
+		}
+		_ = conn.close(conn.closeErr(disconnectMessage))
 		return nil
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
@@ -904,14 +966,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	}
 
 	if len(packsToDownload) != 0 {
-		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData)
+		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame)
 		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
 		return nil
 	}
-	conn.expect(packet.IDResourcePackStack)
+	conn.expect(packet.IDResourcePackStack, packet.IDStartGame)
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
@@ -1261,7 +1323,8 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 	}
-	conn.expect(packet.IDItemRegistry)
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
 }
 
@@ -1275,7 +1338,6 @@ func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
 		}
 	}
 
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
 	return nil
 }

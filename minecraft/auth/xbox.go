@@ -306,7 +306,7 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) error {
 	hash.Write(buf.Bytes())
 
 	// HTTP method, generally POST + 0 byte.
-	hash.Write([]byte("POST"))
+	hash.Write([]byte(request.Method))
 	hash.Write([]byte{0})
 	// Request uri path + raw query + 0 byte.
 	path := request.URL.Path
