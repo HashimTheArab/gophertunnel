@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
@@ -70,43 +71,93 @@ type authorizationToken struct {
 }
 
 func (t authorizationToken) Expired() bool {
-	return time.Now().After(t.NotAfter.Add(-time.Minute*5))
+	return time.Now().After(t.NotAfter.Add(-time.Minute * 5))
 }
 
 // SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
 // related endpoints that need an XBOX Live authenticated caller.
 func (t XBLToken) SetAuthHeader(r *http.Request) {
+	if len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+		panic("xbox: authorization token has no user info (malformed response from Microsoft)")
+	}
 	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
 }
 
-// RequestXBLToken requests an XBOX Live auth token using the passed Live token pair.
-func (c *AuthClient) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+// XBLTokenObtainer holds a live token and device token used for requesting XBL tokens.
+type XBLTokenObtainer struct {
+	authClient  *authclient.AuthClient
+	key         *ecdsa.PrivateKey
+	liveToken   *oauth2.Token
+	src         oauth2.TokenSource
+	deviceToken *deviceToken
+	deviceType  Device
+}
+
+// NewXBLTokenObtainer creates a new XBLTokenObtainer from the live token and token source passed.
+func NewXBLTokenObtainer(ctx context.Context, deviceType Device, authClient *authclient.AuthClient, liveToken *oauth2.Token, src oauth2.TokenSource) (*XBLTokenObtainer, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
 	// requests, and to sign these requests.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
+	deviceToken, err := obtainDeviceToken(ctx, authClient, key, deviceType)
+	if err != nil {
+		return nil, err
+	}
+	return &XBLTokenObtainer{key: key, deviceToken: deviceToken, liveToken: liveToken, src: src, deviceType: deviceType, authClient: authClient}, nil
+}
 
-	deviceToken, err := c.obtainDeviceToken(ctx, key)
+// RequestXBLToken requests an XBL token using the pair stored in the obtainer.
+// It automatically refreshes the live token if it has expired.
+func (x *XBLTokenObtainer) RequestXBLToken(ctx context.Context, relyingParty string) (*XBLToken, error) {
+	if !x.liveToken.Valid() {
+		tok, err := x.src.Token()
+		if err != nil {
+			return nil, fmt.Errorf("refresh live token: %w", err)
+		}
+		x.liveToken = tok
+	}
+	if time.Now().After(x.deviceToken.NotAfter) {
+		return nil, fmt.Errorf("device token is no longer valid") // dont refresh for now, device token stays valid for 14 days
+	}
+	return obtainXBLToken(ctx, x.authClient, x.key, x.liveToken, x.deviceToken, x.deviceType, relyingParty)
+}
+
+// RequestXBLToken calls [RequestXBLTokenDevice] with the default device info.
+func RequestXBLToken(ctx context.Context, authClient *authclient.AuthClient, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+	return RequestXBLTokenDevice(ctx, authClient, liveToken, DeviceAndroid, relyingParty)
+}
+
+// RequestXBLTokenDevice requests an XBOX Live auth token using the passed Live token pair.
+func RequestXBLTokenDevice(ctx context.Context, authClient *authclient.AuthClient, liveToken *oauth2.Token, deviceType Device, relyingParty string) (*XBLToken, error) {
+	if !liveToken.Valid() {
+		return nil, fmt.Errorf("live token is no longer valid")
+	}
+	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
+	// requests, and to sign these requests.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating ECDSA key: %w", err)
+	}
+	deviceToken, err := obtainDeviceToken(ctx, authClient, key, deviceType)
 	if err != nil {
 		return nil, fmt.Errorf("device token request failed: %w", err)
 	}
-	xblToken, err := c.obtainXBLToken(ctx, key, liveToken, deviceToken, relyingParty)
+	xblToken, err := obtainXBLToken(ctx, authClient, key, liveToken, deviceToken, deviceType, relyingParty)
 	if err != nil {
 		return nil, fmt.Errorf("xbl token request failed: %w", err)
 	}
 	return xblToken, nil
 }
 
-func (c *AuthClient) obtainXBLToken(ctx context.Context, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, relyingParty string) (*XBLToken, error) {
+func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, deviceType Device, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
-		"AppId":             AppID,
+		"AppId":             deviceType.ClientID,
 		"DeviceToken":       device.Token,
 		"Sandbox":           "RETAIL",
 		"UseModernGamertag": true,
@@ -130,9 +181,11 @@ func (c *AuthClient) obtainXBLToken(ctx context.Context, key *ecdsa.PrivateKey, 
 		return nil, fmt.Errorf("POST %v: %w", "https://sisu.xboxlive.com/authorize", err)
 	}
 	req.Header.Set("x-xbl-contract-version", "1")
-	sign(req, data, key)
+	if err := sign(req, data, key); err != nil {
+		return nil, fmt.Errorf("signing XBL auth request: %w", err)
+	}
 
-	resp, err := c.DoWithOptions(ctx, req, RetryOptions{Attempts: 5})
+	resp, err := c.DoWithOptions(ctx, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -172,15 +225,15 @@ type deviceToken struct {
 
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
-func (c *AuthClient) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
+func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, deviceType Device) (token *deviceToken, err error) {
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
 		"Properties": map[string]any{
 			"AuthMethod": "ProofOfPossession",
 			"Id":         "{" + uuid.New().String() + "}",
-			"DeviceType": DeviceType,
-			"Version":    "10",
+			"DeviceType": deviceType.DeviceType,
+			"Version":    deviceType.Version,
 			"ProofKey": map[string]any{
 				"crv": "P-256",
 				"alg": "ES256",
@@ -202,9 +255,11 @@ func (c *AuthClient) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKe
 
 	request.Header.Set("Cache-Control", "no-store, must-revalidate, no-cache")
 	request.Header.Set("x-xbl-contract-version", "1")
-	sign(request, data, key)
+	if err := sign(request, data, key); err != nil {
+		return nil, fmt.Errorf("signing device auth request: %w", err)
+	}
 
-	resp, err := c.DoWithOptions(ctx, request, RetryOptions{Attempts: 5})
+	resp, err := c.DoWithOptions(ctx, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -228,7 +283,7 @@ func (c *AuthClient) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKe
 
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
-func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
+func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) error {
 	var currentTime int64
 	serverDateMu.Lock()
 	currentServerDate := serverDate
@@ -244,7 +299,9 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 	// Signature policy version (0, 0, 0, 1) + 0 byte.
 	buf := bytes.NewBuffer([]byte{0, 0, 0, 1, 0})
 	// Timestamp + 0 byte.
-	_ = binary.Write(buf, binary.BigEndian, currentTime)
+	if err := binary.Write(buf, binary.BigEndian, currentTime); err != nil {
+		return fmt.Errorf("writing current time: %w", err)
+	}
 	buf.Write([]byte{0})
 	hash.Write(buf.Bytes())
 
@@ -269,7 +326,10 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 
 	// Sign the checksum produced, and combine the 'r' and 's' into a single signature.
 	// Encode r and s as 32-byte, zero-padded big-endian values so the P-256 signature is always exactly 64 bytes long.
-	r, s, _ := ecdsa.Sign(rand.Reader, key, hash.Sum(nil))
+	r, s, err := ecdsa.Sign(rand.Reader, key, hash.Sum(nil))
+	if err != nil {
+		return fmt.Errorf("signing hash: %w", err)
+	}
 	signature := make([]byte, 64)
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
@@ -277,11 +337,14 @@ func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
 	// The signature begins with 12 bytes, the first being the signature policy version (0, 0, 0, 1) again,
 	// and the other 8 the timestamp again.
 	buf = bytes.NewBuffer([]byte{0, 0, 0, 1})
-	_ = binary.Write(buf, binary.BigEndian, currentTime)
+	if err := binary.Write(buf, binary.BigEndian, currentTime); err != nil {
+		return fmt.Errorf("writing current time: %w", err)
+	}
 
 	// Append the signature to the other 12 bytes, and encode the signature with standard base64 encoding.
 	sig := append(buf.Bytes(), signature...)
 	request.Header.Set("Signature", base64.StdEncoding.EncodeToString(sig))
+	return nil
 }
 
 // windowsTimestamp returns a Windows specific timestamp. It has a certain offset from Unix time which must be
@@ -297,28 +360,4 @@ func padTo32Bytes(b *big.Int) []byte {
 	out := make([]byte, 32)
 	b.FillBytes(out)
 	return out
-}
-
-// parseXboxError returns the message associated with an Xbox Live error code.
-func parseXboxErrorCode(code string) string {
-	switch code {
-	case "2148916227":
-		return "Your account was banned by Xbox for violating one or more Community Standards for Xbox and is unable to be used."
-	case "2148916229":
-		return "Your account is currently restricted and your guardian has not given you permission to play online. Login to https://account.microsoft.com/family/ and have your guardian change your permissions."
-	case "2148916233":
-		return "Your account currently does not have an Xbox profile. Please create one at https://signup.live.com/signup"
-	case "2148916234":
-		return "Your account has not accepted Xbox's Terms of Service. Please login and accept them."
-	case "2148916235":
-		return "Your account resides in a region that Xbox has not authorized use from. Xbox has blocked your attempt at logging in."
-	case "2148916236":
-		return "Your account requires proof of age. Please login to https://login.live.com/login.srf and provide proof of age."
-	case "2148916237":
-		return "Your account has reached its limit for playtime. Your account has been blocked from logging in."
-	case "2148916238":
-		return "The account date of birth is under 18 years and cannot proceed unless the account is added to a family by an adult."
-	default:
-		return fmt.Sprintf("unknown error code: %v", code)
-	}
 }

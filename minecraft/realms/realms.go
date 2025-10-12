@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
 // Client is an instance of the realms api with a token.
 type Client struct {
 	getTokenSrc func() oauth2.TokenSource
-	getAuthCl   func() *auth.AuthClient
+	getAuthCl   func() *authclient.AuthClient
 
 	xblToken *auth.XBLToken
 }
@@ -39,9 +40,9 @@ var (
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
-func NewClient(getTS func() oauth2.TokenSource, getAC func() *auth.AuthClient) *Client {
+func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
 	if getAC == nil {
-		getAC = func() *auth.AuthClient { return auth.DefaultClient }
+		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
 	}
 	return &Client{
 		getTokenSrc: getTS,
@@ -266,7 +267,7 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return nil, err
 	}
 
-	c.xblToken, err = authClient.RequestXBLToken(ctx, t, realmsBaseURL+"/")
+	c.xblToken, err = auth.RequestXBLToken(ctx, authClient, t, realmsBaseURL+"/")
 	return c.xblToken, err
 }
 

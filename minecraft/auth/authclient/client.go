@@ -1,4 +1,4 @@
-package auth
+package authclient
 
 import (
 	"context"
@@ -23,18 +23,13 @@ func NewAuthClient(httpClient *http.Client) *AuthClient {
 	}
 
 	var transport *http.Transport
-	if httpClient.Transport != nil {
-		if t, ok := httpClient.Transport.(*http.Transport); ok {
-			transport = t
+	if httpClient.Transport == nil {
+		if t, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = t.Clone()
 		} else {
 			transport = &http.Transport{}
 		}
-	} else if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = t.Clone()
-	} else {
-		transport = &http.Transport{}
 	}
-
 	transport.TLSClientConfig = &tls.Config{
 		Renegotiation: tls.RenegotiateOnceAsClient,
 	}
@@ -49,12 +44,16 @@ func (c *AuthClient) Close() {
 	c.httpClient.CloseIdleConnections()
 }
 
+func (c *AuthClient) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
 func (c *AuthClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return sendRequestWithRetries(ctx, c.httpClient, req)
+	return SendRequestWithRetries(ctx, c.httpClient, req)
 }
 
 func (c *AuthClient) DoWithOptions(ctx context.Context, req *http.Request, opts RetryOptions) (*http.Response, error) {
-	return sendRequestWithRetries(ctx, c.httpClient, req, opts)
+	return SendRequestWithRetries(ctx, c.httpClient, req, opts)
 }
 
 type RetryOptions struct {
@@ -64,8 +63,8 @@ type RetryOptions struct {
 	MaxDelay time.Duration // Maximum delay (default: 8s)
 }
 
-// sendRequestWithRetries sends a request and retries on 429, 5xx and network errors.
-func sendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
+// SendRequestWithRetries sends a request and retries on 429, 5xx and network errors.
+func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
 	var opts RetryOptions
 	if len(r) > 0 {
 		opts = r[0]
