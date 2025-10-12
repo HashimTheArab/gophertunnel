@@ -71,7 +71,7 @@ func (s *Session) login(ctx context.Context) error {
 		Environment: &s.env,
 	}
 
-	s.obtainer, err = NewXBLTokenObtainer(ctx, s.deviceType, s.authClient, tok)
+	s.obtainer, err = NewXBLTokenObtainer(ctx, s.deviceType, s.authClient, tok, s.src)
 	if err != nil {
 		return fmt.Errorf("obtain device token: %w", err)
 	}

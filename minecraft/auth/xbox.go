@@ -85,12 +85,13 @@ type XBLTokenObtainer struct {
 	authClient  *authclient.AuthClient
 	key         *ecdsa.PrivateKey
 	liveToken   *oauth2.Token
+	src         oauth2.TokenSource
 	deviceToken *deviceToken
 	deviceType  Device
 }
 
-// NewXBLTokenObtainer creates a new XBLTokenObtainer from the live token passed.
-func NewXBLTokenObtainer(ctx context.Context, deviceType Device, authClient *authclient.AuthClient, liveToken *oauth2.Token) (*XBLTokenObtainer, error) {
+// NewXBLTokenObtainer creates a new XBLTokenObtainer from the live token and token source passed.
+func NewXBLTokenObtainer(ctx context.Context, deviceType Device, authClient *authclient.AuthClient, liveToken *oauth2.Token, src oauth2.TokenSource) (*XBLTokenObtainer, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
@@ -104,13 +105,18 @@ func NewXBLTokenObtainer(ctx context.Context, deviceType Device, authClient *aut
 	if err != nil {
 		return nil, err
 	}
-	return &XBLTokenObtainer{key: key, deviceToken: deviceToken, liveToken: liveToken, deviceType: deviceType, authClient: authClient}, nil
+	return &XBLTokenObtainer{key: key, deviceToken: deviceToken, liveToken: liveToken, src: src, deviceType: deviceType, authClient: authClient}, nil
 }
 
 // RequestXBLToken requests an XBL token using the pair stored in the obtainer.
+// It automatically refreshes the live token if it has expired.
 func (x *XBLTokenObtainer) RequestXBLToken(ctx context.Context, relyingParty string) (*XBLToken, error) {
 	if !x.liveToken.Valid() {
-		return nil, fmt.Errorf("live token is no longer valid")
+		tok, err := x.src.Token()
+		if err != nil {
+			return nil, fmt.Errorf("refresh live token: %w", err)
+		}
+		x.liveToken = tok
 	}
 	if time.Now().After(x.deviceToken.NotAfter) {
 		return nil, fmt.Errorf("device token is no longer valid") // dont refresh for now, device token stays valid for 14 days
