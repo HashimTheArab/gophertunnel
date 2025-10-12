@@ -185,25 +185,35 @@ func setServerDate(d time.Time) {
 	}
 }
 
+// postFormRequest is a helper that creates and sends a POST request with form data.
+func postFormRequest(ctx context.Context, authClient *authclient.AuthClient, url string, form url.Values) (*http.Response, error) {
+	req, err := http.NewRequest("POST", url, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create request for POST %s: %w", url, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", url, err)
+	}
+	return resp, nil
+}
+
 // StartDeviceAuth starts the device auth, retrieving a login URI for the user and a code the user needs to
 // enter.
 func StartDeviceAuth(ctx context.Context, authClient *authclient.AuthClient, deviceType Device) (*deviceAuthConnect, error) {
 	const connectURL = "https://login.live.com/oauth20_connect.srf"
-	form := url.Values{
+	resp, err := postFormRequest(ctx, authClient, connectURL, url.Values{
 		"client_id":     {deviceType.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"response_type": {"device_code"},
-	}
-	req, err := http.NewRequest("POST", connectURL, strings.NewReader(form.Encode()))
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create request for POST %s: %w", connectURL, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", connectURL, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("POST %s: %v", connectURL, resp.Status)
 	}
@@ -223,21 +233,13 @@ func newOAuth2Token(poll *deviceAuthPoll) *oauth2.Token {
 // PollDeviceAuth polls the token endpoint for the device code. A token is returned if the user authenticated
 // successfully. If the user has not yet authenticated, err is nil but the token is nil too.
 func PollDeviceAuth(ctx context.Context, authClient *authclient.AuthClient, deviceCode string, deviceType Device) (t *oauth2.Token, err error) {
-	form := url.Values{
+	resp, err := postFormRequest(ctx, authClient, microsoft.LiveConnectEndpoint.TokenURL, url.Values{
 		"client_id":   {deviceType.ClientID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {deviceCode},
-	}
-
-	req, err := http.NewRequest("POST", microsoft.LiveConnectEndpoint.TokenURL, strings.NewReader(form.Encode()))
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create request for POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -264,21 +266,14 @@ func PollDeviceAuth(ctx context.Context, authClient *authclient.AuthClient, devi
 func refreshToken(ctx context.Context, authClient *authclient.AuthClient, t *oauth2.Token, deviceType Device) (*oauth2.Token, error) {
 	// This function unfortunately needs to exist because golang.org/x/oauth2 does not pass the scope to this
 	// request, which Microsoft Connect enforces.
-	form := url.Values{
+	resp, err := postFormRequest(ctx, authClient, microsoft.LiveConnectEndpoint.TokenURL, url.Values{
 		"client_id":     {deviceType.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {t.RefreshToken},
-	}
-	req, err := http.NewRequest("POST", microsoft.LiveConnectEndpoint.TokenURL, strings.NewReader(form.Encode()))
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create request for POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := authclient.SendRequestWithRetries(ctx, authClient.HTTPClient(), req)
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
