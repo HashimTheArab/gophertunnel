@@ -316,6 +316,29 @@ func compile(data []byte) (*Pack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
 	}
+
+	// Check if this is a nested zip (only contains a single .zip file)
+	// We only unwrap one level to avoid recursive nesting issues
+	if len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
+		nestedFile, err := zr.File[0].Open()
+		if err != nil {
+			return nil, fmt.Errorf("open nested zip %s: %w", zr.File[0].Name, err)
+		}
+		defer nestedFile.Close()
+
+		nestedData, err := io.ReadAll(nestedFile)
+		if err != nil {
+			return nil, fmt.Errorf("read nested zip %s: %w", zr.File[0].Name, err)
+		}
+
+		// Replace data with the unwrapped nested zip and re-open it
+		data = nestedData
+		zr, err = zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, fmt.Errorf("open unwrapped zip: %w", err)
+		}
+	}
+
 	pr := zipPackReader{zr}
 
 	// Read the manifest to ensure that it exists and is valid.
