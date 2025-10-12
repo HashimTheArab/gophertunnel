@@ -1,12 +1,14 @@
 package franchise
 
 import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"testing"
+
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 func TestDiscover(t *testing.T) {
-	d, err := Discover(protocol.CurrentVersion)
+	d, err := Discover(t.Context(), authclient.DefaultClient, protocol.CurrentVersion)
 	if err != nil {
 		t.Fatal(err)
 	}

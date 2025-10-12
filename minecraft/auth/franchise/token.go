@@ -2,6 +2,7 @@ package franchise
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
 
 	"github.com/google/uuid"
@@ -29,7 +31,7 @@ const (
 )
 
 // Token starts the session and returns the session token
-func (conf TokenConfig) Token() (*Token, error) {
+func (conf TokenConfig) Token(ctx context.Context, c *authclient.AuthClient) (*Token, error) {
 	if conf.Environment == nil {
 		return nil, errors.New("minecraft/franchise: TokenConfig: Environment is nil")
 	}
@@ -44,14 +46,14 @@ func (conf TokenConfig) Token() (*Token, error) {
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, u.String(), buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), buf)
 	if err != nil {
 		return nil, fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", req.Method, req.URL, err)
 	}

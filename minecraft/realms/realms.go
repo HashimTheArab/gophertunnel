@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
@@ -151,7 +152,7 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 		return nil, err
 	}
 
-	r.xblToken, err = auth.RequestXBLToken(ctx, t, "https://pocket.realms.minecraft.net/")
+	r.xblToken, err = auth.RequestXBLToken(ctx, authclient.DefaultClient, t, "https://pocket.realms.minecraft.net/")
 	return r.xblToken, err
 }
 

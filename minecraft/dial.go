@@ -24,6 +24,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -364,7 +365,7 @@ func getAuthSession(ctx context.Context, dialer Dialer) (*auth.Session, error) {
 		return dialer.AuthSession, nil
 	}
 
-	return auth.SessionFromTokenSource(dialer.TokenSource, auth.DeviceAndroid, ctx)
+	return auth.SessionFromTokenSource(authclient.DefaultClient, dialer.TokenSource, auth.DeviceAndroid, ctx)
 }
 
 // authChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
@@ -372,7 +373,7 @@ func getAuthSession(ctx context.Context, dialer Dialer) (*auth.Session, error) {
 func authChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey) (string, error) {
 
 	// Obtain the raw chain data using the
-	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key)
+	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key, authclient.DefaultClient)
 	if err != nil {
 		return "", fmt.Errorf("request Minecraft auth chain: %w", err)
 	}

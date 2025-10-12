@@ -11,6 +11,7 @@ import (
 	"github.com/df-mc/go-playfab"
 	"github.com/df-mc/go-playfab/title"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/auth/franchise"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
@@ -18,6 +19,7 @@ import (
 )
 
 type Session struct {
+	authClient           *authclient.AuthClient
 	env                  franchise.AuthorizationEnvironment
 	obtainer             *XBLTokenObtainer
 	legacyMultiplayerXBL *XBLToken
@@ -29,8 +31,8 @@ type Session struct {
 }
 
 // SessionFromTokenSource creates a session from an XBOX token source and returns it.
-func SessionFromTokenSource(src oauth2.TokenSource, deviceType Device, ctx context.Context) (s *Session, err error) {
-	s = &Session{src: src, deviceType: deviceType}
+func SessionFromTokenSource(authClient *authclient.AuthClient, src oauth2.TokenSource, deviceType Device, ctx context.Context) (s *Session, err error) {
+	s = &Session{authClient: authClient, src: src, deviceType: deviceType}
 	if err := s.login(ctx); err != nil {
 		return nil, err
 	}
@@ -42,7 +44,7 @@ func (s *Session) login(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("request token: %w", err)
 	}
-	err = s.initDiscovery()
+	err = s.initDiscovery(ctx)
 	if err != nil {
 		return fmt.Errorf("init discovery: %w", err)
 	}
@@ -69,7 +71,7 @@ func (s *Session) login(ctx context.Context) error {
 		Environment: &s.env,
 	}
 
-	s.obtainer, err = NewXBLTokenObtainer(tok, s.deviceType, ctx)
+	s.obtainer, err = NewXBLTokenObtainer(ctx, s.deviceType, s.authClient, tok)
 	if err != nil {
 		return fmt.Errorf("obtain device token: %w", err)
 	}
@@ -81,8 +83,8 @@ func (s *Session) login(ctx context.Context) error {
 	return s.obtainMcToken(ctx)
 }
 
-func (s *Session) initDiscovery() error {
-	discovery, err := franchise.Discover(protocol.CurrentVersion)
+func (s *Session) initDiscovery(ctx context.Context) error {
+	discovery, err := franchise.Discover(ctx, s.authClient, protocol.CurrentVersion)
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
@@ -119,7 +121,7 @@ func (s *Session) obtainMcToken(ctx context.Context) (err error) {
 		return err
 	}
 	s.conf.User.Token = playfabIdentity.SessionTicket
-	s.mcToken, err = s.conf.Token()
+	s.mcToken, err = s.conf.Token(ctx, s.authClient)
 	if err != nil {
 		return fmt.Errorf("start session: %w", err)
 	}
@@ -169,7 +171,7 @@ func (s *Session) MultiplayerToken(ctx context.Context, key *ecdsa.PrivateKey) (
 	if err != nil {
 		return nil, fmt.Errorf("obtain MCToken: %w", err)
 	}
-	return franchise.RequestMultiplayerToken(ctx, s.env, mcToken, key)
+	return franchise.RequestMultiplayerToken(ctx, s.authClient, s.env, mcToken, key)
 }
 
 const expirationTimeDelta = time.Minute

@@ -11,6 +11,7 @@ import (
 	"github.com/pelletier/go-toml"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
@@ -48,7 +49,7 @@ func main() {
 	config := readConfig()
 	src := tokenSource()
 
-	session, err := auth.SessionFromTokenSource(src, auth.DeviceAndroid, context.Background())
+	session, err := auth.SessionFromTokenSource(authclient.DefaultClient, src, auth.DeviceAndroid, context.Background())
 	if err != nil {
 		panic(err)
 	}

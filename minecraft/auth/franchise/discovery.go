@@ -1,31 +1,41 @@
 package franchise
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
 )
 
 const userAgent = "libhttpclient/1.0.0.0"
 
-var discovered = map[string]*Discovery{}
+var (
+	discovered  = map[string]*Discovery{}
+	discoveryMu sync.Mutex
+)
 
-func Discover(build string) (*Discovery, error) {
+func Discover(ctx context.Context, c *authclient.AuthClient, build string) (*Discovery, error) {
+	discoveryMu.Lock()
 	if discovery, ok := discovered[build]; ok {
+		discoveryMu.Unlock()
 		return discovery, nil
 	}
-	req, err := http.NewRequest(http.MethodGet, discoveryURL.JoinPath(build).String(), nil)
+	discoveryMu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL.JoinPath(build).String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", req.Method, req.URL, err)
 	}
@@ -40,7 +50,11 @@ func Discover(build string) (*Discovery, error) {
 	if result.Data == nil {
 		return nil, errors.New("franchise: Discover: result.Data is nil")
 	}
+
+	discoveryMu.Lock()
 	discovered[build] = result.Data
+	discoveryMu.Unlock()
+
 	return result.Data, nil
 }
 

@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
@@ -81,6 +81,7 @@ func (t XBLToken) SetAuthHeader(r *http.Request) {
 
 // XBLTokenObtainer holds a live token and device token used for requesting XBL tokens.
 type XBLTokenObtainer struct {
+	authClient  *authclient.AuthClient
 	key         *ecdsa.PrivateKey
 	liveToken   *oauth2.Token
 	deviceToken *deviceToken
@@ -88,30 +89,21 @@ type XBLTokenObtainer struct {
 }
 
 // NewXBLTokenObtainer creates a new XBLTokenObtainer from the live token passed.
-func NewXBLTokenObtainer(liveToken *oauth2.Token, deviceType Device, ctx context.Context) (*XBLTokenObtainer, error) {
+func NewXBLTokenObtainer(ctx context.Context, deviceType Device, authClient *authclient.AuthClient, liveToken *oauth2.Token) (*XBLTokenObtainer, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Renegotiation: tls.RenegotiateOnceAsClient,
-			},
-		},
-	}
-	defer c.CloseIdleConnections()
-
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
 	// requests, and to sign these requests.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
-	deviceToken, err := obtainDeviceToken(ctx, c, key, deviceType)
+	deviceToken, err := obtainDeviceToken(ctx, authClient, key, deviceType)
 	if err != nil {
 		return nil, err
 	}
-	return &XBLTokenObtainer{key: key, deviceToken: deviceToken, liveToken: liveToken, deviceType: deviceType}, nil
+	return &XBLTokenObtainer{key: key, deviceToken: deviceToken, liveToken: liveToken, deviceType: deviceType, authClient: authClient}, nil
 }
 
 // RequestXBLToken requests an XBL token using the pair stored in the obtainer.
@@ -122,51 +114,33 @@ func (x *XBLTokenObtainer) RequestXBLToken(ctx context.Context, relyingParty str
 	if time.Now().After(x.deviceToken.NotAfter) {
 		return nil, fmt.Errorf("device token is no longer valid") // dont refresh for now, device token stays valid for 14 days
 	}
-	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Renegotiation: tls.RenegotiateOnceAsClient,
-			},
-		},
-	}
-	defer c.CloseIdleConnections()
-	return obtainXBLToken(ctx, c, x.key, x.liveToken, x.deviceToken, x.deviceType, relyingParty)
+	return obtainXBLToken(ctx, x.authClient, x.key, x.liveToken, x.deviceToken, x.deviceType, relyingParty)
 }
 
 // RequestXBLToken calls [RequestXBLTokenDevice] with the default device info.
-func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
-	return RequestXBLTokenDevice(ctx, liveToken, DeviceAndroid, relyingParty)
+func RequestXBLToken(ctx context.Context, authClient *authclient.AuthClient, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+	return RequestXBLTokenDevice(ctx, authClient, liveToken, DeviceAndroid, relyingParty)
 }
 
 // RequestXBLTokenDevice requests an XBOX Live auth token using the passed Live token pair.
-func RequestXBLTokenDevice(ctx context.Context, liveToken *oauth2.Token, deviceType Device, relyingParty string) (*XBLToken, error) {
+func RequestXBLTokenDevice(ctx context.Context, authClient *authclient.AuthClient, liveToken *oauth2.Token, deviceType Device, relyingParty string) (*XBLToken, error) {
 	if !liveToken.Valid() {
 		return nil, fmt.Errorf("live token is no longer valid")
 	}
-	c := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Renegotiation:      tls.RenegotiateOnceAsClient,
-				InsecureSkipVerify: true,
-			},
-		},
-	}
-	defer c.CloseIdleConnections()
-
 	// We first generate an ECDSA private key which will be used to provide a 'ProofKey' to each of the
 	// requests, and to sign these requests.
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
-	deviceToken, err := obtainDeviceToken(ctx, c, key, deviceType)
+	deviceToken, err := obtainDeviceToken(ctx, authClient, key, deviceType)
 	if err != nil {
 		return nil, err
 	}
-	return obtainXBLToken(ctx, c, key, liveToken, deviceToken, deviceType, relyingParty)
+	return obtainXBLToken(ctx, authClient, key, liveToken, deviceToken, deviceType, relyingParty)
 }
 
-func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, deviceType Device, relyingParty string) (*XBLToken, error) {
+func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, deviceType Device, relyingParty string) (*XBLToken, error) {
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
 		"AppId":             deviceType.ClientID,
@@ -195,7 +169,7 @@ func obtainXBLToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, 
 	req.Header.Set("x-xbl-contract-version", "1")
 	sign(req, data, key)
 
-	resp, err := c.Do(req)
+	resp, err := c.Do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("POST %v: %w", "https://sisu.xboxlive.com/authorize", err)
 	}
@@ -221,7 +195,7 @@ type deviceToken struct {
 
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
-func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKey, deviceType Device) (token *deviceToken, err error) {
+func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, deviceType Device) (token *deviceToken, err error) {
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
@@ -251,7 +225,7 @@ func obtainDeviceToken(ctx context.Context, c *http.Client, key *ecdsa.PrivateKe
 	request.Header.Set("x-xbl-contract-version", "1")
 	sign(request, data, key)
 
-	resp, err := c.Do(request)
+	resp, err := c.Do(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("POST %v: %w", "https://device.auth.xboxlive.com/device/authenticate", err)
 	}
