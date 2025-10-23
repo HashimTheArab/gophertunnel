@@ -115,6 +115,7 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonNotAuthenticated:                 "You need to authenticate to Microsoft services.",
 	packet.DisconnectReasonInvalidTenant:                    "Unable to connect to the world. Please check your join code and try again.",
 	packet.DisconnectReasonKicked:                           "You were kicked from the game",
+	packet.DisconnectReasonKickedForExploit:                 "You were kicked from the game for exploiting.",
 	packet.DisconnectReasonResourcePackProblem:              "Encountered a problem while downloading or applying resource pack.",
 	packet.DisconnectReasonIncompatiblePack:                 "You are unable to join the world because you have an incompatible pack.",
 	packet.DisconnectReasonOutOfStorage:                     "Out of storage space",
@@ -676,6 +677,7 @@ func (conn *Conn) receive(data []byte) error {
 			if reason, ok := disconnectReasons[disconnectPacket.Reason]; ok {
 				disconnectMessage = reason
 			} else {
+				conn.log.Debug("unknown disconnect reason", "reason", disconnectPacket.Reason)
 				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
 			}
 		}
