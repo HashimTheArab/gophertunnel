@@ -222,9 +222,7 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 	}
 	defer resp.Body.Close()
 
-	if d := getDateHeader(resp.Header); !d.IsZero() {
-		setServerDate(d)
-	}
+	updateServerTimeFromHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -318,6 +316,8 @@ func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa
 		setServerDate(d)
 	}
 
+	updateServerTimeFromHeaders(resp.Header)
+
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -329,11 +329,11 @@ func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa
 
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
-func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) error {
+func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
+	serverTimeMu.Lock()
+	currentServerDate := serverTime
+	serverTimeMu.Unlock()
 	var currentTime int64
-	serverDateMu.Lock()
-	currentServerDate := serverDate
-	serverDateMu.Unlock()
 	if !currentServerDate.IsZero() {
 		currentTime = windowsTimestamp(currentServerDate)
 	} else { // Should never happen
