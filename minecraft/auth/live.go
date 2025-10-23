@@ -146,27 +146,25 @@ func (conf Config) RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
 }
 
 var (
-	serverDate   time.Time
-	serverDateMu sync.Mutex
+	serverTimeMu sync.Mutex
+	// serverTime represents the most recent server date received from Microsoft servers.
+	// It's used for the signed requests which can be blocked if the users device time is not synced.
+	// It uses the date received from the unsigned requests.
+	serverTime time.Time
 )
 
-func getDateHeader(headers http.Header) time.Time {
+func updateServerTimeFromHeaders(headers http.Header) {
 	date := headers.Get("Date")
 	if date == "" {
-		return time.Time{}
+		return
 	}
-	if t, err := time.Parse(time.RFC1123, date); err == nil {
-		return t
+	t, err := time.Parse(time.RFC1123, date)
+	if err != nil || t.IsZero() {
+		return
 	}
-	return time.Time{}
-}
-
-func setServerDate(d time.Time) {
-	if !d.IsZero() {
-		serverDateMu.Lock()
-		serverDate = d
-		serverDateMu.Unlock()
-	}
+	serverTimeMu.Lock()
+	serverTime = t
+	serverTimeMu.Unlock()
 }
 
 // postFormRequest is a helper that creates and sends a POST request with form data.
@@ -230,9 +228,7 @@ func (conf Config) pollDeviceAuth(deviceCode string) (t *oauth2.Token, err error
 	}
 	defer resp.Body.Close()
 
-	if d := getDateHeader(resp.Header); !d.IsZero() {
-		setServerDate(d)
-	}
+	updateServerTimeFromHeaders(resp.Header)
 
 	poll := new(deviceAuthPoll)
 	if err := json.NewDecoder(resp.Body).Decode(poll); err != nil {
@@ -264,9 +260,7 @@ func (conf Config) refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
 	}
 	defer resp.Body.Close()
 
-	if d := getDateHeader(resp.Header); !d.IsZero() {
-		setServerDate(d)
-	}
+	updateServerTimeFromHeaders(resp.Header)
 
 	poll := new(deviceAuthPoll)
 	if err := json.NewDecoder(resp.Body).Decode(poll); err != nil {
