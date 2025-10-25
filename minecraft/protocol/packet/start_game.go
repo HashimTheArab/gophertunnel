@@ -30,6 +30,7 @@ const (
 	EditorWorldTypeNotEditor = iota
 	EditorWorldTypeProject
 	EditorWorldTypeTestLevel
+	EditorWorldTypeRealmsUpload
 )
 
 // StartGame is sent by the server to send information about the world the player will be spawned in. It
@@ -198,7 +199,7 @@ type StartGame struct {
 	EducationSharedResourceURI protocol.EducationSharedResourceURI
 	// ForceExperimentalGameplay specifies if experimental gameplay should be force enabled. For servers this
 	// should always be set to false.
-	ForceExperimentalGameplay protocol.Optional[bool]
+	ForceExperimentalGameplay bool
 	// LevelID is a base64 encoded world ID that is used to identify the world.
 	LevelID string
 	// WorldName is the name of the world that the player is joining. Note that this field shows up above the
@@ -221,9 +222,6 @@ type StartGame struct {
 	EnchantmentSeed int32
 	// Blocks is a list of all custom blocks registered on the server.
 	Blocks []protocol.BlockEntry
-	// Items is a list of all items with their legacy IDs which are available in the game. Failing to send any
-	// of the items that are in the game will crash mobile clients.
-	Items []protocol.ItemEntry
 	// MultiPlayerCorrelationID is a unique ID specifying the multi-player session of the player. A random
 	// UUID should be filled out for this field.
 	MultiPlayerCorrelationID string
@@ -255,10 +253,14 @@ type StartGame struct {
 	WorldID string
 	// ScenarioID is always empty in vanilla and its usage is currently unknown.
 	ScenarioID string
+	// OwnerID is always empty in vanilla and its usage is currently unknown.
+	OwnerID string
 	// UseBlockNetworkIDHashes is true if the client should use the hash of a block's name as its network ID rather than
 	// its index in the expected block palette. This is useful for servers that wish to support multiple protocol versions
 	// and custom blocks, but it will result in extra bytes being written for every block in a sub chunk palette.
 	UseBlockNetworkIDHashes bool
+	// TickDeathSystemsEnabled specifies if the new tick death systems are enabled.
+	TickDeathSystemsEnabled bool
 	// ServerAuthoritativeSound is currently unknown as to what it does.
 	ServerAuthoritativeSound bool
 }
@@ -301,7 +303,7 @@ func (pk *StartGame) Marshal(io protocol.IO) {
 	io.Varint32(&pk.PlatformBroadcastMode)
 	io.Bool(&pk.CommandsEnabled)
 	io.Bool(&pk.TexturePackRequired)
-	protocol.FuncSlice(io, &pk.GameRules, io.GameRule)
+	protocol.FuncSlice(io, &pk.GameRules, io.GameRuleLegacy)
 	protocol.SliceUint32Length(io, &pk.Experiments)
 	io.Bool(&pk.ExperimentsPreviouslyToggled)
 	io.Bool(&pk.BonusChestEnabled)
@@ -323,12 +325,13 @@ func (pk *StartGame) Marshal(io protocol.IO) {
 	io.Int32(&pk.LimitedWorldDepth)
 	io.Bool(&pk.NewNether)
 	protocol.Single(io, &pk.EducationSharedResourceURI)
-	protocol.OptionalFunc(io, &pk.ForceExperimentalGameplay, io.Bool)
+	io.Bool(&pk.ForceExperimentalGameplay)
 	io.Uint8(&pk.ChatRestrictionLevel)
 	io.Bool(&pk.DisablePlayerInteractions)
 	io.String(&pk.ServerID)
 	io.String(&pk.WorldID)
 	io.String(&pk.ScenarioID)
+	io.String(&pk.OwnerID)
 	io.String(&pk.LevelID)
 	io.String(&pk.WorldName)
 	io.String(&pk.TemplateContentIdentity)
@@ -337,7 +340,6 @@ func (pk *StartGame) Marshal(io protocol.IO) {
 	io.Int64(&pk.Time)
 	io.Varint32(&pk.EnchantmentSeed)
 	protocol.Slice(io, &pk.Blocks)
-	protocol.Slice(io, &pk.Items)
 	io.String(&pk.MultiPlayerCorrelationID)
 	io.Bool(&pk.ServerAuthoritativeInventory)
 	io.String(&pk.GameVersion)
@@ -346,5 +348,6 @@ func (pk *StartGame) Marshal(io protocol.IO) {
 	io.UUID(&pk.WorldTemplateID)
 	io.Bool(&pk.ClientSideGeneration)
 	io.Bool(&pk.UseBlockNetworkIDHashes)
+	io.Bool(&pk.TickDeathSystemsEnabled)
 	io.Bool(&pk.ServerAuthoritativeSound)
 }

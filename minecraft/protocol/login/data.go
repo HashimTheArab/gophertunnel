@@ -4,13 +4,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"golang.org/x/text/language"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"golang.org/x/text/language"
 )
 
 // IdentityData contains identity data of the player logged in. It is found in one of the JWT claims signed
@@ -34,10 +35,14 @@ type IdentityData struct {
 	TitleID string `json:"titleId,omitempty"`
 }
 
-// checkUsername is used to check if a username is valid according to the Microsoft specification: "You can
+// checkOfflineUsername is used to check if a username is valid for normal Minecraft client,
+// it validates usernames only for unauthenticated clients.
+var checkOfflineUsername = regexp.MustCompile(`[ \p{L}]`).MatchString
+
+// checkOnlineUsername is used to check if a username is valid according to the Microsoft specification: "You can
 // use up to 15 characters: Aa-Zz, 0-9, and single spaces. It cannot start with a number and cannot start or
 // end with a space."
-var checkUsername = regexp.MustCompile("[A-Za-z0-9 ]").MatchString
+var checkOnlineUsername = regexp.MustCompile("[A-Za-z0-9 ]").MatchString
 
 // Validate validates the identity data. It returns an error if any data contained in the IdentityData is
 // invalid.
@@ -48,8 +53,13 @@ func (data IdentityData) Validate() error {
 	if id, err := uuid.Parse(data.Identity); err != nil || id == uuid.Nil {
 		return fmt.Errorf("UUID must be parseable as a valid UUID, but got %v", data.Identity)
 	}
-	if len(data.DisplayName) == 0 || len(data.DisplayName) > 15 {
-		return fmt.Errorf("DisplayName must not be empty or longer than 15 characters, but got %v characters", len(data.DisplayName))
+	nameLimit := 15
+	if data.XUID == "" {
+		// Non-authenticated clients can have up to 16 characters in their name.
+		nameLimit = 16
+	}
+	if len(data.DisplayName) == 0 || len(data.DisplayName) > nameLimit {
+		return fmt.Errorf("DisplayName must not be empty or longer than %d characters, but got %v characters", nameLimit, len(data.DisplayName))
 	}
 	if data.DisplayName[0] == ' ' || data.DisplayName[len(data.DisplayName)-1] == ' ' {
 		return fmt.Errorf("DisplayName may not have a space as first/last character, but got %v", data.DisplayName)
@@ -57,8 +67,14 @@ func (data IdentityData) Validate() error {
 	if data.DisplayName[0] >= '0' && data.DisplayName[0] <= '9' {
 		return fmt.Errorf("DisplayName may not have a number as first character, but got %v", data.DisplayName)
 	}
-	if !checkUsername(data.DisplayName) {
-		return fmt.Errorf("DisplayName must only contain numbers, letters and spaces, but got %v", data.DisplayName)
+	if data.XUID != "" {
+		if !checkOnlineUsername(data.DisplayName) {
+			return fmt.Errorf("DisplayName for authorized client must only contain numbers, Latin letters and spaces, but got %v", data.DisplayName)
+		}
+	} else {
+		if !checkOfflineUsername(data.DisplayName) {
+			return fmt.Errorf("DisplayName for unauthorized client must only contain numbers, letters and spaces, but got %v", data.DisplayName)
+		}
 	}
 	// We check here if the name contains at least 2 spaces after each other, which is not allowed. The name
 	// is only allowed to have single spaces.
@@ -183,7 +199,7 @@ type ClientData struct {
 	// and the username changed.
 	// Although this field is obviously here for a reason, allowing this is too dangerous and should never be
 	// done.
-	ThirdPartyNameOnly bool
+	ThirdPartyNameOnly *bool `json:"ThirdPartyNameOnly,omitempty"`
 	// UIProfile is the UI profile used. For the 'Pocket' UI, this is 1. For the 'Classic' UI, this is 0.
 	UIProfile int
 	// TrustedSkin is a boolean indicating if the skin the client is using is trusted.
@@ -193,6 +209,22 @@ type ClientData struct {
 	// CompatibleWithClientSideChunkGen is a boolean indicating if the client's hardware is capable of using the client
 	// side chunk generation system.
 	CompatibleWithClientSideChunkGen bool
+	// MaxViewDistance is the highest render distance that the client's hardware can handle.
+	MaxViewDistance int
+	// MemoryTier is the tier of memory that the client's hardware has. This is a number between 0 and 5. The
+	// full calculation of this tier is currently unknown but the following is a rough estimate from a
+	// developer at Mojang:
+	// 0 - Undetermined
+	// 1 - Super Low, less than ~1.5GB of memory
+	// 2 - Low, less than ~2GB of memory
+	// 3 - Mid, less than ~4GB of memory
+	// 4 - High, less than ~8GB of memory
+	// 5 - Super High, more than ~8GB of memory
+	MemoryTier int
+	// PlatformType is the type of platform the client is running.
+	PlatformType int
+	// GraphicsMode is the graphics mode the client is running.
+	GraphicsMode int
 }
 
 // PersonaPiece represents a piece of a persona skin. All pieces are sent separately.

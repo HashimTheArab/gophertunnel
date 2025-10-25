@@ -9,23 +9,27 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
+
+	"regexp"
+
+	"io"
+	"log/slog"
+	"net"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 	"github.com/sandertv/gophertunnel/minecraft/text"
-	"io"
-	"log"
-	"net"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
@@ -39,9 +43,87 @@ type exemptedResourcePack struct {
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
 	{
+		uuid:    "b41c2785-c512-4a49-af56-3a87afd47c57",
+		version: "1.21.30",
+	},
+	{
+		uuid:    "a4df0cb3-17be-4163-88d7-fcf7002b935d",
+		version: "1.21.20",
+	},
+	{
+		uuid:    "d19adffe-a2e1-4b02-8436-ca4583368c89",
+		version: "1.21.10",
+	},
+	{
+		uuid:    "85d5603d-2824-4b21-8044-34f441f4fce1",
+		version: "1.21.0",
+	},
+	{
+		uuid:    "e977cd13-0a11-4618-96fb-03dfe9c43608",
+		version: "1.20.60",
+	},
+	{
+		uuid:    "0674721c-a0aa-41a1-9ba8-1ed33ea3e7ed",
+		version: "1.20.50",
+	},
+	{
 		uuid:    "0fba4063-dba1-4281-9b89-ff9390653530",
 		version: "1.0.0",
 	},
+}
+
+var disconnectReasons = map[int32]string{
+	packet.DisconnectReasonCantConnectNoInternet:            "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonNoPermissions:                    "You're not invited to play on this server.",
+	packet.DisconnectReasonUnrecoverableError:               "An unrecoverable error has occurred.",
+	packet.DisconnectReasonThirdPartyBlocked:                "Third-party server is blocked.",
+	packet.DisconnectReasonThirdPartyNoInternet:             "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonThirdPartyBadIP:                  "Invalid IP address.",
+	packet.DisconnectReasonThirdPartyNoServerOrServerLocked: "The server you are attempting to join may not exist or be locked.",
+	packet.DisconnectReasonVersionMismatch:                  "Version mismatch",
+	packet.DisconnectReasonSkinIssue:                        "There is an issue with your skin.",
+	packet.DisconnectReasonInviteSessionNotFound:            "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonEduLevelSettingsMissing:          "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLocalServerNotFound:              "Local server not found.",
+	packet.DisconnectReasonUserLeaveGameAttempted:           "Quitting",
+	packet.DisconnectReasonPlatformLockedSkinsError:         "Platform Restricted Skin!",
+	packet.DisconnectReasonRealmsWorldUnassigned:            "This Realm has no world assigned.",
+	packet.DisconnectReasonRealmsServerCantConnect:          "Unable to connect to Realm.",
+	packet.DisconnectReasonRealmsServerHidden:               "Multiplayer Invitation",
+	packet.DisconnectReasonRealmsServerDisabledBeta:         "Realms are disabled for the beta.",
+	packet.DisconnectReasonRealmsServerDisabled:             "Realms are disabled.",
+	packet.DisconnectReasonCrossPlatformDisabled:            "Cross-Platform Play Disabled.",
+	packet.DisconnectReasonCantConnect:                      "Unable to connect to world.",
+	packet.DisconnectReasonSessionNotFound:                  "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonServerFull:                       "Server Full",
+	packet.DisconnectReasonInvalidPlatformSkin:              "Invalid or corrupt skin!",
+	packet.DisconnectReasonEditionVersionMismatch:           "Unable to load world.",
+	packet.DisconnectReasonEditionMismatch:                  "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLevelNewerThanExeVersion:         "A newer version of the game has saved this world. It cannot be loaded.",
+	packet.DisconnectReasonBannedSkin:                       "Skin Not Allowed In Multiplayer",
+	packet.DisconnectReasonTimeout:                          "Timed out",
+	packet.DisconnectReasonServerNotFound:                   "Server not found.",
+	packet.DisconnectReasonOutdatedServer:                   "The host is using an older version of Minecraft. Everyone should update to the latest version of Minecraft and try again.",
+	packet.DisconnectReasonOutdatedClient:                   "Could not connect: Outdated client!",
+	packet.DisconnectReasonMultiplayerDisabled:              "The world has been set to single player mode.",
+	packet.DisconnectReasonNoWiFi:                           "No WiFi Connection",
+	packet.DisconnectReasonDisconnected:                     "Disconnected by Server",
+	packet.DisconnectReasonInvalidPlayer:                    "This world's multiplayer setting is set to friends only. You must be friends with the host of this world to join.",
+	packet.DisconnectReasonLoggedInOtherLocation:            "Logged in from other location",
+	packet.DisconnectReasonServerIdConflict:                 "Cannot join world. The account you are signed in to is currently playing in this world on a different device.",
+	packet.DisconnectReasonNotAllowed:                       "You're not invited to play on this server.",
+	packet.DisconnectReasonNotAuthenticated:                 "You need to authenticate to Microsoft services.",
+	packet.DisconnectReasonInvalidTenant:                    "Unable to connect to the world. Please check your join code and try again.",
+	packet.DisconnectReasonKicked:                           "You were kicked from the game",
+	packet.DisconnectReasonKickedForExploit:                 "You were kicked from the game for exploiting.",
+	packet.DisconnectReasonResourcePackProblem:              "Encountered a problem while downloading or applying resource pack.",
+	packet.DisconnectReasonIncompatiblePack:                 "You are unable to join the world because you have an incompatible pack.",
+	packet.DisconnectReasonOutOfStorage:                     "Out of storage space",
+	packet.DisconnectReasonInvalidLevel:                     "Invalid Level!",
+	packet.DisconnectReasonShutdown:                         "Quitting",
+	packet.DisconnectReasonBadPacket:                        "Server sent broken packet.",
+	packet.DisconnectReasonEditorMismatchEditorWorld:        "This world is in Editor Mode. It cannot be loaded.",
+	packet.DisconnectReasonEditorMismatchVanillaWorld:       "This world is a not in Editor Mode. It cannot be loaded.",
 }
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
@@ -50,20 +132,22 @@ var exemptedPacks = []exemptedResourcePack{
 type Conn struct {
 	// once is used to ensure the Conn is closed only a single time. It protects the channel below from being
 	// closed multiple times.
-	once  sync.Once
-	close chan struct{}
+	once       sync.Once
+	ctx        context.Context
+	cancelFunc context.CancelCauseFunc
 
 	conn        net.Conn
-	log         *log.Logger
+	log         *slog.Logger
 	authEnabled bool
 
-	proto         Protocol
-	acceptedProto []Protocol
-	pool          packet.Pool
-	enc           *packet.Encoder
-	dec           *packet.Decoder
-	compression   packet.Compression
-	readerLimits  bool
+	proto              Protocol
+	acceptedProto      []Protocol
+	pool               packet.Pool
+	enc                *packet.Encoder
+	dec                *packet.Decoder
+	compression        packet.Compression
+	maxDecompressedLen int
+	readerLimits       bool
 
 	disconnectOnUnknownPacket bool
 	disconnectOnInvalidPacket bool
@@ -118,9 +202,6 @@ type Conn struct {
 	// resourcePacks is a slice of resource packs that the listener may hold. Each client will be asked to
 	// download these resource packs upon joining.
 	resourcePacks []*resource.Pack
-	// biomes is a map of biome definitions that the listener may hold. Each client will be sent these biome
-	// definitions upon joining.
-	biomes map[string]any
 	// texturePacksRequired specifies if clients that join must accept the texture pack in order for them to
 	// be able to join the server. If they don't accept, they can only leave the server.
 	texturePacksRequired bool
@@ -128,6 +209,9 @@ type Conn struct {
 	// downloadResourcePack is an optional function passed to a Dial() call. If set, each resource pack received
 	// from the server will call this function to see if it should be downloaded or not.
 	downloadResourcePack func(id uuid.UUID, version string, currentPack, totalPacks int) bool
+	// fetchResourcePacks is an optional function passed to a Listener. If set, the returned resource packs from the function
+	// will determine which resource packs to send to the client based on its identity and client data.
+	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
 	// func returning false for the specific pack.
 	ignoredResourcePacks []exemptedResourcePack
@@ -137,8 +221,6 @@ type Conn struct {
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
-
-	disconnectMessage atomic.Pointer[string]
 
 	shieldID atomic.Int32
 
@@ -156,17 +238,20 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *log.Logger, proto Pro
 		salt:         make([]byte, 16),
 		packets:      make(chan *packetData, 8),
 		additional:   make(chan packet.Packet, 16),
-		close:        make(chan struct{}),
 		spawn:        make(chan struct{}),
 		conn:         netConn,
 		privateKey:   key,
-		log:          log,
+		log:          log.With("raddr", netConn.RemoteAddr().String()),
 		hdr:          &packet.Header{},
 		proto:        proto,
 		readerLimits: limits,
 	}
-	var s string
-	conn.disconnectMessage.Store(&s)
+
+	if c, ok := netConn.(interface{ Context() context.Context }); ok {
+		conn.ctx, conn.cancelFunc = context.WithCancelCause(c.Context())
+	} else {
+		conn.ctx, conn.cancelFunc = context.WithCancelCause(context.Background())
+	}
 
 	if !limits {
 		// Disable the batch packet limit so that the server can send packets as often as it wants to.
@@ -184,7 +269,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *log.Logger, proto Pro
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := conn.Flush(); err != nil {
-				_ = conn.Close()
+				_ = conn.close(err)
 				return
 			}
 		}
@@ -265,7 +350,7 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 	conn.startGame()
 
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return conn.closeErr("start game")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "start game")
@@ -305,7 +390,7 @@ func (conn *Conn) DoSpawnTimeout(timeout time.Duration) error {
 // sent earlier by the server.
 func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return conn.closeErr("do spawn")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "do spawn")
@@ -319,7 +404,7 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 // next 20th of a second, after which the data is flushed and sent over the connection.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return conn.closeErr("write packet")
 	default:
 	}
@@ -361,7 +446,7 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	if data, ok := conn.takeDeferredPacket(); ok {
 		pk, err := data.decode(conn)
 		if err != nil {
-			conn.log.Println(err)
+			conn.log.Error("read packet: " + err.Error())
 			return conn.ReadPacket()
 		}
 		if len(pk) == 0 {
@@ -374,14 +459,14 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	}
 
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return nil, conn.closeErr("read packet")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read packet")
 	case data := <-conn.packets:
 		pk, err := data.decode(conn)
 		if err != nil {
-			conn.log.Println(err)
+			conn.log.Error("read packet: " + err.Error())
 			return conn.ReadPacket()
 		}
 		if len(pk) == 0 {
@@ -418,7 +503,7 @@ func (conn *Conn) ReadBytes() ([]byte, error) {
 		return data.full, nil
 	}
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return nil, conn.closeErr("read")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read")
@@ -438,7 +523,7 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 		return copy(b, data.full), nil
 	}
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return 0, conn.closeErr("read")
 	case <-conn.readDeadline:
 		return 0, conn.wrap(context.DeadlineExceeded, "read")
@@ -454,7 +539,7 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 // are directly sent.
 func (conn *Conn) Flush() error {
 	select {
-	case <-conn.close:
+	case <-conn.ctx.Done():
 		return conn.closeErr("flush")
 	default:
 	}
@@ -481,13 +566,7 @@ func (conn *Conn) Flush() error {
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
 // packets currently pending are sent out.
 func (conn *Conn) Close() error {
-	var err error
-	conn.once.Do(func() {
-		err = conn.Flush()
-		close(conn.close)
-		_ = conn.conn.Close()
-	})
-	return err
+	return conn.close(net.ErrClosed)
 }
 
 // LocalAddr returns the local address of the underlying connection.
@@ -509,8 +588,7 @@ func (conn *Conn) SetDeadline(t time.Time) error {
 // SetReadDeadline sets the read deadline of the Conn to the time passed. The time must be after time.Now().
 // Passing an empty time.Time to the method (time.Time{}) results in the read deadline being cleared.
 func (conn *Conn) SetReadDeadline(t time.Time) error {
-	empty := time.Time{}
-	if t == empty {
+	if t.Equal(time.Time{}) {
 		conn.readDeadline = make(chan time.Time)
 	} else if t.Before(time.Now()) {
 		panic(fmt.Errorf("error setting read deadline: time passed is before time.Now()"))
@@ -548,6 +626,12 @@ func (conn *Conn) ClientCacheEnabled() bool {
 // is the radius that the server approved upon.
 func (conn *Conn) ChunkRadius() int {
 	return int(conn.gameData.ChunkRadius)
+}
+
+// Context returns the connection's context. The context is canceled when the connection is closed,
+// allowing for cancellation of operations that are tied to the lifecycle of the connection.
+func (conn *Conn) Context() context.Context {
+	return conn.ctx
 }
 
 // takeDeferredPacket locks the deferred packets lock and takes the next packet from the list of deferred
@@ -588,13 +672,22 @@ func (conn *Conn) receive(data []byte) error {
 		if err != nil {
 			return err
 		}
-		conn.disconnectMessage.Store(&pks[0].(*packet.Disconnect).Message)
-		_ = conn.Close()
+		disconnectPacket := pks[0].(*packet.Disconnect)
+		disconnectMessage := disconnectPacket.Message
+		if disconnectPacket.Message == "" {
+			if reason, ok := disconnectReasons[disconnectPacket.Reason]; ok {
+				disconnectMessage = reason
+			} else {
+				conn.log.Debug("unknown disconnect reason", "reason", disconnectPacket.Reason)
+				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
+			}
+		}
+		_ = conn.close(conn.closeErr(disconnectMessage))
 		return nil
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
 		select {
-		case <-conn.close:
+		case <-conn.ctx.Done():
 		case previous := <-conn.packets:
 			// There was already a packet in this channel, so take it out and defer it so that it is read
 			// next.
@@ -602,7 +695,7 @@ func (conn *Conn) receive(data []byte) error {
 		default:
 		}
 		select {
-		case <-conn.close:
+		case <-conn.ctx.Done():
 		case conn.packets <- pkData:
 		}
 		return nil
@@ -682,6 +775,8 @@ func (conn *Conn) handlePacket(pk packet.Packet) error {
 		return conn.handleResourcePackStack(pk)
 	case *packet.StartGame:
 		return conn.handleStartGame(pk)
+	case *packet.ItemRegistry:
+		return conn.handleItemRegistry(pk)
 	case *packet.ChunkRadiusUpdated:
 		return conn.handleChunkRadiusUpdated(pk)
 	}
@@ -719,7 +814,7 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 	_ = conn.Flush()
 	conn.enc.EnableCompression(conn.compression)
-	conn.dec.EnableCompression()
+	conn.dec.EnableCompression(conn.maxDecompressedLen)
 	return nil
 }
 
@@ -730,7 +825,7 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 		return fmt.Errorf("unknown compression algorithm %v", pk.CompressionAlgorithm)
 	}
 	conn.enc.EnableCompression(alg)
-	conn.dec.EnableCompression()
+	conn.dec.EnableCompression(conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
 }
@@ -767,18 +862,21 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
 		return fmt.Errorf("send PlayStatus (Status=LoginSuccess): %w", err)
 	}
+
+	if conn.fetchResourcePacks != nil {
+		conn.resourcePacks = conn.fetchResourcePacks(conn.identityData, conn.clientData, slices.Clone(conn.resourcePacks))
+	}
 	pk := &packet.ResourcePacksInfo{TexturePackRequired: conn.texturePacksRequired}
 	for _, pack := range conn.resourcePacks {
-		if pack.DownloadURL() != "" {
-			pk.PackURLs = append(pk.PackURLs, protocol.PackURL{
-				UUIDVersion: fmt.Sprintf("%s_%s", pack.UUID(), pack.Version()),
-				URL:         pack.DownloadURL(),
-			})
+		texturePack := protocol.TexturePackInfo{
+			UUID:        pack.UUID(),
+			Version:     pack.Version(),
+			Size:        uint64(pack.Size()),
+			DownloadURL: pack.DownloadURL(),
 		}
-		texturePack := protocol.TexturePackInfo{UUID: pack.UUID(), Version: pack.Version(), Size: uint64(pack.Len())}
 		if pack.Encrypted() {
 			texturePack.ContentKey = pack.ContentKey()
-			texturePack.ContentIdentity = pack.Manifest().Header.UUID
+			texturePack.ContentIdentity = pack.Manifest().Header.UUID.String()
 		}
 		pk.TexturePacks = append(pk.TexturePacks, texturePack)
 	}
@@ -798,7 +896,7 @@ type saltClaims struct {
 // on the client side of the connection, using the hash and the public key from the server exposed in the
 // packet.
 func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandshake) error {
-	tok, err := jwt.ParseSigned(string(pk.JWT))
+	tok, err := jwt.ParseSigned(string(pk.JWT), []jose.SignatureAlgorithm{jose.ES384})
 	if err != nil {
 		return fmt.Errorf("parse server token: %w", err)
 	}
@@ -859,22 +957,35 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	packsToDownload := make([]string, 0, totalPacks)
 
 	for index, pack := range pk.TexturePacks {
-		if _, ok := conn.packQueue.downloadingPacks[pack.UUID]; ok {
-			conn.log.Printf("handle ResourcePacksInfo: duplicate texture pack (UUID=%v)\n", pack.UUID)
+		id := pack.UUID.String()
+		if _, ok := conn.packQueue.downloadingPacks[id]; ok {
+			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID)
 			conn.packQueue.packAmount--
 			continue
 		}
-		if conn.downloadResourcePack != nil && !conn.downloadResourcePack(uuid.MustParse(pack.UUID), pack.Version, index, totalPacks) {
+		if conn.downloadResourcePack != nil && !conn.downloadResourcePack(uuid.MustParse(id), pack.Version, index, totalPacks) {
 			conn.ignoredResourcePacks = append(conn.ignoredResourcePacks, exemptedResourcePack{
-				uuid:    pack.UUID,
+				uuid:    id,
 				version: pack.Version,
 			})
 			conn.packQueue.packAmount--
 			continue
 		}
+
+		// Try to use the Download URL if set
+		if pack.DownloadURL != "" {
+			newPack, err := resource.ReadURL(pack.DownloadURL)
+			if err != nil {
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
+			} else {
+				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				continue
+			}
+		}
+
 		// This UUID_Version is a hack Mojang put in place.
-		packsToDownload = append(packsToDownload, pack.UUID+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[pack.UUID] = downloadingPack{
+		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
+		conn.packQueue.downloadingPacks[id] = downloadingPack{
 			size:       pack.Size,
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
 			newFrag:    make(chan []byte),
@@ -883,14 +994,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	}
 
 	if len(packsToDownload) != 0 {
-		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData)
+		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame)
 		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
 		return nil
 	}
-	conn.expect(packet.IDResourcePackStack)
+	conn.expect(packet.IDResourcePackStack, packet.IDStartGame)
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
@@ -904,9 +1015,9 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	for _, pack := range pk.TexturePacks {
 		for i, behaviourPack := range pk.BehaviourPacks {
 			if pack.UUID == behaviourPack.UUID {
-				// We had a behaviour pack with the same UUID as the texture pack, so we drop the texture
+				// We had a behaviour pack with the same UUID as the texture pack, so we drop the behaviour
 				// pack and log it.
-				conn.log.Printf("handle ResourcePackStack: dropping behaviour pack (UUID=%v) due to a texture pack with the same UUID\n", pack.UUID)
+				conn.log.Warn("handle ResourcePackStack: dropping behaviour pack due to a texture pack with the same UUID", "UUID", pack.UUID)
 				pk.BehaviourPacks = append(pk.BehaviourPacks[:i], pk.BehaviourPacks[i+1:]...)
 			}
 		}
@@ -943,7 +1054,7 @@ func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool 
 		}
 	}
 	for _, pack := range conn.resourcePacks {
-		if pack.UUID() == uuid && pack.Version() == version && pack.HasBehaviours() == hasBehaviours {
+		if pack.UUID().String() == uuid && pack.Version() == version && pack.HasBehaviours() == hasBehaviours {
 			return true
 		}
 	}
@@ -960,7 +1071,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 	case packet.PackResponseRefused:
 		// Even though this response is never sent, we handle it appropriately in case it is changed to work
 		// correctly again.
-		return conn.Close()
+		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
 		conn.packQueue = &resourcePackQueue{packs: conn.resourcePacks}
@@ -975,7 +1086,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 	case packet.PackResponseAllPacksDownloaded:
 		pk := &packet.ResourcePackStack{BaseGameVersion: protocol.CurrentVersion, Experiments: []protocol.ExperimentData{{Name: "cameras", Enabled: true}}}
 		for _, pack := range conn.resourcePacks {
-			resourcePack := protocol.StackResourcePack{UUID: pack.UUID(), Version: pack.Version()}
+			resourcePack := protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()}
 			// If it has behaviours, add it to the behaviour pack list. If not, we add it to the texture packs
 			// list.
 			if pack.HasBehaviours() {
@@ -1020,10 +1131,10 @@ func (conn *Conn) startGame() {
 		ExportedFromEditor:           data.ExportedFromEditor,
 		PersonaDisabled:              data.PersonaDisabled,
 		CustomSkinsDisabled:          data.CustomSkinsDisabled,
+		EmoteChatMuted:               data.EmoteChatMuted,
 		GameRules:                    data.GameRules,
 		Time:                         data.Time,
 		Blocks:                       data.CustomBlocks,
-		Items:                        data.Items,
 		AchievementsDisabled:         true,
 		Generator:                    1,
 		EducationFeaturesEnabled:     true,
@@ -1046,6 +1157,7 @@ func (conn *Conn) startGame() {
 		GameVersion:                  protocol.CurrentVersion,
 		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
 	})
+	_ = conn.WritePacket(&packet.ItemRegistry{Items: data.Items})
 	_ = conn.Flush()
 	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 }
@@ -1074,12 +1186,12 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	if !ok {
 		// We either already downloaded the pack or we got sent an invalid UUID, that did not match any pack
 		// sent in the ResourcePacksInfo packet.
-		return fmt.Errorf("unknown pack (UUID=%v)", id)
+		return fmt.Errorf("handle ResourcePackDataInfo: unknown pack (UUID=%v)", id)
 	}
 	if pack.size != pk.Size {
 		// Size mismatch: The ResourcePacksInfo packet had a size for the pack that did not match with the
 		// size sent here.
-		conn.log.Printf("pack (UUID=%v) had a different size in ResourcePacksInfo than in ResourcePackDataInfo\n", id)
+		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id, "packs_info_size", pack.size, "data_info_size", pk.Size)
 		pack.size = pk.Size
 	}
 
@@ -1104,7 +1216,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				ChunkIndex: i,
 			})
 			select {
-			case <-conn.close:
+			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
 				// Write the fragment to the full buffer of the downloading resource pack.
@@ -1115,13 +1227,13 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		defer conn.packMu.Unlock()
 
 		if pack.buf.Len() != int(pack.size) {
-			conn.log.Printf("incorrect resource pack size (UUID=%v): expected %v, got %v\n", id, pack.size, pack.buf.Len())
+			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
-			conn.log.Printf("invalid full resource pack data (UUID=%v): %v\n", id, err)
+			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
 			return
 		}
 		conn.packQueue.packAmount--
@@ -1163,7 +1275,7 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 // pack to be downloaded.
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
-	if current.UUID() != pk.UUID {
+	if current.UUID().String() != pk.UUID {
 		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
 	}
 	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*packChunkSize {
@@ -1203,6 +1315,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
+	if matched, _ := regexp.MatchString(`.*\.hivebedrock\.network.*`, conn.clientData.ServerAddress); matched {
+		pk.BaseGameVersion = "1.17.0" // temp fix for hive
+	}
 	conn.gameData = GameData{
 		Difficulty:                   pk.Difficulty,
 		WorldName:                    pk.WorldName,
@@ -1221,11 +1336,11 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		ExportedFromEditor:           pk.ExportedFromEditor,
 		PersonaDisabled:              pk.PersonaDisabled,
 		CustomSkinsDisabled:          pk.CustomSkinsDisabled,
+		EmoteChatMuted:               pk.EmoteChatMuted,
 		GameRules:                    pk.GameRules,
 		Time:                         pk.Time,
 		ServerBlockStateChecksum:     pk.ServerBlockStateChecksum,
 		CustomBlocks:                 pk.Blocks,
-		Items:                        pk.Items,
 		PlayerMovementSettings:       pk.PlayerMovementSettings,
 		WorldGameMode:                pk.WorldGameMode,
 		Hardcore:                     pk.Hardcore,
@@ -1237,13 +1352,21 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 	}
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
+	return nil
+}
+
+// handleItemRegistry handles an incoming ItemRegistry packet. It contains the item definitions that the client
+// should use, including the shield ID which is necessary for reading and writing items in the future.
+func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
+	conn.gameData.Items = pk.Items
 	for _, item := range pk.Items {
 		if item.Name == "minecraft:shield" {
 			conn.shieldID.Store(int32(item.RuntimeID))
 		}
 	}
 
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
 	return nil
 }
@@ -1261,20 +1384,10 @@ func (conn *Conn) handleRequestChunkRadius(pk *packet.RequestChunkRadius) error 
 	}
 	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	conn.gameData.ChunkRadius = pk.ChunkRadius
-
-	// The client crashes when not sending all biomes, due to achievements assuming all biomes are present.
-	//noinspection SpellCheckingInspection
-	if conn.biomes == nil {
-		const s = `CgAKDWJhbWJvb19qdW5nbGUFCGRvd25mYWxsZmZmPwULdGVtcGVyYXR1cmUzM3M/AAoTYmFtYm9vX2p1bmdsZV9oaWxscwUIZG93bmZhbGxmZmY/BQt0ZW1wZXJhdHVyZTMzcz8ACgViZWFjaAUIZG93bmZhbGzNzMw+BQt0ZW1wZXJhdHVyZc3MTD8ACgxiaXJjaF9mb3Jlc3QFCGRvd25mYWxsmpkZPwULdGVtcGVyYXR1cmWamRk/AAoSYmlyY2hfZm9yZXN0X2hpbGxzBQhkb3duZmFsbJqZGT8FC3RlbXBlcmF0dXJlmpkZPwAKGmJpcmNoX2ZvcmVzdF9oaWxsc19tdXRhdGVkBQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlMzMzPwAKFGJpcmNoX2ZvcmVzdF9tdXRhdGVkBQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlMzMzPwAKCmNvbGRfYmVhY2gFCGRvd25mYWxsmpmZPgULdGVtcGVyYXR1cmXNzEw9AAoKY29sZF9vY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAD8ACgpjb2xkX3RhaWdhBQhkb3duZmFsbM3MzD4FC3RlbXBlcmF0dXJlAAAAvwAKEGNvbGRfdGFpZ2FfaGlsbHMFCGRvd25mYWxszczMPgULdGVtcGVyYXR1cmUAAAC/AAoSY29sZF90YWlnYV9tdXRhdGVkBQhkb3duZmFsbM3MzD4FC3RlbXBlcmF0dXJlAAAAvwAKD2RlZXBfY29sZF9vY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAD8AChFkZWVwX2Zyb3plbl9vY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAAAAChNkZWVwX2x1a2V3YXJtX29jZWFuBQhkb3duZmFsbAAAAD8FC3RlbXBlcmF0dXJlAAAAPwAKCmRlZXBfb2NlYW4FCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmUAAAA/AAoPZGVlcF93YXJtX29jZWFuBQhkb3duZmFsbAAAAD8FC3RlbXBlcmF0dXJlAAAAPwAKBmRlc2VydAUIZG93bmZhbGwAAAAABQt0ZW1wZXJhdHVyZQAAAEAACgxkZXNlcnRfaGlsbHMFCGRvd25mYWxsAAAAAAULdGVtcGVyYXR1cmUAAABAAAoOZGVzZXJ0X211dGF0ZWQFCGRvd25mYWxsAAAAAAULdGVtcGVyYXR1cmUAAABAAAoNZXh0cmVtZV9oaWxscwUIZG93bmZhbGyamZk+BQt0ZW1wZXJhdHVyZc3MTD4AChJleHRyZW1lX2hpbGxzX2VkZ2UFCGRvd25mYWxsmpmZPgULdGVtcGVyYXR1cmXNzEw+AAoVZXh0cmVtZV9oaWxsc19tdXRhdGVkBQhkb3duZmFsbJqZmT4FC3RlbXBlcmF0dXJlzcxMPgAKGGV4dHJlbWVfaGlsbHNfcGx1c190cmVlcwUIZG93bmZhbGyamZk+BQt0ZW1wZXJhdHVyZc3MTD4ACiBleHRyZW1lX2hpbGxzX3BsdXNfdHJlZXNfbXV0YXRlZAUIZG93bmZhbGyamZk+BQt0ZW1wZXJhdHVyZc3MTD4ACg1mbG93ZXJfZm9yZXN0BQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlMzMzPwAKBmZvcmVzdAUIZG93bmZhbGzNzEw/BQt0ZW1wZXJhdHVyZTMzMz8ACgxmb3Jlc3RfaGlsbHMFCGRvd25mYWxszcxMPwULdGVtcGVyYXR1cmUzMzM/AAoMZnJvemVuX29jZWFuBQhkb3duZmFsbAAAAD8FC3RlbXBlcmF0dXJlAAAAAAAKDGZyb3plbl9yaXZlcgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAAAACgRoZWxsBQhkb3duZmFsbAAAAAAFC3RlbXBlcmF0dXJlAAAAQAAKDWljZV9tb3VudGFpbnMFCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmUAAAAAAAoKaWNlX3BsYWlucwUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAAAAChFpY2VfcGxhaW5zX3NwaWtlcwUIZG93bmZhbGwAAIA/BQt0ZW1wZXJhdHVyZQAAAAAACgZqdW5nbGUFCGRvd25mYWxsZmZmPwULdGVtcGVyYXR1cmUzM3M/AAoLanVuZ2xlX2VkZ2UFCGRvd25mYWxszcxMPwULdGVtcGVyYXR1cmUzM3M/AAoTanVuZ2xlX2VkZ2VfbXV0YXRlZAUIZG93bmZhbGzNzEw/BQt0ZW1wZXJhdHVyZTMzcz8ACgxqdW5nbGVfaGlsbHMFCGRvd25mYWxsZmZmPwULdGVtcGVyYXR1cmUzM3M/AAoOanVuZ2xlX211dGF0ZWQFCGRvd25mYWxsZmZmPwULdGVtcGVyYXR1cmUzM3M/AAoTbGVnYWN5X2Zyb3plbl9vY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAAAACg5sdWtld2FybV9vY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAD8ACgptZWdhX3RhaWdhBQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlmpmZPgAKEG1lZ2FfdGFpZ2FfaGlsbHMFCGRvd25mYWxszcxMPwULdGVtcGVyYXR1cmWamZk+AAoEbWVzYQUIZG93bmZhbGwAAAAABQt0ZW1wZXJhdHVyZQAAAEAACgptZXNhX2JyeWNlBQhkb3duZmFsbAAAAAAFC3RlbXBlcmF0dXJlAAAAQAAKDG1lc2FfcGxhdGVhdQUIZG93bmZhbGwAAAAABQt0ZW1wZXJhdHVyZQAAAEAAChRtZXNhX3BsYXRlYXVfbXV0YXRlZAUIZG93bmZhbGwAAAAABQt0ZW1wZXJhdHVyZQAAAEAAChJtZXNhX3BsYXRlYXVfc3RvbmUFCGRvd25mYWxsAAAAAAULdGVtcGVyYXR1cmUAAABAAAoabWVzYV9wbGF0ZWF1X3N0b25lX211dGF0ZWQFCGRvd25mYWxsAAAAAAULdGVtcGVyYXR1cmUAAABAAAoPbXVzaHJvb21faXNsYW5kBQhkb3duZmFsbAAAgD8FC3RlbXBlcmF0dXJlZmZmPwAKFW11c2hyb29tX2lzbGFuZF9zaG9yZQUIZG93bmZhbGwAAIA/BQt0ZW1wZXJhdHVyZWZmZj8ACgVvY2VhbgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAD8ACgZwbGFpbnMFCGRvd25mYWxszczMPgULdGVtcGVyYXR1cmXNzEw/AAobcmVkd29vZF90YWlnYV9oaWxsc19tdXRhdGVkBQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlmpmZPgAKFXJlZHdvb2RfdGFpZ2FfbXV0YXRlZAUIZG93bmZhbGzNzEw/BQt0ZW1wZXJhdHVyZQAAgD4ACgVyaXZlcgUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZQAAAD8ACg1yb29mZWRfZm9yZXN0BQhkb3duZmFsbM3MTD8FC3RlbXBlcmF0dXJlMzMzPwAKFXJvb2ZlZF9mb3Jlc3RfbXV0YXRlZAUIZG93bmZhbGzNzEw/BQt0ZW1wZXJhdHVyZTMzMz8ACgdzYXZhbm5hBQhkb3duZmFsbAAAAAAFC3RlbXBlcmF0dXJlmpmZPwAKD3NhdmFubmFfbXV0YXRlZAUIZG93bmZhbGwAAAA/BQt0ZW1wZXJhdHVyZc3MjD8ACg9zYXZhbm5hX3BsYXRlYXUFCGRvd25mYWxsAAAAAAULdGVtcGVyYXR1cmUAAIA/AAoXc2F2YW5uYV9wbGF0ZWF1X211dGF0ZWQFCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmUAAIA/AAoLc3RvbmVfYmVhY2gFCGRvd25mYWxsmpmZPgULdGVtcGVyYXR1cmXNzEw+AAoQc3VuZmxvd2VyX3BsYWlucwUIZG93bmZhbGzNzMw+BQt0ZW1wZXJhdHVyZc3MTD8ACglzd2FtcGxhbmQFCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmXNzEw/AAoRc3dhbXBsYW5kX211dGF0ZWQFCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmXNzEw/AAoFdGFpZ2EFCGRvd25mYWxszcxMPwULdGVtcGVyYXR1cmUAAIA+AAoLdGFpZ2FfaGlsbHMFCGRvd25mYWxszcxMPwULdGVtcGVyYXR1cmUAAIA+AAoNdGFpZ2FfbXV0YXRlZAUIZG93bmZhbGzNzEw/BQt0ZW1wZXJhdHVyZQAAgD4ACgd0aGVfZW5kBQhkb3duZmFsbAAAAD8FC3RlbXBlcmF0dXJlAAAAPwAKCndhcm1fb2NlYW4FCGRvd25mYWxsAAAAPwULdGVtcGVyYXR1cmUAAAA/AAA=`
-		b, _ := base64.StdEncoding.DecodeString(s)
-		_ = conn.WritePacket(&packet.BiomeDefinitionList{
-			SerialisedBiomeDefinitions: b,
-		})
-	} else {
-		b, _ := nbt.MarshalEncoding(conn.biomes, nbt.NetworkLittleEndian)
-		_ = conn.WritePacket(&packet.BiomeDefinitionList{SerialisedBiomeDefinitions: b})
-	}
-
+	// Clients pre-1.21.80 crash when not sending all biomes, due to achievements assuming all biomes are present.
+	// To maintain backwards compatibility, we send empty biomes so the protocol can handle legacy biome data
+	// for older clients (see: https://github.com/Sandertv/gophertunnel/blob/a61732e9cb7bc04e5e7dd961ad4fea597f1229dc/minecraft/conn.go#L1274-L1278).
+	_ = conn.WritePacket(&packet.BiomeDefinitionList{})
 	_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
 	_ = conn.WritePacket(&packet.CreativeContent{})
 	return nil
@@ -1320,10 +1433,10 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 		conn.expect(packet.IDResourcePacksInfo)
 		return conn.Flush()
 	case packet.PlayStatusLoginFailedClient:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("client outdated"))
 		return fmt.Errorf("client outdated")
 	case packet.PlayStatusLoginFailedServer:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("server outdated"))
 		return fmt.Errorf("server outdated")
 	case packet.PlayStatusPlayerSpawn:
 		// We've spawned and can send the last packet in the spawn sequence.
@@ -1331,22 +1444,22 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 		conn.tryFinaliseClientConn()
 		return nil
 	case packet.PlayStatusLoginFailedInvalidTenant:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("invalid edu edition game owner"))
 		return fmt.Errorf("invalid edu edition game owner")
 	case packet.PlayStatusLoginFailedVanillaEdu:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("cannot join an edu edition game on vanilla"))
 		return fmt.Errorf("cannot join an edu edition game on vanilla")
 	case packet.PlayStatusLoginFailedEduVanilla:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("cannot join a vanilla game on edu edition"))
 		return fmt.Errorf("cannot join a vanilla game on edu edition")
 	case packet.PlayStatusLoginFailedServerFull:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("server full"))
 		return fmt.Errorf("server full")
 	case packet.PlayStatusLoginFailedEditorVanilla:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("cannot join a vanilla game on editor"))
 		return fmt.Errorf("cannot join a vanilla game on editor")
 	case packet.PlayStatusLoginFailedVanillaEditor:
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("cannot join an editor game on vanilla"))
 		return fmt.Errorf("cannot join an editor game on vanilla")
 	default:
 		return fmt.Errorf("unknown play status %v", pk.Status)
@@ -1375,7 +1488,7 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 	})
 	// We produce an encoded JWT using the header and payload above, then we send the JWT in a ServerToClient-
 	// Handshake packet so that the client can initialise encryption.
-	serverJWT, err := jwt.Signed(signer).Claims(saltClaims{Salt: base64.RawStdEncoding.EncodeToString(conn.salt)}).CompactSerialize()
+	serverJWT, err := jwt.Signed(signer).Claims(saltClaims{Salt: base64.RawStdEncoding.EncodeToString(conn.salt)}).Serialize()
 	if err != nil {
 		return fmt.Errorf("compact serialise server JWT: %w", err)
 	}
@@ -1406,11 +1519,23 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
+func (conn *Conn) close(cause error) error {
+	var err error
+	conn.once.Do(func() {
+		err = conn.Flush()
+		conn.cancelFunc(cause)
+		_ = conn.conn.Close()
+	})
+	return err
+}
+
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed
 // through a Disconnect packet, the message is contained.
 func (conn *Conn) closeErr(op string) error {
-	if msg := *conn.disconnectMessage.Load(); msg != "" {
-		return conn.wrap(DisconnectError(msg), op)
+	select {
+	case <-conn.ctx.Done():
+		return conn.wrap(context.Cause(conn.ctx), op)
+	default:
+		return conn.wrap(net.ErrClosed, op)
 	}
-	return conn.wrap(errClosed, op)
 }

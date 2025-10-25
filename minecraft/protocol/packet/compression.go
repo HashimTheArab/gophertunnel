@@ -3,11 +3,13 @@ package packet
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"math"
+	"sync"
+
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/flate"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
-	"io"
-	"sync"
 )
 
 // Compression represents a compression algorithm that can compress and decompress data.
@@ -17,7 +19,7 @@ type Compression interface {
 	// Compress compresses the given data and returns the compressed data.
 	Compress(decompressed []byte) ([]byte, error)
 	// Decompress decompresses the given data and returns the decompressed data.
-	Decompress(compressed []byte) ([]byte, error)
+	Decompress(compressed []byte, limit int) ([]byte, error)
 }
 
 var (
@@ -67,7 +69,10 @@ func (nopCompression) Compress(decompressed []byte) ([]byte, error) {
 }
 
 // Decompress ...
-func (nopCompression) Decompress(compressed []byte) ([]byte, error) {
+func (nopCompression) Decompress(compressed []byte, limit int) ([]byte, error) {
+	if len(compressed) > limit {
+		return nil, fmt.Errorf("nop decompression: size %d exceeds limit %d", len(compressed), limit)
+	}
 	return compressed, nil
 }
 
@@ -102,20 +107,43 @@ func (flateCompression) Compress(decompressed []byte) ([]byte, error) {
 }
 
 // Decompress ...
-func (flateCompression) Decompress(compressed []byte) ([]byte, error) {
-	buf := bytes.NewReader(compressed)
-	c := flateDecompressPool.Get().(io.ReadCloser)
-	defer flateDecompressPool.Put(c)
+func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error) {
+	r := flateDecompressPool.Get().(io.ReadCloser)
+	defer func() {
+		_ = r.Close()
+		flateDecompressPool.Put(r)
+	}()
 
-	if err := c.(flate.Resetter).Reset(buf, nil); err != nil {
+	if err := r.(flate.Resetter).Reset(bytes.NewReader(compressed), nil); err != nil {
 		return nil, fmt.Errorf("reset flate: %w", err)
 	}
-	_ = c.Close()
 
-	// Guess an uncompressed size of 2*len(compressed).
-	decompressed := bytes.NewBuffer(make([]byte, 0, len(compressed)*2))
-	if _, err := io.Copy(decompressed, c); err != nil {
+	var decompressed bytes.Buffer
+	// If the compressed data is less than half the limit, we can safely assume l*2, otherwise cap at limit.
+	l := len(compressed)
+	capHint := limit
+	if l <= limit/2 {
+		capHint = l * 2
+	}
+	decompressed.Grow(capHint)
+
+	// Handle no limit
+	if limit == math.MaxInt {
+		if _, err := io.Copy(&decompressed, r); err != nil {
+			return nil, fmt.Errorf("decompress flate: %w", err)
+		}
+		return decompressed.Bytes(), nil
+	}
+
+	// Read limit+1 bytes to detect overflow without CopyN truncating the result.
+	toRead := int64(limit) + 1
+	n, err := io.CopyN(&decompressed, r, toRead)
+	if err != nil && err != io.EOF {
+		// CopyN returns an EOF error if the stream is shorter than the limit, we can treat that as a success.
 		return nil, fmt.Errorf("decompress flate: %w", err)
+	}
+	if n > int64(limit) {
+		return nil, fmt.Errorf("decompress flate: size %d exceeds limit %d", n, limit)
 	}
 	return decompressed.Bytes(), nil
 }
@@ -135,10 +163,17 @@ func (snappyCompression) Compress(decompressed []byte) ([]byte, error) {
 }
 
 // Decompress ...
-func (snappyCompression) Decompress(compressed []byte) ([]byte, error) {
+func (snappyCompression) Decompress(compressed []byte, limit int) ([]byte, error) {
 	// Snappy writes a decoded data length prefix, so it can allocate the
 	// perfect size right away and only needs to allocate once. No need to pool
 	// byte slices here either.
+	decodedLen, err := snappy.DecodedLen(compressed)
+	if err != nil {
+		return nil, fmt.Errorf("snappy decoded length: %w", err)
+	}
+	if decodedLen > limit {
+		return nil, fmt.Errorf("snappy decoded size %d exceeds limit %d", decodedLen, limit)
+	}
 	decompressed, err := snappy.Decode(nil, compressed)
 	if err != nil {
 		return nil, fmt.Errorf("decompress snappy: %w", err)

@@ -14,8 +14,10 @@ type CameraInstruction struct {
 	Fade protocol.Optional[protocol.CameraInstructionFade]
 	// Target is a camera instruction that targets a specific entity.
 	Target protocol.Optional[protocol.CameraInstructionTarget]
-	// RemoveTarget can be set to true to remove the current target entity.
+	// RemoveTarget can be set to true to remove the current aim assist target.
 	RemoveTarget protocol.Optional[bool]
+	// FieldOfView is a camera instruction that updates the field of view for the camera.
+	FieldOfView protocol.Optional[protocol.CameraInstructionFieldOfView]
 }
 
 // ID ...
@@ -29,4 +31,5 @@ func (pk *CameraInstruction) Marshal(io protocol.IO) {
 	protocol.OptionalMarshaler(io, &pk.Fade)
 	protocol.OptionalMarshaler(io, &pk.Target)
 	protocol.OptionalFunc(io, &pk.RemoveTarget, io.Bool)
+	protocol.OptionalMarshaler(io, &pk.FieldOfView)
 }

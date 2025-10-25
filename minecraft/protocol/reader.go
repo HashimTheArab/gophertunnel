@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/go-gl/mathgl/mgl32"
-	"github.com/google/uuid"
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"image/color"
 	"io"
 	"math"
+	"math/big"
+	"math/bits"
 	"unsafe"
+
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
 )
 
 // Reader implements reading operations for reading types from Minecraft packets. Each Packet implementation
@@ -187,6 +190,30 @@ func (r *Reader) RGBA(x *color.RGBA) {
 	}
 }
 
+// ARGB reads a color.ARGB x from a int32.
+func (r *Reader) ARGB(x *color.RGBA) {
+	var v int32
+	r.Int32(&v)
+	*x = color.RGBA{
+		A: byte(v),
+		R: byte(v >> 8),
+		G: byte(v >> 16),
+		B: byte(v >> 24),
+	}
+}
+
+// BEARGB reads a color.ARGB x from a big endian int32.
+func (r *Reader) BEARGB(x *color.RGBA) {
+	var v int32
+	r.BEInt32(&v)
+	*x = color.RGBA{
+		A: byte(v),
+		R: byte(v >> 8),
+		G: byte(v >> 16),
+		B: byte(v >> 24),
+	}
+}
+
 // VarRGBA reads a color.RGBA x from a varuint32.
 func (r *Reader) VarRGBA(x *color.RGBA) {
 	var v uint32
@@ -252,7 +279,7 @@ func (r *Reader) PlayerInventoryAction(x *UseItemTransactionData) {
 	Slice(r, &x.Actions)
 	r.Varuint32(&x.ActionType)
 	r.Varuint32(&x.TriggerType)
-	r.BlockPos(&x.BlockPosition)
+	r.UBlockPos(&x.BlockPosition)
 	r.Varint32(&x.BlockFace)
 	r.Varint32(&x.HotBarSlot)
 	r.ItemInstance(&x.HeldItem)
@@ -264,6 +291,31 @@ func (r *Reader) PlayerInventoryAction(x *UseItemTransactionData) {
 
 // GameRule reads a GameRule x from the Reader.
 func (r *Reader) GameRule(x *GameRule) {
+	r.String(&x.Name)
+	r.Bool(&x.CanBeModifiedByPlayer)
+	var t uint32
+	r.Varuint32(&t)
+
+	switch t {
+	case 1:
+		var v bool
+		r.Bool(&v)
+		x.Value = v
+	case 2:
+		var v uint32
+		r.Uint32(&v)
+		x.Value = v
+	case 3:
+		var v float32
+		r.Float32(&v)
+		x.Value = v
+	default:
+		r.UnknownEnumOption(t, "game rule type")
+	}
+}
+
+// GameRuleLegacy reads a legacy GameRule x from the Reader.
+func (r *Reader) GameRuleLegacy(x *GameRule) {
 	r.String(&x.Name)
 	r.Bool(&x.CanBeModifiedByPlayer)
 	var t uint32
@@ -372,7 +424,7 @@ func (r *Reader) ItemInstance(i *ItemInstance) {
 	x := &i.Stack
 	x.NBTData = make(map[string]any)
 	r.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there is no more data we should read for the item instance. After all, air
 		// items aren't really anything.
 		x.MetadataValue, x.Count, x.CanBePlacedOn, x.CanBreak = 0, 0, nil, nil
@@ -428,7 +480,7 @@ func (r *Reader) ItemInstance(i *ItemInstance) {
 func (r *Reader) Item(x *ItemStack) {
 	x.NBTData = make(map[string]any)
 	r.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there is no more data we should read for the item instance. After all, air
 		// items aren't really anything.
 		x.MetadataValue, x.Count, x.CanBePlacedOn, x.CanBreak = 0, 0, nil, nil
@@ -536,77 +588,55 @@ func (r *Reader) AbilityValue(x *any) {
 	}
 }
 
-// CompressedBiomeDefinitions reads a list of compressed biome definitions from the reader. Minecraft decided to make their
-// own type of compression for this, so we have to implement it ourselves. It uses a dictionary of repeated byte sequences
-// to reduce the size of the data. The compressed data is read byte-by-byte, and if the byte is 0xff then it is assumed
-// that the next two bytes are an int16 for the dictionary index. Otherwise, the byte is copied to the output. The dictionary
-// index is then used to look up the byte sequence to be appended to the output.
-func (r *Reader) CompressedBiomeDefinitions(x *map[string]any) {
-	var length uint32
-	header := make([]byte, 10)
-	r.Varuint32(&length)
-	if _, err := r.r.Read(header); err != nil {
-		r.panic(err)
-	}
-	if !bytes.Equal(header, []byte("COMPRESSED")) {
-		r.InvalidValue(header, "compression header", fmt.Sprintf("must be COMPRESSED (%v)", []byte("COMPRESSED")))
-		return
-	}
-
-	var dictLength uint16
-	var entryLength uint8
-	r.Uint16(&dictLength)
-	dictionary := make([][]byte, dictLength)
-	for i := 0; i < int(dictLength); i++ {
-		r.Uint8(&entryLength)
-		dictionary[i] = make([]byte, int(entryLength))
-		if _, err := r.r.Read(dictionary[i]); err != nil {
-			r.panic(err)
-		}
-	}
-
-	var decompressed []byte
-	var dictIndex int16
-	for {
-		key, err := r.r.ReadByte()
+// Bitset reads a Bitset from the reader.
+func (r *Reader) Bitset(x *Bitset, size int) {
+	*x = NewBitset(size)
+	for i := 0; i < size; i += 7 {
+		b, err := r.r.ReadByte()
 		if err != nil {
-			break
-		}
-		if key != 0xff {
-			decompressed = append(decompressed, key)
-			continue
+			r.panic(err)
+		} else if i+bits.Len8(b) > size {
+			r.panic(errBitsetOverflow)
 		}
 
-		r.Int16(&dictIndex)
-		if dictIndex >= 0 && int(dictIndex) < len(dictionary) {
-			decompressed = append(decompressed, dictionary[dictIndex]...)
-			continue
+		bi := big.NewInt(int64(b & 0x7f))
+		x.int.Or(x.int, bi.Lsh(bi, uint(i)))
+		if b&0x80 == 0 {
+			return
 		}
-		decompressed = append(decompressed, key)
 	}
-	if err := nbt.Unmarshal(decompressed, x); err != nil {
-		r.panic(err)
+
+	r.panic(errBitsetOverflow)
+}
+
+// PackSetting reads a PackSetting from the reader.
+func (r *Reader) PackSetting(x *PackSetting) {
+	r.String(&x.Name)
+	var t uint32
+	r.Varuint32(&t)
+	switch t {
+	case PackSettingTypeFloat:
+		var v float32
+		r.Float32(&v)
+		x.Value = v
+	case PackSettingTypeBool:
+		var v bool
+		r.Bool(&v)
+		x.Value = v
+	case PackSettingTypeString:
+		var v string
+		r.String(&v)
+		x.Value = v
+	default:
+		r.UnknownEnumOption(t, "pack setting")
 	}
 }
 
-// LimitUint32 checks if the value passed is lower than the limit passed. If not, the Reader panics.
-func (r *Reader) LimitUint32(value uint32, max uint32) {
-	if max == math.MaxUint32 {
-		// Account for 0-1 overflowing into max.
-		max = 0
-	}
-	if value > max {
-		r.panicf("uint32 %v exceeds maximum of %v", value, max)
-	}
-}
-
-// LimitInt32 checks if the value passed is lower than the limit passed and higher than the minimum. If not,
-// the Reader panics.
-func (r *Reader) LimitInt32(value int32, min, max int32) {
-	if value < min {
-		r.panicf("int32 %v exceeds minimum of %v", value, min)
-	} else if value > max {
-		r.panicf("int32 %v exceeds maximum of %v", value, max)
+// SliceLimit checks if the value passed is lower than the limit passed. If
+// not, the Reader panics.
+func (r *Reader) SliceLimit(value uint32, max uint32) {
+	if value > max && r.limitsEnabled {
+		r.panicf("slice length was too long: length of %v (max %v)", value, max)
 	}
 }
 
@@ -627,12 +657,14 @@ func (r *Reader) InvalidValue(value any, forField, reason string) {
 
 // errVarIntOverflow is an error set if one of the Varint methods encounters a varint that does not terminate
 // after 5 or 10 bytes, depending on the data type read into.
-var errVarIntOverflow = errors.New("varint overflows integer")
+// var errVarIntOverflow = errors.New("varint overflows integer")
+var errBitsetOverflow = errors.New("bitset overflows size")
 
 // Varint64 reads up to 10 bytes from the underlying buffer into an int64.
 func (r *Reader) Varint64(x *int64) {
 	var ux uint64
-	for i := 0; i < 70; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -646,14 +678,15 @@ func (r *Reader) Varint64(x *int64) {
 			}
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64
-	for i := 0; i < 70; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -664,14 +697,15 @@ func (r *Reader) Varuint64(x *uint64) {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varint32 reads up to 5 bytes from the underlying buffer into an int32.
 func (r *Reader) Varint32(x *int32) {
 	var ux uint32
-	for i := 0; i < 35; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -685,14 +719,15 @@ func (r *Reader) Varint32(x *int32) {
 			}
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varuint32 reads up to 5 bytes from the underlying buffer into a uint32.
 func (r *Reader) Varuint32(x *uint32) {
 	var v uint32
-	for i := 0; i < 35; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -703,8 +738,8 @@ func (r *Reader) Varuint32(x *uint32) {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // panicf panics with the format and values passed and assigns the error created to the Reader.

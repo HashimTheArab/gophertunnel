@@ -6,12 +6,16 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+
+	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
-	"log"
+
+	"log/slog"
+	"math"
 	"net"
-	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -20,9 +24,9 @@ import (
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
-	// ErrorLog is a log.Logger that errors that occur during packet handling of clients are written to. By
-	// default, ErrorLog is set to one equal to the global logger.
-	ErrorLog *log.Logger
+	// ErrorLog is a log.Logger that errors that occur during packet handling of
+	// clients are written to. By default, errors are not logged.
+	ErrorLog *slog.Logger
 
 	// AuthenticationDisabled specifies if authentication of players that join is disabled. If set to true, no
 	// verification will be done to ensure that the player connecting is authenticated using their XBOX Live
@@ -69,18 +73,23 @@ type ListenConfig struct {
 	// Use Listener.AddResourcePack() to add a resource pack and Listener.RemoveResourcePack() to remove a resource pack
 	// after having called ListenConfig.Listen(). Note that these methods will not update resource packs for active connections.
 	ResourcePacks []*resource.Pack
-	// Biomes contains information about all biomes that the server has registered, which the client can use
-	// to render the world more effectively. If these are nil, the default biome definitions will be used.
-	Biomes map[string]any
 	// TexturePacksRequired specifies if clients that join must accept the texture pack in order for them to
 	// be able to join the server. If they don't accept, they can only leave the server.
 	TexturePacksRequired bool
+	// FetchResourcePacks determines which resource packs to send to a client based on its identity and client data.
+	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
+	// will be forwarded to the client in place of the Listener's current ones.
+	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
 
 	// PacketFunc is called whenever a packet is read from or written to a connection returned when using
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+
+	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
+	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
+	MaxDecompressedLen int
 }
 
 // Listener implements a Minecraft listener on top of an unspecific net.Listener. It abstracts away the
@@ -110,19 +119,10 @@ type Listener struct {
 // If the host in the address parameter is empty or a literal unspecified IP address, Listen listens on all
 // available unicast and anycast IP addresses of the local system.
 func (cfg ListenConfig) Listen(network string, address string) (*Listener, error) {
-	n, ok := networkByID(network)
-	if !ok {
-		return nil, fmt.Errorf("listen: no network under id %v", network)
-	}
-
-	netListener, err := n.Listen(address)
-	if err != nil {
-		return nil, err
-	}
-
 	if cfg.ErrorLog == nil {
-		cfg.ErrorLog = log.New(os.Stderr, "", log.LstdFlags)
+		cfg.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
+	cfg.ErrorLog = cfg.ErrorLog.With("src", "listener")
 	if cfg.StatusProvider == nil {
 		cfg.StatusProvider = NewStatusProvider("Minecraft Server", "Gophertunnel")
 	}
@@ -132,7 +132,25 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 	if cfg.FlushRate == 0 {
 		cfg.FlushRate = time.Second / 20
 	}
-	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if cfg.MaxDecompressedLen == 0 {
+		cfg.MaxDecompressedLen = 16 * 1024 * 1024 // 16MB
+	} else if cfg.MaxDecompressedLen < 0 {
+		cfg.MaxDecompressedLen = math.MaxInt
+	}
+
+	n, ok := networkByID(network, cfg.ErrorLog)
+	if !ok {
+		return nil, fmt.Errorf("listen: no network under id %v", network)
+	}
+
+	netListener, err := n.Listen(address)
+	if err != nil {
+		return nil, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating ECDSA key: %w", err)
+	}
 	listener := &Listener{
 		cfg:               cfg,
 		listener:          netListener,
@@ -167,7 +185,7 @@ func Listen(network, address string) (*Listener, error) {
 func (listener *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-listener.incoming
 	if !ok {
-		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: errListenerClosed}
+		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: net.ErrClosed}
 	}
 	return conn, nil
 }
@@ -180,7 +198,7 @@ func (listener *Listener) Disconnect(conn *Conn, message string) error {
 		HideDisconnectionScreen: message == "",
 		Message:                 message,
 	})
-	return conn.Close()
+	return conn.close(conn.closeErr(message))
 }
 
 // AddResourcePack adds a new resource pack to the listener's resource packs.
@@ -196,7 +214,7 @@ func (listener *Listener) AddResourcePack(pack *resource.Pack) {
 func (listener *Listener) RemoveResourcePack(uuid string) {
 	listener.packsMu.Lock()
 	listener.packs = slices.DeleteFunc(listener.packs, func(pack *resource.Pack) bool {
-		return pack.UUID() == uuid
+		return pack.UUID().String() == uuid
 	})
 	listener.packsMu.Unlock()
 }
@@ -211,6 +229,11 @@ func (listener *Listener) Close() error {
 	return listener.listener.Close()
 }
 
+// PlayerCount returns the number of active connections.
+func (listener *Listener) PlayerCount() int {
+	return int(listener.playerCount.Load())
+}
+
 // updatePongData updates the pong data of the listener using the current only players, maximum players and
 // server name of the listener, provided the listener isn't currently hijacking the pong of another server.
 // If NetworkListener of the listener supports updating the server status directly with ServerStatus(ServerStatus)
@@ -222,6 +245,7 @@ func (listener *Listener) updatePongData() {
 	}
 
 	s := listener.status()
+	s.ServerSubName = "§bLunar Proxy"
 	listener.listener.PongData([]byte(fmt.Sprintf("MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
 		listener.listener.ID(), s.ServerSubName, "Creative", 1, port, port,
@@ -252,8 +276,8 @@ func (listener *Listener) listen() {
 		}
 	}()
 	defer func() {
-		close(listener.incoming)
 		close(listener.close)
+		close(listener.incoming)
 		_ = listener.Close()
 	}()
 	for {
@@ -277,6 +301,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true, listener.batchHeader)
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
 	conn.compression = listener.cfg.Compression
+	conn.maxDecompressedLen = listener.cfg.MaxDecompressedLen
 	conn.pool = conn.proto.Packets(true)
 
 	conn.disableEncryption = listener.disableEncryption
@@ -284,7 +309,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.packetFunc = listener.cfg.PacketFunc
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.resourcePacks = packs
-	conn.biomes = listener.cfg.Biomes
+	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
@@ -293,7 +318,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
 		// The server was full. We kick the player immediately and close the connection.
 		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
-		_ = conn.Close()
+		_ = conn.close(conn.closeErr("server full"))
 		return
 	}
 	listener.playerCount.Add(1)
@@ -325,14 +350,14 @@ func (listener *Listener) handleConn(conn *Conn) {
 		packets, err := conn.dec.Decode()
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
-				conn.log.Printf("listener conn: %v\n", err)
+				conn.log.Error(err.Error())
 			}
 			return
 		}
 		for _, data := range packets {
 			loggedInBefore := conn.loggedIn
 			if err := conn.receive(data); err != nil {
-				conn.log.Printf("listener conn: %v", err)
+				conn.log.Error(err.Error())
 				return
 			}
 			if !loggedInBefore && conn.loggedIn {

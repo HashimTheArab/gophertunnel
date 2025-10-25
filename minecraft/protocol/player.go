@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"image/color"
+
 	"github.com/google/uuid"
 )
 
@@ -41,13 +43,8 @@ const (
 	PlayerActionStopCrawling
 	PlayerActionStartFlying
 	PlayerActionStopFlying
-	PlayerActionClientAckServerData
-)
-
-const (
-	PlayerMovementModeClient = iota
-	PlayerMovementModeServer
-	PlayerMovementModeServerWithRewind
+	_
+	PlayerActionStartUsingItem
 )
 
 // PlayerListEntry is an entry found in the PlayerList packet. It represents a single player using the UUID
@@ -81,6 +78,9 @@ type PlayerListEntry struct {
 	Host bool
 	// SubClient specifies if the player that is added to the player list is a sub-client of another player.
 	SubClient bool
+	// PlayerColour is the colour of the player that is shown in UI elements, currently only used for the
+	// player locator bar.
+	PlayerColour color.RGBA
 }
 
 // Marshal encodes/decodes a PlayerListEntry.
@@ -95,6 +95,7 @@ func (x *PlayerListEntry) Marshal(r IO) {
 	r.Bool(&x.Teacher)
 	r.Bool(&x.Host)
 	r.Bool(&x.SubClient)
+	r.ARGB(&x.PlayerColour)
 }
 
 // PlayerListRemoveEntry encodes/decodes a PlayerListEntry for removal from the list.
@@ -105,25 +106,15 @@ func PlayerListRemoveEntry(r IO, x *PlayerListEntry) {
 // PlayerMovementSettings represents the different server authoritative movement settings. These control how
 // the client will provide input to the server.
 type PlayerMovementSettings struct {
-	// MovementType specifies the way the server handles player movement. Available options are
-	// protocol.PlayerMovementModeClient, protocol.PlayerMovementModeServer and
-	// protocol.PlayerMovementModeServerWithRewind, where the server authoritative types result
-	// in the client sending PlayerAuthInput packets instead of MovePlayer packets and the rewind mode
-	// requires sending the tick of movement and several actions.
-	MovementType int32
-	// RewindHistorySize is the amount of history to keep at maximum if MovementType is
-	// protocol.PlayerMovementModeServerWithRewind.
+	// RewindHistorySize is the amount of history to keep at maximum.
 	RewindHistorySize int32
 	// ServerAuthoritativeBlockBreaking specifies if block breaking should be sent through
-	// packet.PlayerAuthInput or not. This field is somewhat redundant as it is always enabled if
-	// MovementType is packet.AuthoritativeMovementModeServer or
-	// protocol.PlayerMovementModeServerWithRewind
+	// packet.PlayerAuthInput or not.
 	ServerAuthoritativeBlockBreaking bool
 }
 
 // PlayerMoveSettings reads/writes PlayerMovementSettings x to/from IO r.
 func PlayerMoveSettings(r IO, x *PlayerMovementSettings) {
-	r.Varint32(&x.MovementType)
 	r.Varint32(&x.RewindHistorySize)
 	r.Bool(&x.ServerAuthoritativeBlockBreaking)
 }
@@ -146,4 +137,18 @@ func (x *PlayerBlockAction) Marshal(r IO) {
 		r.BlockPos(&x.BlockPos)
 		r.Varint32(&x.Face)
 	}
+}
+
+// PlayerArmourDamageEntry represents an entry for a single piece of armour that should be damaged.
+type PlayerArmourDamageEntry struct {
+	// ArmourSlot is the index of the armour slot to damage.
+	ArmourSlot int32
+	// Damage is the amount of damage to apply to the armour in the specified slot.
+	Damage int16
+}
+
+// Marshal encodes/decodes a PlayerArmourDamageEntry.
+func (x *PlayerArmourDamageEntry) Marshal(r IO) {
+	r.Varint32(&x.ArmourSlot)
+	r.Int16(&x.Damage)
 }

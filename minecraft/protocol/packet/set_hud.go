@@ -16,6 +16,8 @@ const (
 	HudElementHunger
 	HudElementAirBubbles
 	HudElementHorseHealth
+	HudElementStatusEffects
+	HudElementItemText
 )
 
 const (
@@ -23,17 +25,14 @@ const (
 	HudVisibilityReset
 )
 
-// SetHud is sent by the server to set the visibility of individual HUD elements on the client. It is
-// important to note that the client does not reset the state of the HUD elements after it leaves a server,
-// meaning they can leak into sessions on different servers. To be safe, you should reset the visibility of
-// all HUD elements when a player connects.
+// SetHud is sent by the server to set the visibility of individual HUD elements on the client.
 type SetHud struct {
 	// Elements is a list of HUD elements that are being modified. The values can be any of the HudElement
 	// constants above.
-	Elements []byte
+	Elements []int32
 	// Visibility represents the new visibility of the specified Elements. It can be any of the HudVisibility
 	// constants above.
-	Visibility byte
+	Visibility int32
 }
 
 // ID ...
@@ -42,6 +41,6 @@ func (*SetHud) ID() uint32 {
 }
 
 func (pk *SetHud) Marshal(io protocol.IO) {
-	protocol.FuncSlice(io, &pk.Elements, io.Uint8)
-	io.Uint8(&pk.Visibility)
+	protocol.FuncSlice(io, &pk.Elements, io.Varint32)
+	io.Varint32(&pk.Visibility)
 }

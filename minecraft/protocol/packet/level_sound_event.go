@@ -539,7 +539,40 @@ const (
 	SoundEventRecordPrecipice
 	SoundEventVaultRejectRewardedPlayer
 	SoundEventImitateDrowned
+	SoundEventImitateCreaking
 	SoundEventBundleInsertFailed
+	SoundEventSpongeAbsorb
+	_
+	SoundEventBlockCreakingHeartTrail
+	SoundEventCreakingHeartSpawn
+	SoundEventActivate
+	SoundEventDeactivate
+	SoundEventFreeze
+	SoundEventUnfreeze
+	SoundEventOpen
+	SoundEventOpenLong
+	SoundEventClose
+	SoundEventCloseLong
+	SoundEventImitatePhantom
+	SoundEventImitateZoglin
+	SoundEventImitateGuardian
+	SoundEventImitateRavager
+	SoundEventImitatePillager
+	SoundEventPlaceInWater
+	SoundEventStateChange
+	SoundEventImitateHappyGhast
+	SoundEventUniqueGeneric
+	SoundEventRecordTears
+	SoundEventTheEndLightFlash
+	SoundEventLeadLeash
+	SoundEventLeadUnleash
+	SoundEventLeadBreak
+	SoundEventUnsaddle
+	SoundEventEquipCopper
+	SoundEventRecordLavaChicken
+	SoundEventPlaceItem
+	SoundEventSingleItemSwap
+	SoundEventMultiItemSwap
 )
 
 // LevelSoundEvent is sent by the server to make any kind of built-in sound heard to a player. It is sent to,
@@ -566,6 +599,10 @@ type LevelSoundEvent struct {
 	// sound will have full volume, regardless of where the Position is, whereas if set to false, the sound's
 	// volume will be based on the distance to Position.
 	DisableRelativeVolume bool
+	// EntityUniqueID is the unique ID of a source entity. The unique ID is a value that remains consistent across
+	// different sessions of the same world, but most servers simply fill the runtime ID of the entity out for
+	// this field.
+	EntityUniqueID int64
 }
 
 // ID ...
@@ -580,4 +617,5 @@ func (pk *LevelSoundEvent) Marshal(io protocol.IO) {
 	io.String(&pk.EntityType)
 	io.Bool(&pk.BabyMob)
 	io.Bool(&pk.DisableRelativeVolume)
+	io.Int64(&pk.EntityUniqueID)
 }

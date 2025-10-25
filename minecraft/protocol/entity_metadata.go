@@ -49,7 +49,7 @@ const (
 	EntityDataKeyContainerSize
 	EntityDataKeyContainerStrengthModifier
 	EntityDataKeyBlockTarget
-	EntityDataKeyInventory
+	EntityDataKeyInvulnerableTicks
 	EntityDataKeyTargetA
 	EntityDataKeyTargetB
 	EntityDataKeyTargetC
@@ -133,6 +133,10 @@ const (
 	EntityDataKeyPlayerHasDied
 	EntityDataKeyCollisionBox
 	EntityDataKeyVisibleMobEffects
+	EntityDataKeyFilteredName
+	EntityDataKeyEnterBedPosition
+	EntityDataKeySeatThirdPersonCameraRadius
+	EntityDataKeySeatCameraRelaxDistanceSmoothing
 )
 
 const (
@@ -254,6 +258,15 @@ const (
 	EntityDataFlagTimerFlag1
 	EntityDataFlagTimerFlag2
 	EntityDataFlagTimerFlag3
+	EntityDataFlagBodyRotationBlocked
+	EntityDataFlagRenderWhenInvisible
+	EntityDataFlagBodyRotationAxisAligned
+	EntityDataFlagCollidable
+	EntityDataFlagWASDAirControlled
+	EntityDataFlagDoesServerAuthOnlyDismount
+	EntityDataFlagBodyRotationAlwaysFollowsHead
+	EntityDataFlagCanUseVerticalMovementAction
+	EntityDataFlagCount
 )
 
 const (
@@ -300,5 +313,17 @@ func (m EntityMetadata) Flag(key uint32, index uint8) bool {
 		return v.(byte)&(1<<index) != 0
 	default:
 		return v.(int64)&(1<<int64(index)) != 0
+	}
+}
+
+// ClearFlag clears a flag with a given index within the entity metadata map.
+// This sets the bit to 0.
+func (m EntityMetadata) ClearFlag(key uint32, index uint8) {
+	v := m[key]
+	switch key {
+	case EntityDataKeyPlayerFlags:
+		m[key] = v.(byte) &^ (1 << index)
+	default:
+		m[key] = v.(int64) &^ (1 << int64(index))
 	}
 }
