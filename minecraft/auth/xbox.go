@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -226,23 +227,39 @@ type deviceToken struct {
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
 func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, deviceType Device) (token *deviceToken, err error) {
+	properties := map[string]any{
+		"AuthMethod": "ProofOfPossession",
+		"Id":         "{" + uuid.New().String() + "}",
+		"DeviceType": deviceType.DeviceType,
+		"Version":    deviceType.Version,
+		"ProofKey": map[string]any{
+			"crv": "P-256",
+			"alg": "ES256",
+			"use": "sig",
+			"kty": "EC",
+			"x":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.X)),
+			"y":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.Y)),
+		},
+	}
+
+	switch deviceType.DeviceType {
+	case DeviceAndroid.DeviceType, DeviceNintendo.DeviceType:
+		properties["Id"] = "{" + uuid.NewString() + "}"
+	case DeviceIOS.DeviceType:
+		properties["Id"] = strings.ToUpper(uuid.NewString())
+	case DevicePlaystation.DeviceType:
+		properties["Id"] = uuid.NewString()
+	case DeviceWin32.DeviceType, "Xbox":
+		properties["Id"] = "{" + strings.ToUpper(uuid.NewString()) + "}"
+		properties["SerialNumber"] = properties["Id"]
+	default:
+		return nil, fmt.Errorf("unknown device type: %s", deviceType.DeviceType)
+	}
+
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
-		"Properties": map[string]any{
-			"AuthMethod": "ProofOfPossession",
-			"Id":         "{" + uuid.New().String() + "}",
-			"DeviceType": deviceType.DeviceType,
-			"Version":    deviceType.Version,
-			"ProofKey": map[string]any{
-				"crv": "P-256",
-				"alg": "ES256",
-				"use": "sig",
-				"kty": "EC",
-				"x":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.X)),
-				"y":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.Y)),
-			},
-		},
+		"Properties":   properties,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling device auth request: %w", err)
@@ -254,7 +271,10 @@ func obtainDeviceToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa
 	}
 
 	request.Header.Set("Cache-Control", "no-store, must-revalidate, no-cache")
+	request.Header.Set("Accept", "application/json")
 	request.Header.Set("x-xbl-contract-version", "1")
+	request.Header.Set("Accept-Encoding", "gzip, deflate, compress")
+	request.Header.Set("Accept-Language", "en-US, en;q=0.9")
 	if err := sign(request, data, key); err != nil {
 		return nil, fmt.Errorf("signing device auth request: %w", err)
 	}
