@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 )
 
 // Network represents an implementation of a supported network layers, such as RakNet.
@@ -49,15 +50,20 @@ type NetworkListener interface {
 // networks holds a map of id => Network to be used for looking up the network by an ID. It is registered to when calling
 // RegisterNetwork.
 var networks = map[string]func(l *slog.Logger) Network{}
+var networksMu sync.Mutex
 
 // RegisterNetwork registers a network so that it can be used for Gophertunnel.
 func RegisterNetwork(id string, n func(l *slog.Logger) Network) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
 	networks[id] = n
 }
 
 // networkByID returns the network with the ID passed. If no network is found, the second return value will be false.
 func networkByID(id string, l *slog.Logger) (Network, bool) {
+	networksMu.Lock()
 	n, ok := networks[id]
+	networksMu.Unlock()
 	if ok {
 		return n(l), true
 	}
