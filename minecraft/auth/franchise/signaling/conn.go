@@ -186,6 +186,10 @@ func (c *Conn) read() {
 				n.NotifyError(&err)
 			}
 			c.notifiersMu.Unlock()
+		case 3:
+		//  unhandled message type {"Type":3,"From":"Server","Message":"{\"MessageId\":\"abc96627-33f0-4551-9e99-b90f7ab700ce\",\"AcceptedOn\":\"2025-10-26T19:58:14.9259933+00:00\"}","MessageId":"abc96627-33f0-4551-9e99-b90f7ab700ce"}
+		case 4:
+		//  unhandled message type {"Type":4,"From":"Server","Message":"{\"MessageId\":\"5c15c19a-f95c-4bd0-a716-bff83c1fd881\",\"ToPlayerId\":\"9853058716227158536\",\"DeliveredOn\":\"2025-10-26T19:58:19.5916651+00:00\"}","MessageId":"5c15c19a-f95c-4bd0-a716-bff83c1fd881"}
 		default:
 			c.d.Log.Warn("received message for unknown type", slog.Any("message", message))
 		}
