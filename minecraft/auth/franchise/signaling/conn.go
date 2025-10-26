@@ -3,16 +3,17 @@ package signaling
 import (
 	"context"
 	"encoding/json"
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
-	"github.com/df-mc/go-nethernet"
-	"github.com/sandertv/gophertunnel/minecraft/franchise/internal"
 	"log/slog"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+	"github.com/df-mc/go-nethernet"
+	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
 )
 
 // Conn implements a [nethernet.Signaling] over a WebSocket connection.

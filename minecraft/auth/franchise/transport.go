@@ -4,14 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 )
 
 type Transport struct {
 	IdentityProvider IdentityProvider
 	Base             http.RoundTripper
+	AuthClient       *authclient.AuthClient
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.AuthClient == nil {
+		t.AuthClient = authclient.DefaultClient
+	}
 	reqBodyClosed := false
 	if req.Body != nil {
 		defer func() {
@@ -28,7 +34,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("request token config: %w", err)
 	}
-	token, err := config.Token()
+	token, err := config.Token(req.Context(), t.AuthClient)
 	if err != nil {
 		return nil, fmt.Errorf("request token: %w", err)
 	}

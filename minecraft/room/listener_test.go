@@ -4,18 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/sandertv/gophertunnel/minecraft"
-	"github.com/sandertv/gophertunnel/minecraft/auth"
-	"github.com/sandertv/gophertunnel/minecraft/auth/xal"
-	"github.com/sandertv/gophertunnel/minecraft/franchise/signaling"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-	"golang.org/x/oauth2"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/signaling"
+	"github.com/sandertv/gophertunnel/minecraft/auth/xal"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+	"golang.org/x/oauth2"
 )
 
 // TestListen demonstrates a world displayed in the friend list.
@@ -41,23 +44,25 @@ func TestListen(t *testing.T) {
 		}
 	})
 
-	x, err := xal.RefreshTokenSource(src, "http://xboxlive.com").Token()
+	x, err := xal.RefreshTokenSource(src, authclient.DefaultClient, "http://xboxlive.com").Token()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	status := DefaultStatus()
 	status.OwnerID = x.DisplayClaims().XUID
-	minecraft.RegisterNetwork("room", Network{
-		Network: minecraft.NetherNet{
-			Signaling: signals,
-		},
-		ListenConfig: ListenConfig{
-			Announcer: &XBLAnnouncer{
-				TokenSource: xal.RefreshTokenSource(src, "http://xboxlive.com"),
+	minecraft.RegisterNetwork("room", func(l *slog.Logger) minecraft.Network {
+		return Network{
+			Network: minecraft.NetherNet{
+				Signaling: signals,
 			},
-			StatusProvider: NewStatusProvider(status),
-		},
+			ListenConfig: ListenConfig{
+				Announcer: &XBLAnnouncer{
+					TokenSource: xal.RefreshTokenSource(src, authclient.DefaultClient, "http://xboxlive.com"),
+				},
+				StatusProvider: NewStatusProvider(status),
+			},
+		}
 	})
 
 	l, err := minecraft.Listen("room", "")

@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/df-mc/go-xsapi"
 	"github.com/df-mc/go-xsapi/mpsd"
 	"github.com/google/uuid"
-	"strings"
-	"sync"
 )
 
 // XBLAnnouncer announces a Status through the Multiplayer Session Directory (MPSD) of Xbox Live.

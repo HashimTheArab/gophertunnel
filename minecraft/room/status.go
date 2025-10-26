@@ -3,6 +3,7 @@ package room
 import (
 	"crypto/rand"
 	"encoding/base64"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 

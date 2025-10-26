@@ -2,8 +2,9 @@ package room
 
 import (
 	"context"
-	"github.com/sandertv/gophertunnel/minecraft"
 	"net"
+
+	"github.com/sandertv/gophertunnel/minecraft"
 )
 
 // Network wraps the [minecraft.Network], extending its functionality by hijacking some methods

@@ -2,14 +2,15 @@ package room
 
 import (
 	"errors"
-	"github.com/df-mc/go-nethernet"
-	"github.com/sandertv/gophertunnel/minecraft"
-	"github.com/sandertv/gophertunnel/minecraft/room/internal"
 	"log/slog"
 	"net"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/df-mc/go-nethernet"
+	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/room/internal"
 )
 
 // ListenConfig holds the configuration for wrapping a [minecraft.NetworkListener] with additional functionality.

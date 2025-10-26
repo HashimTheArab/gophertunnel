@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/df-mc/go-nethernet"
-	"github.com/sandertv/gophertunnel/minecraft/auth"
-	"golang.org/x/oauth2"
 	"math/rand"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/df-mc/go-nethernet"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"golang.org/x/oauth2"
 )
 
 // TestDial demonstrates dialing a Conn using [Dialer.DialContext] and ensures that the notification is working correctly.
@@ -38,7 +39,7 @@ func TestDial(t *testing.T) {
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
 
-	conn.Notify(ctx, testNotifier{t})
+	conn.Notify(testNotifier{t})
 	if err := conn.Signal(&nethernet.Signal{
 		Type:         nethernet.SignalTypeOffer,
 		ConnectionID: rand.Uint64(),

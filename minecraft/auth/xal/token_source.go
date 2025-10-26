@@ -3,16 +3,18 @@ package xal
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/df-mc/go-xsapi"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
-	"sync"
 )
 
-func RefreshTokenSource(underlying oauth2.TokenSource, relyingParty string) xsapi.TokenSource {
+func RefreshTokenSource(underlying oauth2.TokenSource, authClient *authclient.AuthClient, relyingParty string) xsapi.TokenSource {
 	return &refreshTokenSource{
-		underlying: underlying,
-
+		underlying:   underlying,
+		authClient:   authClient,
 		relyingParty: relyingParty,
 	}
 }
@@ -20,6 +22,7 @@ func RefreshTokenSource(underlying oauth2.TokenSource, relyingParty string) xsap
 type refreshTokenSource struct {
 	underlying oauth2.TokenSource
 
+	authClient   *authclient.AuthClient
 	relyingParty string
 
 	t  *oauth2.Token
@@ -36,7 +39,7 @@ func (r *refreshTokenSource) Token() (_ xsapi.Token, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("request underlying token: %w", err)
 		}
-		r.x, err = auth.RequestXBLToken(context.Background(), r.t, r.relyingParty)
+		r.x, err = auth.RequestXBLToken(context.Background(), r.authClient, r.t, r.relyingParty)
 		if err != nil {
 			return nil, fmt.Errorf("request xbox live token: %w", err)
 		}
