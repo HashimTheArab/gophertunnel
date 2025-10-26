@@ -110,6 +110,9 @@ type Listener struct {
 	close    chan struct{}
 
 	key *ecdsa.PrivateKey
+
+	disableEncryption bool
+	batchHeader       []byte
 }
 
 // Listen announces on the local network address. The network is typically "raknet".
@@ -149,12 +152,14 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 	listener := &Listener{
-		cfg:      cfg,
-		listener: netListener,
-		packs:    slices.Clone(cfg.ResourcePacks),
-		incoming: make(chan *Conn),
-		close:    make(chan struct{}),
-		key:      key,
+		cfg:               cfg,
+		listener:          netListener,
+		packs:             slices.Clone(cfg.ResourcePacks),
+		incoming:          make(chan *Conn),
+		close:             make(chan struct{}),
+		key:               key,
+		disableEncryption: n.DisableEncryption(),
+		batchHeader:       n.BatchHeader(),
 	}
 
 	// Actually start listening.
@@ -231,13 +236,27 @@ func (listener *Listener) PlayerCount() int {
 
 // updatePongData updates the pong data of the listener using the current only players, maximum players and
 // server name of the listener, provided the listener isn't currently hijacking the pong of another server.
+// If NetworkListener of the listener supports updating the server status directly with ServerStatus(ServerStatus)
+// method, it will directly call the method after updating its pong data.
 func (listener *Listener) updatePongData() {
+	var port uint16
+	if addr, ok := listener.Addr().(*net.UDPAddr); ok {
+		port = uint16(addr.Port)
+	}
+
 	s := listener.status()
 	s.ServerSubName = "§bLunar Proxy"
 	listener.listener.PongData([]byte(fmt.Sprintf("MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, listener.Addr().(*net.UDPAddr).Port, listener.Addr().(*net.UDPAddr).Port, 0,
+		listener.listener.ID(), s.ServerSubName, "Creative", 1, port, port,
+		0,
 	)))
+
+	if status, ok := listener.listener.(interface {
+		ServerStatus(status ServerStatus)
+	}); ok {
+		status.ServerStatus(s)
+	}
 }
 
 // listen starts listening for incoming connections and packets. When a player is fully connected, it submits
@@ -279,11 +298,13 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
 
-	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
+	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true, listener.batchHeader)
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
 	conn.compression = listener.cfg.Compression
 	conn.maxDecompressedLen = listener.cfg.MaxDecompressedLen
 	conn.pool = conn.proto.Packets(true)
+
+	conn.disableEncryption = listener.disableEncryption
 
 	conn.packetFunc = listener.cfg.PacketFunc
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired

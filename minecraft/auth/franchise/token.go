@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 
 	"github.com/google/uuid"
 	"golang.org/x/text/language"
@@ -23,6 +25,11 @@ type Token struct {
 	Treatments          []string                 `json:"treatments"`
 	Configurations      map[string]Configuration `json:"configurations"`
 	TreatmentContext    string                   `json:"treatmentContext"`
+}
+
+// SetAuthHeader sets an 'Authorization' header to the [http.Request] using the [Token.AuthorizationHeader].
+func (t *Token) SetAuthHeader(req *http.Request) {
+	req.Header.Set("Authorization", t.AuthorizationHeader)
 }
 
 const (
@@ -90,11 +97,39 @@ type TokenConfigSource interface {
 	TokenConfig() (*TokenConfig, error)
 }
 
+// IdentityProvider implements a TokenConfig method, which provides a TokenConfig used for authorization.
+//
+// IdentityProvider is implemented by various platforms that support identity-based authentication and
+// authorization. Platforms implementing IdentityProvider can provide a TokenConfig, which contains the
+// necessary configuration to obtain Tokens required for accessing with franchise services.
+type IdentityProvider interface {
+	// TokenConfig should return a TokenConfig that includes the necessary configuration for authorizing with
+	// franchise services. An error may be returned during authenticating with external platforms.
+	TokenConfig() (*TokenConfig, error)
+}
+
 type TokenConfig struct {
 	Device *DeviceConfig `json:"device,omitempty"`
 	User   *UserConfig   `json:"user,omitempty"`
 
 	Environment *AuthorizationEnvironment `json:"-"`
+}
+
+// defaultDeviceConfig returns a default DeviceConfig based on the AuthorizationEnvironment.
+// It is called by the [TokenConfig.Token] method to set a default device configuration when
+// the [TokenConfig.Device] field is not set.
+func defaultDeviceConfig(env *AuthorizationEnvironment) *DeviceConfig {
+	return &DeviceConfig{
+		ApplicationType: ApplicationTypeMinecraftPE,
+		Capabilities:    []string{},
+		GameVersion:     protocol.CurrentVersion,
+		ID:              uuid.New(),
+		Memory:          strconv.FormatUint(16*(1<<30), 10),
+		Platform:        PlatformWindows10,
+		PlayFabTitleID:  env.PlayFabTitleID,
+		StorePlatform:   StorePlatformUWPStore,
+		Type:            DeviceTypeWindows10,
+	}
 }
 
 type DeviceConfig struct {
@@ -110,6 +145,24 @@ type DeviceConfig struct {
 	Type               string    `json:"type,omitempty"`
 }
 
+type UserConfig struct {
+	Language     language.Tag `json:"language,omitempty"`
+	LanguageCode language.Tag `json:"languageCode,omitempty"`
+	RegionCode   string       `json:"regionCode,omitempty"`
+	Token        string       `json:"token,omitempty"`
+	TokenType    string       `json:"tokenType,omitempty"`
+}
+
+func defaultUserConfig() *UserConfig {
+	region, _ := language.AmericanEnglish.Region()
+
+	return &UserConfig{
+		Language:     language.AmericanEnglish,
+		LanguageCode: language.AmericanEnglish,
+		RegionCode:   region.String(),
+	}
+}
+
 const (
 	ApplicationTypeMinecraftPE = "MinecraftPE"
 
@@ -121,13 +174,5 @@ const (
 
 	DeviceTypeWindows10 = "Windows10"
 )
-
-type UserConfig struct {
-	Language     language.Tag `json:"language,omitempty"`
-	LanguageCode language.Tag `json:"languageCode,omitempty"`
-	RegionCode   string       `json:"regionCode,omitempty"`
-	Token        string       `json:"token,omitempty"`
-	TokenType    string       `json:"tokenType,omitempty"`
-}
 
 const TokenTypePlayFab = "PlayFab"

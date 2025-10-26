@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/df-mc/go-xsapi"
+
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
@@ -56,6 +58,10 @@ type XBLToken struct {
 		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
 	}
 	Flow string
+
+	// key is the private key used as 'ProofKey' for authentication.
+	// It is used for signing requests in [XBLToken.SetAuthHeader].
+	key *ecdsa.PrivateKey
 }
 
 type authorizationToken struct {
@@ -75,13 +81,29 @@ func (t authorizationToken) Expired() bool {
 	return time.Now().After(t.NotAfter.Add(-time.Minute * 5))
 }
 
-// SetAuthHeader returns a string that may be used for the 'Authorization' header used for Minecraft
+// String returns a string that may be used for the 'Authorization' header used for Minecraft
 // related endpoints that need an XBOX Live authenticated caller.
+func (t XBLToken) String() string {
+	return fmt.Sprintf("XBL3.0 x=%s;%s", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token)
+}
+
+// DisplayClaims returns a [xsapi.DisplayClaims] from the token. It can be used by the XSAPI
+// package to include display claims in requests that require them.
+func (t XBLToken) DisplayClaims() xsapi.DisplayClaims {
+	return t.AuthorizationToken.DisplayClaims.UserInfo[0]
+}
+
+// SetAuthHeader sets an 'Authorization' header to the request using [XBLToken.String]. It also
+// signs the request with a 'Signature' header using the private key if [http.Request.Body] implements
+// the Bytes() method to return its bytes to sign (typically [bytes.Buffer] or similar).
 func (t XBLToken) SetAuthHeader(r *http.Request) {
-	if len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
-		panic("xbox: authorization token has no user info (malformed response from Microsoft)")
+	r.Header.Set("Authorization", t.String())
+
+	if b, ok := r.Body.(interface {
+		Bytes() []byte
+	}); ok {
+		sign(r, b.Bytes(), t.key)
 	}
-	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
 }
 
 // XBLTokenObtainer holds a live token and device token used for requesting XBL tokens.
@@ -204,7 +226,7 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 		body, _ := io.ReadAll(resp.Body)
 		return nil, newXboxHTTPError("POST", "https://sisu.xboxlive.com/authorize", resp, body)
 	}
-	info := new(XBLToken)
+	info := &XBLToken{key: key}
 	return info, json.NewDecoder(resp.Body).Decode(info)
 }
 

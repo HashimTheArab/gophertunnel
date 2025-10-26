@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -34,8 +33,6 @@ const realmsBaseURL = "https://pocket.realms.minecraft.net"
 var (
 	ErrPlayerNotInRealm = errors.New("player not in realm")
 	ErrRealmNotFound    = errors.New("realm not found")
-	// Nethernet does not return a ip:port address format, gophertunnel doesn't support nethernet yet
-	ErrRealmNethernet = errors.New("realm runs on nethernet which is not supported yet")
 )
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
@@ -158,11 +155,6 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 			}
 			if err := json.Unmarshal(body, &data); err != nil {
 				return "", err
-			}
-
-			if data.NetworkProtocol == "NETHERNET" {
-				slog.ErrorContext(ctx, "nethernet realm", "realm_id", realmID, "response_body", string(body))
-				return "", ErrRealmNethernet
 			}
 
 			return data.Address, nil
