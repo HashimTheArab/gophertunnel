@@ -20,7 +20,7 @@ type Message struct {
 
 	// To specifies the recipient of the message, which is the ID of remote network
 	// to which the message is being sent. It is included only sent from client.
-	To uint64 `json:"To,omitempty"`
+	To string `json:"To,omitempty"`
 
 	// Data contains the actual payload of the message, which holds the data being transmitted.
 	// It is optional and may be omitted if no data is being sent.

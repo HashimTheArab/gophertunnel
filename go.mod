@@ -42,6 +42,4 @@ require (
 	golang.org/x/sys v0.30.0 // indirect
 )
 
-replace github.com/df-mc/go-nethernet => github.com/lactyy/go-nethernet v0.0.0-20240918151603-8274a4680204
-
-// replace github.com/df-mc/go-nethernet => github.com/lumineproxy/go-nethernet v0.0.0-20251024044000-f3860133179b
+replace github.com/df-mc/go-nethernet => github.com/lumineproxy/go-nethernet v0.0.0-20251024044000-f3860133179b

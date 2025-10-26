@@ -38,6 +38,10 @@ type Conn struct {
 	notifiersMu sync.Mutex
 }
 
+func (c *Conn) PongData(b []byte) {
+	// NOOP
+}
+
 // Signal sends a [nethernet.Signal] to a network.
 func (c *Conn) Signal(signal *nethernet.Signal) error {
 	return c.write(Message{
@@ -89,8 +93,8 @@ func (c *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) 
 // NetworkID returns the network ID of the Conn. It may be specified from [Dialer.NetworkID], otherwise a random
 // value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext]. It is utilized by
 // [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
-func (c *Conn) NetworkID() uint64 {
-	return c.d.NetworkID
+func (c *Conn) NetworkID() string {
+	return strconv.FormatUint(c.d.NetworkID, 10)
 }
 
 // Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
@@ -163,12 +167,7 @@ func (c *Conn) read() {
 				c.d.Log.Error("error decoding signal", internal.ErrAttr(err))
 				continue
 			}
-			var err error
-			signal.NetworkID, err = strconv.ParseUint(message.From, 10, 64)
-			if err != nil {
-				c.d.Log.Error("error parsing network ID of signal", internal.ErrAttr(err))
-				continue
-			}
+			signal.NetworkID = message.From
 
 			c.notifiersMu.Lock()
 			for _, n := range c.notifiers {

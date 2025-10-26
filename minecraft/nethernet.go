@@ -3,10 +3,9 @@ package minecraft
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/df-mc/go-nethernet"
 	"net"
-	"strconv"
+
+	"github.com/df-mc/go-nethernet"
 )
 
 // NetherNet is an implementation of NetherNet network. Unlike RakNet, it needs to be registered manually with a Signaling.
@@ -24,11 +23,7 @@ func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, e
 	if n.Signaling == nil {
 		return nil, errors.New("minecraft: NetherNet.DialContext: Signaling is nil")
 	}
-	networkID, err := strconv.ParseUint(address, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("parse network ID: %w", err)
-	}
-	return n.Dialer.DialContext(ctx, networkID, n.Signaling)
+	return n.Dialer.DialContext(ctx, address, n.Signaling)
 }
 
 // PingContext ...

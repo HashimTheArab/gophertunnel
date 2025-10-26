@@ -37,7 +37,6 @@ type Dialer struct {
 	// Log is used to logging messages at various levels. If nil, the default
 	// [slog.Logger] will be set from [slog.Default].
 	Log *slog.Logger
-
 	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
 	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
 	AuthClient *authclient.AuthClient
@@ -130,5 +129,11 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i franchise.
 		notifiers: make(map[uint32]nethernet.Notifier),
 	}
 	go conn.read()
-	return conn, nil
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-conn.credentialsReceived:
+		return conn, nil
+	}
 }
