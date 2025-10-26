@@ -5,8 +5,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"io"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 // Decoder handles the decoding of Minecraft packets sent through an io.Reader. These packets in turn contain
@@ -72,8 +73,6 @@ func (decoder *Decoder) DisableBatchPacketLimit() {
 }
 
 const (
-	// header is the header of compressed 'batches' from Minecraft.
-	header = 0xfe
 	// maximumInBatch is the maximum amount of packets that may be found in a batch. If a compressed batch has
 	// more than this amount, decoding will fail.
 	maximumInBatch = 1600
