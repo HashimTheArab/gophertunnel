@@ -59,6 +59,12 @@ func RegisterNetwork(id string, n func(l *slog.Logger) Network) {
 	networks[id] = n
 }
 
+func UnregisterNetwork(id string) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
+	delete(networks, id)
+}
+
 // networkByID returns the network with the ID passed. If no network is found, the second return value will be false.
 func networkByID(id string, l *slog.Logger) (Network, bool) {
 	networksMu.Lock()
