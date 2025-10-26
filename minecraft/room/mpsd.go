@@ -47,7 +47,7 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 	if err != nil {
 		return fmt.Errorf("encode: %w", err)
 	}
-	if bytes.Compare(custom, a.custom) == 0 {
+	if bytes.Equal(custom, a.custom) {
 		return nil
 	} else {
 		a.custom = custom

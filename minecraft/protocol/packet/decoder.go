@@ -100,7 +100,7 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 	if len(data) < h {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if bytes.Compare(data[:h], decoder.header) != 0 {
+	if !bytes.Equal(data[:h], decoder.header) {
 		return nil, fmt.Errorf("decode batch: invalid header %x, expected %x", data[:h], decoder.header)
 	}
 	data = data[h:]
