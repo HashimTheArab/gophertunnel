@@ -1,6 +1,8 @@
 module github.com/sandertv/gophertunnel
 
-go 1.24
+go 1.24.0
+
+toolchain go1.24.1
 
 require (
 	github.com/coder/websocket v1.8.12
@@ -16,7 +18,7 @@ require (
 	github.com/pelletier/go-toml v1.9.5
 	github.com/sandertv/go-raknet v1.14.3-0.20250823121252-325aeea25d25
 	golang.org/x/net v0.35.0
-	golang.org/x/oauth2 v0.21.0
+	golang.org/x/oauth2 v0.32.0
 	golang.org/x/text v0.22.0
 )
 

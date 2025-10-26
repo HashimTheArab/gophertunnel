@@ -11,12 +11,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/df-mc/go-xsapi"
 	"io"
 	"math/big"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/df-mc/go-xsapi"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
@@ -57,7 +58,7 @@ type XBLToken struct {
 		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
 	}
 	Flow string
-  
+
 	// key is the private key used as 'ProofKey' for authentication.
 	// It is used for signing requests in [XBLToken.SetAuthHeader].
 	key *ecdsa.PrivateKey
