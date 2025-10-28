@@ -118,7 +118,16 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 		return nil, fmt.Errorf("reset flate: %w", err)
 	}
 
-	var decompressed bytes.Buffer
+	decompressed := internal.BufferPool.Get().(*bytes.Buffer)
+	decompressed.Reset()
+	defer func() {
+		// Only return reasonably sized buffers to the pool to avoid retaining very large arrays.
+		if decompressed.Cap() <= 1<<20 { // 1 MiB cap
+			decompressed.Reset()
+			internal.BufferPool.Put(decompressed)
+		}
+	}()
+
 	// If the compressed data is less than half the limit, we can safely assume l*2, otherwise cap at limit.
 	l := len(compressed)
 	capHint := limit
@@ -129,15 +138,15 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 
 	// Handle no limit
 	if limit == math.MaxInt {
-		if _, err := io.Copy(&decompressed, r); err != nil {
+		if _, err := io.Copy(decompressed, r); err != nil {
 			return nil, fmt.Errorf("decompress flate: %w", err)
 		}
-		return decompressed.Bytes(), nil
+		return append([]byte(nil), decompressed.Bytes()...), nil
 	}
 
 	// Read limit+1 bytes to detect overflow without CopyN truncating the result.
 	toRead := int64(limit) + 1
-	n, err := io.CopyN(&decompressed, r, toRead)
+	n, err := io.CopyN(decompressed, r, toRead)
 	if err != nil && err != io.EOF {
 		// CopyN returns an EOF error if the stream is shorter than the limit, we can treat that as a success.
 		return nil, fmt.Errorf("decompress flate: %w", err)
@@ -145,7 +154,7 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 	if n > int64(limit) {
 		return nil, fmt.Errorf("decompress flate: size %d exceeds limit %d", n, limit)
 	}
-	return decompressed.Bytes(), nil
+	return append([]byte(nil), decompressed.Bytes()...), nil
 }
 
 // EncodeCompression ...
