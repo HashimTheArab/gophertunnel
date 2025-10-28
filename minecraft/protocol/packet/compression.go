@@ -119,7 +119,6 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 	}
 
 	decompressed := internal.BufferPool.Get().(*bytes.Buffer)
-	decompressed.Reset()
 	defer func() {
 		// Only return reasonably sized buffers to the pool to avoid retaining very large arrays.
 		if decompressed.Cap() <= 1<<20 { // 1 MiB cap
