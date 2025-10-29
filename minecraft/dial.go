@@ -16,7 +16,6 @@ import (
 	"math"
 	"math/rand"
 	"net"
-
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +86,10 @@ type Dialer struct {
 	// to and read from the Conn are always any of those found in the protocol/packet package, as packets
 	// are converted from and to this Protocol.
 	Protocol Protocol
+
+	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
+	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	AfterHandshake func(c *Conn) error
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
@@ -297,13 +300,18 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 
 	readyForLogin, connected := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
-	go listenConn(conn, readyForLogin, connected, cancel)
+	go listenConn(d, conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)
 	if err := conn.WritePacket(&packet.RequestNetworkSettings{ClientProtocol: d.Protocol.ID()}); err != nil {
 		return nil, conn.wrap(fmt.Errorf("send request network settings: %w", err), "dial")
 	}
 	_ = conn.Flush()
+
+	readyForLoginExpected := []uint32{packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame}
+	if conn.disablePacketHandling {
+		readyForLoginExpected = []uint32{packet.IDServerToClientHandshake}
+	}
 
 	select {
 	case <-ctx.Done():
@@ -312,7 +320,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 		return nil, conn.closeErr("dial")
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
-		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
+		conn.expect(readyForLoginExpected...)
 		if err := conn.WritePacket(&packet.Login{ConnectionRequest: request, ClientProtocol: d.Protocol.ID()}); err != nil {
 			return nil, conn.wrap(fmt.Errorf("send login: %w", err), "dial")
 		}
@@ -356,7 +364,7 @@ func readChainIdentityData(chainData []byte) (login.IdentityData, error) {
 
 // listenConn listens on the connection until it is closed on another goroutine. The channel passed will
 // receive a value once the connection is logged in.
-func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
+func listenConn(d Dialer, conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
 	defer func() {
 		_ = conn.Close()
 	}()
@@ -376,7 +384,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			return
 		}
 		for _, data := range packets {
-			loggedInBefore, readyToLoginBefore := conn.loggedIn, conn.readyToLogin
+			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete
 			if err := conn.receive(data); err != nil {
 				if cancelContext {
 					cancel(err)
@@ -384,6 +392,19 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 					conn.log.Error(err.Error())
 				}
 				return
+			}
+			if !handshakeCompleteBefore && conn.handshakeComplete {
+				if d.AfterHandshake != nil {
+					if err := d.AfterHandshake(conn); err != nil {
+						cancel(err)
+						return
+					}
+				}
+				// In relay mode, packet handling is disabled after handshake. Use that to detect early completion.
+				if conn.disablePacketHandling && connected != nil {
+					close(connected)
+					connected = nil
+				}
 			}
 			if !readyToLoginBefore && conn.readyToLogin {
 				// This is the signal that the connection is ready to login, so we put a value in the channel so that
@@ -393,8 +414,11 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			if !loggedInBefore && conn.loggedIn {
 				// This is the signal that the connection was considered logged in, so we put a value in the channel so
 				// that it may be detected.
+				if connected != nil {
+					close(connected)
+					connected = nil
+				}
 				cancelContext = false
-				connected <- struct{}{}
 			}
 		}
 	}
@@ -489,8 +513,15 @@ func defaultClientData(address, username string, d *login.ClientData) {
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	//data.DeviceOS = protocol.DeviceAndroid this is also not good for lunar
-	data.GameVersion = protocol.CurrentVersion
+	if data.DeviceOS == 0 {
+		data.DeviceOS = protocol.DeviceAndroid
+	}
+	if data.DefaultInputMode == 0 {
+		data.DefaultInputMode = packet.InputModeTouch
+	}
+	if data.GameVersion == "" {
+		data.GameVersion = protocol.CurrentVersion
+	}
 }
 
 // clearXBLIdentityData clears data from the login.IdentityData that is only set when a player is logged into

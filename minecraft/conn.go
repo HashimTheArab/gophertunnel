@@ -9,12 +9,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-
-	"regexp"
-
 	"io"
 	"log/slog"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -186,6 +184,8 @@ type Conn struct {
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
 	readyToLogin bool
+	// handshakeComplete is true if the login handshake has been completed.
+	handshakeComplete bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -225,6 +225,13 @@ type Conn struct {
 	shieldID atomic.Int32
 
 	additional chan packet.Packet
+
+	disablePacketHandling bool
+}
+
+// SetDisablePacketHandling disables automatic packet handling for the connection.
+func (conn *Conn) SetDisablePacketHandling(disabled bool) {
+	conn.disablePacketHandling = disabled
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
@@ -682,7 +689,17 @@ func (conn *Conn) receive(data []byte) error {
 				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
 			}
 		}
-		_ = conn.close(conn.closeErr(disconnectMessage))
+		_ = conn.close(conn.wrap(DisconnectError(disconnectMessage), "receive"))
+		return nil
+	}
+	if conn.disablePacketHandling && conn.handshakeComplete {
+		if pkData.h.PacketID == packet.IDClientToServerHandshake {
+			return nil // dont forward it
+		}
+		select {
+		case <-conn.ctx.Done():
+		case conn.packets <- pkData:
+		}
 		return nil
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
@@ -852,6 +869,7 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
 		return fmt.Errorf("enable encryption: %w", err)
 	}
+	conn.handshakeComplete = true
 	return nil
 }
 
@@ -933,6 +951,7 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 
 	// We write a ClientToServerHandshake packet (which has no payload) as a response.
 	_ = conn.WritePacket(&packet.ClientToServerHandshake{})
+	conn.handshakeComplete = true
 	return nil
 }
 

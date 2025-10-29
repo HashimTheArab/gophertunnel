@@ -6,13 +6,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-
-	"github.com/sandertv/gophertunnel/minecraft/internal"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
-	"github.com/sandertv/gophertunnel/minecraft/resource"
-
 	"log/slog"
 	"math"
 	"net"
@@ -20,6 +13,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/sandertv/gophertunnel/minecraft/internal"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
@@ -80,6 +79,10 @@ type ListenConfig struct {
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+
+	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
+	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	AfterHandshake func(c *Conn) error
 
 	// PacketFunc is called whenever a packet is read from or written to a connection returned when using
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the
@@ -355,10 +358,16 @@ func (listener *Listener) handleConn(conn *Conn) {
 			return
 		}
 		for _, data := range packets {
-			loggedInBefore := conn.loggedIn
+			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			if err := conn.receive(data); err != nil {
 				conn.log.Error(err.Error())
 				return
+			}
+			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
+				if err := listener.cfg.AfterHandshake(conn); err != nil {
+					conn.log.Error(err.Error())
+					return
+				}
 			}
 			if !loggedInBefore && conn.loggedIn {
 				select {
