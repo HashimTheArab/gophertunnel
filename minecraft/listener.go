@@ -197,11 +197,7 @@ func (listener *Listener) Accept() (net.Conn, error) {
 // closing the connection after. If the message passed is empty, the client will be immediately sent to the
 // server list instead of a disconnect screen.
 func (listener *Listener) Disconnect(conn *Conn, message string) error {
-	_ = conn.WritePacket(&packet.Disconnect{
-		HideDisconnectionScreen: message == "",
-		Message:                 message,
-	})
-	return conn.close(conn.closeErr(message))
+	return conn.Disconnect(message)
 }
 
 // AddResourcePack adds a new resource pack to the listener's resource packs.
