@@ -84,6 +84,9 @@ type ListenConfig struct {
 	// If AfterHandshake returns a non-nil error, the connection is aborted.
 	AfterHandshake func(c *Conn) error
 
+	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	DisablePacketHandling bool
+
 	// PacketFunc is called whenever a packet is read from or written to a connection returned when using
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
@@ -313,6 +316,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
+	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
 
 	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
 		// The server was full. We kick the player immediately and close the connection.

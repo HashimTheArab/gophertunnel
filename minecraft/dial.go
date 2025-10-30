@@ -87,9 +87,8 @@ type Dialer struct {
 	// are converted from and to this Protocol.
 	Protocol Protocol
 
-	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
-	// If AfterHandshake returns a non-nil error, the connection is aborted.
-	AfterHandshake func(c *Conn) error
+	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	DisablePacketHandling bool
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
@@ -271,6 +270,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = math.MaxInt
+	conn.disablePacketHandling = d.DisablePacketHandling
 
 	conn.disableEncryption = n.DisableEncryption()
 
@@ -300,7 +300,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 
 	readyForLogin, connected := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
-	go listenConn(d, conn, readyForLogin, connected, cancel)
+	go listenConn(conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)
 	if err := conn.WritePacket(&packet.RequestNetworkSettings{ClientProtocol: d.Protocol.ID()}); err != nil {
@@ -364,7 +364,7 @@ func readChainIdentityData(chainData []byte) (login.IdentityData, error) {
 
 // listenConn listens on the connection until it is closed on another goroutine. The channel passed will
 // receive a value once the connection is logged in.
-func listenConn(d Dialer, conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
+func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
 	defer func() {
 		_ = conn.Close()
 	}()
@@ -394,13 +394,8 @@ func listenConn(d Dialer, conn *Conn, readyForLogin, connected chan struct{}, ca
 				return
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete {
-				if d.AfterHandshake != nil {
-					if err := d.AfterHandshake(conn); err != nil {
-						cancel(err)
-						return
-					}
-				}
-				// In relay mode, packet handling is disabled after handshake. Use that to detect early completion.
+				// In relay mode, the dial should be completed immediately after handshake instead of waiting
+				// for the full login sequence.
 				if conn.disablePacketHandling && connected != nil {
 					close(connected)
 					connected = nil

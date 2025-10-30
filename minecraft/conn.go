@@ -229,11 +229,6 @@ type Conn struct {
 	disablePacketHandling bool
 }
 
-// SetDisablePacketHandling disables automatic packet handling for the connection.
-func (conn *Conn) SetDisablePacketHandling(disabled bool) {
-	conn.disablePacketHandling = disabled
-}
-
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
 // Minecraft packets to that net.Conn.
 // newConn accepts a private key which will be used to identify the connection. If a nil key is passed, the
