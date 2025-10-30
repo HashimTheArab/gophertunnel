@@ -630,6 +630,20 @@ func (conn *Conn) ChunkRadius() int {
 	return int(conn.gameData.ChunkRadius)
 }
 
+// SetGameData manually sets the game data for this connection. This is useful when DisablePacketHandling
+// is enabled and you want to populate the internal state without automatic packet handling.
+// This allows GameData() to return meaningful data even when packet handlers aren't running.
+func (conn *Conn) SetGameData(data GameData) {
+	conn.gameData = data
+	// When setting gameData with Items, also update shieldID if present
+	for _, item := range data.Items {
+		if item.Name == "minecraft:shield" {
+			conn.shieldID.Store(int32(item.RuntimeID))
+			break
+		}
+	}
+}
+
 // Context returns the connection's context. The context is canceled when the connection is closed,
 // allowing for cancellation of operations that are tied to the lifecycle of the connection.
 func (conn *Conn) Context() context.Context {
@@ -1345,7 +1359,14 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	if hiveRegex.MatchString(conn.clientData.ServerAddress) {
 		pk.BaseGameVersion = "1.17.0" // temp fix for hive
 	}
-	conn.gameData = GameData{
+	conn.gameData = GameDataFromStartGame(pk)
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
+	return nil
+}
+
+func GameDataFromStartGame(pk *packet.StartGame) GameData {
+	return GameData{
 		Difficulty:                   pk.Difficulty,
 		WorldName:                    pk.WorldName,
 		WorldSeed:                    pk.WorldSeed,
@@ -1379,9 +1400,6 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 	}
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
-	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
-	return nil
 }
 
 // handleItemRegistry handles an incoming ItemRegistry packet. It contains the item definitions that the client
