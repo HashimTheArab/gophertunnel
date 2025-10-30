@@ -94,13 +94,10 @@ func (flateCompression) Compress(decompressed []byte) ([]byte, error) {
 	}()
 
 	w.Reset(compressed)
-
-	_, err := w.Write(decompressed)
-	if err != nil {
+	if _, err := w.Write(decompressed); err != nil {
 		return nil, fmt.Errorf("compress flate: %w", err)
 	}
-	err = w.Close()
-	if err != nil {
+	if err := w.Close(); err != nil {
 		return nil, fmt.Errorf("close flate writer: %w", err)
 	}
 	return append([]byte(nil), compressed.Bytes()...), nil
@@ -127,14 +124,6 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 		}
 	}()
 
-	// If the compressed data is less than half the limit, we can safely assume l*2, otherwise cap at limit.
-	l := len(compressed)
-	capHint := limit
-	if l <= limit/2 {
-		capHint = l * 2
-	}
-	decompressed.Grow(capHint)
-
 	// Handle no limit
 	if limit == math.MaxInt {
 		if _, err := io.Copy(decompressed, r); err != nil {
@@ -143,15 +132,20 @@ func (flateCompression) Decompress(compressed []byte, limit int) ([]byte, error)
 		return append([]byte(nil), decompressed.Bytes()...), nil
 	}
 
-	// Read limit+1 bytes to detect overflow without CopyN truncating the result.
-	toRead := int64(limit) + 1
-	n, err := io.CopyN(decompressed, r, toRead)
-	if err != nil && err != io.EOF {
-		// CopyN returns an EOF error if the stream is shorter than the limit, we can treat that as a success.
+	// If the compressed data is less than half the limit, we can safely assume l*2, otherwise cap at limit.
+	capHint := limit
+	if l := len(compressed); l <= limit/2 {
+		capHint = l * 2
+	}
+	decompressed.Grow(capHint)
+
+	// Read limit+1 bytes to detect overflow
+	lr := &io.LimitedReader{R: r, N: int64(limit) + 1}
+	if _, err := io.Copy(decompressed, lr); err != nil {
 		return nil, fmt.Errorf("decompress flate: %w", err)
 	}
-	if n > int64(limit) {
-		return nil, fmt.Errorf("decompress flate: size %d exceeds limit %d", n, limit)
+	if lr.N <= 0 {
+		return nil, fmt.Errorf("decompress flate: size exceeds limit %d", limit)
 	}
 	return append([]byte(nil), decompressed.Bytes()...), nil
 }
