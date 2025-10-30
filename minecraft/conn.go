@@ -122,6 +122,7 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonBadPacket:                        "Server sent broken packet.",
 	packet.DisconnectReasonEditorMismatchEditorWorld:        "This world is in Editor Mode. It cannot be loaded.",
 	packet.DisconnectReasonEditorMismatchVanillaWorld:       "This world is a not in Editor Mode. It cannot be loaded.",
+	packet.DisconnectReasonHostWithoutKeys:                  "The host is using offline mode.",
 }
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
