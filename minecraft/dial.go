@@ -8,7 +8,6 @@ import (
 	cryptorand "crypto/rand"
 	_ "embed"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -470,11 +469,11 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.LanguageCode == "" {
 		d.LanguageCode = "en_GB"
 	}
-	if d.PlayFabID == "" {
-		id := make([]byte, 8)
-		_, _ = cryptorand.Read(id)
-		d.PlayFabID = hex.EncodeToString(id)
-	}
+	// if d.PlayFabID == "" { not sent as of 1.21.100
+	// 	id := make([]byte, 8)
+	// 	_, _ = cryptorand.Read(id)
+	// 	d.PlayFabID = hex.EncodeToString(id)
+	// }
 	if d.AnimatedImageData == nil {
 		d.AnimatedImageData = make([]login.SkinAnimation, 0)
 	}
