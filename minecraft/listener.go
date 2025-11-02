@@ -96,6 +96,12 @@ type ListenConfig struct {
 	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
+
+	// IPv4Port and IPv6Port specify the ports to advertise in the pong data for LAN discovery.
+	// If 0, the listener's actual port is used. This is useful when running separate IPv4 and IPv6
+	// listeners on different ports (e.g., 19132 for IPv4, 19133 for IPv6).
+	IPv4Port uint16
+	IPv6Port uint16
 }
 
 // Listener implements a Minecraft listener on top of an unspecific net.Listener. It abstracts away the
@@ -246,13 +252,23 @@ func (listener *Listener) updatePongData() {
 		port = uint16(addr.Port)
 	}
 
+	// Use configured ports for LAN discovery, or fall back to actual port
+	ipv4Port := listener.cfg.IPv4Port
+	if ipv4Port == 0 {
+		ipv4Port = port
+	}
+	ipv6Port := listener.cfg.IPv6Port
+	if ipv6Port == 0 {
+		ipv6Port = port
+	}
+
 	s := listener.status()
 	s.ServerSubName = "§bLunar Proxy"
-	listener.listener.PongData([]byte(fmt.Sprintf("MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
+	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, port, port,
+		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port,
 		0,
-	)))
+	))
 
 	if status, ok := listener.listener.(interface {
 		ServerStatus(status ServerStatus)
