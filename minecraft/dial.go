@@ -116,6 +116,9 @@ type Dialer struct {
 	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
 	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
 	AuthClient *authclient.AuthClient
+
+	// DeviceType is the device type used to authenticate with xbox live. Defaults to auth.DeviceAndroid.
+	DeviceType auth.Device
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -193,6 +196,9 @@ func (d Dialer) DialContext(ctx context.Context, network, address string, opts .
 	}
 	if d.FlushRate == 0 {
 		d.FlushRate = time.Second / 20
+	}
+	if d.DeviceType == (auth.Device{}) {
+		d.DeviceType = auth.DeviceAndroid
 	}
 
 	options := &dialOptions{}
@@ -422,7 +428,7 @@ func getAuthSession(ctx context.Context, dialer Dialer) (*auth.Session, error) {
 	if dialer.AuthSession != nil {
 		return dialer.AuthSession, nil
 	}
-	return auth.SessionFromTokenSource(dialer.AuthClient, dialer.TokenSource, auth.DeviceAndroid, ctx)
+	return auth.SessionFromTokenSource(dialer.AuthClient, dialer.TokenSource, dialer.DeviceType, ctx)
 }
 
 // AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
