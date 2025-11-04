@@ -165,7 +165,7 @@ type ClientData struct {
 	// is a semi-hex encoded string, usually consisting of 16 characters. That
 	// said, this is not always valid hex, because the last character may be
 	// omitted.
-	PlayFabID string `json:"PlayFabId"`
+	PlayFabID string `json:"PlayFabId,omitempty"`
 	// SkinImageHeight and SkinImageWidth are the dimensions of the skin's image data.
 	SkinImageHeight, SkinImageWidth int
 	// SkinResourcePatch is a base64 encoded string which holds JSON data. The content of the JSON data points
