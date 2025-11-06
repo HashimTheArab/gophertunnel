@@ -19,6 +19,7 @@ import (
 type Client struct {
 	getTokenSrc func() oauth2.TokenSource
 	getAuthCl   func() *authclient.AuthClient
+	getObtainer func() *auth.XBLTokenObtainer
 
 	xblToken *auth.XBLToken
 }
@@ -44,6 +45,19 @@ func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthCli
 	return &Client{
 		getTokenSrc: getTS,
 		getAuthCl:   getAC,
+	}
+}
+
+// NewClientWithObtainer returns a new Client instance that can reuse an XBLTokenObtainer
+// to request service-specific XBL tokens efficiently.
+func NewClientWithObtainer(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient, getObt func() *auth.XBLTokenObtainer) *Client {
+	if getAC == nil {
+		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
+	}
+	return &Client{
+		getTokenSrc: getTS,
+		getAuthCl:   getAC,
+		getObtainer: getObt,
 	}
 }
 
@@ -244,14 +258,26 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return c.xblToken, nil
 	}
 
-	tokenSrc := c.getTokenSrc()
-	if tokenSrc == nil {
-		return nil, fmt.Errorf("token source is nil")
-	}
-
 	authClient := c.getAuthCl()
 	if authClient == nil {
 		return nil, fmt.Errorf("auth client is nil")
+	}
+
+	// Prefer using an obtainer if available
+	if c.getObtainer != nil {
+		if obt := c.getObtainer(); obt != nil {
+			tok, err := obt.RequestXBLToken(ctx, realmsBaseURL+"/")
+			if err != nil {
+				return nil, err
+			}
+			c.xblToken = tok
+			return c.xblToken, nil
+		}
+	}
+
+	tokenSrc := c.getTokenSrc()
+	if tokenSrc == nil {
+		return nil, fmt.Errorf("token source is nil")
 	}
 
 	t, err := tokenSrc.Token()

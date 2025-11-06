@@ -178,6 +178,7 @@ func RequestXBLTokenDevice(ctx context.Context, authClient *authclient.AuthClien
 }
 
 func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.PrivateKey, liveToken *oauth2.Token, device *deviceToken, deviceType Device, relyingParty string) (*XBLToken, error) {
+	const sisuAuthUrl = "https://sisu.xboxlive.com/authorize"
 	data, err := json.Marshal(map[string]any{
 		"AccessToken":       "t=" + liveToken.AccessToken,
 		"AppId":             deviceType.ClientID,
@@ -199,9 +200,9 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 		return nil, fmt.Errorf("marshaling XBL auth request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://sisu.xboxlive.com/authorize", bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", sisuAuthUrl, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("POST %v: %w", "https://sisu.xboxlive.com/authorize", err)
+		return nil, fmt.Errorf("POST %v: %w", sisuAuthUrl, err)
 	}
 	req.Header.Set("x-xbl-contract-version", "1")
 	if err := sign(req, data, key); err != nil {
@@ -214,7 +215,7 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 		if resp != nil && resp.Body != nil {
 			body, _ = io.ReadAll(resp.Body)
 		}
-		return nil, newXboxNetworkError("POST", "https://sisu.xboxlive.com/authorize", err, body)
+		return nil, newXboxNetworkError("POST", sisuAuthUrl, err, body)
 	}
 	defer resp.Body.Close()
 
@@ -224,7 +225,7 @@ func obtainXBLToken(ctx context.Context, c *authclient.AuthClient, key *ecdsa.Pr
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, newXboxHTTPError("POST", "https://sisu.xboxlive.com/authorize", resp, body)
+		return nil, newXboxHTTPError("POST", sisuAuthUrl, resp, body)
 	}
 	info := &XBLToken{key: key}
 	return info, json.NewDecoder(resp.Body).Decode(info)
