@@ -861,7 +861,6 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	alg, ok := packet.CompressionByID(pk.CompressionAlgorithm)
 	if !ok {
 		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
-		alg = packet.FlateCompression
 	}
 	conn.enc.EnableCompression(alg)
 	conn.dec.EnableCompression(conn.maxDecompressedLen)
