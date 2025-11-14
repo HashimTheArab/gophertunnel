@@ -428,7 +428,11 @@ func getAuthSession(ctx context.Context, dialer Dialer) (*auth.Session, error) {
 	if dialer.AuthSession != nil {
 		return dialer.AuthSession, nil
 	}
-	return auth.SessionFromTokenSource(dialer.AuthClient, dialer.TokenSource, dialer.DeviceType, ctx)
+	session, err := auth.SessionFromTokenSource(dialer.AuthClient, dialer.TokenSource, dialer.DeviceType, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("session from token source: %w", err)
+	}
+	return session, nil
 }
 
 // AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
