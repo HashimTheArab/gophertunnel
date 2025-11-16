@@ -414,6 +414,14 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
+	conn.encodePacketTo(pk, &conn.bufferedSend)
+	return nil
+}
+
+// encodePacketTo marshals the provided packet (including header) into one or more byte slices,
+// accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
+// appended to dst. The appended slices are copies safe to retain beyond the call.
+func (conn *Conn) encodePacketTo(pk packet.Packet, dst *[][]byte) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -431,7 +439,31 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 		if conn.packetFunc != nil {
 			conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 		}
-		conn.bufferedSend = append(conn.bufferedSend, append([]byte(nil), buf.Bytes()...))
+		*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
+	}
+}
+
+// WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
+// bypassing the buffered batch that is flushed every tick. Use this when a packet must be sent at once.
+func (conn *Conn) WritePacketDirect(pk packet.Packet) error {
+	select {
+	case <-conn.ctx.Done():
+		return conn.closeErr("write packet direct")
+	default:
+	}
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+
+	// Use a small stack-allocated buffer for the common case (usually 1 slice),
+	// allowing append to spill to heap only if more capacity is needed.
+	var stackBuf [4][]byte
+	immediate := stackBuf[:0]
+	conn.encodePacketTo(pk, &immediate)
+	if len(immediate) > 0 {
+		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
+			// Should never happen.
+			panic(fmt.Errorf("error encoding packet batch: %w", err))
+		}
 	}
 	return nil
 }
