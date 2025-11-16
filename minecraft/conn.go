@@ -445,7 +445,7 @@ func (conn *Conn) encodePacketTo(pk packet.Packet, dst *[][]byte) {
 
 // WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
 // bypassing the buffered batch that is flushed every tick. Use this when a packet must be sent at once.
-func (conn *Conn) WritePacketDirect(pk packet.Packet) error {
+func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write packet direct")
@@ -458,7 +458,9 @@ func (conn *Conn) WritePacketDirect(pk packet.Packet) error {
 	// allowing append to spill to heap only if more capacity is needed.
 	var stackBuf [4][]byte
 	immediate := stackBuf[:0]
-	conn.encodePacketTo(pk, &immediate)
+	for _, pk := range pks {
+		conn.encodePacketTo(pk, &immediate)
+	}
 	if len(immediate) > 0 {
 		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
 			// Should never happen.
