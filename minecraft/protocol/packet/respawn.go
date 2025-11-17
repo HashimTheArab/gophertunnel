@@ -7,8 +7,8 @@ import (
 
 const (
 	RespawnStateSearchingForSpawn = iota
-	RespawnStateReadyToSpawn
-	RespawnStateClientReadyToSpawn
+	RespawnStateReadyToSpawn // Sent by server to respawn client after client clicks respawn
+	RespawnStateClientReadyToSpawn // Sent when the client is on the respawn page
 )
 
 // Respawn is sent by the server to make a player respawn client-side. It is sent in response to a
