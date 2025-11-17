@@ -414,14 +414,14 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	conn.encodePacketTo(pk, &conn.bufferedSend)
+	conn.encodePacketsTo(&conn.bufferedSend, pk)
 	return nil
 }
 
 // encodePacketTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
 // appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketTo(pk packet.Packet, dst *[][]byte) {
+func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -429,17 +429,19 @@ func (conn *Conn) encodePacketTo(pk packet.Packet, dst *[][]byte) {
 		internal.BufferPool.Put(buf)
 	}()
 
-	conn.hdr.PacketID = pk.ID()
-	_ = conn.hdr.Write(buf)
-	l := buf.Len()
+	for _, pk := range pks {
+		buf.Reset()
+		conn.hdr.PacketID = pk.ID()
+		_ = conn.hdr.Write(buf)
+		l := buf.Len()
 
-	for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-		converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
-
-		if conn.packetFunc != nil {
-			conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
+			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
+			if conn.packetFunc != nil {
+				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+			}
+			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
-		*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 	}
 }
 
@@ -458,9 +460,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	// allowing append to spill to heap only if more capacity is needed.
 	var stackBuf [4][]byte
 	immediate := stackBuf[:0]
-	for _, pk := range pks {
-		conn.encodePacketTo(pk, &immediate)
-	}
+	conn.encodePacketsTo(&immediate, pks...)
 	if len(immediate) > 0 {
 		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
 			// Should never happen.
