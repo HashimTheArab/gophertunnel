@@ -5,8 +5,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"io"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 // Decoder handles the decoding of Minecraft packets sent through an io.Reader. These packets in turn contain
@@ -26,6 +27,8 @@ type Decoder struct {
 	encrypt            *encrypt
 
 	checkPacketLimit bool
+
+	header []byte
 }
 
 // packetReader is used to read packets immediately instead of copying them in a buffer first. This is a
@@ -36,14 +39,15 @@ type packetReader interface {
 
 // NewDecoder returns a new decoder decoding data from the io.Reader passed. One read call from the reader is
 // assumed to consume an entire packet.
-func NewDecoder(reader io.Reader) *Decoder {
+func NewDecoder(reader io.Reader, header []byte) *Decoder {
 	if pr, ok := reader.(packetReader); ok {
-		return &Decoder{checkPacketLimit: true, pr: pr}
+		return &Decoder{checkPacketLimit: true, pr: pr, header: header}
 	}
 	return &Decoder{
 		r:                reader,
 		buf:              make([]byte, 1024*1024*3),
 		checkPacketLimit: true,
+		header:           header,
 	}
 }
 
@@ -69,11 +73,9 @@ func (decoder *Decoder) DisableBatchPacketLimit() {
 }
 
 const (
-	// header is the header of compressed 'batches' from Minecraft.
-	header = 0xfe
 	// maximumInBatch is the maximum amount of packets that may be found in a batch. If a compressed batch has
 	// more than this amount, decoding will fail.
-	maximumInBatch = 812
+	maximumInBatch = 1600
 )
 
 // Decode decodes one 'packet' from the io.Reader passed in NewDecoder(), producing a slice of packets that it
@@ -93,10 +95,14 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	if data[0] != header {
-		return nil, fmt.Errorf("decode batch: invalid header %x, expected %x", data[0], header)
+	h := len(decoder.header)
+	if len(data) < h {
+		return nil, io.ErrUnexpectedEOF
 	}
-	data = data[1:]
+	if !bytes.Equal(data[:h], decoder.header) {
+		return nil, fmt.Errorf("decode batch: invalid header %x, expected %x", data[:h], decoder.header)
+	}
+	data = data[h:]
 	if decoder.encrypt != nil {
 		decoder.encrypt.decrypt(data)
 		if err := decoder.encrypt.verify(data); err != nil {
