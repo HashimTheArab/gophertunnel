@@ -867,12 +867,19 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 			break
 		}
 	}
+
+	// Allow newer clients to connect. Most protocol updates are still playable for the most part.
+	if pk.ClientProtocol > protocol.CurrentProtocol {
+		found = true
+	}
+
 	if !found {
 		status := packet.PlayStatusLoginFailedClient
-		if pk.ClientProtocol > protocol.CurrentProtocol {
-			// The server is outdated in this case, so we have to change the status we send.
-			status = packet.PlayStatusLoginFailedServer
-		}
+		// Dead code because of the newly added check above
+		// if pk.ClientProtocol > protocol.CurrentProtocol {
+		// 	// The server is outdated in this case, so we have to change the status we send.
+		// 	status = packet.PlayStatusLoginFailedServer
+		// }
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
 		return fmt.Errorf("incompatible protocol version: expected %v, got %v", protocol.CurrentProtocol, pk.ClientProtocol)
 	}
