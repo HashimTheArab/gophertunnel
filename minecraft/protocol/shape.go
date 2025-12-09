@@ -156,8 +156,7 @@ type DebugDrawerShape struct {
 	Type Optional[uint8]
 	// Location is the location of the shape.
 	Location Optional[mgl32.Vec3]
-	// Scale is the scale of the shape. This does not make lines thicker, but it changes the size of the shape.
-	// For example, a scale of 2 will make a box twice as large.
+	// Scale is the scale of the shape.
 	Scale Optional[float32]
 	// Rotation is the rotation of the shape.
 	Rotation Optional[mgl32.Vec3]
