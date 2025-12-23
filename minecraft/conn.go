@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +41,10 @@ type exemptedResourcePack struct {
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
 	{
+		uuid:    "0fba4063-dba1-4281-9b89-ff9390653530",
+		version: "1.0.0",
+	},
+	{
 		uuid:    "b41c2785-c512-4a49-af56-3a87afd47c57",
 		version: "1.21.30",
 	},
@@ -63,10 +68,61 @@ var exemptedPacks = []exemptedResourcePack{
 		uuid:    "0674721c-a0aa-41a1-9ba8-1ed33ea3e7ed",
 		version: "1.20.50",
 	},
-	{
-		uuid:    "0fba4063-dba1-4281-9b89-ff9390653530",
-		version: "1.0.0",
-	},
+}
+
+var disconnectReasons = map[int32]string{
+	packet.DisconnectReasonCantConnectNoInternet:            "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonNoPermissions:                    "You're not invited to play on this server.",
+	packet.DisconnectReasonUnrecoverableError:               "An unrecoverable error has occurred.",
+	packet.DisconnectReasonThirdPartyBlocked:                "Third-party server is blocked.",
+	packet.DisconnectReasonThirdPartyNoInternet:             "Please check your connection to the internet and try again.",
+	packet.DisconnectReasonThirdPartyBadIP:                  "Invalid IP address.",
+	packet.DisconnectReasonThirdPartyNoServerOrServerLocked: "The server you are attempting to join may not exist or be locked.",
+	packet.DisconnectReasonVersionMismatch:                  "Version mismatch",
+	packet.DisconnectReasonSkinIssue:                        "There is an issue with your skin.",
+	packet.DisconnectReasonInviteSessionNotFound:            "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonEduLevelSettingsMissing:          "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLocalServerNotFound:              "Local server not found.",
+	packet.DisconnectReasonUserLeaveGameAttempted:           "Quitting",
+	packet.DisconnectReasonPlatformLockedSkinsError:         "Platform Restricted Skin!",
+	packet.DisconnectReasonRealmsWorldUnassigned:            "This Realm has no world assigned.",
+	packet.DisconnectReasonRealmsServerCantConnect:          "Unable to connect to Realm.",
+	packet.DisconnectReasonRealmsServerHidden:               "Multiplayer Invitation",
+	packet.DisconnectReasonRealmsServerDisabledBeta:         "Realms are disabled for the beta.",
+	packet.DisconnectReasonRealmsServerDisabled:             "Realms are disabled.",
+	packet.DisconnectReasonCrossPlatformDisabled:            "Cross-Platform Play Disabled.",
+	packet.DisconnectReasonCantConnect:                      "Unable to connect to world.",
+	packet.DisconnectReasonSessionNotFound:                  "Unable to connect to world. The world is no longer available to join.",
+	packet.DisconnectReasonServerFull:                       "Server Full",
+	packet.DisconnectReasonInvalidPlatformSkin:              "Invalid or corrupt skin!",
+	packet.DisconnectReasonEditionVersionMismatch:           "Unable to load world.",
+	packet.DisconnectReasonEditionMismatch:                  "This world was saved from Minecraft Education. It cannot be loaded.",
+	packet.DisconnectReasonLevelNewerThanExeVersion:         "A newer version of the game has saved this world. It cannot be loaded.",
+	packet.DisconnectReasonBannedSkin:                       "Skin Not Allowed In Multiplayer",
+	packet.DisconnectReasonTimeout:                          "Timed out",
+	packet.DisconnectReasonServerNotFound:                   "Server not found.",
+	packet.DisconnectReasonOutdatedServer:                   "The host is using an older version of Minecraft. Everyone should update to the latest version of Minecraft and try again.",
+	packet.DisconnectReasonOutdatedClient:                   "Could not connect: Outdated client!",
+	packet.DisconnectReasonMultiplayerDisabled:              "The world has been set to single player mode.",
+	packet.DisconnectReasonNoWiFi:                           "No WiFi Connection",
+	packet.DisconnectReasonDisconnected:                     "Disconnected by Server",
+	packet.DisconnectReasonInvalidPlayer:                    "This world's multiplayer setting is set to friends only. You must be friends with the host of this world to join.",
+	packet.DisconnectReasonLoggedInOtherLocation:            "Logged in from other location",
+	packet.DisconnectReasonServerIdConflict:                 "Cannot join world. The account you are signed in to is currently playing in this world on a different device.",
+	packet.DisconnectReasonNotAllowed:                       "You're not invited to play on this server.",
+	packet.DisconnectReasonNotAuthenticated:                 "You need to authenticate to Microsoft services.",
+	packet.DisconnectReasonInvalidTenant:                    "Unable to connect to the world. Please check your join code and try again.",
+	packet.DisconnectReasonKicked:                           "You were kicked from the game",
+	packet.DisconnectReasonKickedForExploit:                 "You were kicked from the game for exploiting.",
+	packet.DisconnectReasonResourcePackProblem:              "Encountered a problem while downloading or applying resource pack.",
+	packet.DisconnectReasonIncompatiblePack:                 "You are unable to join the world because you have an incompatible pack.",
+	packet.DisconnectReasonOutOfStorage:                     "Out of storage space",
+	packet.DisconnectReasonInvalidLevel:                     "Invalid Level!",
+	packet.DisconnectReasonShutdown:                         "Quitting",
+	packet.DisconnectReasonBadPacket:                        "Server sent broken packet.",
+	packet.DisconnectReasonEditorMismatchEditorWorld:        "This world is in Editor Mode. It cannot be loaded.",
+	packet.DisconnectReasonEditorMismatchVanillaWorld:       "This world is a not in Editor Mode. It cannot be loaded.",
+	packet.DisconnectReasonHostWithoutKeys:                  "The host is using offline mode.",
 }
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
@@ -106,7 +162,8 @@ type Conn struct {
 	privateKey *ecdsa.PrivateKey
 	// salt is a 16 byte long randomly generated byte slice which is only used if the Conn is a server sided
 	// connection. It is otherwise left unused.
-	salt []byte
+	salt              []byte
+	disableEncryption bool
 
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.
@@ -128,6 +185,8 @@ type Conn struct {
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
 	readyToLogin bool
+	// handshakeComplete is true if the login handshake has been completed.
+	handshakeComplete bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -167,16 +226,18 @@ type Conn struct {
 	shieldID atomic.Int32
 
 	additional chan packet.Packet
+
+	disablePacketHandling bool
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
 // Minecraft packets to that net.Conn.
 // newConn accepts a private key which will be used to identify the connection. If a nil key is passed, the
 // key is generated.
-func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool) *Conn {
+func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool, batchHeader []byte) *Conn {
 	conn := &Conn{
-		enc:          packet.NewEncoder(netConn),
-		dec:          packet.NewDecoder(netConn),
+		enc:          packet.NewEncoder(netConn, batchHeader),
+		dec:          packet.NewDecoder(netConn, batchHeader),
 		salt:         make([]byte, 16),
 		packets:      make(chan *packetData, 8),
 		additional:   make(chan packet.Packet, 16),
@@ -353,6 +414,14 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
+	conn.encodePacketsTo(&conn.bufferedSend, pk)
+	return nil
+}
+
+// encodePacketTo marshals the provided packet (including header) into one or more byte slices,
+// accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
+// appended to dst. The appended slices are copies safe to retain beyond the call.
+func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -360,17 +429,43 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 		internal.BufferPool.Put(buf)
 	}()
 
-	conn.hdr.PacketID = pk.ID()
-	_ = conn.hdr.Write(buf)
-	l := buf.Len()
+	for _, pk := range pks {
+		buf.Reset()
+		conn.hdr.PacketID = pk.ID()
+		_ = conn.hdr.Write(buf)
+		l := buf.Len()
 
-	for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-		converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
-
-		if conn.packetFunc != nil {
-			conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
+			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
+			if conn.packetFunc != nil {
+				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+			}
+			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
-		conn.bufferedSend = append(conn.bufferedSend, append([]byte(nil), buf.Bytes()...))
+	}
+}
+
+// WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
+// bypassing the buffered batch that is flushed every tick. Use this when a packet must be sent at once.
+func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
+	select {
+	case <-conn.ctx.Done():
+		return conn.closeErr("write packet direct")
+	default:
+	}
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+
+	// Use a small stack-allocated buffer for the common case (usually 1 slice),
+	// allowing append to spill to heap only if more capacity is needed.
+	var stackBuf [4][]byte
+	immediate := stackBuf[:0]
+	conn.encodePacketsTo(&immediate, pks...)
+	if len(immediate) > 0 {
+		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
+			// Should never happen.
+			panic(fmt.Errorf("error encoding packet batch: %w", err))
+		}
 	}
 	return nil
 }
@@ -530,8 +625,7 @@ func (conn *Conn) SetDeadline(t time.Time) error {
 // SetReadDeadline sets the read deadline of the Conn to the time passed. The time must be after time.Now().
 // Passing an empty time.Time to the method (time.Time{}) results in the read deadline being cleared.
 func (conn *Conn) SetReadDeadline(t time.Time) error {
-	empty := time.Time{}
-	if t == empty {
+	if t.Equal(time.Time{}) {
 		conn.readDeadline = make(chan time.Time)
 	} else if t.Before(time.Now()) {
 		panic(fmt.Errorf("error setting read deadline: time passed is before time.Now()"))
@@ -571,10 +665,35 @@ func (conn *Conn) ChunkRadius() int {
 	return int(conn.gameData.ChunkRadius)
 }
 
+// SetGameData manually sets the game data for this connection. This is useful when DisablePacketHandling
+// is enabled and you want to populate the internal state without automatic packet handling.
+// This allows GameData() to return meaningful data even when packet handlers aren't running.
+func (conn *Conn) SetGameData(data GameData) {
+	conn.gameData = data
+	// When setting gameData with Items, also update shieldID if present
+	for _, item := range data.Items {
+		if item.Name == "minecraft:shield" {
+			conn.shieldID.Store(int32(item.RuntimeID))
+			break
+		}
+	}
+}
+
 // Context returns the connection's context. The context is canceled when the connection is closed,
 // allowing for cancellation of operations that are tied to the lifecycle of the connection.
 func (conn *Conn) Context() context.Context {
 	return conn.ctx
+}
+
+// Disconnect disconnects the connection by first sending a disconnect packet with the message passed, and
+// closing the connection after. If the message passed is empty, the client will be immediately sent to the
+// server list instead of a disconnect screen.
+func (conn *Conn) Disconnect(message string) error {
+	_ = conn.WritePacket(&packet.Disconnect{
+		HideDisconnectionScreen: message == "",
+		Message:                 message,
+	})
+	return conn.close(conn.closeErr(message))
 }
 
 // takeDeferredPacket locks the deferred packets lock and takes the next packet from the list of deferred
@@ -615,7 +734,27 @@ func (conn *Conn) receive(data []byte) error {
 		if err != nil {
 			return err
 		}
-		_ = conn.close(conn.closeErr(pks[0].(*packet.Disconnect).Message))
+		disconnectPacket := pks[0].(*packet.Disconnect)
+		disconnectMessage := disconnectPacket.Message
+		if disconnectPacket.Message == "" {
+			if reason, ok := disconnectReasons[disconnectPacket.Reason]; ok {
+				disconnectMessage = reason
+			} else {
+				conn.log.Debug("unknown disconnect reason", "reason", disconnectPacket.Reason)
+				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
+			}
+		}
+		_ = conn.close(conn.wrap(DisconnectError(disconnectMessage), "receive"))
+		return nil
+	}
+	if conn.disablePacketHandling && conn.handshakeComplete {
+		if pkData.h.PacketID == packet.IDClientToServerHandshake {
+			return nil // dont forward it
+		}
+		select {
+		case <-conn.ctx.Done():
+		case conn.packets <- pkData:
+		}
 		return nil
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
@@ -728,12 +867,19 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 			break
 		}
 	}
+
+	// Allow newer clients to connect. Most protocol updates are still playable for the most part.
+	if pk.ClientProtocol > protocol.CurrentProtocol {
+		found = true
+	}
+
 	if !found {
 		status := packet.PlayStatusLoginFailedClient
-		if pk.ClientProtocol > protocol.CurrentProtocol {
-			// The server is outdated in this case, so we have to change the status we send.
-			status = packet.PlayStatusLoginFailedServer
-		}
+		// Dead code because of the newly added check above
+		// if pk.ClientProtocol > protocol.CurrentProtocol {
+		// 	// The server is outdated in this case, so we have to change the status we send.
+		// 	status = packet.PlayStatusLoginFailedServer
+		// }
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
 		return fmt.Errorf("incompatible protocol version: expected %v, got %v", protocol.CurrentProtocol, pk.ClientProtocol)
 	}
@@ -747,7 +893,7 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 	_ = conn.Flush()
 	conn.enc.EnableCompression(conn.compression)
-	conn.dec.EnableCompression(conn.maxDecompressedLen)
+	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
 	return nil
 }
 
@@ -755,10 +901,10 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	alg, ok := packet.CompressionByID(pk.CompressionAlgorithm)
 	if !ok {
-		return fmt.Errorf("unknown compression algorithm %v", pk.CompressionAlgorithm)
+		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
 	}
 	conn.enc.EnableCompression(alg)
-	conn.dec.EnableCompression(conn.maxDecompressedLen)
+	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
 }
@@ -785,6 +931,7 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
 		return fmt.Errorf("enable encryption: %w", err)
 	}
+	conn.handshakeComplete = true
 	return nil
 }
 
@@ -804,7 +951,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		texturePack := protocol.TexturePackInfo{
 			UUID:        pack.UUID(),
 			Version:     pack.Version(),
-			Size:        uint64(pack.Len()),
+			Size:        uint64(pack.Size()),
 			DownloadURL: pack.DownloadURL(),
 		}
 		if pack.Encrypted() {
@@ -852,18 +999,21 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 		return fmt.Errorf("decode ServerToClientHandshake salt: %w", err)
 	}
 
-	x, _ := pub.Curve.ScalarMult(pub.X, pub.Y, conn.privateKey.D.Bytes())
-	// Make sure to pad the shared secret up to 96 bytes.
-	sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
+	if !conn.disableEncryption {
+		x, _ := pub.Curve.ScalarMult(pub.X, pub.Y, conn.privateKey.D.Bytes())
+		// Make sure to pad the shared secret up to 96 bytes.
+		sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
 
-	keyBytes := sha256.Sum256(append(salt, sharedSecret...))
+		keyBytes := sha256.Sum256(append(salt, sharedSecret...))
 
-	// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
-	conn.enc.EnableEncryption(keyBytes)
-	conn.dec.EnableEncryption(keyBytes)
+		// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
+		conn.enc.EnableEncryption(keyBytes)
+		conn.dec.EnableEncryption(keyBytes)
+	}
 
 	// We write a ClientToServerHandshake packet (which has no payload) as a response.
 	_ = conn.WritePacket(&packet.ClientToServerHandshake{})
+	conn.handshakeComplete = true
 	return nil
 }
 
@@ -902,6 +1052,18 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			conn.packQueue.packAmount--
 			continue
 		}
+
+		// Try to use the Download URL if set
+		if pack.DownloadURL != "" {
+			newPack, err := resource.ReadURL(pack.DownloadURL)
+			if err != nil {
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
+			} else {
+				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				continue
+			}
+		}
+
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
 		conn.packQueue.downloadingPacks[id] = downloadingPack{
@@ -913,14 +1075,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	}
 
 	if len(packsToDownload) != 0 {
-		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData)
+		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame)
 		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
 		return nil
 	}
-	conn.expect(packet.IDResourcePackStack)
+	conn.expect(packet.IDResourcePackStack, packet.IDStartGame)
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
@@ -1043,6 +1205,7 @@ func (conn *Conn) startGame() {
 		CommandsEnabled:              true,
 		WorldName:                    data.WorldName,
 		LANBroadcastEnabled:          true,
+		XBLBroadcastMode:             data.GamePublishSetting,
 		PlayerMovementSettings:       data.PlayerMovementSettings,
 		WorldGameMode:                data.WorldGameMode,
 		Hardcore:                     data.Hardcore,
@@ -1090,7 +1253,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	if pack.size != pk.Size {
 		// Size mismatch: The ResourcePacksInfo packet had a size for the pack that did not match with the
 		// size sent here.
-		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id)
+		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id, "packs_info_size", pack.size, "data_info_size", pk.Size)
 		pack.size = pk.Size
 	}
 
@@ -1211,10 +1374,22 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	return nil
 }
 
+var hiveRegex = regexp.MustCompile(`.*\.hivebedrock\.network.*`)
+
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
-	conn.gameData = GameData{
+	if hiveRegex.MatchString(conn.clientData.ServerAddress) {
+		pk.BaseGameVersion = "1.17.0" // temp fix for hive
+	}
+	conn.gameData = GameDataFromStartGame(pk)
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
+	return nil
+}
+
+func GameDataFromStartGame(pk *packet.StartGame) GameData {
+	return GameData{
 		Difficulty:                   pk.Difficulty,
 		WorldName:                    pk.WorldName,
 		WorldSeed:                    pk.WorldSeed,
@@ -1248,8 +1423,6 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 	}
-	conn.expect(packet.IDItemRegistry)
-	return nil
 }
 
 // handleItemRegistry handles an incoming ItemRegistry packet. It contains the item definitions that the client
@@ -1262,7 +1435,6 @@ func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
 		}
 	}
 
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
 	return nil
 }
@@ -1394,16 +1566,18 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 	// Flush immediately as we'll enable encryption after this.
 	_ = conn.Flush()
 
-	// We first compute the shared secret.
-	x, _ := clientPublicKey.Curve.ScalarMult(clientPublicKey.X, clientPublicKey.Y, conn.privateKey.D.Bytes())
+	if !conn.disableEncryption {
+		// We first compute the shared secret.
+		x, _ := clientPublicKey.Curve.ScalarMult(clientPublicKey.X, clientPublicKey.Y, conn.privateKey.D.Bytes())
 
-	sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
+		sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
 
-	keyBytes := sha256.Sum256(append(conn.salt, sharedSecret...))
+		keyBytes := sha256.Sum256(append(conn.salt, sharedSecret...))
 
-	// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
-	conn.enc.EnableEncryption(keyBytes)
-	conn.dec.EnableEncryption(keyBytes)
+		// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
+		conn.enc.EnableEncryption(keyBytes)
+		conn.dec.EnableEncryption(keyBytes)
+	}
 
 	return nil
 }

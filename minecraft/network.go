@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 )
 
 // Network represents an implementation of a supported network layers, such as RakNet.
@@ -25,6 +26,12 @@ type Network interface {
 	// Specific features of the listener may be modified once it is returned, such as the used log and/or the
 	// accepted protocol.
 	Listen(address string) (NetworkListener, error)
+	// DisableEncryption indicates that encryption performed on Conn should be disabled.
+	// For security reasons, most implementations should return false.
+	DisableEncryption() bool
+	// BatchHeader returns the header of compressed 'batches' from Minecraft. It is used
+	// for encoding/decoding packets in Conn.
+	BatchHeader() []byte
 }
 
 // NetworkListener represents a listening connection to a remote server. It is the equivalent of net.Listener, but with extra
@@ -43,15 +50,26 @@ type NetworkListener interface {
 // networks holds a map of id => Network to be used for looking up the network by an ID. It is registered to when calling
 // RegisterNetwork.
 var networks = map[string]func(l *slog.Logger) Network{}
+var networksMu sync.Mutex
 
 // RegisterNetwork registers a network so that it can be used for Gophertunnel.
 func RegisterNetwork(id string, n func(l *slog.Logger) Network) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
 	networks[id] = n
+}
+
+func UnregisterNetwork(id string) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
+	delete(networks, id)
 }
 
 // networkByID returns the network with the ID passed. If no network is found, the second return value will be false.
 func networkByID(id string, l *slog.Logger) (Network, bool) {
+	networksMu.Lock()
 	n, ok := networks[id]
+	networksMu.Unlock()
 	if ok {
 		return n(l), true
 	}

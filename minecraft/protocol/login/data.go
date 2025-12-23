@@ -165,7 +165,7 @@ type ClientData struct {
 	// is a semi-hex encoded string, usually consisting of 16 characters. That
 	// said, this is not always valid hex, because the last character may be
 	// omitted.
-	PlayFabID string `json:"PlayFabId"`
+	PlayFabID string `json:"PlayFabId,omitempty"`
 	// SkinImageHeight and SkinImageWidth are the dimensions of the skin's image data.
 	SkinImageHeight, SkinImageWidth int
 	// SkinResourcePatch is a base64 encoded string which holds JSON data. The content of the JSON data points
@@ -325,7 +325,7 @@ func (data ClientData) Validate() error {
 	if _, err := uuid.Parse(data.SelfSignedID); err != nil {
 		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
 	}
-	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); err != nil {
+	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); strings.Contains(data.ServerAddress, ":") && err != nil {
 		return fmt.Errorf("ServerAddress must be resolveable as a UDP address, but got %v", data.ServerAddress)
 	}
 	if err := base64DecLength(data.SkinData, data.SkinImageHeight*data.SkinImageWidth*4); err != nil {
