@@ -5,8 +5,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
-	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"io"
+
+	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
 
 // Encoder handles the encoding of Minecraft packets that are sent to an io.Writer. The packets are compressed
@@ -14,9 +15,10 @@ import (
 type Encoder struct {
 	w io.Writer
 
-	compression Compression
-	encrypt     *encrypt
-	header      []byte
+	compressionThreshold int
+	compression          Compression
+	encrypt              *encrypt
+	header               []byte
 }
 
 // NewEncoder returns a new Encoder for the io.Writer passed. Each final packet produced by the Encoder is
@@ -35,8 +37,9 @@ func (encoder *Encoder) EnableEncryption(keyBytes [32]byte) {
 }
 
 // EnableCompression enables compression for the Encoder.
-func (encoder *Encoder) EnableCompression(compression Compression) {
+func (encoder *Encoder) EnableCompression(compression Compression, threshold int) {
 	encoder.compression = compression
+	encoder.compressionThreshold = threshold
 }
 
 // Encode encodes the packets passed. It writes all of them as a single packet which is  compressed and
@@ -62,13 +65,16 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 
 	data := buf.Bytes()
 	prepend := encoder.header
-	if encoder.compression != nil {
-		prepend = append(prepend, byte(encoder.compression.EncodeCompression()))
+	if compression := encoder.compression; compression != nil {
+		if len(data) < encoder.compressionThreshold {
+			compression = NopCompression
+		}
 		var err error
-		data, err = encoder.compression.Compress(data)
+		data, err = compression.Compress(data)
 		if err != nil {
 			return fmt.Errorf("compress batch: %w", err)
 		}
+		prepend = append(prepend, byte(compression.EncodeCompression()))
 	}
 
 	data = append(prepend, data...)

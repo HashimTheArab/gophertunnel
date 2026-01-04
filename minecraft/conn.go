@@ -139,14 +139,15 @@ type Conn struct {
 	log         *slog.Logger
 	authEnabled bool
 
-	proto              Protocol
-	acceptedProto      []Protocol
-	pool               packet.Pool
-	enc                *packet.Encoder
-	dec                *packet.Decoder
-	compression        packet.Compression
-	maxDecompressedLen int
-	readerLimits       bool
+	proto                Protocol
+	acceptedProto        []Protocol
+	pool                 packet.Pool
+	enc                  *packet.Encoder
+	dec                  *packet.Decoder
+	compression          packet.Compression
+	compressionThreshold int
+	maxDecompressedLen   int
+	readerLimits         bool
 
 	disconnectOnUnknownPacket bool
 	disconnectOnInvalidPacket bool
@@ -886,13 +887,13 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 
 	conn.expect(packet.IDLogin)
 	if err := conn.WritePacket(&packet.NetworkSettings{
-		CompressionThreshold: 512,
+		CompressionThreshold: uint16(conn.compressionThreshold),
 		CompressionAlgorithm: conn.compression.EncodeCompression(),
 	}); err != nil {
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	conn.enc.EnableCompression(conn.compression)
+	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
 	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
 	return nil
 }
@@ -903,7 +904,7 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	if !ok {
 		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
 	}
-	conn.enc.EnableCompression(alg)
+	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
 	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
