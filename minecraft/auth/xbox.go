@@ -66,6 +66,9 @@ type XBLToken struct {
 
 type authorizationToken struct {
 	DisplayClaims struct {
+		// UserInfo is the user information from the authorization token.
+		// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
+		// The rest only return UserHash.
 		UserInfo []struct {
 			GamerTag string `json:"gtg"`
 			XUID     string `json:"xid"`
