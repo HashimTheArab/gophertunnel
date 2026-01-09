@@ -13,7 +13,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
 )
 
-const userAgent = "libhttpclient/1.0.0.0"
+const userAgent = internal.UserAgent
 
 var (
 	discovered  = map[string]*Discovery{}
@@ -41,7 +41,7 @@ func Discover(ctx context.Context, c *authclient.AuthClient, build string) (*Dis
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s %s: %s", req.Method, req.URL, resp.Status)
+		return nil, internal.Err(resp)
 	}
 	var result internal.Result[*Discovery]
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

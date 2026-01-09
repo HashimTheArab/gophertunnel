@@ -66,7 +66,7 @@ func (conf TokenConfig) Token(ctx context.Context, c *authclient.AuthClient) (*T
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s %s: %s", req.Method, req.URL, resp.Status)
+		return nil, internal.Err(resp)
 	}
 
 	var result internal.Result[*Token]

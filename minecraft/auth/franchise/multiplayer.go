@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -53,13 +52,7 @@ func RequestMultiplayerToken(ctx context.Context, c *authclient.AuthClient, env 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Best-effort read of the error body to make debugging authorization failures possible.
-		// Keep it small to avoid logging huge payloads.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		if len(b) > 0 {
-			return nil, fmt.Errorf("POST %v: %v: %s", u, resp.Status, strings.TrimSpace(string(b)))
-		}
-		return nil, fmt.Errorf("POST %v: %v", u, resp.Status)
+		return nil, internal.Err(resp)
 	}
 
 	var result internal.Result[*MultiplayerToken]
