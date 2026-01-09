@@ -98,7 +98,7 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 			}
 			status.SupportedConnections = append(status.SupportedConnections, Connection{
 				ConnectionType: ConnectionTypeWebSocketsWebRTCSignaling,
-				NetherNetID:    addr.NetworkID,
+				NetherNetID:    NetherNetID(addr.NetworkID),
 			})
 		case *net.UDPAddr:
 			if status.TransportLayer == 0 {
