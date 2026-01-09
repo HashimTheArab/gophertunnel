@@ -33,7 +33,7 @@ type Connection struct {
 	ConnectionType uint32 `json:"ConnectionType"`
 	HostIPAddress  string `json:"HostIpAddress"`
 	HostPort       uint16 `json:"HostPort"`
-	NetherNetID    uint64 `json:"NetherNetId"`
+	NetherNetID    string `json:"NetherNetId"`
 	RakNetGUID     string `json:"RakNetGUID,omitempty"`
 }
 
@@ -97,13 +97,14 @@ func DefaultStatus() Status {
 	}
 }
 
-func NetherNetID(status Status) (uint64, bool) {
+func (status Status) NetherNetID() (string, bool) {
 	for _, c := range status.SupportedConnections {
 		if c.ConnectionType == ConnectionTypeWebSocketsWebRTCSignaling {
-			if c.NetherNetID != 0 {
-				return c.NetherNetID, true
+			id := string(c.NetherNetID)
+			if id != "" && id != "0" {
+				return id, true
 			}
 		}
 	}
-	return 0, false
+	return "", false
 }

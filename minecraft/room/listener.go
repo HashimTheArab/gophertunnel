@@ -96,13 +96,9 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 			if status.TransportLayer == 0 {
 				status.TransportLayer = TransportLayerNetherNet
 			}
-			networkID, err := strconv.ParseUint(addr.NetworkID, 10, 64)
-			if err != nil {
-				panic(err)
-			}
 			status.SupportedConnections = append(status.SupportedConnections, Connection{
 				ConnectionType: ConnectionTypeWebSocketsWebRTCSignaling,
-				NetherNetID:    networkID,
+				NetherNetID:    addr.NetworkID,
 			})
 		case *net.UDPAddr:
 			if status.TransportLayer == 0 {
