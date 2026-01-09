@@ -29,8 +29,7 @@ type Message struct {
 
 // Error represents the data included in a Message of MessageTypeError received from the server.
 //
-// It is notified by Conn to its registered nethernet.Notifier to negotiator to notify an error
-// has occurred while sending a signal.
+// It is currently informational only. Fatal signaling errors are surfaced through Conn.Context().
 type Error struct {
 	// Code is the code of the Error. It indicates the type of error and is may be one
 	// of the constants below.

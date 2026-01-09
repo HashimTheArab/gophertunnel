@@ -126,13 +126,14 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i franchise.
 
 		closed: make(chan struct{}),
 
-		notifiers: make(map[uint32]nethernet.Notifier),
+		notifiers: make(map[uint32]chan<- *nethernet.Signal),
 	}
+	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
 	go conn.read()
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	case <-conn.credentialsReceived:
 		return conn, nil
 	}

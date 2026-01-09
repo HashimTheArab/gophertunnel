@@ -39,8 +39,11 @@ func TestDial(t *testing.T) {
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
 
-	conn.Notify(testNotifier{t})
-	if err := conn.Signal(&nethernet.Signal{
+	signals := make(chan *nethernet.Signal)
+	stop := conn.Notify(signals)
+	t.Cleanup(stop)
+
+	if err := conn.Signal(ctx, &nethernet.Signal{
 		Type:         nethernet.SignalTypeOffer,
 		ConnectionID: rand.Uint64(),
 		NetworkID:    "100", // Try signaling an offer to invalid network, We hopefully notify an Error.
@@ -48,19 +51,13 @@ func TestDial(t *testing.T) {
 		t.Fatalf("error signaling offer: %s", err)
 	}
 
-	<-ctx.Done()
-}
-
-type testNotifier struct {
-	testing.TB
-}
-
-func (n testNotifier) NotifySignal(signal *nethernet.Signal) {
-	n.Logf("NotifySignal(%s)", signal)
-}
-
-func (n testNotifier) NotifyError(err error) {
-	n.Logf("NotifyError(%s)", err)
+	select {
+	case signal := <-signals:
+		t.Logf("received signal: %s", signal)
+	case <-conn.Context().Done():
+		t.Logf("signaling context done: %v", context.Cause(conn.Context()))
+	case <-ctx.Done():
+	}
 }
 
 func readToken(path string, src oauth2.TokenSource) (t *oauth2.Token, err error) {
