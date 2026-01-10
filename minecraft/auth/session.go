@@ -39,6 +39,16 @@ func SessionFromTokenSource(authClient *authclient.AuthClient, src oauth2.TokenS
 	return s, nil
 }
 
+// SessionFromTokenSourceWithObtainer creates a session from an XBOX token source, reusing the provided XBLTokenObtainer.
+// This avoids requesting a new device token/proof key when the caller already created one (e.g. after a friends/realms preload).
+func SessionFromTokenSourceWithObtainer(authClient *authclient.AuthClient, src oauth2.TokenSource, deviceType Device, obtainer *XBLTokenObtainer, ctx context.Context) (*Session, error) {
+	s := &Session{authClient: authClient, src: src, deviceType: deviceType, obtainer: obtainer}
+	if err := s.login(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func (s *Session) login(ctx context.Context) error {
 	tok, err := s.src.Token()
 	if err != nil {
@@ -71,9 +81,11 @@ func (s *Session) login(ctx context.Context) error {
 		Environment: &s.env,
 	}
 
-	s.obtainer, err = NewXBLTokenObtainer(ctx, s.deviceType, s.authClient, tok, s.src)
-	if err != nil {
-		return fmt.Errorf("obtain device token: %w", err)
+	if s.obtainer == nil {
+		s.obtainer, err = NewXBLTokenObtainer(ctx, s.deviceType, s.authClient, tok, s.src)
+		if err != nil {
+			return fmt.Errorf("obtain device token: %w", err)
+		}
 	}
 
 	if err = s.loginWithPlayfab(ctx); err != nil {
