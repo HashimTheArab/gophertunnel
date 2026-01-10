@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/df-mc/go-xsapi"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
@@ -38,6 +37,22 @@ type XBLToken struct {
 		Token        string
 	} `json:"TitleToken"`
 
+	AuthorizationToken struct {
+		DisplayClaims struct {
+			// UserInfo is the user information from the authorization token.
+			// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
+			// The rest only return UserHash.
+			UserInfo []struct {
+				GamerTag string `json:"gtg"`
+				XUID     string `json:"xid"`
+				UserHash string `json:"uhs"`
+			} `json:"xui"`
+		}
+		IssueInstant time.Time
+		NotAfter     time.Time
+		Token        string
+	}
+
 	UserToken struct {
 		DisplayClaims struct {
 			// UserInfo contains the user information claimed from the authorization token.
@@ -53,37 +68,12 @@ type XBLToken struct {
 		NotAfter     time.Time
 		Token        string
 	}
-
-	// AuthorizationToken is the token used for the authorization header for Xbox API requests.
-	AuthorizationToken authorizationToken
-
-	WebPage              string
-	Sandbox              string
-	UseModernGamertag    bool
-	UcsMigrationResponse struct {
-		GcsConsentsToOverride []string `json:"gcsConsentsToOverride"`
-	}
-	Flow string
-
-	// key is the private key used as 'ProofKey' for authentication.
-	// It is used for signing requests in [XBLToken.SetAuthHeader].
-	key *ecdsa.PrivateKey
 }
 
-type authorizationToken struct {
-	DisplayClaims struct {
-		// UserInfo is the user information from the authorization token.
-		// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
-		// The rest only return UserHash.
-		UserInfo []struct {
-			GamerTag string `json:"gtg"`
-			XUID     string `json:"xid"`
-			UserHash string `json:"uhs"`
-		} `json:"xui"`
-	}
-	IssueInstant time.Time
-	NotAfter     time.Time
-	Token        string
+// SetAuthHeader sets the 'Authorization' header used for Minecraft related endpoints that
+// need an XBOX Live authenticated caller.
+func (t XBLToken) SetAuthHeader(r *http.Request) {
+	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
 }
 
 // expirationDelta is the amount of time before the token expires that it is considered valid.
@@ -92,30 +82,6 @@ const expirationDelta = time.Minute
 // Valid returns whether the XBLToken is valid.
 func (t XBLToken) Valid() bool {
 	return time.Now().Before(t.AuthorizationToken.NotAfter.Add(-expirationDelta))
-}
-
-// String returns a string that may be used for the 'Authorization' header used for Minecraft
-// related endpoints that need an XBOX Live authenticated caller.
-func (t XBLToken) String() string {
-	return fmt.Sprintf("XBL3.0 x=%s;%s", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token)
-}
-
-// DisplayClaims returns a [xsapi.DisplayClaims] from the token. It can be used by the XSAPI
-// package to include display claims in requests that require them.
-func (t XBLToken) DisplayClaims() xsapi.DisplayClaims {
-	return t.AuthorizationToken.DisplayClaims.UserInfo[0]
-}
-
-// SetAuthHeader sets the 'Authorization' header used for Minecraft related endpoints that
-// need an XBOX Live authenticated caller.
-func (t XBLToken) SetAuthHeader(r *http.Request) {
-	r.Header.Set("Authorization", t.String())
-
-	if b, ok := r.Body.(interface {
-		Bytes() []byte
-	}); ok {
-		sign(r, b.Bytes(), t.key)
-	}
 }
 
 // Config specifies the configuration for authenticating with Xbox Live and Microsoft services.
