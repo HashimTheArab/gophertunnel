@@ -31,6 +31,6 @@ type Environment struct {
 }
 
 // EnvironmentName implements a [franchise.Environment] so that may be obtained using [franchise.Discovery.Environment].
-func (env *Environment) EnvironmentName() string {
+func (env *Environment) ServiceName() string {
 	return "signaling"
 }

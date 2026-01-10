@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"golang.org/x/oauth2"
 )
 
 // minecraftAuthURL is the URL that an authentication request is made to to get an encoded JWT claim chain.
@@ -20,7 +20,10 @@ const minecraftAuthURL = `https://multiplayer.minecraft.net/authentication`
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using the XSTS token passed, and the
 // ECDSA private key of the client. This key will later be used to initialise encryption, and must be saved
 // for when packets need to be decrypted/encrypted.
-func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.PrivateKey, authClient *authclient.AuthClient) (string, error) {
+func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.PrivateKey) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("marshal public key: %w", err)
@@ -41,7 +44,11 @@ func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.Priv
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
 
-	resp, err := authClient.DoWithOptions(ctx, request, authclient.RetryOptions{Attempts: 5})
+	c, _ := ctx.Value(oauth2.HTTPClient).(*http.Client)
+	if c == nil {
+		c = http.DefaultClient
+	}
+	resp, err := c.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}

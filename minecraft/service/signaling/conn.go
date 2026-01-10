@@ -13,7 +13,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/df-mc/go-nethernet"
-	"github.com/sandertv/gophertunnel/minecraft/auth/franchise/internal"
+	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
 // Conn implements a [nethernet.Signaling] over a WebSocket connection.

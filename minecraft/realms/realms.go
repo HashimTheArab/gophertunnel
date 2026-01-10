@@ -19,7 +19,7 @@ import (
 type Client struct {
 	getTokenSrc func() oauth2.TokenSource
 	getAuthCl   func() *authclient.AuthClient
-	getObtainer func() *auth.XBLTokenObtainer
+	// getObtainer func() *auth.XBLTokenObtainer
 
 	xblToken *auth.XBLToken
 }
@@ -50,14 +50,13 @@ func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthCli
 
 // NewClientWithObtainer returns a new Client instance that can reuse an XBLTokenObtainer
 // to request service-specific XBL tokens efficiently.
-func NewClientWithObtainer(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient, getObt func() *auth.XBLTokenObtainer) *Client {
+func NewClientWithObtainer(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
 	if getAC == nil {
 		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
 	}
 	return &Client{
 		getTokenSrc: getTS,
 		getAuthCl:   getAC,
-		getObtainer: getObt,
 	}
 }
 
@@ -254,7 +253,7 @@ func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
 
 // xboxToken returns the xbox token used for the api.
 func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
-	if !forceRefresh && c.xblToken != nil && !c.xblToken.AuthorizationToken.Expired() {
+	if !forceRefresh && c.xblToken != nil && c.xblToken.Valid() {
 		return c.xblToken, nil
 	}
 
@@ -264,16 +263,16 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 	}
 
 	// Prefer using an obtainer if available
-	if c.getObtainer != nil {
-		if obt := c.getObtainer(); obt != nil {
-			tok, err := obt.RequestXBLToken(ctx, realmsBaseURL+"/")
-			if err != nil {
-				return nil, err
-			}
-			c.xblToken = tok
-			return c.xblToken, nil
-		}
-	}
+	// if c.getObtainer != nil {
+	// 	if obt := c.getObtainer(); obt != nil {
+	// 		tok, err := obt.RequestXBLToken(ctx, realmsBaseURL+"/")
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+	// 		c.xblToken = tok
+	// 		return c.xblToken, nil
+	// 	}
+	// }
 
 	tokenSrc := c.getTokenSrc()
 	if tokenSrc == nil {
@@ -285,7 +284,7 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return nil, err
 	}
 
-	c.xblToken, err = auth.RequestXBLToken(ctx, authClient, t, realmsBaseURL+"/")
+	c.xblToken, err = auth.RequestXBLToken(ctx, t, realmsBaseURL+"/")
 	return c.xblToken, err
 }
 

@@ -11,11 +11,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func RefreshTokenSource(underlying oauth2.TokenSource, authClient *authclient.AuthClient, relyingParty string) xsapi.TokenSource {
+func RefreshTokenSource(ctx context.Context, underlying oauth2.TokenSource, authClient *authclient.AuthClient, relyingParty string) xsapi.TokenSource {
 	return &refreshTokenSource{
 		underlying:   underlying,
 		authClient:   authClient,
 		relyingParty: relyingParty,
+		ctx:          ctx,
 	}
 }
 
@@ -25,9 +26,10 @@ type refreshTokenSource struct {
 	authClient   *authclient.AuthClient
 	relyingParty string
 
-	t  *oauth2.Token
-	x  *auth.XBLToken
-	mu sync.Mutex
+	t   *oauth2.Token
+	x   *auth.XBLToken
+	ctx context.Context
+	mu  sync.Mutex
 }
 
 func (r *refreshTokenSource) Token() (_ xsapi.Token, err error) {
@@ -39,7 +41,7 @@ func (r *refreshTokenSource) Token() (_ xsapi.Token, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("request underlying token: %w", err)
 		}
-		r.x, err = auth.RequestXBLToken(context.Background(), r.authClient, r.t, r.relyingParty)
+		r.x, err = auth.RequestXBLToken(r.ctx, r.t, r.relyingParty)
 		if err != nil {
 			return nil, fmt.Errorf("request xbox live token: %w", err)
 		}

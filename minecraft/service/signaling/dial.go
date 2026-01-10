@@ -13,9 +13,9 @@ import (
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-playfab"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
-	"github.com/sandertv/gophertunnel/minecraft/auth/franchise"
 	"github.com/sandertv/gophertunnel/minecraft/auth/xal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
 
@@ -50,24 +50,21 @@ func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn,
 	if d.AuthClient == nil {
 		d.AuthClient = authclient.DefaultClient
 	}
-	discovery, err := franchise.Discover(ctx, d.AuthClient, protocol.CurrentVersion)
+	discovery, err := service.Discover(service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("obtain discovery: %w", err)
 	}
-	a := new(franchise.AuthorizationEnvironment)
-	if err := discovery.Environment(a, franchise.EnvironmentTypeProduction); err != nil {
-		return nil, fmt.Errorf("obtain environment for %s: %w", a.EnvironmentName(), err)
+	a := new(service.AuthorizationEnvironment)
+	if err := discovery.Environment(a); err != nil {
+		return nil, fmt.Errorf("obtain environment for %s: %w", a.ServiceName(), err)
 	}
 	s := new(Environment)
-	if err := discovery.Environment(s, franchise.EnvironmentTypeProduction); err != nil {
-		return nil, fmt.Errorf("obtain environment for %s: %w", s.EnvironmentName(), err)
+	if err := discovery.Environment(s); err != nil {
+		return nil, fmt.Errorf("obtain environment for %s: %w", s.ServiceName(), err)
 	}
 
-	return d.DialWithIdentityAndEnvironment(ctx, franchise.PlayFabIdentityProvider{
-		Environment: a,
-		IdentityProvider: playfab.XBLIdentityProvider{
-			TokenSource: xal.RefreshTokenSource(src, d.AuthClient, playfab.RelyingParty),
-		},
+	return d.DialWithIdentityAndEnvironment(ctx, playfab.XBLIdentityProvider{
+		TokenSource: xal.RefreshTokenSource(ctx, src, d.AuthClient, playfab.RelyingParty),
 	}, s)
 }
 
@@ -76,7 +73,7 @@ func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn,
 // with the NetworkID to the service URI from the Environment. It sets up necessary options and logging if not provided, and
 // dials a [websocket.Conn] using [websocket.Dial]. The [context.Context] may be used to cancel the connection if necessary as
 // soon as possible.
-func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i franchise.IdentityProvider, env *Environment) (*Conn, error) {
+func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i playfab.IdentityProvider, env *Environment) (*Conn, error) {
 	if d.Options == nil {
 		d.Options = &websocket.DialOptions{}
 	}
@@ -98,10 +95,10 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i franchise.
 		base         = d.Options.HTTPClient.Transport
 	)
 	if base != nil {
-		_, hasTransport = base.(*franchise.Transport)
+		_, hasTransport = base.(*service.Transport)
 	}
 	if !hasTransport {
-		d.Options.HTTPClient.Transport = &franchise.Transport{
+		d.Options.HTTPClient.Transport = &service.Transport{
 			IdentityProvider: i,
 			Base:             base,
 			AuthClient:       d.AuthClient,
