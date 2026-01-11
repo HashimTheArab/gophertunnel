@@ -431,7 +431,7 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 	return xblToken, nil
 }
 
-// authChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
+// AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
 func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey) (string, error) {
 	// Obtain the raw chain data using the XBL token.
