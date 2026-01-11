@@ -10,6 +10,7 @@ import (
 
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
+	"golang.org/x/oauth2"
 )
 
 // Environment represents the configuration for a network service in Minecraft: Bedrock Edition.
@@ -115,7 +116,13 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := authclient.SendRequestWithRetries(ctx, http.DefaultClient, req, authclient.RetryOptions{Attempts: 5})
+	httpClient := http.DefaultClient
+	if ctx != nil {
+		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+			httpClient = c
+		}
+	}
+	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
