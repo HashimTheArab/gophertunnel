@@ -341,7 +341,7 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 		body, _ := io.ReadAll(resp.Body)
 		return nil, newXboxHTTPError("POST", sisuAuthUrl, resp, body)
 	}
-	info := &XBLToken{key: device.proofKey}
+	info := new(XBLToken)
 	return info, json.NewDecoder(resp.Body).Decode(info)
 }
 
