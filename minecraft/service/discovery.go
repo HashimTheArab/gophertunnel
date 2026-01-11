@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
@@ -111,7 +113,7 @@ func Discover(appType, version string) (*Discovery, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := authclient.SendRequestWithRetries(context.Background(), http.DefaultClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
