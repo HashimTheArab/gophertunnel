@@ -189,7 +189,7 @@ func (conf Config) startDeviceAuth() (*deviceAuthConnect, error) {
 		panic(fmt.Errorf("minecraft/auth: missing ClientID for device auth"))
 	}
 	const connectURL = "https://login.live.com/oauth20_connect.srf"
-	resp, err := http.PostForm(connectURL, url.Values{ // TODO: use postformrequest
+	resp, err := postFormRequest(context.Background(), connectURL, url.Values{ // TODO: pass context
 		"client_id":     {conf.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"response_type": {"device_code"},
@@ -218,7 +218,7 @@ func newOAuth2Token(poll *deviceAuthPoll) *oauth2.Token {
 // PollDeviceAuth polls the token endpoint for the device code. A token is returned if the user authenticated
 // successfully. If the user has not yet authenticated, err is nil but the token is nil too.
 func (conf Config) PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error) {
-	resp, err := http.PostForm(microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: use postformrequest
+	resp, err := postFormRequest(context.Background(), microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: pass context
 		"client_id":   {conf.ClientID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {deviceCode},
@@ -249,7 +249,7 @@ func (conf Config) PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error
 func (conf Config) refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
 	// This function unfortunately needs to exist because golang.org/x/oauth2 does not pass the scope to this
 	// request, which Microsoft Connect enforces.
-	resp, err := http.PostForm(microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: use postformrequest
+	resp, err := postFormRequest(context.Background(), microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: pass context
 		"client_id":     {conf.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"grant_type":    {"refresh_token"},
