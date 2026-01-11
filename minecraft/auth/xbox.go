@@ -22,6 +22,7 @@ import (
 
 	"github.com/df-mc/go-xsapi"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
@@ -335,7 +336,7 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 	req.Header.Set("x-xbl-contract-version", "1")
 	sign(req, data, device.proofKey)
 
-	resp, err := xblHTTPClient(ctx).Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req)
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -414,7 +415,7 @@ func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey)
 		return nil, fmt.Errorf("signing device auth request: %w", err)
 	}
 
-	resp, err := xblHTTPClient(ctx).Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), request)
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {

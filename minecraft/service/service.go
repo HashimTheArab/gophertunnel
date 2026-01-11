@@ -10,14 +10,12 @@ import (
 
 	"github.com/df-mc/go-playfab"
 	"github.com/df-mc/go-playfab/title"
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 type Transport struct {
 	IdentityProvider playfab.IdentityProvider
 	Base             http.RoundTripper
-	AuthClient       *authclient.AuthClient
 
 	mu    sync.Mutex
 	env   *AuthorizationEnvironment
@@ -27,9 +25,6 @@ type Transport struct {
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.IdentityProvider == nil {
 		return nil, errors.New("minecraft/service: Transport: IdentityProvider is nil")
-	}
-	if t.AuthClient == nil {
-		t.AuthClient = authclient.DefaultClient
 	}
 
 	tok, err := t.serviceToken(req.Context())

@@ -7,14 +7,12 @@ import (
 
 	"github.com/df-mc/go-xsapi"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"golang.org/x/oauth2"
 )
 
-func RefreshTokenSource(ctx context.Context, underlying oauth2.TokenSource, authClient *authclient.AuthClient, relyingParty string) xsapi.TokenSource {
+func RefreshTokenSource(ctx context.Context, underlying oauth2.TokenSource, relyingParty string) xsapi.TokenSource {
 	return &refreshTokenSource{
 		underlying:   underlying,
-		authClient:   authClient,
 		relyingParty: relyingParty,
 		ctx:          ctx,
 	}
@@ -23,7 +21,6 @@ func RefreshTokenSource(ctx context.Context, underlying oauth2.TokenSource, auth
 type refreshTokenSource struct {
 	underlying oauth2.TokenSource
 
-	authClient   *authclient.AuthClient
 	relyingParty string
 
 	t   *oauth2.Token

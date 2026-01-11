@@ -17,8 +17,8 @@ import (
 
 // Client is an instance of the realms api with a token.
 type Client struct {
-	getTokenSrc func() oauth2.TokenSource
-	getAuthCl   func() *authclient.AuthClient
+	getTokenSrc   func() oauth2.TokenSource
+	getHTTPClient func() *http.Client
 
 	// TokenCache is an optional cache that can be shared across calls (and across modules) to reuse the
 	// device token + proof key and XSTS tokens per relying party. If set, calls to auth.RequestXBLToken
@@ -41,15 +41,29 @@ var (
 )
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
-// If httpClient is nil, http.DefaultClient will be used to request the realms api.
-func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
-	if getAC == nil {
-		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
+// If getHTTPClient is nil, http.DefaultClient will be used for Realms + Xbox auth HTTP requests.
+func NewClient(getTS func() oauth2.TokenSource, getHTTPClient func() *http.Client) *Client {
+	if getHTTPClient == nil {
+		getHTTPClient = func() *http.Client { return http.DefaultClient }
 	}
 	return &Client{
-		getTokenSrc: getTS,
-		getAuthCl:   getAC,
+		getTokenSrc:   getTS,
+		getHTTPClient: getHTTPClient,
 	}
+}
+
+func (c *Client) httpClient(ctx context.Context) *http.Client {
+	if ctx != nil {
+		if v, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && v != nil {
+			return v
+		}
+	}
+	if c.getHTTPClient != nil {
+		if v := c.getHTTPClient(); v != nil {
+			return v
+		}
+	}
+	return http.DefaultClient
 }
 
 // Player is a player in a Realm.
@@ -252,16 +266,6 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return c.xblToken, nil
 	}
 
-	authClient := c.getAuthCl()
-	if authClient == nil {
-		return nil, fmt.Errorf("auth client is nil")
-	}
-
-	// Ensure Xbox Live auth requests (device token + SISU) reuse the same HTTP client/transport/proxy
-	// that the realms client is using, via oauth2.HTTPClient on the context.
-	if v, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || v == nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, authClient.HTTPClient())
-	}
 	if c.TokenCache != nil {
 		ctx = auth.WithXBLTokenCache(ctx, c.TokenCache)
 	}
@@ -290,13 +294,11 @@ func (c *Client) requestPost(ctx context.Context, path string) (body []byte, sta
 }
 
 func (c *Client) request(ctx context.Context, method string, path string, body []byte) (responseBody []byte, status int, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if string(path[0]) != "/" {
 		path = "/" + path
-	}
-
-	authClient := c.getAuthCl()
-	if authClient == nil {
-		return nil, 0, fmt.Errorf("auth client is nil")
 	}
 
 	var reqBody io.Reader
@@ -315,7 +317,8 @@ func (c *Client) request(ctx context.Context, method string, path string, body [
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := authClient.Do(ctx, req)
+	cl := c.httpClient(ctx)
+	resp, err := authclient.SendRequestWithRetries(ctx, cl, req)
 	if err != nil {
 		return nil, 0, err
 	}

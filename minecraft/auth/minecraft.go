@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
@@ -48,7 +49,7 @@ func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.Priv
 	if c == nil {
 		c = http.DefaultClient
 	}
-	resp, err := c.Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, c, request)
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}

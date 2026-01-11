@@ -12,7 +12,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-playfab"
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/auth/xal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service"
@@ -37,9 +36,6 @@ type Dialer struct {
 	// Log is used to logging messages at various levels. If nil, the default
 	// [slog.Logger] will be set from [slog.Default].
 	Log *slog.Logger
-	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
-	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
-	AuthClient *authclient.AuthClient
 }
 
 // DialContext establishes a Conn to the signaling service using the [oauth2.TokenSource] for
@@ -47,9 +43,6 @@ type Dialer struct {
 // and [Environment] needed, then calls DialWithIdentityAndEnvironment internally. It is the
 // method that is typically used when no configuration of identity and environment is required.
 func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn, error) {
-	if d.AuthClient == nil {
-		d.AuthClient = authclient.DefaultClient
-	}
 	discovery, err := service.Discover(service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("obtain discovery: %w", err)
@@ -64,7 +57,7 @@ func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn,
 	}
 
 	return d.DialWithIdentityAndEnvironment(ctx, playfab.XBLIdentityProvider{
-		TokenSource: xal.RefreshTokenSource(ctx, src, d.AuthClient, playfab.RelyingParty),
+		TokenSource: xal.RefreshTokenSource(ctx, src, playfab.RelyingParty),
 	}, s)
 }
 
@@ -86,9 +79,6 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i playfab.Id
 	if d.Log == nil {
 		d.Log = slog.Default()
 	}
-	if d.AuthClient == nil {
-		d.AuthClient = authclient.DefaultClient
-	}
 
 	var (
 		hasTransport bool
@@ -101,7 +91,6 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i playfab.Id
 		d.Options.HTTPClient.Transport = &service.Transport{
 			IdentityProvider: i,
 			Base:             base,
-			AuthClient:       d.AuthClient,
 		}
 	}
 

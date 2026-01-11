@@ -25,7 +25,6 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -119,10 +118,6 @@ type Dialer struct {
 	// (pre-1.21.90) when connecting to the server. This should only be used for outdated
 	// servers, as enabling it will cause compatibility issues with updated servers.
 	EnableLegacyAuth bool
-
-	// AuthClient is the client used to make requests to the Microsoft authentication servers. If nil,
-	// auth.DefaultClient is used. This can be used to provide a timeout or proxy settings to the client.
-	AuthClient *authclient.AuthClient
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -180,9 +175,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
-	if d.AuthClient == nil {
-		d.AuthClient = authclient.DefaultClient
-	}
 	d.ErrorLog = d.ErrorLog.With("src", "dialer")
 	if d.Protocol == nil {
 		d.Protocol = DefaultProtocol
@@ -227,7 +219,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
-		chainData, err = AuthChain(ctx, xblToken, key, d.AuthClient)
+		chainData, err = AuthChain(ctx, xblToken, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
@@ -441,7 +433,7 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 
 // authChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
-func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey, authClient *authclient.AuthClient) (string, error) {
+func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey) (string, error) {
 	// Obtain the raw chain data using the XBL token.
 	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key)
 	if err != nil {

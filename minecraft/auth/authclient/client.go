@@ -2,7 +2,6 @@ package authclient
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"math"
 	"net"
@@ -10,56 +9,6 @@ import (
 	"strconv"
 	"time"
 )
-
-type AuthClient struct {
-	httpClient *http.Client
-}
-
-var DefaultClient = NewAuthClient(nil)
-
-func NewAuthClient(httpClient *http.Client) *AuthClient {
-	if httpClient == nil {
-		httpClient = &http.Client{}
-	}
-
-	var transport *http.Transport
-	if httpClient.Transport != nil {
-		if t, ok := httpClient.Transport.(*http.Transport); ok {
-			transport = t
-		} else {
-			transport = &http.Transport{}
-		}
-	} else if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = t.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-
-	transport.TLSClientConfig = &tls.Config{
-		Renegotiation: tls.RenegotiateOnceAsClient,
-	}
-	httpClient.Transport = transport
-
-	return &AuthClient{
-		httpClient: httpClient,
-	}
-}
-
-func (c *AuthClient) Close() {
-	c.httpClient.CloseIdleConnections()
-}
-
-func (c *AuthClient) HTTPClient() *http.Client {
-	return c.httpClient
-}
-
-func (c *AuthClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return SendRequestWithRetries(ctx, c.httpClient, req)
-}
-
-func (c *AuthClient) DoWithOptions(ctx context.Context, req *http.Request, opts RetryOptions) (*http.Response, error) {
-	return SendRequestWithRetries(ctx, c.httpClient, req, opts)
-}
 
 type RetryOptions struct {
 	Attempts int           // how many times to send the request (default: 3)
