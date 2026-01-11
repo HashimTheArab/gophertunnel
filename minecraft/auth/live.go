@@ -55,7 +55,7 @@ func (src *tokenSource) Token() (*oauth2.Token, error) {
 		src.t = t
 		return t, err
 	}
-	tok, err := src.conf.refreshToken(src.t)
+	tok, err := src.conf.refreshToken(context.Background(), src.t)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,8 @@ func RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
 // be printed to the io.Writer passed with a user code which the user must use to submit.
 // Once fully authenticated, an oauth2 token is returned which may be used to login to XBOX Live.
 func (conf Config) RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
-	d, err := conf.startDeviceAuth()
+	ctx := context.Background()
+	d, err := conf.StartDeviceAuth(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (conf Config) RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		t, err := conf.PollDeviceAuth(d.DeviceCode)
+		t, err := conf.PollDeviceAuth(ctx, d.DeviceCode)
 		if err != nil {
 			return nil, fmt.Errorf("error polling for device auth: %w", err)
 		}
@@ -151,6 +152,11 @@ var (
 	// It's used for the signed requests which can be blocked if the users device time is not synced.
 	// It uses the date received from the unsigned requests.
 	serverTime time.Time
+
+	// deviceAuthBackoff holds additional delay to apply (per device code) after the server responds with
+	// "slow_down" (RFC 8628). This allows callers to keep using a fixed ticker interval while still honoring
+	// the server's request to back off.
+	deviceAuthBackoff sync.Map // map[string]time.Duration
 )
 
 func updateServerTimeFromHeaders(headers http.Header) {
@@ -174,6 +180,7 @@ func postFormRequest(ctx context.Context, url string, form url.Values) (*http.Re
 		return nil, fmt.Errorf("create request for POST %s: %w", url, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -183,13 +190,14 @@ func postFormRequest(ctx context.Context, url string, form url.Values) (*http.Re
 }
 
 // StartDeviceAuth starts the device auth, retrieving a login URI for the user and a code the user needs to
-// enter.
-func (conf Config) startDeviceAuth() (*deviceAuthConnect, error) {
+// enter. The returned DeviceAuthResponse contains the verification URI and user code to present to the user.
+// Use PollDeviceAuth with the DeviceCode to poll for completion.
+func (conf Config) StartDeviceAuth(ctx context.Context) (*DeviceAuthConnect, error) {
 	if conf.ClientID == "" {
 		panic(fmt.Errorf("minecraft/auth: missing ClientID for device auth"))
 	}
 	const connectURL = "https://login.live.com/oauth20_connect.srf"
-	resp, err := postFormRequest(context.Background(), connectURL, url.Values{ // TODO: pass context
+	resp, err := postFormRequest(ctx, connectURL, url.Values{
 		"client_id":     {conf.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"response_type": {"device_code"},
@@ -202,7 +210,7 @@ func (conf Config) startDeviceAuth() (*deviceAuthConnect, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("POST %s: %v", connectURL, resp.Status)
 	}
-	data := new(deviceAuthConnect)
+	data := new(DeviceAuthConnect)
 	return data, json.NewDecoder(resp.Body).Decode(data)
 }
 
@@ -217,8 +225,22 @@ func newOAuth2Token(poll *deviceAuthPoll) *oauth2.Token {
 
 // PollDeviceAuth polls the token endpoint for the device code. A token is returned if the user authenticated
 // successfully. If the user has not yet authenticated, err is nil but the token is nil too.
-func (conf Config) PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error) {
-	resp, err := postFormRequest(context.Background(), microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: pass context
+func (conf Config) PollDeviceAuth(ctx context.Context, deviceCode string) (t *oauth2.Token, err error) {
+	// Honor any server-requested backoff. This delays the *next* poll request without requiring callers to
+	// mutate their polling ticker interval.
+	if v, ok := deviceAuthBackoff.Load(deviceCode); ok {
+		if d, ok := v.(time.Duration); ok && d > 0 {
+			timer := time.NewTimer(d)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+
+	resp, err := postFormRequest(ctx, microsoft.LiveConnectEndpoint.TokenURL, url.Values{
 		"client_id":   {conf.ClientID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {deviceCode},
@@ -237,19 +259,33 @@ func (conf Config) PollDeviceAuth(deviceCode string) (t *oauth2.Token, err error
 	switch poll.Error {
 	case "authorization_pending":
 		return nil, nil
+	case "slow_down":
+		// RFC 8628 instructs clients to increase the poll interval by 5 seconds for all subsequent requests.
+		// We implement this as an additional per-device-code delay inside PollDeviceAuth so callers don't need
+		// to special-case this error.
+		var current time.Duration
+		if v, ok := deviceAuthBackoff.Load(deviceCode); ok {
+			if d, ok := v.(time.Duration); ok {
+				current = d
+			}
+		}
+		deviceAuthBackoff.Store(deviceCode, current+5*time.Second)
+		return nil, nil
 	case "":
+		deviceAuthBackoff.Delete(deviceCode)
 		return newOAuth2Token(poll), nil
 	default:
+		deviceAuthBackoff.Delete(deviceCode)
 		return nil, fmt.Errorf("%v: %v", poll.Error, poll.ErrorDescription)
 	}
 }
 
 // refreshToken refreshes the oauth2.Token passed and returns a new oauth2.Token. An error is returned if
 // refreshing was not successful.
-func (conf Config) refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
+func (conf Config) refreshToken(ctx context.Context, t *oauth2.Token) (*oauth2.Token, error) {
 	// This function unfortunately needs to exist because golang.org/x/oauth2 does not pass the scope to this
 	// request, which Microsoft Connect enforces.
-	resp, err := postFormRequest(context.Background(), microsoft.LiveConnectEndpoint.TokenURL, url.Values{ // TODO: pass context
+	resp, err := postFormRequest(ctx, microsoft.LiveConnectEndpoint.TokenURL, url.Values{
 		"client_id":     {conf.ClientID},
 		"scope":         {"service::user.auth.xboxlive.com::MBI_SSL"},
 		"grant_type":    {"refresh_token"},
@@ -272,7 +308,9 @@ func (conf Config) refreshToken(t *oauth2.Token) (*oauth2.Token, error) {
 	return newOAuth2Token(poll), nil
 }
 
-type deviceAuthConnect struct {
+// DeviceAuthConnect contains the response from starting device authentication.
+// It includes the user code and verification URI that should be presented to the user.
+type DeviceAuthConnect struct {
 	UserCode        string `json:"user_code"`
 	DeviceCode      string `json:"device_code"`
 	VerificationURI string `json:"verification_uri"`
