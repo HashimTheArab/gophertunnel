@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -72,7 +73,10 @@ func (t XBLToken) SetAuthHeader(req *http.Request) {
 	}
 
 	if ok {
-		sign(req, body, t.key)
+		if err := sign(req, body, t.key); err != nil {
+			slog.Error("signing XBL token", "error", err)
+			return
+		}
 	}
 }
 
@@ -334,7 +338,9 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 		return nil, fmt.Errorf("POST %v: %w", sisuAuthUrl, err)
 	}
 	req.Header.Set("x-xbl-contract-version", "1")
-	sign(req, data, device.proofKey)
+	if err := sign(req, data, device.proofKey); err != nil {
+		return nil, fmt.Errorf("signing XBL auth request: %w", err)
+	}
 
 	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req)
 	if err != nil {
