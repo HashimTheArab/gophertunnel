@@ -409,10 +409,6 @@ func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey)
 		return nil, newXboxNetworkError("POST", "https://device.auth.xboxlive.com/device/authenticate", err, body)
 	}
 
-	if d := getDateHeader(resp.Header); !d.IsZero() {
-		setServerDate(d)
-	}
-
 	updateServerTimeFromHeaders(resp.Header)
 
 	defer resp.Body.Close()
@@ -426,7 +422,7 @@ func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey)
 
 // sign signs the request passed containing the body passed. It signs the request using the ECDSA private key
 // passed. If the request has a 'ProofKey' field in the Properties field, that key must be passed here.
-func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) {
+func sign(request *http.Request, body []byte, key *ecdsa.PrivateKey) error {
 	serverTimeMu.Lock()
 	currentServerDate := serverTime
 	serverTimeMu.Unlock()
