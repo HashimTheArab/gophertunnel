@@ -2,7 +2,9 @@ module github.com/sandertv/gophertunnel
 
 go 1.24.0
 
-replace github.com/df-mc/go-nethernet => github.com/hashimthearab/go-nethernet v0.0.0-20251227165514-1a78f223d850
+toolchain go1.24.1
+
+replace github.com/df-mc/go-nethernet => github.com/lactyy/go-nethernet v1.0.0-alpha.2.0.20260107091143-efab6f57a8d4
 
 require (
 	github.com/coder/websocket v1.8.12

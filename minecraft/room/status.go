@@ -1,8 +1,11 @@
 package room
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"strconv"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -29,12 +32,40 @@ type Status struct {
 	SupportedConnections    []Connection `json:"SupportedConnections"`
 }
 
+// NetherNetID is a NetherNet connection ID. MPSD custom properties sometimes encode this as a JSON
+// number and sometimes as a JSON string, so we accept both and normalize to a decimal string.
+type NetherNetID string
+
+func (id *NetherNetID) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
+		*id = ""
+		return nil
+	}
+	// Regular string
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*id = NetherNetID(s)
+		return nil
+	}
+	// Uint64 number, parse as a string
+	u, err := strconv.ParseUint(string(b), 10, 64)
+	if err != nil {
+		return err
+	}
+	*id = NetherNetID(strconv.FormatUint(u, 10))
+	return nil
+}
+
 type Connection struct {
-	ConnectionType uint32 `json:"ConnectionType"`
-	HostIPAddress  string `json:"HostIpAddress"`
-	HostPort       uint16 `json:"HostPort"`
-	NetherNetID    string `json:"NetherNetId"`
-	RakNetGUID     string `json:"RakNetGUID,omitempty"`
+	ConnectionType uint32      `json:"ConnectionType"`
+	HostIPAddress  string      `json:"HostIpAddress"`
+	HostPort       uint16      `json:"HostPort"`
+	NetherNetID    NetherNetID `json:"NetherNetId"`
+	RakNetGUID     string      `json:"RakNetGUID,omitempty"`
 }
 
 const (
