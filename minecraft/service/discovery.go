@@ -99,7 +99,7 @@ func (d *Discovery) Environment(env Environment) error {
 //
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
-func Discover(appType, version string) (*Discovery, error) {
+func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
 
@@ -108,14 +108,14 @@ func Discover(appType, version string) (*Discovery, error) {
 		return d, nil
 	}
 
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := authclient.SendRequestWithRetries(context.Background(), http.DefaultClient, req, authclient.RetryOptions{Attempts: 5})
+	resp, err := authclient.SendRequestWithRetries(ctx, http.DefaultClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}

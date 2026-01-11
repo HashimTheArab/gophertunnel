@@ -43,7 +43,7 @@ type Dialer struct {
 // and [Environment] needed, then calls DialWithIdentityAndEnvironment internally. It is the
 // method that is typically used when no configuration of identity and environment is required.
 func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn, error) {
-	discovery, err := service.Discover(service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
+	discovery, err := service.Discover(ctx, service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("obtain discovery: %w", err)
 	}

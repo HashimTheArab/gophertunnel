@@ -46,7 +46,7 @@ func (t *Transport) serviceToken(ctx context.Context) (*Token, error) {
 	}
 
 	if t.env == nil {
-		discovery, err := Discover(ApplicationTypeMinecraftPE, protocol.CurrentVersion)
+		discovery, err := Discover(ctx, ApplicationTypeMinecraftPE, protocol.CurrentVersion)
 		if err != nil {
 			return nil, fmt.Errorf("minecraft/service: discover: %w", err)
 		}

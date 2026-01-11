@@ -7,7 +7,7 @@ package signaling
 //
 // Example usage:
 //
-//	discovery, err := franchise.Discover(protocol.CurrentVersion)
+//	discovery, err := service.Discover(ctx, protocol.CurrentVersion)
 //	if err != nil {
 //		panic(err)
 //	}
