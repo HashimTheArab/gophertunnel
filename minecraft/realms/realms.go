@@ -41,11 +41,10 @@ var (
 )
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
-// If getHTTPClient is nil, http.DefaultClient will be used for Realms + Xbox auth HTTP requests.
+// If getHTTPClient is nil, http.DefaultClient will be used for Realms HTTP requests.
+// Note: Xbox auth requests (auth.RequestXBLToken) use the HTTP client stored in the context under
+// oauth2.HTTPClient, or fall back to the auth package's internal default.
 func NewClient(getTS func() oauth2.TokenSource, getHTTPClient func() *http.Client) *Client {
-	if getHTTPClient == nil {
-		getHTTPClient = func() *http.Client { return http.DefaultClient }
-	}
 	return &Client{
 		getTokenSrc:   getTS,
 		getHTTPClient: getHTTPClient,
@@ -143,6 +142,9 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 // RealmAddress returns the address and port to connect to a realm from the api,
 // will wait for the realm to start if it is currently offline.
 func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
 	for {
@@ -264,6 +266,17 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 	}
 	if !forceRefresh && c.xblToken != nil && c.xblToken.Valid() {
 		return c.xblToken, nil
+	}
+
+	// If the caller configured an HTTP client on the realms Client, thread it into the context so Xbox auth
+	// requests can use it too. We only do this when the caller explicitly provided a client (getHTTPClient),
+	// otherwise we let the auth package use its internal default client (which has special TLS settings).
+	if _, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok {
+		if c.getHTTPClient != nil {
+			if hc := c.getHTTPClient(); hc != nil {
+				ctx = context.WithValue(ctx, oauth2.HTTPClient, hc)
+			}
+		}
 	}
 
 	if c.TokenCache != nil {
