@@ -47,7 +47,7 @@ func RequestMinecraftChain(ctx context.Context, token *XBLToken, key *ecdsa.Priv
 
 	c, _ := ctx.Value(oauth2.HTTPClient).(*http.Client)
 	if c == nil {
-		c = http.DefaultClient
+		c = defaultXBLHTTPClient
 	}
 	resp, err := authclient.SendRequestWithRetries(ctx, c, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
