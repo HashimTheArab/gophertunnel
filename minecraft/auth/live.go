@@ -169,7 +169,7 @@ func updateServerTimeFromHeaders(headers http.Header) {
 
 // postFormRequest is a helper that creates and sends a POST request with form data.
 func postFormRequest(ctx context.Context, url string, form url.Values) (*http.Response, error) {
-	req, err := http.NewRequest("POST", url, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create request for POST %s: %w", url, err)
 	}

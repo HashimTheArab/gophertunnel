@@ -95,6 +95,8 @@ func (d *Discovery) Environment(env Environment) error {
 // to specify [protocol.CurrentVersion] to keep up the compatibility with the
 // `protocol` package.
 //
+// The mutex is intentionally held during the request to avoid race conditions with the cache.
+//
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
 func Discover(appType, version string) (*Discovery, error) {
