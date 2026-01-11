@@ -257,7 +257,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 	if cache != nil {
 		rpKey := normalizeRelyingPartyKey(relyingParty)
 		cache.mu.Lock()
-		if cache.config != conf {
+		if cache.config != conf { // Warning: This should be changed if pointer fields are added to the Config.
 			cache.mu.Unlock()
 			return nil, errors.New("xbl token cache config mismatch")
 		}
@@ -385,23 +385,39 @@ func (d *deviceToken) Valid() bool {
 // obtainDeviceToken sends a POST request to the device auth endpoint using the ECDSA private key passed to
 // sign the request.
 func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey) (token *deviceToken, err error) {
+	properties := map[string]any{
+		"AuthMethod": "ProofOfPossession",
+		"Id":         "{" + uuid.New().String() + "}",
+		"DeviceType": conf.DeviceType,
+		"Version":    conf.Version,
+		"ProofKey": map[string]any{
+			"crv": "P-256",
+			"alg": "ES256",
+			"use": "sig",
+			"kty": "EC",
+			"x":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.X)),
+			"y":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.Y)),
+		},
+	}
+
+	switch conf.DeviceType {
+	case AndroidConfig.DeviceType, NintendoConfig.DeviceType:
+		properties["Id"] = "{" + uuid.NewString() + "}"
+	case IOSConfig.DeviceType:
+		properties["Id"] = strings.ToUpper(uuid.NewString())
+	case PlayStationConfig.DeviceType:
+		properties["Id"] = uuid.NewString()
+	case Win32Config.DeviceType, "Xbox":
+		properties["Id"] = "{" + strings.ToUpper(uuid.NewString()) + "}"
+		properties["SerialNumber"] = properties["Id"]
+	default:
+		return nil, fmt.Errorf("unknown device type: %s", conf.DeviceType)
+	}
+
 	data, err := json.Marshal(map[string]any{
 		"RelyingParty": "http://auth.xboxlive.com",
 		"TokenType":    "JWT",
-		"Properties": map[string]any{
-			"AuthMethod": "ProofOfPossession",
-			"Id":         "{" + uuid.New().String() + "}",
-			"DeviceType": conf.DeviceType,
-			"Version":    conf.Version,
-			"ProofKey": map[string]any{
-				"crv": "P-256",
-				"alg": "ES256",
-				"use": "sig",
-				"kty": "EC",
-				"x":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.X)),
-				"y":   base64.RawURLEncoding.EncodeToString(padTo32Bytes(key.PublicKey.Y)),
-			},
-		},
+		"Properties":   properties,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling device auth request: %w", err)
