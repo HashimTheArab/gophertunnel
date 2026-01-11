@@ -347,6 +347,7 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 		var body []byte
 		if resp != nil && resp.Body != nil {
 			body, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
 		}
 		return nil, newXboxNetworkError("POST", sisuAuthUrl, err, body)
 	}
@@ -442,6 +443,7 @@ func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey)
 		var body []byte
 		if resp != nil && resp.Body != nil {
 			body, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
 		}
 		return nil, newXboxNetworkError("POST", "https://device.auth.xboxlive.com/device/authenticate", err, body)
 	}
