@@ -30,7 +30,7 @@ type Environment struct {
 	TurnURI string `json:"turnUri"`
 }
 
-// EnvironmentName implements a [franchise.Environment] so that may be obtained using [franchise.Discovery.Environment].
+// ServiceName implements a [franchise.Environment] so that may be obtained using [franchise.Discovery.Environment].
 func (env *Environment) ServiceName() string {
 	return "signaling"
 }
