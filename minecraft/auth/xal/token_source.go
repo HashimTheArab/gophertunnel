@@ -33,15 +33,24 @@ func (r *refreshTokenSource) Token() (_ xsapi.Token, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.t == nil || !r.t.Valid() || r.x == nil {
+	// Return the cached XBL token if it is valid.
+	if r.x != nil && r.x.Valid() {
+		return r.x, nil
+	}
+
+	// Request a new underlying token if it is not valid.
+	if r.t == nil || !r.t.Valid() {
 		r.t, err = r.underlying.Token()
 		if err != nil {
 			return nil, fmt.Errorf("request underlying token: %w", err)
 		}
-		r.x, err = auth.RequestXBLToken(r.ctx, r.t, r.relyingParty)
-		if err != nil {
-			return nil, fmt.Errorf("request xbox live token: %w", err)
-		}
 	}
+
+	// Request a new XBL token using the underlying token.
+	r.x, err = auth.RequestXBLToken(r.ctx, r.t, r.relyingParty)
+	if err != nil {
+		return nil, fmt.Errorf("request xbox live token: %w", err)
+	}
+
 	return r.x, nil
 }
