@@ -230,12 +230,20 @@ func Listen(network, address string) (*Listener, error) {
 // authEnvCache holds authorization environment used to issue or verify
 // the multiplayer token for OpenID authentication. It is cached by authEnv.
 var authEnvCache atomic.Pointer[service.AuthorizationEnvironment]
+var authEnvMu sync.Mutex
 
 // authEnv returns the authorization environment that can be used for issuing
 // or verifying the multiplayer token for OpenID authentication.
 // This method is only called once and cached globally which means it will
 // use the HTTP client from the first caller's context (oauth2.HTTPClient).
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
+	// Double-checked locking: avoid locking on the hot path, and ensure only one goroutine does the initial
+	// network discovery (prevents duplicate requests and preserves "first init wins" for the chosen HTTP client).
+	if e := authEnvCache.Load(); e != nil {
+		return e, nil
+	}
+	authEnvMu.Lock()
+	defer authEnvMu.Unlock()
 	if e := authEnvCache.Load(); e != nil {
 		return e, nil
 	}
