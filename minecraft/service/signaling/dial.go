@@ -36,6 +36,10 @@ type Dialer struct {
 	// Log is used to logging messages at various levels. If nil, the default
 	// [slog.Logger] will be set from [slog.Default].
 	Log *slog.Logger
+
+	// HTTPClient is used to make HTTP requests to the signaling service. If nil, the default
+	// [http.Client] will be used.
+	HTTPClient *http.Client
 }
 
 // DialContext establishes a Conn to the signaling service using the [oauth2.TokenSource] for
@@ -43,6 +47,12 @@ type Dialer struct {
 // and [Environment] needed, then calls DialWithIdentityAndEnvironment internally. It is the
 // method that is typically used when no configuration of identity and environment is required.
 func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn, error) {
+	if d.HTTPClient != nil {
+		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
+			ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
+		}
+	}
+
 	discovery, err := service.Discover(ctx, service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("obtain discovery: %w", err)
