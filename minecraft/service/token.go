@@ -336,7 +336,7 @@ func decodeKeySet(r io.Reader) (*jose.JSONWebKeySet, error) {
 }
 
 // MultiplayerToken issues a token signed by the authorization service that can be used
-// to authenticate with a multiplayer server. The public key can will be used as the 'cpk'
+// to authenticate with a multiplayer server. The public key will be used as the 'cpk'
 // claim of the token.
 // Servers can verify this JWT using the remote OpenID configuration published by the
 // authorization service and validate the claims to authenticate the player.
