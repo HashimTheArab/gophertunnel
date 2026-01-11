@@ -20,23 +20,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/df-mc/go-xsapi"
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
-	TitleToken struct {
-		DisplayClaims struct {
-			Xti struct {
-				TitleID string `json:"tid"`
-			} `json:"xti"`
-		}
-		IssueInstant time.Time
-		NotAfter     time.Time
-		Token        string
-	} `json:"TitleToken"`
-
 	AuthorizationToken struct {
 		DisplayClaims struct {
 			// UserInfo is the user information from the authorization token.
@@ -52,28 +42,49 @@ type XBLToken struct {
 		NotAfter     time.Time
 		Token        string
 	}
-
-	UserToken struct {
-		DisplayClaims struct {
-			// UserInfo contains the user information claimed from the authorization token.
-			// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
-			// The rest only return UserHash.
-			UserInfo []struct {
-				GamerTag string `json:"gtg"`
-				XUID     string `json:"xid"`
-				UserHash string `json:"uhs"`
-			} `json:"xui"`
-		}
-		IssueInstant time.Time
-		NotAfter     time.Time
-		Token        string
-	}
+	// key is the private key used as 'ProofKey' for authentication.
+	// It is used for signing requests in [XBLToken.SetAuthHeader].
+	key *ecdsa.PrivateKey
 }
 
 // SetAuthHeader sets the 'Authorization' header used for Minecraft related endpoints that
 // need an XBOX Live authenticated caller.
-func (t XBLToken) SetAuthHeader(r *http.Request) {
-	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
+func (t XBLToken) SetAuthHeader(req *http.Request) {
+	req.Header.Set("Authorization", t.String())
+
+	if t.key == nil {
+		return
+	}
+
+	var body []byte
+	ok := false
+	if req.GetBody != nil {
+		rc, err := req.GetBody()
+		if err == nil && rc != nil {
+			body, _ = io.ReadAll(rc)
+			_ = rc.Close()
+			ok = true
+		}
+	} else if b, ok2 := req.Body.(interface{ Bytes() []byte }); ok2 {
+		body = b.Bytes()
+		ok = true
+	}
+
+	if ok {
+		sign(req, body, t.key)
+	}
+}
+
+// String returns a string that may be used for the 'Authorization' header used for Minecraft
+// related endpoints that need an XBOX Live authenticated caller.
+func (t XBLToken) String() string {
+	return fmt.Sprintf("XBL3.0 x=%s;%s", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token)
+}
+
+// DisplayClaims returns a [xsapi.DisplayClaims] from the token. It can be used by the XSAPI
+// package to include display claims in requests that require them.
+func (t XBLToken) DisplayClaims() xsapi.DisplayClaims {
+	return t.AuthorizationToken.DisplayClaims.UserInfo[0]
 }
 
 // expirationDelta is the amount of time before the token expires that it is considered valid.
@@ -101,8 +112,7 @@ type Config struct {
 var defaultXBLHTTPClient = &http.Client{
 	Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{
-			Renegotiation:      tls.RenegotiateOnceAsClient,
-			InsecureSkipVerify: true,
+			Renegotiation: tls.RenegotiateOnceAsClient,
 		},
 	},
 }
@@ -342,7 +352,11 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 		return nil, newXboxHTTPError("POST", sisuAuthUrl, resp, body)
 	}
 	info := new(XBLToken)
-	return info, json.NewDecoder(resp.Body).Decode(info)
+	if err := json.NewDecoder(resp.Body).Decode(info); err != nil {
+		return nil, fmt.Errorf("decode XBL token: %w", err)
+	}
+	info.key = device.proofKey
+	return info, nil
 }
 
 // deviceToken is the token obtained by requesting a device token by posting to xblDeviceAuthURL. Its Token
