@@ -342,7 +342,7 @@ func (conf Config) obtainXBLToken(ctx context.Context, liveToken *oauth2.Token, 
 		return nil, fmt.Errorf("signing XBL auth request: %w", err)
 	}
 
-	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req)
+	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {
@@ -421,7 +421,7 @@ func (conf Config) obtainDeviceToken(ctx context.Context, key *ecdsa.PrivateKey)
 		return nil, fmt.Errorf("signing device auth request: %w", err)
 	}
 
-	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), request)
+	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		var body []byte
 		if resp != nil && resp.Body != nil {

@@ -175,7 +175,7 @@ func postFormRequest(ctx context.Context, url string, form url.Values) (*http.Re
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req)
+	resp, err := authclient.SendRequestWithRetries(ctx, xblHTTPClient(ctx), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", url, err)
 	}
