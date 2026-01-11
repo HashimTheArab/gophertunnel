@@ -123,6 +123,9 @@ type xstsToken struct {
 
 // DisplayClaims returns [xsapi.DisplayClaims] from the user info claimed by the token.
 func (t *xstsToken) DisplayClaims() xsapi.DisplayClaims {
+	if len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+		panic("XSTSToken.DisplayClaims: received empty display claims user info")
+	}
 	return xsapi.DisplayClaims{
 		GamerTag: t.AuthorizationToken.DisplayClaims.UserInfo[0].GamerTag,
 		XUID:     t.AuthorizationToken.DisplayClaims.UserInfo[0].XUID,
@@ -132,5 +135,8 @@ func (t *xstsToken) DisplayClaims() xsapi.DisplayClaims {
 
 // String returns a string representation of the XSTS token in the same format used for Authorization headers.
 func (t *xstsToken) String() string {
+	if len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
+		panic("XSTSToken.String: received empty display claims user info")
+	}
 	return fmt.Sprintf("XBL3.0 x=%s;%s", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token)
 }
