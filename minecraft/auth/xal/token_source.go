@@ -11,6 +11,10 @@ import (
 )
 
 func RefreshTokenSource(ctx context.Context, underlying oauth2.TokenSource, relyingParty string) xsapi.TokenSource {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
 	return &refreshTokenSource{
 		underlying:   underlying,
 		relyingParty: relyingParty,
