@@ -320,8 +320,7 @@ func (c *Client) request(ctx context.Context, method string, path string, body [
 	}
 	xbl.SetAuthHeader(req)
 
-	cl := c.httpClient(ctx)
-	resp, err := authclient.SendRequestWithRetries(ctx, cl, req)
+	resp, err := authclient.SendRequestWithRetries(ctx, c.httpClient(ctx), req)
 	if err != nil {
 		return nil, 0, err
 	}
