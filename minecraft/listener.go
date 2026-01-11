@@ -288,6 +288,14 @@ func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	return e.VerifierContext(ctx)
 }
 
+// PreloadAuthEnvironment resolves and caches the authorization environment used for issuing and verifying
+// multiplayer tokens. It is safe to call multiple times and is primarily useful to avoid a first-join
+// latency spike (service discovery) when callers prefer warming it earlier in their startup flow.
+func PreloadAuthEnvironment(ctx context.Context) error {
+	_, err := authEnv(ctx)
+	return err
+}
+
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
 // use the Conn.ReadPacket() and Conn.WritePacket() methods.
