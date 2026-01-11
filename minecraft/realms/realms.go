@@ -297,7 +297,10 @@ func (c *Client) request(ctx context.Context, method string, path string, body [
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if string(path[0]) != "/" {
+	if path == "" {
+		return nil, 0, fmt.Errorf("path is empty")
+	}
+	if path[0] != '/' {
 		path = "/" + path
 	}
 
