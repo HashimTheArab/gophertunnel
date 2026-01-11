@@ -159,16 +159,26 @@ type XBLTokenCache struct {
 	// xsts caches the most recent XSTS tokens (XBLToken) issued for relying parties.
 	// The key is the relying party string.
 	xsts map[string]*XBLToken
+	// inflight tracks in-progress XSTS token requests per relying party to avoid duplicate network calls
+	// when multiple goroutines request the same relying party at the same time.
+	inflight map[string]*xstsInFlight
 	// mu guards device from concurrent access.
 	mu sync.Mutex
+}
+
+type xstsInFlight struct {
+	done chan struct{}
+	tok  *XBLToken
+	err  error
 }
 
 // NewTokenCache returns an XBLTokenCache that can be used to re-use XBL tokens
 // in [RequestXBLToken].
 func (conf Config) NewTokenCache() *XBLTokenCache {
 	return &XBLTokenCache{
-		config: conf,
-		xsts:   make(map[string]*XBLToken),
+		config:   conf,
+		xsts:     make(map[string]*XBLToken),
+		inflight: make(map[string]*xstsInFlight),
 	}
 }
 
@@ -257,6 +267,63 @@ func normalizeRelyingPartyKey(relyingParty string) string {
 	return strings.TrimRight(relyingParty, "/")
 }
 
+func (x *XBLTokenCache) requestXBLToken(ctx context.Context, conf Config, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+	rpKey := normalizeRelyingPartyKey(relyingParty)
+
+	x.mu.Lock()
+	if x.config != conf { // Warning: This should be changed if pointer fields are added to the Config.
+		x.mu.Unlock()
+		return nil, errors.New("xbl token cache config mismatch")
+	}
+	if tok := x.xsts[rpKey]; tok != nil && tok.Valid() {
+		x.mu.Unlock()
+		return tok, nil
+	}
+	// inflight tracks in-progress XSTS token requests per relying party to avoid duplicate network calls
+	if in := x.inflight[rpKey]; in != nil {
+		done := in.done
+		x.mu.Unlock()
+		select {
+		case <-done:
+			return in.tok, in.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	in := &xstsInFlight{done: make(chan struct{})}
+	if x.inflight == nil {
+		x.inflight = make(map[string]*xstsInFlight)
+	}
+	x.inflight[rpKey] = in
+	x.mu.Unlock()
+
+	finish := func(tok *XBLToken, err error) (*XBLToken, error) {
+		x.mu.Lock()
+		delete(x.inflight, rpKey)
+		if err == nil && tok != nil {
+			if x.xsts == nil {
+				x.xsts = make(map[string]*XBLToken)
+			}
+			x.xsts[rpKey] = tok
+		}
+		in.tok = tok
+		in.err = err
+		close(in.done)
+		x.mu.Unlock()
+		return tok, err
+	}
+
+	d, err := conf.getDeviceToken(ctx)
+	if err != nil {
+		return finish(nil, fmt.Errorf("request device token: %w", err))
+	}
+	xbl, err := conf.obtainXBLToken(ctx, liveToken, d, relyingParty)
+	if err != nil {
+		return finish(nil, err)
+	}
+	return finish(xbl, nil)
+}
+
 // RequestXBLToken requests an XBOX Live auth token using the passed Live token pair.
 func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
 	if ctx == nil {
@@ -268,17 +335,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 
 	cache, _ := ctx.Value(tokenCacheContextKey).(*XBLTokenCache)
 	if cache != nil {
-		rpKey := normalizeRelyingPartyKey(relyingParty)
-		cache.mu.Lock()
-		if cache.config != conf { // Warning: This should be changed if pointer fields are added to the Config.
-			cache.mu.Unlock()
-			return nil, errors.New("xbl token cache config mismatch")
-		}
-		if tok := cache.xsts[rpKey]; tok != nil && tok.Valid() {
-			cache.mu.Unlock()
-			return tok, nil
-		}
-		cache.mu.Unlock()
+		return cache.requestXBLToken(ctx, conf, liveToken, relyingParty)
 	}
 
 	d, err := conf.getDeviceToken(ctx)
@@ -288,16 +345,6 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 	xbl, err := conf.obtainXBLToken(ctx, liveToken, d, relyingParty)
 	if err != nil {
 		return nil, err
-	}
-
-	if cache != nil {
-		rpKey := normalizeRelyingPartyKey(relyingParty)
-		cache.mu.Lock()
-		if cache.xsts == nil {
-			cache.xsts = make(map[string]*XBLToken)
-		}
-		cache.xsts[rpKey] = xbl
-		cache.mu.Unlock()
 	}
 
 	return xbl, nil
