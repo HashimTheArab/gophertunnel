@@ -228,6 +228,8 @@ var authEnvCache atomic.Pointer[service.AuthorizationEnvironment]
 
 // authEnv returns the authorization environment that can be used for issuing
 // or verifying the multiplayer token for OpenID authentication.
+// This method is only called once and cached globally which means it will
+// use the http client of the first caller.
 func authEnv(client *http.Client) (*service.AuthorizationEnvironment, error) {
 	if e := authEnvCache.Load(); e != nil {
 		return e, nil
