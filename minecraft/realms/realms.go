@@ -19,7 +19,11 @@ import (
 type Client struct {
 	getTokenSrc func() oauth2.TokenSource
 	getAuthCl   func() *authclient.AuthClient
-	// getObtainer func() *auth.XBLTokenObtainer
+
+	// TokenCache is an optional cache that can be shared across calls (and across modules) to reuse the
+	// device token + proof key and XSTS tokens per relying party. If set, calls to auth.RequestXBLToken
+	// will use it via auth.WithXBLTokenCache(ctx, TokenCache).
+	TokenCache *auth.XBLTokenCache
 
 	xblToken *auth.XBLToken
 }
@@ -39,18 +43,6 @@ var (
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
 func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
-	if getAC == nil {
-		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
-	}
-	return &Client{
-		getTokenSrc: getTS,
-		getAuthCl:   getAC,
-	}
-}
-
-// NewClientWithObtainer returns a new Client instance that can reuse an XBLTokenObtainer
-// to request service-specific XBL tokens efficiently.
-func NewClientWithObtainer(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
 	if getAC == nil {
 		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
 	}
@@ -253,6 +245,9 @@ func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
 
 // xboxToken returns the xbox token used for the api.
 func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !forceRefresh && c.xblToken != nil && c.xblToken.Valid() {
 		return c.xblToken, nil
 	}
@@ -262,17 +257,14 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return nil, fmt.Errorf("auth client is nil")
 	}
 
-	// Prefer using an obtainer if available
-	// if c.getObtainer != nil {
-	// 	if obt := c.getObtainer(); obt != nil {
-	// 		tok, err := obt.RequestXBLToken(ctx, realmsBaseURL+"/")
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 		c.xblToken = tok
-	// 		return c.xblToken, nil
-	// 	}
-	// }
+	// Ensure Xbox Live auth requests (device token + SISU) reuse the same HTTP client/transport/proxy
+	// that the realms client is using, via oauth2.HTTPClient on the context.
+	if v, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || v == nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, authClient.HTTPClient())
+	}
+	if c.TokenCache != nil {
+		ctx = auth.WithXBLTokenCache(ctx, c.TokenCache)
+	}
 
 	tokenSrc := c.getTokenSrc()
 	if tokenSrc == nil {
