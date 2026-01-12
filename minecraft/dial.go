@@ -282,7 +282,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		setAndroidData(&conn.clientData)
 
 		request = login.Encode(chainData, conn.clientData, key, token, d.EnableLegacyAuth)
-		identityData, _, _, _ := login.Parse(request, verifier)
+		identityData, _, _, _ := login.Parse(request, verifier) // TODO: check error or see if its fine to ignore
 		// If we got the identity data from Minecraft auth, we need to make sure we set it in the Conn too, as
 		// we are not aware of the identity data ourselves yet.
 		conn.identityData = identityData
