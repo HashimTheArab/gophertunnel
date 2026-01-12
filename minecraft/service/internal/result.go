@@ -54,4 +54,6 @@ const UserAgent = "libhttpclient/1.0.0.0"
 
 const errorKey = "error"
 
-func ErrAttr(err error) slog.Attr { return slog.Any(errorKey, err) }
+func ErrAttr(err error) slog.Attr {
+	return slog.Any(errorKey, err)
+}

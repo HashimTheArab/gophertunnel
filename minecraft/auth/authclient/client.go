@@ -2,64 +2,14 @@ package authclient
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 )
-
-type AuthClient struct {
-	httpClient *http.Client
-}
-
-var DefaultClient = NewAuthClient(nil)
-
-func NewAuthClient(httpClient *http.Client) *AuthClient {
-	if httpClient == nil {
-		httpClient = &http.Client{}
-	}
-
-	var transport *http.Transport
-	if httpClient.Transport != nil {
-		if t, ok := httpClient.Transport.(*http.Transport); ok {
-			transport = t
-		} else {
-			transport = &http.Transport{}
-		}
-	} else if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = t.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-
-	transport.TLSClientConfig = &tls.Config{
-		Renegotiation: tls.RenegotiateOnceAsClient,
-	}
-	httpClient.Transport = transport
-
-	return &AuthClient{
-		httpClient: httpClient,
-	}
-}
-
-func (c *AuthClient) Close() {
-	c.httpClient.CloseIdleConnections()
-}
-
-func (c *AuthClient) HTTPClient() *http.Client {
-	return c.httpClient
-}
-
-func (c *AuthClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return SendRequestWithRetries(ctx, c.httpClient, req)
-}
-
-func (c *AuthClient) DoWithOptions(ctx context.Context, req *http.Request, opts RetryOptions) (*http.Response, error) {
-	return SendRequestWithRetries(ctx, c.httpClient, req, opts)
-}
 
 type RetryOptions struct {
 	Attempts int           // how many times to send the request (default: 3)
@@ -125,6 +75,11 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resp, err
 			}
+			// Some proxies close the connection without returning a response, which often surfaces as EOF.
+			// Treat that as retryable.
+			if errors.Is(err, io.EOF) {
+				continue
+			}
 			var netErr net.Error
 			if errors.As(err, &netErr) {
 				continue
@@ -133,9 +88,13 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			return resp, err
 		}
 
-		// Retry on 429, 408, and 5xx server errors
+		// Retry on 429, 408, and server errors.
+		//
+		// Some proxies/edges return non-standard status codes (e.g. 999) for upstream/internal failures.
+		// Treat those as retryable too.
 		if resp.StatusCode == http.StatusTooManyRequests ||
 			resp.StatusCode == http.StatusRequestTimeout ||
+			resp.StatusCode == 999 ||
 			(resp.StatusCode >= 500 && resp.StatusCode < 600) {
 			// Read Retry-After header before closing body
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {

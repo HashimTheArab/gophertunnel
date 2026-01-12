@@ -17,9 +17,13 @@ import (
 
 // Client is an instance of the realms api with a token.
 type Client struct {
-	getTokenSrc func() oauth2.TokenSource
-	getAuthCl   func() *authclient.AuthClient
-	getObtainer func() *auth.XBLTokenObtainer
+	getTokenSrc   func() oauth2.TokenSource
+	getHTTPClient func() *http.Client
+
+	// TokenCache is an optional cache that can be shared across calls (and across modules) to reuse the
+	// device token + proof key and XSTS tokens per relying party. If set, calls to auth.RequestXBLToken
+	// will use it via auth.WithXBLTokenCache(ctx, TokenCache).
+	TokenCache *auth.XBLTokenCache
 
 	xblToken *auth.XBLToken
 }
@@ -37,28 +41,28 @@ var (
 )
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
-// If httpClient is nil, http.DefaultClient will be used to request the realms api.
-func NewClient(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient) *Client {
-	if getAC == nil {
-		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
-	}
+// If getHTTPClient is nil, http.DefaultClient will be used for Realms HTTP requests.
+// Note: Xbox auth requests (auth.RequestXBLToken) use the HTTP client stored in the context under
+// oauth2.HTTPClient, or fall back to the auth package's internal default.
+func NewClient(getTS func() oauth2.TokenSource, getHTTPClient func() *http.Client) *Client {
 	return &Client{
-		getTokenSrc: getTS,
-		getAuthCl:   getAC,
+		getTokenSrc:   getTS,
+		getHTTPClient: getHTTPClient,
 	}
 }
 
-// NewClientWithObtainer returns a new Client instance that can reuse an XBLTokenObtainer
-// to request service-specific XBL tokens efficiently.
-func NewClientWithObtainer(getTS func() oauth2.TokenSource, getAC func() *authclient.AuthClient, getObt func() *auth.XBLTokenObtainer) *Client {
-	if getAC == nil {
-		getAC = func() *authclient.AuthClient { return authclient.DefaultClient }
+func (c *Client) httpClient(ctx context.Context) *http.Client {
+	if ctx != nil {
+		if v, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && v != nil {
+			return v
+		}
 	}
-	return &Client{
-		getTokenSrc: getTS,
-		getAuthCl:   getAC,
-		getObtainer: getObt,
+	if c.getHTTPClient != nil {
+		if v := c.getHTTPClient(); v != nil {
+			return v
+		}
 	}
+	return http.DefaultClient
 }
 
 // Player is a player in a Realm.
@@ -138,6 +142,9 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 // RealmAddress returns the address and port to connect to a realm from the api,
 // will wait for the realm to start if it is currently offline.
 func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
 	for {
@@ -254,25 +261,26 @@ func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
 
 // xboxToken returns the xbox token used for the api.
 func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLToken, error) {
-	if !forceRefresh && c.xblToken != nil && !c.xblToken.AuthorizationToken.Expired() {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !forceRefresh && c.xblToken != nil && c.xblToken.Valid() {
 		return c.xblToken, nil
 	}
 
-	authClient := c.getAuthCl()
-	if authClient == nil {
-		return nil, fmt.Errorf("auth client is nil")
+	// If the caller configured an HTTP client on the realms Client, thread it into the context so Xbox auth
+	// requests can use it too. We only do this when the caller explicitly provided a client (getHTTPClient),
+	// otherwise we let the auth package use its internal default client (which has special TLS settings).
+	if _, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok {
+		if c.getHTTPClient != nil {
+			if hc := c.getHTTPClient(); hc != nil {
+				ctx = context.WithValue(ctx, oauth2.HTTPClient, hc)
+			}
+		}
 	}
 
-	// Prefer using an obtainer if available
-	if c.getObtainer != nil {
-		if obt := c.getObtainer(); obt != nil {
-			tok, err := obt.RequestXBLToken(ctx, realmsBaseURL+"/")
-			if err != nil {
-				return nil, err
-			}
-			c.xblToken = tok
-			return c.xblToken, nil
-		}
+	if c.TokenCache != nil {
+		ctx = auth.WithXBLTokenCache(ctx, c.TokenCache)
 	}
 
 	tokenSrc := c.getTokenSrc()
@@ -285,7 +293,7 @@ func (c *Client) xboxToken(ctx context.Context, forceRefresh bool) (*auth.XBLTok
 		return nil, err
 	}
 
-	c.xblToken, err = auth.RequestXBLToken(ctx, authClient, t, realmsBaseURL+"/")
+	c.xblToken, err = auth.RequestXBLToken(ctx, t, realmsBaseURL+"/")
 	return c.xblToken, err
 }
 
@@ -299,13 +307,14 @@ func (c *Client) requestPost(ctx context.Context, path string) (body []byte, sta
 }
 
 func (c *Client) request(ctx context.Context, method string, path string, body []byte) (responseBody []byte, status int, err error) {
-	if string(path[0]) != "/" {
-		path = "/" + path
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	authClient := c.getAuthCl()
-	if authClient == nil {
-		return nil, 0, fmt.Errorf("auth client is nil")
+	if path == "" {
+		return nil, 0, fmt.Errorf("path is empty")
+	}
+	if path[0] != '/' {
+		path = "/" + path
 	}
 
 	var reqBody io.Reader
@@ -324,7 +333,7 @@ func (c *Client) request(ctx context.Context, method string, path string, body [
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := authClient.Do(ctx, req)
+	resp, err := authclient.SendRequestWithRetries(ctx, c.httpClient(ctx), req)
 	if err != nil {
 		return nil, 0, err
 	}

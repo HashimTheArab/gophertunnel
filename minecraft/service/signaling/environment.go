@@ -7,7 +7,7 @@ package signaling
 //
 // Example usage:
 //
-//	discovery, err := franchise.Discover(protocol.CurrentVersion)
+//	discovery, err := service.Discover(ctx, protocol.CurrentVersion)
 //	if err != nil {
 //		panic(err)
 //	}
@@ -30,7 +30,7 @@ type Environment struct {
 	TurnURI string `json:"turnUri"`
 }
 
-// EnvironmentName implements a [franchise.Environment] so that may be obtained using [franchise.Discovery.Environment].
-func (env *Environment) EnvironmentName() string {
+// ServiceName implements a [franchise.Environment] so that may be obtained using [franchise.Discovery.Environment].
+func (env *Environment) ServiceName() string {
 	return "signaling"
 }
