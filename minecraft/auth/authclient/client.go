@@ -3,6 +3,7 @@ package authclient
 import (
 	"context"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -74,6 +75,11 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resp, err
 			}
+			// Some proxies close the connection without returning a response, which often surfaces as EOF.
+			// Treat that as retryable.
+			if errors.Is(err, io.EOF) {
+				continue
+			}
 			var netErr net.Error
 			if errors.As(err, &netErr) {
 				continue
@@ -82,9 +88,13 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			return resp, err
 		}
 
-		// Retry on 429, 408, and 5xx server errors
+		// Retry on 429, 408, and server errors.
+		//
+		// Some proxies/edges return non-standard status codes (e.g. 999) for upstream/internal failures.
+		// Treat those as retryable too.
 		if resp.StatusCode == http.StatusTooManyRequests ||
 			resp.StatusCode == http.StatusRequestTimeout ||
+			resp.StatusCode == 999 ||
 			(resp.StatusCode >= 500 && resp.StatusCode < 600) {
 			// Read Retry-After header before closing body
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
