@@ -29,24 +29,30 @@ import (
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
-	AuthorizationToken struct {
-		DisplayClaims struct {
-			// UserInfo is the user information from the authorization token.
-			// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
-			// The rest only return UserHash.
-			UserInfo []struct {
-				GamerTag string `json:"gtg"`
-				XUID     string `json:"xid"`
-				UserHash string `json:"uhs"`
-			} `json:"xui"`
-		}
-		IssueInstant time.Time
-		NotAfter     time.Time
-		Token        string
-	}
+	AuthorizationToken AuthorizationToken
 	// key is the private key used as 'ProofKey' for authentication.
 	// It is used for signing requests in [XBLToken.SetAuthHeader].
 	key *ecdsa.PrivateKey
+}
+
+type AuthorizationToken struct {
+	DisplayClaims DisplayClaims
+	IssueInstant  time.Time
+	NotAfter      time.Time
+	Token         string
+}
+
+type DisplayClaims struct {
+	// UserInfo is the user information from the authorization token.
+	// GamerTag and XUID are only populated on the "xboxlive.com" relying party.
+	// The rest only return UserHash.
+	UserInfo []UserInfo `json:"xui"`
+}
+
+type UserInfo struct {
+	GamerTag string `json:"gtg"`
+	XUID     string `json:"xid"`
+	UserHash string `json:"uhs"`
 }
 
 // SetAuthHeader sets the 'Authorization' header used for Minecraft related endpoints that
