@@ -49,11 +49,8 @@ type DisplayClaims struct {
 	UserInfo []UserInfo `json:"xui"`
 }
 
-type UserInfo struct {
-	GamerTag string `json:"gtg"`
-	XUID     string `json:"xid"`
-	UserHash string `json:"uhs"`
-}
+// UserInfo is the user claims structure used by XSAPI and also used in XSTS token display claims.
+type UserInfo = xsapi.DisplayClaims
 
 // SetAuthHeader sets the 'Authorization' header used for Minecraft related endpoints that
 // need an XBOX Live authenticated caller.
