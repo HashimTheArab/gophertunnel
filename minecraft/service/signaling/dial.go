@@ -25,7 +25,7 @@ type Dialer struct {
 	// Options specifies the options for dialing the signaling service over
 	// a WebSocket connection. If nil, a new *websocket.DialOptions will be
 	// created. Note that the [websocket.DialOptions.HTTPClient] and its Transport
-	// will be overridden with a [franchise.Transport] for authorization.
+	// will be overridden with a [service.Transport] for authorization.
 	Options *websocket.DialOptions
 
 	// NetworkID specifies a unique ID for the network. If zero, a random value will
@@ -77,6 +77,14 @@ func (d Dialer) DialContext(ctx context.Context, src oauth2.TokenSource) (*Conn,
 // dials a [websocket.Conn] using [websocket.Dial]. The [context.Context] may be used to cancel the connection if necessary as
 // soon as possible.
 func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i playfab.IdentityProvider, env *Environment) (*Conn, error) {
+	// DialWithIdentityAndEnvironment may be called directly (without DialContext). Ensure the ctx has an HTTP
+	// client for any discovery/auth HTTP requests, without affecting the websocket dial client.
+	if d.HTTPClient != nil {
+		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
+			ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
+		}
+	}
+
 	if d.Options == nil {
 		d.Options = &websocket.DialOptions{}
 	}

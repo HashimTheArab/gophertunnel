@@ -11,6 +11,7 @@ import (
 	"github.com/df-mc/go-playfab"
 	"github.com/df-mc/go-playfab/title"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"golang.org/x/oauth2"
 )
 
 type Transport struct {
@@ -27,6 +28,16 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("minecraft/service: Transport: IdentityProvider is nil")
 	}
 
+	// Make sure req.Body is closed after the request is complete.
+	reqBodyClosed := false
+	if req.Body != nil {
+		defer func() {
+			if !reqBodyClosed {
+				_ = req.Body.Close()
+			}
+		}()
+	}
+
 	tok, err := t.serviceToken(req.Context())
 	if err != nil {
 		return nil, err
@@ -34,6 +45,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	req2 := cloneRequest(req)
 	tok.SetAuthHeader(req2)
+
+	reqBodyClosed = true
 	return t.base().RoundTrip(req2)
 }
 
@@ -56,8 +69,17 @@ func (t *Transport) serviceToken(ctx context.Context) (*Token, error) {
 		}
 
 		// IMPORTANT: Avoid recursion if the caller’s http.Client.Transport is this Transport.
-		// Use the Base round tripper for auth-service calls.
-		env.HTTPClient = &http.Client{Transport: t.base()}
+		// Prefer the context HTTP client transport for auth-service calls (so proxies apply), but fall back to Base
+		// if the context transport is this Transport (or nil).
+		authBase := t.base()
+		if ctx != nil {
+			if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil && c.Transport != nil {
+				if tr, ok := c.Transport.(*Transport); !ok || tr != t {
+					authBase = c.Transport
+				}
+			}
+		}
+		env.HTTPClient = &http.Client{Transport: authBase}
 		t.env = env
 	}
 
