@@ -24,10 +24,6 @@ type Transport struct {
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.IdentityProvider == nil {
-		return nil, errors.New("minecraft/service: Transport: IdentityProvider is nil")
-	}
-
 	// Make sure req.Body is closed after the request is complete.
 	reqBodyClosed := false
 	if req.Body != nil {
@@ -36,6 +32,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				_ = req.Body.Close()
 			}
 		}()
+	}
+
+	if t.IdentityProvider == nil {
+		return nil, errors.New("minecraft/service: Transport: IdentityProvider is nil")
 	}
 
 	tok, err := t.serviceToken(req.Context())

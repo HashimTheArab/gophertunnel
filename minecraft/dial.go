@@ -416,6 +416,9 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 	if dialer.XBLToken != nil && dialer.XBLToken.Valid() {
 		return dialer.XBLToken, nil
 	}
+	if dialer.TokenSource == nil {
+		return nil, fmt.Errorf("XBL token expired and no TokenSource provided to refresh")
+	}
 
 	liveToken, err := dialer.TokenSource.Token()
 	if err != nil {
