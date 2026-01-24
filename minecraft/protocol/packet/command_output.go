@@ -2,6 +2,7 @@ package packet
 
 import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"strings"
 )
 
 const (
@@ -70,6 +71,7 @@ func commandOutputTypeToString(x byte) string {
 }
 
 func commandOutputTypeFromString(io protocol.IO, x *byte, s string) {
+	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "none":
 		*x = CommandOutputTypeNone

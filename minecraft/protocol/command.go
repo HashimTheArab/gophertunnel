@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"github.com/google/uuid"
+	"strings"
 )
 
 const (
@@ -344,6 +345,7 @@ func commandOriginToString(x uint32) string {
 }
 
 func commandOriginFromString(r IO, x *uint32, s string) {
+	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "player":
 		*x = CommandOriginPlayer
@@ -402,6 +404,7 @@ func commandPermissionToString(x byte) string {
 }
 
 func commandPermissionFromString(r IO, x *byte, s string) {
+	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "any":
 		*x = CommandPermissionLevelAny

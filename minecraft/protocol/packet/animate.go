@@ -2,6 +2,7 @@ package packet
 
 import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"strings"
 )
 
 const (
@@ -61,6 +62,7 @@ func (pk *Animate) Marshal(io protocol.IO) {
 }
 
 func swingSourceFromString(io protocol.IO, x *uint8, s string) {
+	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "none":
 		*x = AnimateSwingSourceNone

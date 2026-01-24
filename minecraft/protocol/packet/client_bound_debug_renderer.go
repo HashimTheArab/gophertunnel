@@ -3,6 +3,7 @@ package packet
 import (
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"strings"
 )
 
 const (
@@ -62,6 +63,7 @@ func clientBoundDebugRenderToString(x uint32) string {
 }
 
 func clientBoundDebugRenderFromString(io protocol.IO, x *uint32, s string) {
+	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "cleardebugmarkers":
 		*x = ClientBoundDebugRendererClear
