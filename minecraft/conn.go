@@ -183,6 +183,7 @@ type Conn struct {
 	readDeadline    <-chan time.Time
 
 	sendMu sync.Mutex
+	encMu  sync.Mutex
 	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
 	// they are sent each 20th of a second.
 	bufferedSend [][]byte
@@ -424,7 +425,7 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	return nil
 }
 
-// encodePacketTo marshals the provided packet (including header) into one or more byte slices,
+// encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
 // appended to dst. The appended slices are copies safe to retain beyond the call.
 func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
@@ -436,12 +437,12 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}()
 
 	for _, pk := range pks {
-		buf.Reset()
-		conn.hdr.PacketID = pk.ID()
-		_ = conn.hdr.Write(buf)
-		l := buf.Len()
-
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
+			buf.Reset()
+			conn.hdr.PacketID = converted.ID()
+			_ = conn.hdr.Write(buf)
+			l := buf.Len()
+
 			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
 			if conn.packetFunc != nil {
 				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
@@ -459,15 +460,18 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 		return conn.closeErr("write packet direct")
 	default:
 	}
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
 	// Use a small stack-allocated buffer for the common case (usually 1 slice),
 	// allowing append to spill to heap only if more capacity is needed.
 	var stackBuf [4][]byte
 	immediate := stackBuf[:0]
+
+	conn.sendMu.Lock()
 	conn.encodePacketsTo(&immediate, pks...)
+	conn.sendMu.Unlock()
+
 	if len(immediate) > 0 {
+		conn.encMu.Lock()
+		defer conn.encMu.Unlock()
 		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
 			// Should never happen.
 			panic(fmt.Errorf("error encoding packet batch: %w", err))
@@ -586,22 +590,28 @@ func (conn *Conn) Flush() error {
 		return conn.closeErr("flush")
 	default:
 	}
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
 
-	if len(conn.bufferedSend) > 0 {
-		if err := conn.enc.Encode(conn.bufferedSend); err != nil && !errors.Is(err, net.ErrClosed) {
-			// Should never happen.
-			panic(fmt.Errorf("error encoding packet batch: %w", err))
-		}
-		// First manually clear out conn.bufferedSend so that re-using the slice after resetting its length to
-		// 0 doesn't result in an 'invisible' memory leak.
-		for i := range conn.bufferedSend {
-			conn.bufferedSend[i] = nil
-		}
-		// Slice the conn.bufferedSend to a length of 0 so we don't have to re-allocate space in this slice
-		// every time.
-		conn.bufferedSend = conn.bufferedSend[:0]
+	conn.sendMu.Lock()
+	if len(conn.bufferedSend) == 0 {
+		conn.sendMu.Unlock()
+		return nil
+	}
+	toSend := append([][]byte(nil), conn.bufferedSend...)
+	// First manually clear out conn.bufferedSend so that re-using the slice after resetting its length to
+	// 0 doesn't result in an 'invisible' memory leak.
+	for i := range conn.bufferedSend {
+		conn.bufferedSend[i] = nil
+	}
+	// Slice the conn.bufferedSend to a length of 0 so we don't have to re-allocate space in this slice
+	// every time.
+	conn.bufferedSend = conn.bufferedSend[:0]
+	conn.sendMu.Unlock()
+
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	if err := conn.enc.Encode(toSend); err != nil && !errors.Is(err, net.ErrClosed) {
+		// Should never happen.
+		panic(fmt.Errorf("error encoding packet batch: %w", err))
 	}
 	return nil
 }
@@ -898,7 +908,9 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
+	conn.encMu.Lock()
 	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
+	conn.encMu.Unlock()
 	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
 	return nil
 }
@@ -909,7 +921,9 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	if !ok {
 		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
 	}
+	conn.encMu.Lock()
 	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
+	conn.encMu.Unlock()
 	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
@@ -1013,7 +1027,9 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 		keyBytes := sha256.Sum256(append(salt, sharedSecret...))
 
 		// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
+		conn.encMu.Lock()
 		conn.enc.EnableEncryption(keyBytes)
+		conn.encMu.Unlock()
 		conn.dec.EnableEncryption(keyBytes)
 	}
 
@@ -1581,7 +1597,9 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 		keyBytes := sha256.Sum256(append(conn.salt, sharedSecret...))
 
 		// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
+		conn.encMu.Lock()
 		conn.enc.EnableEncryption(keyBytes)
+		conn.encMu.Unlock()
 		conn.dec.EnableEncryption(keyBytes)
 	}
 
