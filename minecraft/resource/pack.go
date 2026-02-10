@@ -216,6 +216,12 @@ func (pack *Pack) Size() int {
 	return int(pack.content.Size())
 }
 
+// Len returns the total size in bytes of the archive of the resource pack.
+// Deprecated: Use Size instead. Kept for backwards compatibility with older integrations.
+func (pack *Pack) Len() int {
+	return pack.Size()
+}
+
 // DataChunkCount returns the amount of chunks the data of the resource pack is split into if each chunk has
 // a specific length.
 func (pack *Pack) DataChunkCount(length int) int {
