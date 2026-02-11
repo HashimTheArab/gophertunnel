@@ -29,7 +29,7 @@ type Client struct {
 }
 
 type realmService interface {
-	RealmAddress(ctx context.Context, realmID int) (string, error)
+	RealmAddress(ctx context.Context, realmID int) (RealmAddress, error)
 	OnlinePlayers(ctx context.Context, realmID int) ([]Player, error)
 }
 
@@ -131,7 +131,7 @@ type Realm struct {
 	svc realmService `json:"-"`
 }
 
-func (r *Realm) Address(ctx context.Context) (address string, err error) {
+func (r *Realm) Address(ctx context.Context) (address RealmAddress, err error) {
 	return r.svc.RealmAddress(ctx, r.ID)
 }
 
@@ -139,9 +139,14 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 	return r.svc.OnlinePlayers(ctx, r.ID)
 }
 
+type RealmAddress struct {
+	NetworkProtocol string
+	Address         string
+}
+
 // RealmAddress returns the address and port to connect to a realm from the api,
 // will wait for the realm to start if it is currently offline.
-func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string, err error) {
+func (c *Client) RealmAddress(ctx context.Context, realmID int) (address RealmAddress, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -150,7 +155,7 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return RealmAddress{}, ctx.Err()
 		case <-ticker.C:
 			body, status, err := c.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
 			if err != nil {
@@ -158,11 +163,11 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 				case 503:
 					continue
 				case 404:
-					return "", ErrRealmNotFound
+					return RealmAddress{}, ErrRealmNotFound
 				case 403:
-					return "", ErrPlayerNotInRealm
+					return RealmAddress{}, ErrPlayerNotInRealm
 				}
-				return "", err
+				return RealmAddress{}, err
 			}
 
 			var data struct {
@@ -175,10 +180,13 @@ func (c *Client) RealmAddress(ctx context.Context, realmID int) (address string,
 				} `json:"sessionRegionData"`
 			}
 			if err := json.Unmarshal(body, &data); err != nil {
-				return "", err
+				return RealmAddress{}, err
 			}
 
-			return data.Address, nil
+			return RealmAddress{
+				NetworkProtocol: data.NetworkProtocol,
+				Address:         data.Address,
+			}, nil
 		}
 	}
 }

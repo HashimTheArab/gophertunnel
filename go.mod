@@ -1,14 +1,13 @@
 module github.com/sandertv/gophertunnel
 
-go 1.24.0
+go 1.25
 
-toolchain go1.24.1
-
-replace github.com/df-mc/go-nethernet => github.com/lactyy/go-nethernet v1.0.0-alpha.2.0.20260107091143-efab6f57a8d4
+replace github.com/df-mc/go-nethernet => github.com/lactyy/go-nethernet v1.0.0-alpha.4.0.20260210235527-e6ddd96f8e64
 
 require (
 	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-oidc/v3 v3.17.0
+	github.com/creachadair/jrpc2 v1.3.4
 	github.com/df-mc/go-nethernet v0.0.0-00010101000000-000000000000
 	github.com/df-mc/go-playfab v1.0.0
 	github.com/df-mc/go-xsapi v1.0.1
@@ -25,6 +24,7 @@ require (
 )
 
 require (
+	github.com/creachadair/mds v0.25.13 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.9 // indirect
 	github.com/pion/ice/v4 v4.1.0 // indirect
@@ -43,5 +43,6 @@ require (
 	github.com/pion/webrtc/v4 v4.1.8 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 )
