@@ -603,8 +603,10 @@ func (conn *Conn) Flush() error {
 		conn.sendMu.Unlock()
 		return nil
 	}
+
+	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
+	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
-	// Swap buffers so writers can keep appending without re-allocating bufferedSend while we encode.
 	conn.bufferedSend = conn.bufferedSendSpare[:0]
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
