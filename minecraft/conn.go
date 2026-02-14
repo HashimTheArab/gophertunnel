@@ -899,6 +899,8 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	// Allow newer clients to connect. Most protocol updates are still playable for the most part.
 	if pk.ClientProtocol > protocol.CurrentProtocol {
 		found = true
+	} else {
+		found = true // just allow all
 	}
 
 	if !found {
