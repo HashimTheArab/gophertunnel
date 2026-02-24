@@ -24,7 +24,7 @@ type Conn struct {
 	client         *jrpc2.Client
 	localNetworkID uint64
 
-	notifiers   map[int]chan<- *nethernet.Signal
+	notifiers   map[int]*notifier
 	notifyCount int
 	notifiersMu sync.Mutex
 
@@ -39,6 +39,11 @@ type Conn struct {
 
 	cancel context.CancelCauseFunc
 	ctx    context.Context
+}
+
+type notifier struct {
+	ch   chan<- *nethernet.Signal
+	done chan struct{}
 }
 
 func (c *Conn) background() {
@@ -119,10 +124,20 @@ func (c *Conn) handleCallback(ctx context.Context, req *jrpc2.Request) (result a
 				}
 
 				c.notifiersMu.Lock()
-				for _, ch := range c.notifiers {
-					ch <- signal
+				notifiers := make([]*notifier, 0, len(c.notifiers))
+				for _, n := range c.notifiers {
+					notifiers = append(notifiers, n)
 				}
 				c.notifiersMu.Unlock()
+
+				for _, n := range notifiers {
+					select {
+					case <-n.done:
+					case n.ch <- signal:
+					case <-c.ctx.Done():
+						return nil, context.Cause(c.ctx)
+					}
+				}
 
 				b, _ := json.Marshal(map[string]any{
 					"jsonrpc": "2.0",
@@ -269,20 +284,23 @@ func (c *Conn) Signal(ctx context.Context, signal *nethernet.Signal) (err error)
 }
 
 // Notify registers a channel to receive incoming signals.
+//
+// The returned stop function only unregisters the channel. The caller owns the
+// channel lifecycle and may close it after stop returns, if desired.
 func (c *Conn) Notify(ch chan<- *nethernet.Signal) (stop func()) {
 	c.log.Debug(fmt.Sprintf("Notify(%#v)", ch))
 
 	c.notifiersMu.Lock()
 	i := c.notifyCount
-	c.notifiers[i] = ch
+	c.notifiers[i] = &notifier{ch: ch, done: make(chan struct{})}
 	c.notifyCount++
 	c.notifiersMu.Unlock()
 
 	return func() {
 		c.notifiersMu.Lock()
-		if _, ok := c.notifiers[i]; ok {
+		if n, ok := c.notifiers[i]; ok {
 			delete(c.notifiers, i)
-			close(ch)
+			close(n.done)
 		}
 		c.notifiersMu.Unlock()
 	}
@@ -292,9 +310,9 @@ func (c *Conn) Notify(ch chan<- *nethernet.Signal) (stop func()) {
 func (c *Conn) Close() (err error) {
 	c.once.Do(func() {
 		c.notifiersMu.Lock()
-		for i, ch := range c.notifiers {
+		for i, n := range c.notifiers {
 			delete(c.notifiers, i)
-			close(ch)
+			close(n.done)
 		}
 		c.notifiersMu.Unlock()
 

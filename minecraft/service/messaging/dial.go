@@ -11,7 +11,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/creachadair/jrpc2"
-	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-playfab"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth/xal"
@@ -119,7 +118,7 @@ func (d Dialer) DialWithIdentityAndEnvironment(ctx context.Context, i playfab.Id
 		log:            d.Log,
 		conn:           c,
 		localNetworkID: d.NetworkID,
-		notifiers:      make(map[int]chan<- *nethernet.Signal),
+		notifiers:      make(map[int]*notifier),
 		expected:       make(map[uuid.UUID]chan<- error),
 	}
 	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
