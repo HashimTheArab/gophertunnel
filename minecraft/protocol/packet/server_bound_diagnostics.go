@@ -34,8 +34,6 @@ type ServerBoundDiagnostics struct {
 	AverageUnaccountedTimePercent float32
 	// MemoryCategoryValues is a list of memory category counters sent by the client.
 	MemoryCategoryValues []protocol.MemoryCategoryCounter
-	// MemoryCategoryValues is a list of memory category counters sent by the client.
-	MemoryCategoryValues []protocol.MemoryCategoryCounter
 }
 
 // ID ...
