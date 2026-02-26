@@ -291,11 +291,15 @@ type EntityMetadata map[uint32]any
 
 // NewEntityMetadata initializes and returns a new entity metadata map.
 func NewEntityMetadata() EntityMetadata {
-	return map[uint32]any{
-		EntityDataKeyFlags:       int64(0),
-		EntityDataKeyFlagsTwo:    int64(0),
-		EntityDataKeyPlayerFlags: byte(0),
-	}
+	return NewEntityMetadataWithCapacity(3)
+}
+
+func NewEntityMetadataWithCapacity(capacity int) EntityMetadata {
+	md := make(EntityMetadata, capacity)
+	md[EntityDataKeyFlags] = int64(0)
+	md[EntityDataKeyFlagsTwo] = int64(0)
+	md[EntityDataKeyPlayerFlags] = byte(0)
+	return md
 }
 
 // SetFlag sets a flag with a given index and value within the entity metadata map.
