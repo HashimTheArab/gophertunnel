@@ -55,7 +55,13 @@ func (src *tokenSource) Token() (*oauth2.Token, error) {
 		src.t = t
 		return t, err
 	}
-	tok, err := src.conf.refreshToken(context.Background(), src.t)
+
+	// Refreshes can otherwise block indefinitely on bad networks/proxies because
+	// oauth2.TokenSource doesn't expose a context-aware Token() method.
+	refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tok, err := src.conf.refreshToken(refreshCtx, src.t)
 	if err != nil {
 		return nil, err
 	}
