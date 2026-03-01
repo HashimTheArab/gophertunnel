@@ -123,14 +123,25 @@ type Config struct {
 	UserAgent string
 }
 
-// defaultXBLHTTPClient is the default HTTP client used for requests made by Xbox Live auth helpers.
-var defaultXBLHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{
-			Renegotiation: tls.RenegotiateOnceAsClient,
-		},
-	},
+func newDefaultXBLHTTPClient() *http.Client {
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok || baseTransport == nil {
+		baseTransport = &http.Transport{}
+	}
+	transport := baseTransport.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.Renegotiation = tls.RenegotiateOnceAsClient
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
 }
+
+// defaultXBLHTTPClient is the default HTTP client used for requests made by Xbox Live auth helpers.
+var defaultXBLHTTPClient = newDefaultXBLHTTPClient()
 
 // xblHTTPClient returns the HTTP client used for requests made by Xbox Live auth helpers.
 // The HTTP client is obtained from the context via ctx.Value(oauth2.HTTPClient).
@@ -165,6 +176,9 @@ type XBLTokenCache struct {
 	// inflight tracks in-progress XSTS token requests per relying party to avoid duplicate network calls
 	// when multiple goroutines request the same relying party at the same time.
 	inflight map[string]*xstsInFlight
+	// deviceInflight tracks an in-progress device token request to avoid concurrent
+	// duplicate device-auth calls under contention.
+	deviceInflight *deviceInFlight
 	// mu guards device from concurrent access.
 	mu sync.Mutex
 }
@@ -172,6 +186,12 @@ type XBLTokenCache struct {
 type xstsInFlight struct {
 	done chan struct{}
 	tok  *XBLToken
+	err  error
+}
+
+type deviceInFlight struct {
+	done chan struct{}
+	tok  *deviceToken
 	err  error
 }
 
@@ -199,20 +219,49 @@ func WithXBLTokenCache(parent context.Context, cache *XBLTokenCache) context.Con
 // proof key.
 func (x *XBLTokenCache) deviceToken(ctx context.Context, conf Config) (*deviceToken, error) {
 	x.mu.Lock()
-	defer x.mu.Unlock()
 	if x.device != nil && x.device.Valid() {
-		return x.device, nil
+		d := x.device
+		x.mu.Unlock()
+		return d, nil
 	}
+
+	if in := x.deviceInflight; in != nil {
+		done := in.done
+		x.mu.Unlock()
+		select {
+		case <-done:
+			return in.tok, in.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	in := &deviceInFlight{done: make(chan struct{})}
+	x.deviceInflight = in
+	x.mu.Unlock()
+
+	finish := func(tok *deviceToken, err error) (*deviceToken, error) {
+		x.mu.Lock()
+		x.deviceInflight = nil
+		if err == nil && tok != nil {
+			x.device = tok
+		}
+		in.tok = tok
+		in.err = err
+		close(in.done)
+		x.mu.Unlock()
+		return tok, err
+	}
+
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generate proof key: %w", err)
+		return finish(nil, fmt.Errorf("generate proof key: %w", err))
 	}
 	d, err := conf.obtainDeviceToken(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("obtain device token: %w", err)
+		return finish(nil, fmt.Errorf("obtain device token: %w", err))
 	}
-	x.device = d
-	return d, nil
+	return finish(d, nil)
 }
 
 var (
