@@ -298,11 +298,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	}
 	_ = conn.Flush()
 
-	readyForLoginExpected := []uint32{packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame}
-	if conn.disablePacketHandling {
-		readyForLoginExpected = []uint32{packet.IDServerToClientHandshake}
-	}
-
 	select {
 	case <-ctx.Done():
 		return nil, conn.wrap(context.Cause(ctx), "dial")
@@ -310,7 +305,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, conn.closeErr("dial")
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
-		conn.expect(readyForLoginExpected...)
+		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
 		if err := conn.WritePacket(&packet.Login{ConnectionRequest: request, ClientProtocol: d.Protocol.ID()}); err != nil {
 			return nil, conn.wrap(fmt.Errorf("send login: %w", err), "dial")
 		}
@@ -374,7 +369,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			return
 		}
 		for _, data := range packets {
-			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete
+			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				if cancelContext {
 					cancel(err)
@@ -383,9 +378,11 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 				}
 				return
 			}
-			if !handshakeCompleteBefore && conn.handshakeComplete {
-				// In relay mode, the dial should be completed immediately after handshake instead of waiting
-				// for the full login sequence.
+			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
+			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
+			if handshakeReady || passthroughReady {
+				// In relay mode, complete dialing as soon as handshake succeeds or passthrough is ready.
+				// This supports both encrypted servers and servers that skip the handshake.
 				if conn.disablePacketHandling && connected != nil {
 					close(connected)
 					connected = nil

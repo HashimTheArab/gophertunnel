@@ -240,6 +240,10 @@ type Conn struct {
 	additional chan packet.Packet
 
 	disablePacketHandling bool
+	// disablePacketHandlingReady indicates that the connection should now forward packets directly to the caller
+	// when disablePacketHandling is enabled. This becomes true after handshake completion or once post-login
+	// packets start arriving on servers that skip the handshake packet.
+	disablePacketHandlingReady bool
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
@@ -776,15 +780,27 @@ func (conn *Conn) receive(data []byte) error {
 		_ = conn.close(conn.wrap(DisconnectError(disconnectMessage), "receive"))
 		return nil
 	}
-	if conn.disablePacketHandling && conn.handshakeComplete {
-		if pkData.h.PacketID == packet.IDClientToServerHandshake {
-			return nil // dont forward it
+	if conn.disablePacketHandling {
+		if conn.handshakeComplete || conn.loggedIn {
+			conn.disablePacketHandlingReady = true
+		} else if !conn.disablePacketHandlingReady {
+			switch pkData.h.PacketID {
+			case packet.IDResourcePacksInfo, packet.IDStartGame, packet.IDPlayStatus:
+				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
+				// packets start coming in.
+				conn.disablePacketHandlingReady = true
+			}
 		}
-		select {
-		case <-conn.ctx.Done():
-		case conn.packets <- pkData:
+		if conn.disablePacketHandlingReady {
+			if pkData.h.PacketID == packet.IDClientToServerHandshake {
+				return nil // don't forward it
+			}
+			select {
+			case <-conn.ctx.Done():
+			case conn.packets <- pkData:
+			}
+			return nil
 		}
-		return nil
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
 		select {
