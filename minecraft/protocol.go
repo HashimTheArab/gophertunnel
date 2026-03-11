@@ -72,6 +72,17 @@ func (p proto) ConvertToLatest(pk packet.Packet, _ *Conn) []packet.Packet { retu
 func (p proto) ConvertFromLatest(pk packet.Packet, _ *Conn) []packet.Packet {
 	return []packet.Packet{pk}
 }
+func (p proto) convertToLatestInto(pk packet.Packet, _ *Conn, dst []packet.Packet) []packet.Packet {
+	return append(dst, pk)
+}
+func (p proto) acquireReader(r ByteReader, shieldID int32, enableLimits bool) protocol.IO {
+	return protocol.AcquireReader(r, shieldID, enableLimits)
+}
+func (p proto) releaseReader(r protocol.IO) {
+	if reader, ok := r.(*protocol.Reader); ok {
+		protocol.ReleaseReader(reader)
+	}
+}
 
 // DefaultProtocol is the Protocol implementation using as default, In default it is current protocol, version and packet
 // pool and does not convert any packets, as they are already of the right type.

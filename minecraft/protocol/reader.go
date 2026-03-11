@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
+	"sync"
 	"unsafe"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -28,12 +29,38 @@ type Reader struct {
 	limitsEnabled bool
 }
 
+var readerPool = sync.Pool{
+	New: func() any {
+		return new(Reader)
+	},
+}
+
 // NewReader creates a new Reader using the io.ByteReader passed as underlying source to read bytes from.
 func NewReader(r interface {
 	io.Reader
 	io.ByteReader
 }, shieldID int32, enableLimits bool) *Reader {
 	return &Reader{r: r, shieldID: shieldID, limitsEnabled: enableLimits}
+}
+
+// AcquireReader returns a Reader from a small pool for short-lived decode paths.
+func AcquireReader(r interface {
+	io.Reader
+	io.ByteReader
+}, shieldID int32, enableLimits bool) *Reader {
+	reader := readerPool.Get().(*Reader)
+	reader.r = r
+	reader.shieldID = shieldID
+	reader.limitsEnabled = enableLimits
+	return reader
+}
+
+// ReleaseReader returns a Reader obtained through AcquireReader back to the pool.
+func ReleaseReader(r *Reader) {
+	r.r = nil
+	r.shieldID = 0
+	r.limitsEnabled = false
+	readerPool.Put(r)
 }
 
 // Uint8 reads a uint8 from the underlying buffer.

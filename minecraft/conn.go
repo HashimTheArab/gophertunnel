@@ -500,7 +500,9 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 		return <-conn.additional, nil
 	}
 	if data, ok := conn.takeDeferredPacket(); ok {
-		pk, err := data.decode(conn)
+		var convertedBuf [1]packet.Packet
+		pk, err := data.decodeInto(conn, convertedBuf[:0])
+		releasePacketData(data)
 		if err != nil {
 			conn.log.Error("read packet: " + err.Error())
 			return conn.ReadPacket()
@@ -520,7 +522,9 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read packet")
 	case data := <-conn.packets:
-		pk, err := data.decode(conn)
+		var convertedBuf [1]packet.Packet
+		pk, err := data.decodeInto(conn, convertedBuf[:0])
+		releasePacketData(data)
 		if err != nil {
 			conn.log.Error("read packet: " + err.Error())
 			return conn.ReadPacket()
@@ -763,7 +767,9 @@ func (conn *Conn) receive(data []byte) error {
 	}
 	if pkData.h.PacketID == packet.IDDisconnect {
 		// We always handle disconnect packets and close the connection if one comes in.
-		pks, err := pkData.decode(conn)
+		var convertedBuf [1]packet.Packet
+		pks, err := pkData.decodeInto(conn, convertedBuf[:0])
+		releasePacketData(pkData)
 		if err != nil {
 			return err
 		}
@@ -825,7 +831,9 @@ func (conn *Conn) handle(pkData *packetData) error {
 	for _, id := range conn.expectedIDs.Load().([]uint32) {
 		if id == pkData.h.PacketID {
 			// If the packet was expected, so we handle it right now.
-			pks, err := pkData.decode(conn)
+			var convertedBuf [1]packet.Packet
+			pks, err := pkData.decodeInto(conn, convertedBuf[:0])
+			releasePacketData(pkData)
 			if err != nil {
 				return err
 			}

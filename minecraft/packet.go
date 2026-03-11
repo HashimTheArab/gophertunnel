@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -16,12 +18,20 @@ type packetData struct {
 	offset  int
 }
 
+var packetDataPool = sync.Pool{
+	New: func() any {
+		return new(packetData)
+	},
+}
+
 // parseData parses the packet data slice passed into a packetData struct.
 func parseData(data []byte, conn *Conn) (*packetData, error) {
-	pk := &packetData{full: data, payload: data}
+	pk := packetDataPool.Get().(*packetData)
+	*pk = packetData{full: data, payload: data}
 	if err := pk.h.Read(pk); err != nil {
 		// We don't return this as an error as it's not in the hand of the user to control this. Instead,
 		// we return to reading a new packet.
+		releasePacketData(pk)
 		return nil, fmt.Errorf("read packet header: %w", err)
 	}
 	if conn.packetFunc != nil {
@@ -31,6 +41,11 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	pk.payload = pk.payload[pk.offset:]
 	pk.offset = 0
 	return pk, nil
+}
+
+func releasePacketData(pk *packetData) {
+	*pk = packetData{}
+	packetDataPool.Put(pk)
 }
 
 type unknownPacketError struct {
@@ -59,8 +74,17 @@ func (p *packetData) ReadByte() (byte, error) {
 	return b, nil
 }
 
-// decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
-func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
+type convertToLatestInto interface {
+	convertToLatestInto(pk packet.Packet, conn *Conn, dst []packet.Packet) []packet.Packet
+}
+
+type pooledReaderProtocol interface {
+	acquireReader(r ByteReader, shieldID int32, enableLimits bool) protocol.IO
+	releaseReader(r protocol.IO)
+}
+
+// decodeInto decodes the packet payload held in the packetData and appends the decoded packet(s) to dst.
+func (p *packetData) decodeInto(conn *Conn, dst []packet.Packet) (pks []packet.Packet, err error) {
 	// Attempt to fetch the packet with the right packet ID from the pool.
 	pkFunc, ok := conn.pool[p.h.PacketID]
 	var pk packet.Packet
@@ -85,7 +109,13 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 	}()
 
 	p.offset = 0
-	r := conn.proto.NewReader(p, conn.shieldID.Load(), conn.readerLimits)
+	var r protocol.IO
+	if pooledProto, ok := conn.proto.(pooledReaderProtocol); ok {
+		r = pooledProto.acquireReader(p, conn.shieldID.Load(), conn.readerLimits)
+		defer pooledProto.releaseReader(r)
+	} else {
+		r = conn.proto.NewReader(p, conn.shieldID.Load(), conn.readerLimits)
+	}
 	pk.Marshal(r)
 	if unread := p.payload[p.offset:]; len(unread) != 0 {
 		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, len(unread), unread)
@@ -93,5 +123,12 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 	if conn.disconnectOnInvalidPacket && err != nil {
 		return nil, err
 	}
-	return conn.proto.ConvertToLatest(pk, conn), err
+	if converter, ok := conn.proto.(convertToLatestInto); ok {
+		return converter.convertToLatestInto(pk, conn, dst), err
+	}
+	converted := conn.proto.ConvertToLatest(pk, conn)
+	if len(dst) == 0 {
+		return converted, err
+	}
+	return append(dst, converted...), err
 }
