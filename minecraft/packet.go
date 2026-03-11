@@ -1,33 +1,36 @@
 package minecraft
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
+	"io"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 // packetData holds the data of a Minecraft packet.
 type packetData struct {
-	h       *packet.Header
+	h       packet.Header
 	full    []byte
-	payload *bytes.Buffer
+	payload []byte
+	offset  int
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
 func parseData(data []byte, conn *Conn) (*packetData, error) {
-	buf := bytes.NewBuffer(data)
-	header := &packet.Header{}
-	if err := header.Read(buf); err != nil {
+	pk := &packetData{full: data, payload: data}
+	if err := pk.h.Read(pk); err != nil {
 		// We don't return this as an error as it's not in the hand of the user to control this. Instead,
 		// we return to reading a new packet.
 		return nil, fmt.Errorf("read packet header: %w", err)
 	}
 	if conn.packetFunc != nil {
 		// The packet func was set, so we call it.
-		conn.packetFunc(*header, buf.Bytes(), conn.RemoteAddr(), conn.LocalAddr())
+		conn.packetFunc(pk.h, pk.payload[pk.offset:], conn.RemoteAddr(), conn.LocalAddr())
 	}
-	return &packetData{h: header, full: data, payload: buf}, nil
+	pk.payload = pk.payload[pk.offset:]
+	pk.offset = 0
+	return pk, nil
 }
 
 type unknownPacketError struct {
@@ -36,6 +39,24 @@ type unknownPacketError struct {
 
 func (err unknownPacketError) Error() string {
 	return fmt.Sprintf("unexpected packet (ID=%v)", err.id)
+}
+
+func (p *packetData) Read(b []byte) (int, error) {
+	if p.offset >= len(p.payload) {
+		return 0, io.EOF
+	}
+	n := copy(b, p.payload[p.offset:])
+	p.offset += n
+	return n, nil
+}
+
+func (p *packetData) ReadByte() (byte, error) {
+	if p.offset >= len(p.payload) {
+		return 0, io.EOF
+	}
+	b := p.payload[p.offset]
+	p.offset++
+	return b, nil
 }
 
 // decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
@@ -63,10 +84,11 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 		}
 	}()
 
-	r := conn.proto.NewReader(p.payload, conn.shieldID.Load(), conn.readerLimits)
+	p.offset = 0
+	r := conn.proto.NewReader(p, conn.shieldID.Load(), conn.readerLimits)
 	pk.Marshal(r)
-	if p.payload.Len() != 0 {
-		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, p.payload.Len(), p.payload.Bytes())
+	if unread := p.payload[p.offset:]; len(unread) != 0 {
+		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, len(unread), unread)
 	}
 	if conn.disconnectOnInvalidPacket && err != nil {
 		return nil, err
