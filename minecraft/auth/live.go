@@ -310,7 +310,7 @@ func (conf Config) refreshToken(ctx context.Context, t *oauth2.Token) (*oauth2.T
 		return nil, fmt.Errorf("POST %s: json decode: %w", microsoft.LiveConnectEndpoint.TokenURL, err)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("POST %s: refresh error: %v", microsoft.LiveConnectEndpoint.TokenURL, poll.Error)
+		return nil, fmt.Errorf("POST %s: refresh error: %v: %v", microsoft.LiveConnectEndpoint.TokenURL, poll.Error, poll.ErrorDescription)
 	}
 	return newOAuth2Token(poll), nil
 }
