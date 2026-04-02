@@ -1,6 +1,9 @@
 package text
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 const (
 	Black      = "§0"
@@ -143,6 +146,57 @@ var strMap = map[string]string{
 	"lapis":       Lapis,
 	"amethyst":    Amethyst,
 	"resin":       Resin,
+}
+
+// ColorEntry represents a named Minecraft formatting code.
+type ColorEntry struct {
+	// Name is the human-readable name (e.g. "Green", "Bold").
+	Name string
+	// Code is the full formatting code (e.g. "§a", "§l").
+	Code string
+}
+
+// formattingCodes is the set of codes that are formatting rather than colors.
+var formattingCodes = map[string]struct{}{
+	Obfuscated: {},
+	Bold:       {},
+	Italic:     {},
+	Reset:      {},
+}
+
+// Colors returns all Minecraft color codes sorted by code.
+func Colors() []ColorEntry {
+	return collectEntries(false)
+}
+
+// FormattingCodes returns all Minecraft formatting (non-color) codes sorted by code.
+func FormattingCodes() []ColorEntry {
+	return collectEntries(true)
+}
+
+func collectEntries(formatting bool) []ColorEntry {
+	var entries []ColorEntry
+	for name, code := range strMap {
+		// Skip single-char aliases like "b" and "i".
+		if len(name) == 1 {
+			continue
+		}
+		_, isFmt := formattingCodes[code]
+		if isFmt != formatting {
+			continue
+		}
+		// Title-case the name (e.g. "dark-blue" -> "Dark Blue").
+		parts := strings.Split(name, "-")
+		for i, p := range parts {
+			parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		}
+		title := strings.Join(parts, " ")
+		entries = append(entries, ColorEntry{Name: title, Code: code})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Code < entries[j].Code
+	})
+	return entries
 }
 
 // minecraftReplacer and ansiReplacer are used to translate ANSI formatting codes to Minecraft formatting
