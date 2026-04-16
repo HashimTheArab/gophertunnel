@@ -146,8 +146,13 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 // RealmAddress contains the address returned by the Realms join endpoint along
 // with the signalling protocol used for connecting to it.
 type RealmAddress struct {
-	NetworkProtocol string `json:"networkProtocol"`
-	Address         string `json:"address"`
+	Address           string `json:"address"`
+	NetworkProtocol   string `json:"networkProtocol"`
+	PendingUpdate     bool   `json:"pendingUpdate"`
+	SessionRegionData struct {
+		RegionName     string `json:"regionName"`
+		ServiceQuality int    `json:"serviceQuality"`
+	} `json:"sessionRegionData"`
 }
 
 // RealmAddress returns the address and port to connect to a realm from the api,
