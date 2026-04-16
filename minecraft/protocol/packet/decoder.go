@@ -22,10 +22,16 @@ type Decoder struct {
 	// NewDecoder implements the packetReader interface.
 	pr packetReader
 
+	// header holds the batch header that is expected on the beginning of input packet data.
+	header []byte
+
 	decompress         bool
 	compression        Compression
 	maxDecompressedLen int
 	encrypt            *encrypt
+	// disableEncryption indicates whether to prevent encryption from being enabled
+	// even if it is requested on handshake during login.
+	disableEncryption bool
 
 	checkPacketLimit bool
 
@@ -40,21 +46,39 @@ type packetReader interface {
 
 // NewDecoder returns a new decoder decoding data from the io.Reader passed. One read call from the reader is
 // assumed to consume an entire packet.
-func NewDecoder(reader io.Reader, header []byte) *Decoder {
+func NewDecoder(reader io.Reader) *Decoder {
+	var batch []byte
+	if b, ok := reader.(batchHeader); ok {
+		batch = b.BatchHeader()
+	} else {
+		batch = []byte{header}
+	}
+	var disableEncryption bool
+	if d, ok := reader.(encryptionDisabler); ok {
+		disableEncryption = d.DisableEncryption()
+	}
 	if pr, ok := reader.(packetReader); ok {
-		return &Decoder{checkPacketLimit: true, pr: pr, header: header}
+		return &Decoder{
+			checkPacketLimit:  true,
+			pr:                pr,
+			header:            batch,
+			disableEncryption: disableEncryption,
+		}
 	}
 	return &Decoder{
-		r:                reader,
-		buf:              make([]byte, 1024*1024*3),
-		checkPacketLimit: true,
-		header:           header,
+		r:                 reader,
+		buf:               make([]byte, 1024*1024*3),
+		checkPacketLimit:  true,
+		disableEncryption: disableEncryption,
 	}
 }
 
 // EnableEncryption enables encryption for the Decoder using the secret key bytes passed. Each packet received
 // will be decrypted.
 func (decoder *Decoder) EnableEncryption(keyBytes [32]byte) {
+	if decoder.disableEncryption {
+		return
+	}
 	block, _ := aes.NewCipher(keyBytes[:])
 	first12 := append([]byte(nil), keyBytes[:12]...)
 	stream := cipher.NewCTR(block, append(first12, 0, 0, 0, 2))
@@ -94,6 +118,7 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("read batch: %w", err)
 	}
+
 	if len(data) == 0 {
 		return nil, nil
 	}

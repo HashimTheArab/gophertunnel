@@ -305,14 +305,25 @@ func NewEntityMetadataWithCapacity(capacity int) EntityMetadata {
 	return md
 }
 
-// SetFlag sets a flag with a given index and value within the entity metadata map.
+// SetFlag sets a flag with a given index within the entity metadata map.
 func (m EntityMetadata) SetFlag(key uint32, index uint8) {
 	v := m[key]
 	switch key {
 	case EntityDataKeyPlayerFlags:
-		m[key] = v.(byte) ^ (1 << index)
+		m[key] = v.(byte) | (1 << index)
 	default:
-		m[key] = v.(int64) ^ (1 << int64(index))
+		m[key] = v.(int64) | (1 << int64(index))
+	}
+}
+
+// UnsetFlag unsets a flag with a given index within the entity metadata map.
+func (m EntityMetadata) UnsetFlag(key uint32, index uint8) {
+	v := m[key]
+	switch key {
+	case EntityDataKeyPlayerFlags:
+		m[key] = v.(byte) &^ (1 << index)
+	default:
+		m[key] = v.(int64) &^ (1 << int64(index))
 	}
 }
 
