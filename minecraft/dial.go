@@ -250,7 +250,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, err
 	}
 
-	conn = newConn(netConn, key, d.ErrorLog, d.Protocol, d.FlushRate, false, n.BatchHeader())
+	conn = newConn(netConn, key, d.ErrorLog, d.Protocol, d.FlushRate, false)
 	conn.pool = conn.proto.Packets(false)
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
@@ -261,8 +261,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = math.MaxInt
 	conn.disablePacketHandling = d.DisablePacketHandling
-
-	conn.disableEncryption = n.DisableEncryption()
 
 	defaultIdentityData(&conn.identityData)
 	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)

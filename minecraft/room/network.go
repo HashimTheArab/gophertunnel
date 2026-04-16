@@ -41,9 +41,3 @@ func (n Network) Listen(address string) (minecraft.NetworkListener, error) {
 	}
 	return n.ListenConfig.Wrap(l), nil
 }
-
-// DisableEncryption ...
-func (n Network) DisableEncryption() bool { return n.Network.DisableEncryption() }
-
-// BatchHeader ...
-func (n Network) BatchHeader() []byte { return n.Network.BatchHeader() }

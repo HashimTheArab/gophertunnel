@@ -28,12 +28,6 @@ func (r RakNet) Listen(address string) (NetworkListener, error) {
 	return raknet.ListenConfig{ErrorLog: r.l.With("net origin", "raknet")}.Listen(address)
 }
 
-// DisableEncryption ...
-func (r RakNet) DisableEncryption() bool { return false }
-
-// BatchHeader ...
-func (r RakNet) BatchHeader() []byte { return []byte{0xfe} }
-
 // init registers the RakNet network.
 func init() {
 	RegisterNetwork("raknet", func(l *slog.Logger) Network { return RakNet{l: l} })

@@ -250,21 +250,27 @@ type Conn struct {
 // Minecraft packets to that net.Conn.
 // newConn accepts a private key which will be used to identify the connection. If a nil key is passed, the
 // key is generated.
-func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool, batchHeader []byte) *Conn {
-	conn := &Conn{
-		enc:          packet.NewEncoder(netConn, batchHeader),
-		dec:          packet.NewDecoder(netConn, batchHeader),
-		salt:         make([]byte, 16),
-		packets:      make(chan *packetData, 8),
-		additional:   make(chan packet.Packet, 16),
-		spawn:        make(chan struct{}),
-		conn:         netConn,
-		privateKey:   key,
-		log:          log.With("raddr", netConn.RemoteAddr().String()),
-		hdr:          &packet.Header{},
-		proto:        proto,
-		readerLimits: limits,
+func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool) *Conn {
+	disableEncryption := false
+	if d, ok := netConn.(interface{ DisableEncryption() bool }); ok {
+		disableEncryption = d.DisableEncryption()
 	}
+
+	conn := &Conn{
+		salt:              make([]byte, 16),
+		disableEncryption: disableEncryption,
+		packets:           make(chan *packetData, 8),
+		additional:        make(chan packet.Packet, 16),
+		spawn:             make(chan struct{}),
+		conn:              netConn,
+		privateKey:        key,
+		log:               log.With("raddr", netConn.RemoteAddr().String()),
+		hdr:               &packet.Header{},
+		proto:             proto,
+		readerLimits:      limits,
+	}
+	conn.enc = packet.NewEncoder(netConn)
+	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
 		conn.ctx, conn.cancelFunc = context.WithCancelCause(c.Context())

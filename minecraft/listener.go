@@ -143,9 +143,6 @@ type Listener struct {
 	// for authenticating incoming connections. It will be nil if authentication is
 	// disabled on ListenConfig.
 	verifier *oidc.IDTokenVerifier
-
-	disableEncryption bool
-	batchHeader       []byte
 }
 
 // Listen announces on the local network address. The network is typically "raknet".
@@ -208,15 +205,13 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 	listener := &Listener{
-		cfg:               cfg,
-		listener:          netListener,
-		packs:             slices.Clone(cfg.ResourcePacks),
-		incoming:          make(chan *Conn),
-		close:             make(chan struct{}),
-		key:               key,
-		disableEncryption: n.DisableEncryption(),
-		batchHeader:       n.BatchHeader(),
-		verifier:          verifier,
+		cfg:      cfg,
+		listener: netListener,
+		packs:    slices.Clone(cfg.ResourcePacks),
+		incoming: make(chan *Conn),
+		close:    make(chan struct{}),
+		key:      key,
+		verifier: verifier,
 	}
 
 	// Actually start listening.
@@ -427,15 +422,13 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
 
-	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true, listener.batchHeader)
+	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold
 	conn.maxDecompressedLen = listener.cfg.MaxDecompressedLen
 	conn.pool = conn.proto.Packets(true)
-
-	conn.disableEncryption = listener.disableEncryption
 
 	conn.packetFunc = listener.cfg.PacketFunc
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired

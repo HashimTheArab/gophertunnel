@@ -23,8 +23,7 @@ type Decoder struct {
 	pr packetReader
 
 	// header holds the batch header that is expected on the beginning of input packet data.
-	header []byte
-
+	header             []byte
 	decompress         bool
 	compression        Compression
 	maxDecompressedLen int
@@ -34,8 +33,6 @@ type Decoder struct {
 	disableEncryption bool
 
 	checkPacketLimit bool
-
-	header []byte
 }
 
 // packetReader is used to read packets immediately instead of copying them in a buffer first. This is a
@@ -68,6 +65,7 @@ func NewDecoder(reader io.Reader) *Decoder {
 	return &Decoder{
 		r:                 reader,
 		buf:               make([]byte, 1024*1024*3),
+		header:            batch,
 		checkPacketLimit:  true,
 		disableEncryption: disableEncryption,
 	}
@@ -99,6 +97,8 @@ func (decoder *Decoder) DisableBatchPacketLimit() {
 }
 
 const (
+	// header is the header of compressed 'batches' from Minecraft.
+	header = 0xfe
 	// maximumInBatch is the maximum amount of packets that may be found in a batch. If a compressed batch has
 	// more than this amount, decoding will fail.
 	maximumInBatch = 1600

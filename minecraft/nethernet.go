@@ -38,9 +38,3 @@ func (n NetherNet) Listen(string) (NetworkListener, error) {
 	}
 	return n.ListenConfig.Listen(n.Signaling)
 }
-
-// DisableEncryption ...
-func (NetherNet) DisableEncryption() bool { return true }
-
-// BatchHeader ...
-func (NetherNet) BatchHeader() []byte { return nil }

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 
-	"io"
-
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
 
