@@ -142,19 +142,3 @@ func (status Status) NetherNetID() (string, bool) {
 	}
 	return "", false
 }
-
-// NetherNetConnectionInfo extracts the best available NetherNet connection details from a room status.
-// It returns the numeric NetherNet ID, optional messaging player ID, and selected connection type.
-func NetherNetConnectionInfo(status Status) (id uint64, pmsgID uuid.UUID, connType uint32, ok bool) {
-	for _, c := range status.SupportedConnections {
-		if c.ConnectionType != ConnectionTypeWebSocketsWebRTCSignaling && c.ConnectionType != ConnectionTypeJSONRPCSignaling {
-			continue
-		}
-		parsed, err := strconv.ParseUint(string(c.NetherNetID), 10, 64)
-		if err != nil || parsed == 0 {
-			continue
-		}
-		return parsed, c.PmsgID, c.ConnectionType, true
-	}
-	return 0, uuid.Nil, 0, false
-}
