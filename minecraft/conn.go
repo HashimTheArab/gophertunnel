@@ -467,10 +467,10 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}
 }
 
-// WriteImmediatePacket encodes the packets passed, queues them in the normal buffered send queue and flushes
+// WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
 // that queue immediately. This preserves ordering relative to packets that were already queued through
 // WritePacket while still sending the data right away.
-func (conn *Conn) WriteImmediatePacket(pks ...packet.Packet) error {
+func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write immediate packet")
