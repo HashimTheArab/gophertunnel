@@ -467,8 +467,26 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}
 }
 
+// WriteImmediatePacket encodes the packets passed, queues them in the normal buffered send queue and flushes
+// that queue immediately. This preserves ordering relative to packets that were already queued through
+// WritePacket while still sending the data right away.
+func (conn *Conn) WriteImmediatePacket(pks ...packet.Packet) error {
+	select {
+	case <-conn.ctx.Done():
+		return conn.closeErr("write immediate packet")
+	default:
+	}
+
+	conn.sendMu.Lock()
+	conn.encodePacketsTo(&conn.bufferedSend, pks...)
+	conn.sendMu.Unlock()
+
+	return conn.Flush()
+}
+
 // WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
-// bypassing the buffered batch that is flushed every tick. Use this when a packet must be sent at once.
+// bypassing the buffered batch that is flushed every tick.
+// Use this only when packet ordering relative to already-buffered packets does not matter.
 func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	select {
 	case <-conn.ctx.Done():
@@ -1194,7 +1212,7 @@ func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool 
 	return false
 }
 
-// packChunkSize is the size of a single chunk of data from a resource pack: 512 kB or 0.5 MB
+// packChunkSize is the size of a single chunk of data from a resource pack: 128 KiB.
 const packChunkSize = 1024 * 128
 
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
