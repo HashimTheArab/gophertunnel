@@ -292,6 +292,13 @@ func (pack Pack) WithContentKey(key string) *Pack {
 	return &pack
 }
 
+// WithDownloadURL creates a copy of the pack and sets the HTTP download URL
+// used in ResourcePacksInfo.
+func (pack Pack) WithDownloadURL(url string) *Pack {
+	pack.downloadURL = url
+	return &pack
+}
+
 // Manifest returns the manifest found in the manifest.json of the resource pack. It contains information
 // about the pack such as its name.
 func (pack *Pack) Manifest() Manifest {
