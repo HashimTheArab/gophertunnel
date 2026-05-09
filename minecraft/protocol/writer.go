@@ -176,7 +176,7 @@ func (w *Writer) PlayerInventoryAction(x *UseItemTransactionData) {
 	w.BlockPos(&x.BlockPosition)
 	w.Varint32(&x.BlockFace)
 	w.Varint32(&x.HotBarSlot)
-	w.ItemInstance(&x.HeldItem)
+	Single(w, &x.HeldItem)
 	w.Vec3(&x.Position)
 	w.Vec3(&x.ClickedPosition)
 	w.Varuint32(&x.BlockRuntimeID)
@@ -382,8 +382,7 @@ func (w *Writer) ItemInstanceNew(i *ItemInstance) {
 	w.Bool(&hasNetID)
 
 	if hasNetID {
-		var zero uint32
-		w.Varuint32(&zero)
+		w.Varuint32(&i.StackNetworkIDVariant)
 		w.Varint32(&i.StackNetworkID)
 	}
 

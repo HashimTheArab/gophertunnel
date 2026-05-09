@@ -40,7 +40,7 @@ type AddPlayer struct {
 	// HeldItem is the item that the player is holding. The item is shown to the viewer as soon as the player
 	// itself shows up. Needless to say that this field is rather pointless, as additional packets still must
 	// be sent for armour to show up.
-	HeldItem protocol.ItemInstance
+	HeldItem protocol.NetworkItemStackDescriptor
 	// GameType is the game type of the player. If set to GameTypeSpectator, the player will not be shown to viewers.
 	GameType int32
 	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
@@ -79,7 +79,7 @@ func (pk *AddPlayer) Marshal(io protocol.IO) {
 	io.Float32(&pk.Pitch)
 	io.Float32(&pk.Yaw)
 	io.Float32(&pk.HeadYaw)
-	io.ItemInstance(&pk.HeldItem)
+	protocol.Single(io, &pk.HeldItem)
 	io.Varint32(&pk.GameType)
 	io.EntityMetadata(&pk.EntityMetadata)
 	protocol.Single(io, &pk.EntityProperties)

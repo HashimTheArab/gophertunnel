@@ -61,7 +61,7 @@ func InstanceToDescriptor(i ItemInstance, shieldID int32) NetworkItemStackDescri
 	}
 	if i.StackNetworkID != 0 {
 		d.NetIDVariant = Option(NetworkItemStackNetIDVariant{
-			Type:  NetworkItemStackNetIDVariantStack,
+			Type:  i.StackNetworkIDVariant,
 			Value: i.StackNetworkID,
 		})
 	}
@@ -70,6 +70,25 @@ func InstanceToDescriptor(i ItemInstance, shieldID int32) NetworkItemStackDescri
 
 // DescriptorToInstance converts a NetworkItemStackDescriptor into a legacy ItemInstance.
 func DescriptorToInstance(d NetworkItemStackDescriptor, shieldID int32) ItemInstance {
+	i, err := SafeDescriptorToInstance(d, shieldID)
+	if err != nil {
+		panic(err)
+	}
+	return i
+}
+
+// SafeDescriptorToInstance converts a NetworkItemStackDescriptor into a legacy ItemInstance, returning an
+// error if its user data buffer is malformed.
+func SafeDescriptorToInstance(d NetworkItemStackDescriptor, shieldID int32) (i ItemInstance, err error) {
+	defer func() {
+		if recoveredErr := recover(); recoveredErr != nil {
+			err = recoveredErr.(error)
+		}
+	}()
+	return descriptorToInstance(d, shieldID, true), nil
+}
+
+func descriptorToInstance(d NetworkItemStackDescriptor, shieldID int32, enableLimits bool) ItemInstance {
 	if d.NetworkID == 0 {
 		return ItemInstance{}
 	}
@@ -85,9 +104,9 @@ func DescriptorToInstance(d NetworkItemStackDescriptor, shieldID int32) ItemInst
 		},
 	}
 	if v, ok := d.NetIDVariant.Value(); ok {
-		i.StackNetworkID = v.Value
+		i.StackNetworkID, i.StackNetworkIDVariant = v.Value, v.Type
 	}
-	unmarshalNetworkItemUserData(&i.Stack, d.UserDataBuffer, shieldID)
+	unmarshalNetworkItemUserData(&i.Stack, d.UserDataBuffer, shieldID, enableLimits)
 	return i
 }
 
@@ -118,13 +137,13 @@ func marshalNetworkItemUserData(x ItemStack, shieldID int32) []byte {
 	return append([]byte(nil), buf.Bytes()...)
 }
 
-func unmarshalNetworkItemUserData(x *ItemStack, data string, shieldID int32) {
+func unmarshalNetworkItemUserData(x *ItemStack, data string, shieldID int32, enableLimits bool) {
 	if data == "" {
 		x.NBTData, x.CanBePlacedOn, x.CanBreak = nil, nil, nil
 		x.BlockingTick = 0
 		return
 	}
-	r := NewReader(bytes.NewBufferString(data), shieldID, false)
+	r := NewReader(bytes.NewBufferString(data), shieldID, enableLimits)
 
 	var length int16
 	r.Int16(&length)

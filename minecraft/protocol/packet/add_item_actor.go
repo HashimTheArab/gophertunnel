@@ -17,7 +17,7 @@ type AddItemActor struct {
 	EntityRuntimeID uint64
 	// Item is the item that is spawned. It must have a valid ID for it to show up client-side. If it is not
 	// a valid item, the client will crash when coming near.
-	Item protocol.ItemInstance
+	Item protocol.NetworkItemStackDescriptor
 	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot
 	// see it, the entity will still show up if the player moves closer.
 	Position mgl32.Vec3
@@ -41,7 +41,7 @@ func (*AddItemActor) ID() uint32 {
 func (pk *AddItemActor) Marshal(io protocol.IO) {
 	io.Varint64(&pk.EntityUniqueID)
 	io.Varuint64(&pk.EntityRuntimeID)
-	io.ItemInstance(&pk.Item)
+	protocol.Single(io, &pk.Item)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
 	io.EntityMetadata(&pk.EntityMetadata)

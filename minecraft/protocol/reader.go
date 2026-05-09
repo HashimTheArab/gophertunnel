@@ -273,7 +273,7 @@ func (r *Reader) PlayerInventoryAction(x *UseItemTransactionData) {
 	r.BlockPos(&x.BlockPosition)
 	r.Varint32(&x.BlockFace)
 	r.Varint32(&x.HotBarSlot)
-	r.ItemInstance(&x.HeldItem)
+	Single(r, &x.HeldItem)
 	r.Vec3(&x.Position)
 	r.Vec3(&x.ClickedPosition)
 	r.Varuint32(&x.BlockRuntimeID)
@@ -485,11 +485,10 @@ func (r *Reader) ItemInstanceNew(i *ItemInstance) {
 	r.Bool(&hasNetID)
 
 	if hasNetID {
-		var empty uint32
-		r.Varuint32(&empty)
+		r.Varuint32(&i.StackNetworkIDVariant)
 		r.Varint32(&i.StackNetworkID)
 	} else {
-		i.StackNetworkID = 0
+		i.StackNetworkID, i.StackNetworkIDVariant = 0, 0
 	}
 
 	var runtimeID uint32

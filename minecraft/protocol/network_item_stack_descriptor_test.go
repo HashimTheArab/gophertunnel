@@ -73,6 +73,40 @@ func TestNetworkItemStackDescriptorRoundTripsEmptyItem(t *testing.T) {
 	}
 }
 
+func TestNetworkItemStackDescriptorPreservesNetIDVariant(t *testing.T) {
+	const shieldID int32 = 512
+	in := protocol.NetworkItemStackDescriptor{
+		NetworkID:     42,
+		Count:         1,
+		MetadataValue: 3,
+		NetIDVariant: protocol.Option(protocol.NetworkItemStackNetIDVariant{
+			Type:  protocol.NetworkItemStackNetIDVariantLegacyRequest,
+			Value: 99,
+		}),
+		UserDataBuffer: string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
+	}
+
+	out := protocol.InstanceToDescriptor(protocol.DescriptorToInstance(in, shieldID), shieldID)
+	variant, ok := out.NetIDVariant.Value()
+	if !ok {
+		t.Fatal("net ID variant missing after round trip")
+	}
+	if variant.Type != protocol.NetworkItemStackNetIDVariantLegacyRequest || variant.Value != 99 {
+		t.Fatalf("net ID variant = %#v, want legacy request 99", variant)
+	}
+}
+
+func TestSafeDescriptorToInstanceReturnsErrorForMalformedUserData(t *testing.T) {
+	_, err := protocol.SafeDescriptorToInstance(protocol.NetworkItemStackDescriptor{
+		NetworkID:      42,
+		Count:          1,
+		UserDataBuffer: string([]byte{0xff}),
+	}, 512)
+	if err == nil {
+		t.Fatal("expected malformed descriptor user data to return an error")
+	}
+}
+
 func TestMobEquipmentUsesNetworkItemStackDescriptor(t *testing.T) {
 	const shieldID int32 = 512
 	in := protocol.ItemInstance{

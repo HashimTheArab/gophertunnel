@@ -15,6 +15,8 @@ type ItemInstance struct {
 	// field. If not, the field should be set to 1 if the server authoritative inventories are disabled in the
 	// StartGame packet, or to a unique stack ID if it is enabled.
 	StackNetworkID int32
+	// StackNetworkIDVariant is the ID namespace that StackNetworkID belongs to.
+	StackNetworkIDVariant uint32
 	// Stack is the actual item stack of the item instance.
 	Stack ItemStack
 }
