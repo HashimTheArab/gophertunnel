@@ -256,6 +256,11 @@ func (conn *Conn) GameData() GameData {
 	return conn.gameData
 }
 
+// ShieldID returns the runtime item ID of minecraft:shield for this connection.
+func (conn *Conn) ShieldID() int32 {
+	return conn.shieldID.Load()
+}
+
 // Proto returns the protocol of the connection.
 func (conn *Conn) Proto() Protocol {
 	return conn.proto
