@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
@@ -87,16 +88,21 @@ func (encoder *Encoder) EnableCompression(compression Compression, threshold int
 // optionally encrypted.
 func (encoder *Encoder) Encode(packets [][]byte) error {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
+	var compressedBuf *bytes.Buffer
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
 		buf.Reset()
 		internal.BufferPool.Put(buf)
+		if compressedBuf != nil {
+			compressedBuf.Reset()
+			internal.BufferPool.Put(compressedBuf)
+		}
 	}()
 
-	l := make([]byte, 5)
+	var l [5]byte
 	for _, packet := range packets {
 		// Each packet is prefixed with a varuint32 specifying the length of the packet.
-		if err := writeVaruint32(buf, uint32(len(packet)), l); err != nil {
+		if _, err := buf.Write(l[:putVaruint32(&l, uint32(len(packet)))]); err != nil {
 			return fmt.Errorf("encode batch: write packet length: %w", err)
 		}
 		if _, err := buf.Write(packet); err != nil {
@@ -111,18 +117,34 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 		if len(data) < encoder.compressionThreshold {
 			compression = NopCompression
 		}
-		var err error
-		data, err = compression.Compress(data)
-		if err != nil {
-			return fmt.Errorf("compress batch: %w", err)
+		if appender, ok := compression.(appendCompression); ok {
+			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
+			compressedBuf.Grow(len(encoder.header) + 1 + len(data))
+			_, _ = compressedBuf.Write(encoder.header)
+			_ = compressedBuf.WriteByte(byte(compression.EncodeCompression()))
+			var err error
+			data, err = appender.CompressAppend(compressedBuf.Bytes(), data)
+			if err != nil {
+				return fmt.Errorf("compress batch: %w", err)
+			}
+			prepend = nil
+		} else {
+			var err error
+			data, err = compression.Compress(data)
+			if err != nil {
+				return fmt.Errorf("compress batch: %w", err)
+			}
+			prepend = append(prepend, byte(compression.EncodeCompression()))
 		}
-		prepend = append(prepend, byte(compression.EncodeCompression()))
 	}
 
-	data = append(prepend, data...)
+	if prepend != nil {
+		data = append(prepend, data...)
+	}
 	if encoder.encrypt != nil {
 		// If the encryption session is not nil, encryption is enabled, meaning we should encrypt the
 		// compressed data of this packet.
+		data = slices.Grow(data, 8)
 		data = encoder.encrypt.encrypt(data)
 	}
 	if _, err := encoder.w.Write(data); err != nil {
@@ -131,10 +153,9 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	return nil
 }
 
-// writeVaruint32 writes a uint32 to the destination buffer passed with a size of 1-5 bytes. It uses byte
-// slice b in order to prevent allocations.
-func writeVaruint32(dst io.Writer, x uint32, b []byte) error {
-	clear(b[:5])
+// putVaruint32 writes x to b with a size of 1-5 bytes and returns the number of
+// bytes written.
+func putVaruint32(b *[5]byte, x uint32) int {
 	i := 0
 	for x >= 0x80 {
 		b[i] = byte(x) | 0x80
@@ -142,6 +163,5 @@ func writeVaruint32(dst io.Writer, x uint32, b []byte) error {
 		x >>= 7
 	}
 	b[i] = byte(x)
-	_, err := dst.Write(b[:i+1])
-	return err
+	return i + 1
 }
