@@ -95,11 +95,9 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 		// Reset the buffer, so we can return it to the buffer pool safely.
 		buf.Reset()
 		internal.BufferPool.Put(buf)
-		if compressedBuf != nil {
-			if compressedBuf.Cap() <= maxPooledEncoderBufferCap {
-				compressedBuf.Reset()
-				internal.BufferPool.Put(compressedBuf)
-			}
+		if compressedBuf != nil && compressedBuf.Cap() <= maxPooledEncoderBufferCap {
+			compressedBuf.Reset()
+			internal.BufferPool.Put(compressedBuf)
 		}
 	}()
 
