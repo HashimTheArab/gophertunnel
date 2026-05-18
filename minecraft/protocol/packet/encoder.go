@@ -11,6 +11,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
 
+const maxPooledEncoderBufferCap = 1 << 20
+
 // Encoder handles the encoding of Minecraft packets that are sent to an io.Writer. The packets are compressed
 // and optionally encoded before they are sent to the io.Writer.
 type Encoder struct {
@@ -94,8 +96,10 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 		buf.Reset()
 		internal.BufferPool.Put(buf)
 		if compressedBuf != nil {
-			compressedBuf.Reset()
-			internal.BufferPool.Put(compressedBuf)
+			if compressedBuf.Cap() <= maxPooledEncoderBufferCap {
+				compressedBuf.Reset()
+				internal.BufferPool.Put(compressedBuf)
+			}
 		}
 	}()
 
