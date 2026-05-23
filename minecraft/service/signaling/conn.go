@@ -202,21 +202,11 @@ func (conn *Conn) handleMessage(message Message) {
 		if err := conn.notifier.SignalContext(conn.ctx, signal); err != nil {
 			log.Error("error delivering signal", slog.Any("error", err))
 		}
-	case MessageTypeError, MessageTypeDelivered, MessageTypeAccepted:
+	case MessageTypeError:
 		if message.ID == uuid.Nil {
 			log.Warn("received message without an ID", slog.Any("message", message))
 			return
 		}
-		conn.handleStatusMessage(message, log)
-	default:
-		log.Warn("received message for unknown type")
-	}
-}
-
-// handleStatusMessage handles message types that refer to a client-sent message ID.
-func (conn *Conn) handleStatusMessage(message Message, log *slog.Logger) {
-	switch message.Type {
-	case MessageTypeError:
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
@@ -225,6 +215,10 @@ func (conn *Conn) handleStatusMessage(message Message, log *slog.Logger) {
 		log.Debug("received error", slog.Any("message", message))
 		conn.complete(message.ID, err)
 	case MessageTypeDelivered:
+		if message.ID == uuid.Nil {
+			log.Warn("received message without an ID", slog.Any("message", message))
+			return
+		}
 		var status MessageStatus
 		if err := json.Unmarshal([]byte(message.Data), &status); err != nil {
 			log.Error("error decoding message status", slog.Any("message", message), slog.Any("error", err))
@@ -235,7 +229,11 @@ func (conn *Conn) handleStatusMessage(message Message, log *slog.Logger) {
 		}
 		conn.complete(message.ID, nil)
 	case MessageTypeAccepted:
-		return
+		if message.ID == uuid.Nil {
+			log.Warn("received message without an ID", slog.Any("message", message))
+		}
+	default:
+		log.Warn("received message for unknown type")
 	}
 }
 
