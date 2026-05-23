@@ -138,9 +138,11 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// supportsSignaling reports whether c contains the fields required for a
-// signaling transport implemented by this package.
-func (c Connection) supportsSignaling() bool {
+// supported reports whether c is a NetherNet signaling connection that this
+// package can use. Unsupported, LAN-only, or future connection types may still
+// be decoded from MPSD data, but they are ignored when selecting a connection
+// to dial.
+func (c Connection) supported() bool {
 	switch c.Type {
 	case ConnectionTypeSignalingOverJSONRPC:
 		return c.PlayerMessagingID != uuid.Nil && c.NetherNetID != ""
@@ -151,16 +153,17 @@ func (c Connection) supportsSignaling() bool {
 	}
 }
 
-// signalingConnection returns the first NetherNet signaling connection advertised
-// by w that can be used with this package's signaling transports. Non-NetherNet
-// worlds are rejected because this package currently implements only NetherNet
-// peer-to-peer joins.
+// signalingConnection returns the first supported NetherNet signaling connection
+// advertised by w. Non-NetherNet worlds are rejected because this package
+// currently implements only NetherNet peer-to-peer joins. Unsupported connection
+// entries are ignored so a future or auxiliary entry does not make an otherwise
+// joinable world unusable.
 func (w World) signalingConnection() (Connection, bool) {
 	if w.TransportLayer != TransportLayerNetherNet {
 		return Connection{}, false
 	}
 	for _, c := range w.SupportedConnections {
-		if c.supportsSignaling() {
+		if c.supported() {
 			return c, true
 		}
 	}
