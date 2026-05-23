@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -95,6 +96,12 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 				slog.String("id", request.ID()),
 				slog.String("params", request.ParamString()),
 			))
+		},
+		OnStop: func(_ *jrpc2.Client, err error) {
+			if err == nil {
+				err = net.ErrClosed
+			}
+			conn.stop(fmt.Errorf("jrpc2 client stopped: %w", err))
 		},
 		OnCallback: func(ctx context.Context, request *jrpc2.Request) (v any, err error) {
 			defer func() {
