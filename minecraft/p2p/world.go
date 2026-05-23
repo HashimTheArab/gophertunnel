@@ -151,10 +151,14 @@ func (c Connection) supportsSignaling() bool {
 	}
 }
 
-// signalingConnection returns the first connection advertised by w that can be
-// used with this package's signaling transports. Worlds may advertise LAN, UPNP,
-// or future connection types before the public signaling transports.
+// signalingConnection returns the first NetherNet signaling connection advertised
+// by w that can be used with this package's signaling transports. Non-NetherNet
+// worlds are rejected because this package currently implements only NetherNet
+// peer-to-peer joins.
 func (w World) signalingConnection() (Connection, bool) {
+	if w.TransportLayer != TransportLayerNetherNet {
+		return Connection{}, false
+	}
 	for _, c := range w.SupportedConnections {
 		if c.supportsSignaling() {
 			return c, true
