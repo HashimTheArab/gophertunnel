@@ -311,10 +311,10 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 	}
 }
 
-// ping starts calling [MethodSystemPing] at 15 seconds interval.
+// ping starts calling [MethodSystemPing] at 50 seconds interval.
 // If the ping failed, it closes the Conn immediately with the cause.
 func (conn *Conn) ping() {
-	ticker := time.NewTicker(time.Second * 15)
+	ticker := time.NewTicker(time.Second * 50)
 	defer ticker.Stop()
 
 	for {
