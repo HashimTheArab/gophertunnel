@@ -58,7 +58,7 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 
 	id := uuid.New()
 	var ch <-chan error
-	if signal.Type == nethernet.SignalTypeOffer {
+	if signal.Type == nethernet.SignalTypeOffer && !conn.d.IgnoreDeliveryNotification {
 		ch = conn.pending.Add(id)
 		defer conn.pending.Remove(id)
 	}
@@ -73,7 +73,7 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}, messagingID); err != nil {
 		return err
 	}
-	if signal.Type != nethernet.SignalTypeOffer {
+	if signal.Type != nethernet.SignalTypeOffer || conn.d.IgnoreDeliveryNotification {
 		return nil
 	}
 
@@ -253,6 +253,9 @@ func (m *envelope) UnmarshalJSON(b []byte) error {
 func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) error {
 	switch envelope.Message.Method {
 	case MethodSignalingDeliveryNotification:
+		if conn.d.IgnoreDeliveryNotification {
+			return nil
+		}
 		var params struct {
 			MessageID uuid.UUID `json:"messageId"`
 		}
