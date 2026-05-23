@@ -136,7 +136,7 @@ func (conn *Conn) PongData(b []byte) {
 // value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext]. It is utilized by
 // [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
 func (conn *Conn) NetworkID() string {
-	return conn.pmid.String()
+	return conn.d.NetworkID
 }
 
 // PlayerMessagingID returns the player messaging ID of the current authenticated user.
