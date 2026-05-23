@@ -57,24 +57,24 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 
 	id := uuid.New()
-	var ch <-chan error
-	if signal.Type == nethernet.SignalTypeOffer && !conn.d.IgnoreDeliveryNotification {
-		ch = conn.pending.Add(id)
-		defer conn.pending.Remove(id)
-	}
-
-	if err := conn.send(ctx, id, map[string]any{
+	msg := map[string]any{
 		"params": map[string]any{
 			"netherNetId": conn.d.NetworkID,
 			"message":     signal.String(),
 		},
 		"jsonrpc": "2.0",
 		"method":  MethodSignalingWebRTC,
-	}, messagingID); err != nil {
-		return err
 	}
+
 	if signal.Type != nethernet.SignalTypeOffer || conn.d.IgnoreDeliveryNotification {
-		return nil
+		return conn.send(ctx, id, msg, messagingID)
+	}
+
+	ch := conn.pending.Add(id)
+	defer conn.pending.Remove(id)
+
+	if err := conn.send(ctx, id, msg, messagingID); err != nil {
+		return err
 	}
 
 	select {
