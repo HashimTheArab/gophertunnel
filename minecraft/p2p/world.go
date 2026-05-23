@@ -138,11 +138,11 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// supported reports whether c is a NetherNet signaling connection that this
-// package can use. Unsupported, LAN-only, or future connection types may still
-// be decoded from MPSD data, but they are ignored when selecting a connection
-// to dial.
-func (c Connection) supported() bool {
+// Valid reports whether c is a complete NetherNet signaling connection
+// supported by this package. Unsupported, LAN-only, or future connection types
+// may still be decoded from MPSD data, but they are ignored when selecting a
+// connection to dial.
+func (c Connection) Valid() bool {
 	switch c.Type {
 	case ConnectionTypeSignalingOverJSONRPC:
 		return c.PlayerMessagingID != uuid.Nil && c.NetherNetID != ""
@@ -163,7 +163,7 @@ func (w World) signalingConnection() (Connection, bool) {
 		return Connection{}, false
 	}
 	for _, c := range w.SupportedConnections {
-		if c.supported() {
+		if c.Valid() {
 			return c, true
 		}
 	}
