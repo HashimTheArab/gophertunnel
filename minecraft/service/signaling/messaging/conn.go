@@ -178,8 +178,8 @@ func (conn *Conn) close(cause error) (err error) {
 // closing the JSON-RPC client. It is used when the client stops itself.
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
-	_ = conn.notifier.Close()
 	conn.cancel(cause)
+	_ = conn.notifier.Close()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
@@ -311,10 +311,10 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 	}
 }
 
-// ping starts calling [MethodSystemPing] at 50 seconds interval.
+// ping starts calling [MethodSystemPing] at 15 seconds interval.
 // If the ping failed, it closes the Conn immediately with the cause.
 func (conn *Conn) ping() {
-	ticker := time.NewTicker(time.Second * 50)
+	ticker := time.NewTicker(time.Second * 15)
 	defer ticker.Stop()
 
 	for {
