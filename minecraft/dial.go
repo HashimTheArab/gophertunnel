@@ -95,6 +95,10 @@ type Dialer struct {
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
 
+	// MaxDecompressedLen is the maximum length of a decompressed packet batch. If 0, the default value is
+	// 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
+	MaxDecompressedLen int
+
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
 	// time.Duration, the lower the latency but the less efficient both network and cpu wise.
@@ -259,7 +263,12 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	conn.cacheEnabled = d.EnableClientCache
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
-	conn.maxDecompressedLen = math.MaxInt
+	conn.maxDecompressedLen = d.MaxDecompressedLen
+	if conn.maxDecompressedLen == 0 {
+		conn.maxDecompressedLen = packet.DefaultMaxDecompressedLen
+	} else if conn.maxDecompressedLen < 0 {
+		conn.maxDecompressedLen = math.MaxInt
+	}
 	conn.disablePacketHandling = d.DisablePacketHandling
 
 	defaultIdentityData(&conn.identityData)
@@ -355,26 +364,10 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
-		packets, err := conn.dec.Decode()
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				if cancelContext {
-					cancel(err)
-				} else {
-					conn.log.Error(err.Error())
-				}
-			}
-			return
-		}
-		for _, data := range packets {
+		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
-				if cancelContext {
-					cancel(err)
-				} else {
-					conn.log.Error(err.Error())
-				}
-				return
+				return err
 			}
 			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
 			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
@@ -400,6 +393,16 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 				}
 				cancelContext = false
 			}
+			return nil
+		}); err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				if cancelContext {
+					cancel(err)
+				} else {
+					conn.log.Error(err.Error())
+				}
+			}
+			return
 		}
 	}
 }

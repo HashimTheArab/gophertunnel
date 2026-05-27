@@ -113,7 +113,7 @@ type ListenConfig struct {
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
 
-	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
+	// MaxDecompressedLen is the maximum length of a decompressed packet batch to prevent potential exploits. If 0,
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
 
@@ -176,7 +176,7 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 		cfg.CompressionThreshold = 0
 	}
 	if cfg.MaxDecompressedLen == 0 {
-		cfg.MaxDecompressedLen = 16 * 1024 * 1024 // 16MB
+		cfg.MaxDecompressedLen = packet.DefaultMaxDecompressedLen
 	} else if cfg.MaxDecompressedLen < 0 {
 		cfg.MaxDecompressedLen = math.MaxInt
 	}
@@ -477,23 +477,14 @@ func (listener *Listener) handleConn(conn *Conn) {
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
-		packets, err := conn.dec.Decode()
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				conn.log.Error(err.Error())
-			}
-			return
-		}
-		for _, data := range packets {
+		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			if err := conn.receive(data); err != nil {
-				conn.log.Error(err.Error())
-				return
+				return err
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
-					conn.log.Error(err.Error())
-					return
+					return err
 				}
 			}
 			if !loggedInBefore && conn.loggedIn {
@@ -501,13 +492,19 @@ func (listener *Listener) handleConn(conn *Conn) {
 				case <-listener.close:
 					// The listener was closed while this one was logged in, so the incoming channel will be
 					// closed. Just return so the connection is closed and cleaned up.
-					return
+					return net.ErrClosed
 				case listener.incoming <- conn:
 					// The connection was previously not logged in, but was after receiving this packet,
 					// meaning the connection is fully completely now. We add it to the channel so that
 					// a call to Accept() can receive it.
 				}
 			}
+			return nil
+		}); err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				conn.log.Error(err.Error())
+			}
+			return
 		}
 	}
 }
