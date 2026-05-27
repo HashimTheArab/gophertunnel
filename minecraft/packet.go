@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -12,6 +13,7 @@ type packetData struct {
 	h       *packet.Header
 	full    []byte
 	payload *bytes.Buffer
+	owned   bool
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
@@ -28,6 +30,21 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 		conn.packetFunc(*header, buf.Bytes(), conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return &packetData{h: header, full: data, payload: buf}, nil
+}
+
+func (p *packetData) ensureOwned() *packetData {
+	if p.owned {
+		return p
+	}
+	full := append([]byte(nil), p.full...)
+	payloadOffset := len(p.full) - p.payload.Len()
+	header := *p.h
+	return &packetData{
+		h:       &header,
+		full:    full,
+		payload: bytes.NewBuffer(full[payloadOffset:]),
+		owned:   true,
+	}
 }
 
 type unknownPacketError struct {
