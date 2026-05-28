@@ -77,10 +77,12 @@ func (w *Writer) String(x *string) {
 	w.writeString(*x)
 }
 
+// stringWriter is implemented by writers that support writing strings directly.
 type stringWriter interface {
 	WriteString(string) (int, error)
 }
 
+// writeString uses WriteString when available to avoid converting s to []byte.
 func (w *Writer) writeString(s string) {
 	if sw, ok := w.w.(stringWriter); ok {
 		_, _ = sw.WriteString(s)
@@ -345,7 +347,7 @@ func (w *Writer) ItemDescriptorCount(i *ItemDescriptorCount) {
 func (w *Writer) ItemInstance(i *ItemInstance) {
 	x := &i.Stack
 	w.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 || x.NetworkID == -1 {
+	if x.NetworkID <= 0 {
 		// The item was air, so there's no more data to follow. Return immediately.
 		return
 	}
@@ -368,8 +370,7 @@ func (w *Writer) ItemInstance(i *ItemInstance) {
 		internal.BufferPool.Put(buf)
 	}()
 
-	var bufWriter Writer
-	bufWriter.Reset(buf, w.shieldID)
+	bufWriter := NewWriter(buf, w.shieldID)
 
 	var length int16
 	if len(x.NBTData) != 0 {
@@ -383,8 +384,8 @@ func (w *Writer) ItemInstance(i *ItemInstance) {
 		bufWriter.Int16(&length)
 	}
 
-	FuncSliceUint32Length(&bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
-	FuncSliceUint32Length(&bufWriter, &x.CanBreak, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBreak, bufWriter.StringUTF)
 
 	if x.NetworkID == bufWriter.shieldID {
 		bufWriter.Int64(&x.BlockingTick)
@@ -428,8 +429,7 @@ func (w *Writer) ItemInstanceNew(i *ItemInstance) {
 		internal.BufferPool.Put(buf)
 	}()
 
-	var bufWriter Writer
-	bufWriter.Reset(buf, w.shieldID)
+	bufWriter := NewWriter(buf, w.shieldID)
 
 	var length int16
 	if len(x.NBTData) != 0 {
@@ -443,8 +443,8 @@ func (w *Writer) ItemInstanceNew(i *ItemInstance) {
 		bufWriter.Int16(&length)
 	}
 
-	FuncSliceUint32Length(&bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
-	FuncSliceUint32Length(&bufWriter, &x.CanBreak, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBreak, bufWriter.StringUTF)
 
 	if x.NetworkID == bufWriter.shieldID {
 		bufWriter.Int64(&x.BlockingTick)
@@ -457,7 +457,7 @@ func (w *Writer) ItemInstanceNew(i *ItemInstance) {
 // Item writes an ItemStack x to the underlying buffer.
 func (w *Writer) Item(x *ItemStack) {
 	w.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 || x.NetworkID == -1 {
+	if x.NetworkID <= 0 {
 		// The item was air, so there's no more data to follow. Return immediately.
 		return
 	}
@@ -473,8 +473,7 @@ func (w *Writer) Item(x *ItemStack) {
 		internal.BufferPool.Put(buf)
 	}()
 
-	var bufWriter Writer
-	bufWriter.Reset(buf, w.shieldID)
+	bufWriter := NewWriter(buf, w.shieldID)
 
 	var length int16
 	if len(x.NBTData) != 0 {
@@ -488,8 +487,8 @@ func (w *Writer) Item(x *ItemStack) {
 		bufWriter.Int16(&length)
 	}
 
-	FuncSliceUint32Length(&bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
-	FuncSliceUint32Length(&bufWriter, &x.CanBreak, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBePlacedOn, bufWriter.StringUTF)
+	FuncSliceUint32Length(bufWriter, &x.CanBreak, bufWriter.StringUTF)
 
 	if x.NetworkID == bufWriter.shieldID {
 		bufWriter.Int64(&x.BlockingTick)
