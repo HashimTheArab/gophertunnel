@@ -129,7 +129,10 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 			_, _ = compressedBuf.Write(encoder.header)
 			_ = compressedBuf.WriteByte(byte(compression.EncodeCompression()))
 			var err error
-			if appender, ok := compression.(appendCompression); ok {
+			if writer, ok := compression.(writeCompression); ok {
+				err = writer.compressTo(compressedBuf, batch)
+				data = compressedBuf.Bytes()
+			} else if appender, ok := compression.(appendCompression); ok {
 				if n := appender.MaxCompressedLen(len(batch)); n > 0 {
 					compressedBuf.Grow(n)
 				}
