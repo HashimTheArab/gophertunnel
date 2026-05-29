@@ -99,15 +99,30 @@ type ListenConfig struct {
 	// will be forwarded to the client in place of the Listener's current ones.
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
 
+	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
+	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	AfterHandshake func(c *Conn) error
+
+	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	DisablePacketHandling bool
+
 	// PacketFunc is called whenever a packet is read from or written to a connection returned when using
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// PacketBatchFunc is called after each outbound packet batch has been encoded.
+	PacketBatchFunc packet.BatchEncodeObserver
 
 	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
+
+	// IPv4Port and IPv6Port specify the ports to advertise in the pong data for LAN discovery.
+	// If 0, the listener's actual port is used. This is useful when running separate IPv4 and IPv6
+	// listeners on different ports (e.g., 19132 for IPv4, 19133 for IPv6).
+	IPv4Port uint16
+	IPv6Port uint16
 }
 
 // Listener implements a Minecraft listener on top of an unspecific net.Listener. It abstracts away the
@@ -277,6 +292,14 @@ func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	return e.VerifierContext(ctx)
 }
 
+// PreloadAuthEnvironment resolves and caches the authorization environment used for issuing and verifying
+// multiplayer tokens. It is safe to call multiple times and is primarily useful to avoid a first-join
+// latency spike (service discovery) when callers prefer warming it earlier in their startup flow.
+func PreloadAuthEnvironment(ctx context.Context) error {
+	_, err := authEnv(ctx)
+	return err
+}
+
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
 // use the Conn.ReadPacket() and Conn.WritePacket() methods.
@@ -293,11 +316,7 @@ func (listener *Listener) Accept() (net.Conn, error) {
 // closing the connection after. If the message passed is empty, the client will be immediately sent to the
 // server list instead of a disconnect screen.
 func (listener *Listener) Disconnect(conn *Conn, message string) error {
-	_ = conn.WritePacket(&packet.Disconnect{
-		HideDisconnectionScreen: message == "",
-		Message:                 message,
-	})
-	return conn.close(conn.closeErr(message))
+	return conn.Disconnect(message)
 }
 
 // AddResourcePack adds a new resource pack to the listener's resource packs.
@@ -335,12 +354,37 @@ func (listener *Listener) PlayerCount() int {
 
 // updatePongData updates the pong data of the listener using the current only players, maximum players and
 // server name of the listener, provided the listener isn't currently hijacking the pong of another server.
+// If NetworkListener of the listener supports updating the server status directly with ServerStatus(ServerStatus)
+// method, it will directly call the method after updating its pong data.
 func (listener *Listener) updatePongData() {
+	var port uint16
+	if addr, ok := listener.Addr().(*net.UDPAddr); ok {
+		port = uint16(addr.Port)
+	}
+
+	// Use configured ports for LAN discovery, or fall back to actual port
+	ipv4Port := listener.cfg.IPv4Port
+	if ipv4Port == 0 {
+		ipv4Port = port
+	}
+	ipv6Port := listener.cfg.IPv6Port
+	if ipv6Port == 0 {
+		ipv6Port = port
+	}
+
 	s := listener.status()
-	listener.listener.PongData([]byte(fmt.Sprintf("MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
+	s.ServerSubName = "§bLunar Proxy"
+	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, listener.Addr().(*net.UDPAddr).Port, listener.Addr().(*net.UDPAddr).Port, 0,
-	)))
+		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port,
+		0,
+	))
+
+	if status, ok := listener.listener.(interface {
+		ServerStatus(status ServerStatus)
+	}); ok {
+		status.ServerStatus(s)
+	}
 }
 
 // listen starts listening for incoming connections and packets. When a player is fully connected, it submits
@@ -391,6 +435,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.pool = conn.proto.Packets(true)
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
 	conn.resourcePacks = packs
@@ -400,6 +445,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.verifier = listener.verifier
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
+	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
 
 	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
 		// The server was full. We kick the player immediately and close the connection.
@@ -441,10 +487,16 @@ func (listener *Listener) handleConn(conn *Conn) {
 			return
 		}
 		for _, data := range packets {
-			loggedInBefore := conn.loggedIn
+			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			if err := conn.receive(data); err != nil {
 				conn.log.Error(err.Error())
 				return
+			}
+			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
+				if err := listener.cfg.AfterHandshake(conn); err != nil {
+					conn.log.Error(err.Error())
+					return
+				}
 			}
 			if !loggedInBefore && conn.loggedIn {
 				select {

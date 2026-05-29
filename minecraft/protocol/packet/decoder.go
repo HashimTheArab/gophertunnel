@@ -23,8 +23,7 @@ type Decoder struct {
 	pr packetReader
 
 	// header holds the batch header that is expected on the beginning of input packet data.
-	header []byte
-
+	header             []byte
 	decompress         bool
 	compression        Compression
 	maxDecompressedLen int
@@ -102,7 +101,7 @@ const (
 	header = 0xfe
 	// maximumInBatch is the maximum amount of packets that may be found in a batch. If a compressed batch has
 	// more than this amount, decoding will fail.
-	maximumInBatch = 812
+	maximumInBatch = 1600
 )
 
 // Decode decodes one 'packet' from the io.Reader passed in NewDecoder(), producing a slice of packets that it
@@ -123,12 +122,14 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	h := data[:min(len(decoder.header), len(data))]
-	if !bytes.Equal(h, decoder.header) {
-		return nil, fmt.Errorf("decode batch: invalid header %x: expected %x", h, decoder.header)
+	h := len(decoder.header)
+	if len(data) < h {
+		return nil, io.ErrUnexpectedEOF
 	}
-	data = data[len(decoder.header):]
-
+	if !bytes.Equal(data[:h], decoder.header) {
+		return nil, fmt.Errorf("decode batch: invalid header %x, expected %x", data[:h], decoder.header)
+	}
+	data = data[h:]
 	if decoder.encrypt != nil {
 		decoder.encrypt.decrypt(data)
 		if err := decoder.encrypt.verify(data); err != nil {

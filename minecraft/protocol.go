@@ -76,3 +76,14 @@ func (p proto) ConvertFromLatest(pk packet.Packet, _ *Conn) []packet.Packet {
 // DefaultProtocol is the Protocol implementation using as default, In default it is current protocol, version and packet
 // pool and does not convert any packets, as they are already of the right type.
 var DefaultProtocol = proto{}
+
+// BasicProtocol can be used to support multiple versions in cases of a simple Minecraft protocol
+// update where there were minimal changes.
+type BasicProtocol struct {
+	proto
+	Protocol int32
+	Version  string
+}
+
+func (b BasicProtocol) ID() int32   { return b.Protocol }
+func (b BasicProtocol) Ver() string { return b.Version }

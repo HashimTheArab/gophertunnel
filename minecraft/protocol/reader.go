@@ -73,6 +73,7 @@ func (r *Reader) StringUTF(x *string) {
 	if l > math.MaxInt16 {
 		r.panic(errStringTooLong)
 	}
+	r.checkRemaining(l, "string")
 	data := make([]byte, l)
 	if _, err := r.r.Read(data); err != nil {
 		r.panic(err)
@@ -88,6 +89,7 @@ func (r *Reader) String(x *string) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
+	r.checkRemaining(l, "string")
 	data := make([]byte, l)
 	if _, err := r.r.Read(data); err != nil {
 		r.panic(err)
@@ -103,6 +105,7 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
+	r.checkRemaining(l, "byte slice")
 	data := make([]byte, l)
 	if _, err := r.r.Read(data); err != nil {
 		r.panic(err)
@@ -416,7 +419,7 @@ func (r *Reader) ItemDescriptorCount(i *ItemDescriptorCount) {
 func (r *Reader) ItemInstance(i *ItemInstance) {
 	x := &i.Stack
 	r.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there is no more data we should read for the item instance. After all, air
 		// items aren't really anything.
 		x.MetadataValue, x.Count, x.BlockRuntimeID, i.StackNetworkID = 0, 0, 0, 0
@@ -543,7 +546,7 @@ func (r *Reader) ItemInstanceNew(i *ItemInstance) {
 // Item reads an ItemStack x from the underlying buffer.
 func (r *Reader) Item(x *ItemStack) {
 	r.Varint32(&x.NetworkID)
-	if x.NetworkID == 0 {
+	if x.NetworkID == 0 || x.NetworkID == -1 {
 		// The item was air, so there is no more data we should read for the item instance. After all, air
 		// items aren't really anything.
 		x.MetadataValue, x.Count, x.BlockRuntimeID = 0, 0, 0
@@ -718,11 +721,22 @@ func (r *Reader) ShapeData(x *ShapeData) {
 	(*x).Marshal(r)
 }
 
-// SliceLimit checks if the value passed is lower than the limit passed. If
-// not, the Reader panics.
-func (r *Reader) SliceLimit(value uint32, max uint32) {
+// CheckSliceLength validates a length prefix before a slice is allocated.
+func (r *Reader) CheckSliceLength(value uint32, max uint32) {
 	if value > max && r.limitsEnabled {
 		r.panicf("slice length was too long: length of %v (max %v)", value, max)
+	}
+	if remaining, ok := r.r.(interface{ Len() int }); ok && uint64(value) > uint64(remaining.Len()) {
+		r.panicf("slice length %v exceeds remaining packet payload %v", value, remaining.Len())
+	}
+}
+
+func (r *Reader) checkRemaining(length int, field string) {
+	if length < 0 {
+		r.panicf("%s length was negative: %v", field, length)
+	}
+	if remaining, ok := r.r.(interface{ Len() int }); ok && length > remaining.Len() {
+		r.panicf("%s length %v exceeds remaining packet payload %v", field, length, remaining.Len())
 	}
 }
 
@@ -743,13 +757,14 @@ func (r *Reader) InvalidValue(value any, forField, reason string) {
 
 // errVarIntOverflow is an error set if one of the Varint methods encounters a varint that does not terminate
 // after 5 or 10 bytes, depending on the data type read into.
-var errVarIntOverflow = errors.New("varint overflows integer")
+// var errVarIntOverflow = errors.New("varint overflows integer")
 var errBitsetOverflow = errors.New("bitset overflows size")
 
 // Varint64 reads up to 10 bytes from the underlying buffer into an int64.
 func (r *Reader) Varint64(x *int64) {
 	var ux uint64
-	for i := 0; i < 70; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -763,14 +778,15 @@ func (r *Reader) Varint64(x *int64) {
 			}
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64
-	for i := 0; i < 70; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -781,14 +797,15 @@ func (r *Reader) Varuint64(x *uint64) {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varint32 reads up to 5 bytes from the underlying buffer into an int32.
 func (r *Reader) Varint32(x *int32) {
 	var ux uint32
-	for i := 0; i < 35; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -802,14 +819,15 @@ func (r *Reader) Varint32(x *int32) {
 			}
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varuint32 reads up to 5 bytes from the underlying buffer into a uint32.
 func (r *Reader) Varuint32(x *uint32) {
 	var v uint32
-	for i := 0; i < 35; i += 7 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -820,8 +838,8 @@ func (r *Reader) Varuint32(x *uint32) {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // panicf panics with the format and values passed and assigns the error created to the Reader.

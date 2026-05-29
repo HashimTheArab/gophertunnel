@@ -8,7 +8,6 @@ import (
 	cryptorand "crypto/rand"
 	_ "embed"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +69,8 @@ type Dialer struct {
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// PacketBatchFunc is called after each outbound packet batch has been encoded.
+	PacketBatchFunc packet.BatchEncodeObserver
 
 	// DownloadResourcePack is called individually for every texture and behaviour pack sent by the connection when
 	// using Dialer.Dial(), and can be used to stop the pack from being downloaded. The function is called with the UUID
@@ -92,6 +93,9 @@ type Dialer struct {
 	// to and read from the Conn are always any of those found in the protocol/packet package, as packets
 	// are converted from and to this Protocol.
 	Protocol Protocol
+
+	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	DisablePacketHandling bool
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
@@ -216,7 +220,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
-		chainData, err = authChain(ctx, xblToken, key)
+		chainData, err = AuthChain(ctx, xblToken, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
@@ -234,7 +238,12 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 
 	var pong []byte
 	var netConn net.Conn
-	if pong, err = n.PingContext(ctx, address); err == nil {
+	// Try pinging first with a short timeout so we don't block the dial
+	// if the server has pinging blocked.
+	pingCtx, pingCancel := context.WithTimeout(ctx, time.Second*3)
+	pong, err = n.PingContext(pingCtx, address)
+	pingCancel()
+	if err == nil {
 		netConn, err = n.DialContext(ctx, addressWithPongPort(pong, address))
 	} else {
 		netConn, err = n.DialContext(ctx, address)
@@ -253,6 +262,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = math.MaxInt
+	conn.disablePacketHandling = d.DisablePacketHandling
+	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
 	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
@@ -272,7 +283,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		setAndroidData(&conn.clientData)
 
 		request = login.Encode(chainData, conn.clientData, key, token, d.EnableLegacyAuth)
-		identityData, _, _, _ := login.Parse(request, verifier)
+		identityData, _, _, _ := login.Parse(request, verifier) // TODO: check error or see if its fine to ignore
 		// If we got the identity data from Minecraft auth, we need to make sure we set it in the Conn too, as
 		// we are not aware of the identity data ourselves yet.
 		conn.identityData = identityData
@@ -295,7 +306,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, conn.closeErr("dial")
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
-		conn.expect(packet.IDServerToClientHandshake, packet.IDPlayStatus)
+		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
 		if err := conn.WritePacket(&packet.Login{ConnectionRequest: request, ClientProtocol: d.Protocol.ID()}); err != nil {
 			return nil, conn.wrap(fmt.Errorf("send login: %w", err), "dial")
 		}
@@ -359,7 +370,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			return
 		}
 		for _, data := range packets {
-			loggedInBefore, readyToLoginBefore := conn.loggedIn, conn.readyToLogin
+			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				if cancelContext {
 					cancel(err)
@@ -367,6 +378,16 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 					conn.log.Error(err.Error())
 				}
 				return
+			}
+			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
+			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
+			if handshakeReady || passthroughReady {
+				// In relay mode, complete dialing as soon as handshake succeeds or passthrough is ready.
+				// This supports both encrypted servers and servers that skip the handshake.
+				if conn.disablePacketHandling && connected != nil {
+					close(connected)
+					connected = nil
+				}
 			}
 			if !readyToLoginBefore && conn.readyToLogin {
 				// This is the signal that the connection is ready to login, so we put a value in the channel so that
@@ -376,8 +397,11 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			if !loggedInBefore && conn.loggedIn {
 				// This is the signal that the connection was considered logged in, so we put a value in the channel so
 				// that it may be detected.
+				if connected != nil {
+					close(connected)
+					connected = nil
+				}
 				cancelContext = false
-				connected <- struct{}{}
 			}
 		}
 	}
@@ -389,6 +413,9 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 	if dialer.XBLToken != nil && dialer.XBLToken.Valid() {
 		return dialer.XBLToken, nil
+	}
+	if dialer.TokenSource == nil {
+		return nil, fmt.Errorf("XBL token expired and no TokenSource provided to refresh")
 	}
 
 	liveToken, err := dialer.TokenSource.Token()
@@ -404,9 +431,9 @@ func getXBLToken(ctx context.Context, dialer Dialer) (*auth.XBLToken, error) {
 	return xblToken, nil
 }
 
-// authChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
+// AuthChain requests the Minecraft auth JWT chain using the credentials passed. If successful, an encoded
 // chain ready to be put in a login request is returned.
-func authChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey) (string, error) {
+func AuthChain(ctx context.Context, xblToken *auth.XBLToken, key *ecdsa.PrivateKey) (string, error) {
 	// Obtain the raw chain data using the XBL token.
 	chain, err := auth.RequestMinecraftChain(ctx, xblToken, key)
 	if err != nil {
@@ -423,8 +450,12 @@ var skinGeometry []byte
 
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
-	d.ServerAddress = address
-	d.ThirdPartyName = username
+	if d.ServerAddress == "" {
+		d.ServerAddress = address
+	}
+	if d.ThirdPartyName == "" {
+		d.ThirdPartyName = username
+	}
 	if d.DeviceOS == 0 {
 		d.DeviceOS = protocol.DeviceAndroid
 	}
@@ -446,12 +477,11 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.LanguageCode == "" {
 		d.LanguageCode = "en_GB"
 	}
-	if d.PlayFabID == "" {
-		id := make([]byte, 8)
-		_, _ = cryptorand.Read(id)
-		d.PlayFabID = hex.EncodeToString(id)
-	}
-
+	// if d.PlayFabID == "" { not sent as of 1.21.100
+	// 	id := make([]byte, 8)
+	// 	_, _ = cryptorand.Read(id)
+	// 	d.PlayFabID = hex.EncodeToString(id)
+	// }
 	if d.AnimatedImageData == nil {
 		d.AnimatedImageData = make([]login.SkinAnimation, 0)
 	}
@@ -481,12 +511,25 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.SkinGeometryVersion == "" {
 		d.SkinGeometryVersion = base64.StdEncoding.EncodeToString([]byte("0.0.0"))
 	}
+	if d.MaxViewDistance == 0 {
+		d.MaxViewDistance = 16
+	}
+	if d.MemoryTier == 0 {
+		d.MemoryTier = 5
+	}
 }
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	data.DeviceOS = protocol.DeviceAndroid
-	data.GameVersion = protocol.CurrentVersion
+	if data.DeviceOS == 0 {
+		data.DeviceOS = protocol.DeviceAndroid
+	}
+	if data.DefaultInputMode == 0 {
+		data.DefaultInputMode = packet.InputModeTouch
+	}
+	if data.GameVersion == "" {
+		data.GameVersion = protocol.CurrentVersion
+	}
 }
 
 // clearXBLIdentityData clears data from the login.IdentityData that is only set when a player is logged into

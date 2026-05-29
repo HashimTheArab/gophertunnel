@@ -17,6 +17,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/text/language"
@@ -132,7 +133,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +173,7 @@ func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +216,7 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +245,7 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 }
 
 // MultiplayerToken issues a token signed by the authorization service that can be used
-// to authenticate with a multiplayer server. The public key can will be used as the 'cpk'
+// to authenticate with a multiplayer server. The public key will be used as the 'cpk'
 // claim of the token.
 // Servers can verify this JWT using the remote OpenID configuration published by the
 // authorization service and validate the claims to authenticate the player.
@@ -274,7 +275,7 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", err
 	}

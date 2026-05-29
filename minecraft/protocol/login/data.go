@@ -139,6 +139,8 @@ type ClientData struct {
 	// GUIScale is the GUI scale of the player. It is by default 0, and is otherwise -1 or -2 for a smaller
 	// GUI scale than usual.
 	GUIScale int `json:"GuiScale"`
+	// FilterProfanity indicates if the client has profanity filtering enabled.
+	FilterProfanity bool
 	// IsEditorMode is a value to dictate if the player is in editor mode.
 	IsEditorMode bool
 	// LanguageCode is the language code of the player. It looks like 'en_UK'. It follows the ISO language
@@ -182,7 +184,7 @@ type ClientData struct {
 	// is a semi-hex encoded string, usually consisting of 16 characters. That
 	// said, this is not always valid hex, because the last character may be
 	// omitted.
-	PlayFabID string `json:"PlayFabId"`
+	PlayFabID string `json:"PlayFabId,omitempty"`
 	// SkinImageHeight and SkinImageWidth are the dimensions of the skin's image data.
 	SkinImageHeight, SkinImageWidth int
 	// SkinResourcePatch is a base64 encoded string which holds JSON data. The content of the JSON data points
@@ -345,7 +347,7 @@ func (data ClientData) Validate() error {
 	if _, err := uuid.Parse(data.SelfSignedID); err != nil {
 		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
 	}
-	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); err != nil {
+	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); strings.Contains(data.ServerAddress, ":") && err != nil {
 		return fmt.Errorf("ServerAddress must be resolveable as a UDP address, but got %v", data.ServerAddress)
 	}
 	if err := base64DecLength(data.SkinData, data.SkinImageHeight*data.SkinImageWidth*4); err != nil {
@@ -379,9 +381,11 @@ func (data ClientData) Validate() error {
 	if err != nil {
 		return fmt.Errorf("SkinResourcePatch was not a valid base64 string: %w", err)
 	}
-	m := make(map[string]any)
-	if err := json.Unmarshal(b, &m); err != nil {
-		return fmt.Errorf("SkinResourcePatch base64 decoded was not a valid JSON string: %w", err)
+	if len(b) != 0 {
+		m := make(map[string]any)
+		if err := json.Unmarshal(b, &m); err != nil {
+			return fmt.Errorf("SkinResourcePatch base64 decoded was not a valid JSON string: %w", err)
+		}
 	}
 	if data.SkinID == "" {
 		return fmt.Errorf("SkinID must not be an empty string")

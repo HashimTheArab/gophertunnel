@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
+	"golang.org/x/oauth2"
 )
 
 // Environment represents the configuration for a network service in Minecraft: Bedrock Edition.
@@ -94,6 +96,8 @@ func (d *Discovery) Environment(env Environment) error {
 // to specify [protocol.CurrentVersion] to keep up the compatibility with the
 // `protocol` package.
 //
+// The mutex is intentionally held during the request to avoid race conditions with the cache.
+//
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
 func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
@@ -112,7 +116,13 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := http.DefaultClient
+	if ctx != nil {
+		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
+			httpClient = c
+		}
+	}
+	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
