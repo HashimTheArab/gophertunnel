@@ -1458,7 +1458,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		for i := uint32(0); i < chunkCount; i++ {
 			_ = conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
-				ChunkIndex: i,
+				ChunkIndex: int32(i),
 			})
 			select {
 			case <-conn.ctx.Done():
@@ -1528,7 +1528,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	}
 	response := &packet.ResourcePackChunkData{
 		UUID:       pk.UUID,
-		ChunkIndex: pk.ChunkIndex,
+		ChunkIndex: uint32(pk.ChunkIndex),
 		DataOffset: conn.packQueue.currentOffset,
 		Data:       make([]byte, packChunkSize),
 	}
