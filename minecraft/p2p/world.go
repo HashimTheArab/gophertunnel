@@ -1,11 +1,9 @@
 package p2p
 
 import (
-	"bytes"
 	"encoding/json"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
 	"github.com/google/uuid"
@@ -153,24 +151,17 @@ func (id NetherNetID) String() string {
 // string values are accepted as missing so a single incomplete connection entry
 // does not fail the whole World decode.
 func (id *NetherNetID) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		*id = ""
-		return nil
-	}
-	if b[0] == '"' {
-		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
 		*id = NetherNetID(s)
 		return nil
 	}
-	u, err := strconv.ParseUint(string(b), 10, 64)
-	if err != nil {
+
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
 		return err
 	}
-	*id = NetherNetID(strconv.FormatUint(u, 10))
+	*id = NetherNetID(n.String())
 	return nil
 }
 
