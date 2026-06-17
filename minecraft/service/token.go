@@ -20,6 +20,7 @@ import (
 	"github.com/df-mc/go-playfab/v2/title"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/text/language"
@@ -142,7 +143,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,7 @@ func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +257,7 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +303,7 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", err
 	}

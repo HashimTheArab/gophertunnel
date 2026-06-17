@@ -12,6 +12,10 @@ import (
 	"strings"
 
 	"github.com/df-mc/go-xsapi/v2"
+	"github.com/df-mc/go-xsapi/v2/xal"
+	"github.com/df-mc/go-xsapi/v2/xal/nsal"
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -30,7 +34,7 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 		ctx = context.Background()
 	}
 
-	token, _, err := client.TokenAndSignature(ctx, minecraftAuthURL)
+	token, policy, err := client.TokenAndSignature(ctx, minecraftAuthURL)
 	if err != nil {
 		return "", fmt.Errorf("request token and signature: %w", err)
 	}
@@ -54,8 +58,11 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
+	if err := policy.Sign(request, []byte(body), client.TokenSource().ProofKey(), xal.ServerTime()); err != nil {
+		return "", fmt.Errorf("sign request: %w", err)
+	}
 
-	resp, err := client.HTTPClient().Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, client.HTTPClient(), request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
@@ -65,4 +72,84 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 	}
 	data, err = io.ReadAll(resp.Body)
 	return string(data), err
+}
+
+// RequestMinecraftChainWithTokenSource requests a Minecraft JWT chain using the XSTS tokens supplied by src.
+//
+// Unlike [RequestMinecraftChain], this does not require a full Xbox Live API client and therefore does not
+// connect to Xbox RTA services.
+func RequestMinecraftChainWithTokenSource(ctx context.Context, src xsapi.TokenSource, key *ecdsa.PrivateKey) (string, error) {
+	if src == nil {
+		return "", fmt.Errorf("token source is nil")
+	}
+	ctx = withXBLHTTPClient(ctx, nil)
+
+	token, policy, err := TokenAndSignature(ctx, src, minecraftAuthURL)
+	if err != nil {
+		return "", fmt.Errorf("request token and signature: %w", err)
+	}
+
+	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+
+	body := []byte(`{"identityPublicKey":"` + base64.StdEncoding.EncodeToString(data) + `"}`)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, minecraftAuthURL.String(), strings.NewReader(string(body)))
+	if err != nil {
+		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
+	}
+
+	token.SetAuthHeader(request)
+	request.Header.Set("User-Agent", "MCPE/Android")
+	request.Header.Set("Client-Version", protocol.CurrentVersion)
+	request.Header.Set("Content-Type", "application/json")
+	if err := policy.Sign(request, body, src.ProofKey(), xal.ServerTime()); err != nil {
+		return "", fmt.Errorf("sign request: %w", err)
+	}
+
+	resp, err := authclient.SendRequestWithRetries(ctx, xal.ContextClient(ctx), request, authclient.RetryOptions{Attempts: 5})
+	if err != nil {
+		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("POST %v: %v", minecraftAuthURL, resp.Status)
+	}
+	data, err = io.ReadAll(resp.Body)
+	return string(data), err
+}
+
+// TokenAndSignature resolves the XSTS token and signature policy for a URL without creating an xsapi.Client.
+func TokenAndSignature(ctx context.Context, src xsapi.TokenSource, u *url.URL) (_ *xsts.Token, policy nsal.SignaturePolicy, _ error) {
+	if src == nil {
+		return nil, policy, fmt.Errorf("token source is nil")
+	}
+	ctx = withXBLHTTPClient(ctx, nil)
+
+	authToken, err := src.XSTSToken(ctx, "http://xboxlive.com")
+	if err != nil {
+		return nil, policy, fmt.Errorf("request authorization token: %w", err)
+	}
+	currentTitle, err := nsal.Current(ctx, authToken, src.ProofKey())
+	if err != nil {
+		return nil, policy, fmt.Errorf("request NSAL title data for current authenticated title: %w", err)
+	}
+	defaultTitle, err := nsal.Default(ctx)
+	if err != nil {
+		return nil, policy, fmt.Errorf("request NSAL default title data: %w", err)
+	}
+
+	endpoint, policy, ok := currentTitle.Match(u)
+	if !ok {
+		endpoint, policy, ok = defaultTitle.Match(u)
+		if !ok {
+			return nil, policy, fmt.Errorf("no endpoint was found for %s", u)
+		}
+	}
+	token, err := src.XSTSToken(ctx, endpoint.RelyingParty)
+	if err != nil {
+		return nil, policy, fmt.Errorf("request XSTS token: %w", err)
+	}
+	return token, policy, nil
 }
