@@ -43,6 +43,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 	var resp *http.Response
 	var err error
 	var retryAfterDelay time.Duration
+	canRetryBody := request.Body == nil || request.GetBody != nil
 
 	for i := range opts.Attempts {
 		if i > 0 {
@@ -75,6 +76,9 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return resp, err
 			}
+			if !canRetryBody {
+				return resp, err
+			}
 			// Some proxies close the connection without returning a response, which often surfaces as EOF.
 			// Treat that as retryable.
 			if errors.Is(err, io.EOF) {
@@ -96,6 +100,9 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			resp.StatusCode == http.StatusRequestTimeout ||
 			resp.StatusCode == 999 ||
 			(resp.StatusCode >= 500 && resp.StatusCode < 600) {
+			if !canRetryBody || i == opts.Attempts-1 {
+				return resp, nil
+			}
 			// Read Retry-After header before closing body
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
