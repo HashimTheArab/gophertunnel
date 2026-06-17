@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/service"
@@ -174,15 +176,30 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 		cfg.PingFrequency = DefaultPingFrequency
 		return nil
 	}
-	var h, m, s int
-	if _, err := fmt.Sscanf(data.PingFrequency, "%d:%d:%d", &h, &m, &s); err != nil {
-		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency: %w", err)
+	parts := strings.Split(data.PingFrequency, ":")
+	if len(parts) != 3 {
+		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency: invalid value %q", data.PingFrequency)
+	}
+	h, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency hours: %w", err)
+	}
+	m, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency minutes: %w", err)
+	}
+	s, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency seconds: %w", err)
+	}
+	if h < 0 || m < 0 || s < 0 {
+		return fmt.Errorf("service/signaling: Configuration.PingFrequency cannot be negative: %q", data.PingFrequency)
 	}
 	cfg.PingFrequency = time.Duration(h)*time.Hour +
 		time.Duration(m)*time.Minute +
 		time.Duration(s)*time.Second
 	if cfg.PingFrequency <= 0 {
-		cfg.PingFrequency = DefaultPingFrequency
+		return fmt.Errorf("service/signaling: Configuration.PingFrequency must be positive: %q", data.PingFrequency)
 	}
 	return nil
 }
