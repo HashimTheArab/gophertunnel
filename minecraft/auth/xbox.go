@@ -263,6 +263,8 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 	return newXBLToken(token)
 }
 
+// newXBLToken wraps an XSTS token after validating the fields required for
+// Minecraft/Xbox Authorization headers.
 func newXBLToken(token *xsts.Token) (*XBLToken, error) {
 	if token == nil {
 		return nil, errors.New("auth: xsts token is nil")
