@@ -189,6 +189,9 @@ func (s *Session) failReadyLocked(err error) error {
 	return err
 }
 
+// waitReady blocks until updateWorldData observes both a usable connection and
+// the caller nonce, or until ctx is canceled. If both happen together, it
+// returns the ready result so terminal host errors are not hidden by ctx.
 func (s *Session) waitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
