@@ -118,8 +118,7 @@ type Session struct {
 	connection Connection
 	worldMu    sync.RWMutex
 
-	connectionReady bool
-	nonce           string
+	nonce string
 
 	readyOnce sync.Once
 	readyErr  error
@@ -153,10 +152,8 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	s.world = world
 	if err == nil {
 		s.connection = connection
-		s.connectionReady = true
 	} else {
 		s.connection = Connection{}
-		s.connectionReady = false
 	}
 
 	if s.nonce == "" {
@@ -174,7 +171,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 			}
 		}
 	}
-	if s.connectionReady && s.nonce != "" {
+	if err == nil && s.nonce != "" {
 		s.readyOnce.Do(func() {
 			close(s.ready)
 		})
@@ -195,20 +192,14 @@ func (s *Session) failReadyLocked(err error) error {
 func (s *Session) waitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
-		return s.readyResult()
-	default:
-	}
-	select {
-	case <-s.ready:
-		return s.readyResult()
 	case <-ctx.Done():
 		select {
 		case <-s.ready:
-			return s.readyResult()
 		default:
 			return ctx.Err()
 		}
 	}
+	return s.readyResult()
 }
 
 func (s *Session) readyResult() error {
