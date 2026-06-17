@@ -20,6 +20,9 @@ type RetryOptions struct {
 
 // SendRequestWithRetries sends a request and retries on 429, 5xx and network errors.
 func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var opts RetryOptions
 	if len(r) > 0 {
 		opts = r[0]
@@ -63,7 +66,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		}
 
 		// Clone the request for each attempt to avoid issues with consumed request bodies
-		req := request.Clone(request.Context())
+		req := request.Clone(ctx)
 		if request.Body != nil && request.GetBody != nil {
 			req.Body, err = request.GetBody()
 			if err != nil {

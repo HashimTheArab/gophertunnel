@@ -2,6 +2,7 @@ package authclient
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -116,5 +117,31 @@ func TestSendRequestWithRetriesDoesNotRetryNonRewindableBody(t *testing.T) {
 	}
 	if string(body) != "try later" {
 		t.Fatalf("body mismatch: got %q", body)
+	}
+}
+
+func TestSendRequestWithRetriesAppliesContextToRequest(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err = SendRequestWithRetries(ctx, server.Client(), req, RetryOptions{
+		Attempts: 1,
+		MinDelay: time.Millisecond,
+		MaxDelay: time.Millisecond,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error mismatch: got %v want %v", err, context.DeadlineExceeded)
 	}
 }
