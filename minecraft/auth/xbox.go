@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"sync"
 
@@ -28,7 +27,7 @@ func (t XBLToken) SetAuthHeader(r *http.Request) {
 	if t.AuthorizationToken == nil || len(t.AuthorizationToken.DisplayClaims.UserInfo) == 0 {
 		return
 	}
-	r.Header.Set("Authorization", fmt.Sprintf("XBL3.0 x=%v;%v", t.AuthorizationToken.DisplayClaims.UserInfo[0].UserHash, t.AuthorizationToken.Token))
+	t.AuthorizationToken.SetAuthHeader(r)
 }
 
 // Valid returns whether the XBLToken is valid.
@@ -261,6 +260,19 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 	if err != nil {
 		return nil, err
 	}
-	// We wrap the resulting token in XBLToken to maintain compatibility with the old code.
+	return newXBLToken(token)
+}
+
+func newXBLToken(token *xsts.Token) (*XBLToken, error) {
+	if token == nil {
+		return nil, errors.New("auth: xsts token is nil")
+	}
+	if len(token.DisplayClaims.UserInfo) == 0 {
+		return nil, errors.New("auth: xsts token has no user info")
+	}
+	if !token.Valid() {
+		return nil, errors.New("auth: xsts token is invalid")
+	}
+	// Wrap the resulting token in XBLToken to maintain compatibility with the old code.
 	return &XBLToken{AuthorizationToken: token}, nil
 }
