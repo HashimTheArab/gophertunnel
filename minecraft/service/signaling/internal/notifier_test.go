@@ -2,13 +2,11 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
-	"github.com/google/uuid"
 )
 
 func TestSignalContextDoesNotBlockRegistrationWhileDelivering(t *testing.T) {
@@ -69,30 +67,5 @@ func TestCloseUnblocksSignalContext(t *testing.T) {
 	case <-delivered:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("SignalContext did not return after Close")
-	}
-}
-
-func TestPendingMapDoneDoesNotBlockOnFullChannel(t *testing.T) {
-	pending := NewPendingMap()
-	id := uuid.New()
-	ch := make(chan error, 1)
-	ch <- errors.New("already completed")
-
-	pending.mu.Lock()
-	pending.expected[id] = ch
-	pending.mu.Unlock()
-
-	done := make(chan bool, 1)
-	go func() {
-		done <- pending.Done(id, nil)
-	}()
-
-	select {
-	case ok := <-done:
-		if !ok {
-			t.Fatal("Done() = false, want true")
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Done() blocked on a full completion channel")
 	}
 }
