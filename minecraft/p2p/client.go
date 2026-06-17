@@ -143,9 +143,9 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	if err := json.Unmarshal(custom, &world); err != nil {
 		return fmt.Errorf("decode custom properties: %w", err)
 	}
-	connection, ok := world.Connection()
-	if !ok {
-		return errors.New("world has no supported signaling connections")
+	connection, err := world.Connection()
+	if err != nil {
+		return fmt.Errorf("select signaling connection: %w", err)
 	}
 
 	s.worldMu.Lock()
