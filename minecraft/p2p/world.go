@@ -12,6 +12,9 @@ import (
 )
 
 var (
+	// ErrNoSupportedConnection is returned when a World does not advertise a
+	// NetherNet signaling connection supported by this package.
+	ErrNoSupportedConnection = errors.New("minecraft/p2p: no supported signaling connection")
 	// ErrInvalidConnection is returned when a Connection cannot be converted
 	// into a usable dial address.
 	ErrInvalidConnection = errors.New("minecraft/p2p: invalid connection")
@@ -154,42 +157,52 @@ type Connection struct {
 // may still be decoded from MPSD data, but they are ignored when selecting a
 // connection to dial.
 func (c Connection) Valid() bool {
-	switch c.Type {
-	case ConnectionTypeSignalingOverJSONRPC:
-		return c.PlayerMessagingID != uuid.Nil && c.NetherNetID != ""
-	case ConnectionTypeSignalingOverWebSocket:
-		return c.NetherNetID != ""
-	default:
-		return false
-	}
+	_, err := c.Address()
+	return err == nil
 }
 
 // Connection returns the first supported NetherNet signaling connection
 // advertised by w. Non-NetherNet worlds are rejected because this package
 // currently implements only NetherNet peer-to-peer joins. Unsupported connection
 // entries are ignored so a future or auxiliary entry does not make an otherwise
-// joinable world unusable.
-func (w World) Connection() (Connection, bool) {
+// joinable world unusable. If no connection can be selected, the returned error
+// wraps [ErrNoSupportedConnection].
+func (w World) Connection() (Connection, error) {
 	if w.TransportLayer != TransportLayerNetherNet {
-		return Connection{}, false
+		return Connection{}, fmt.Errorf("%w: transport layer %d", ErrNoSupportedConnection, w.TransportLayer)
 	}
+	var errs []error
 	for _, c := range w.SupportedConnections {
-		if c.Valid() {
-			return c, true
+		if _, err := c.Address(); err == nil {
+			return c, nil
+		} else {
+			errs = append(errs, err)
 		}
 	}
-	return Connection{}, false
+	if len(errs) == 0 {
+		return Connection{}, ErrNoSupportedConnection
+	}
+	return Connection{}, errors.Join(append([]error{ErrNoSupportedConnection}, errs...)...)
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
 func (c Connection) Address() (string, error) {
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
+		if c.NetherNetID == "" {
+			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
+		}
 		return c.NetherNetID.String(), nil
 	case ConnectionTypeSignalingOverJSONRPC:
+		if c.NetherNetID == "" {
+			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
+		}
+		if c.PlayerMessagingID == uuid.Nil {
+			return "", fmt.Errorf("%w: missing player messaging id", ErrInvalidConnection)
+		}
 		return c.PlayerMessagingID.String(), nil
 	default:
-		return "", fmt.Errorf("%w: type %d", ErrInvalidConnection, c.Type)
+		return "", fmt.Errorf("%w: unsupported type %d", ErrInvalidConnection, c.Type)
 	}
 }
 
