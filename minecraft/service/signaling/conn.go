@@ -146,6 +146,9 @@ func (conn *Conn) close(cause error) (err error) {
 // ping starts periodically sending ping messages at the specified interval.
 // On failure, it closes the Conn immediately with the cause.
 func (conn *Conn) ping(frequency time.Duration) {
+	if frequency <= 0 {
+		frequency = DefaultPingFrequency
+	}
 	ticker := time.NewTicker(frequency)
 	defer ticker.Stop()
 

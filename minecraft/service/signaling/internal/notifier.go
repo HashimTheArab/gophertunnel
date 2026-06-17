@@ -13,7 +13,7 @@ import (
 // channel is full.
 func NewNotifier(log *slog.Logger) *Notifier {
 	return &Notifier{
-		notifiers: make(map[uint32]chan<- *nethernet.Signal),
+		notifiers: make(map[uint32]*notifier),
 		log:       log,
 	}
 }
@@ -21,10 +21,16 @@ func NewNotifier(log *slog.Logger) *Notifier {
 // Notifier distributes incoming [nethernet.Signal] values to a set of
 // channels registered with [Notifier.Register].
 type Notifier struct {
-	notifiers   map[uint32]chan<- *nethernet.Signal
+	notifiers   map[uint32]*notifier
 	notifyCount uint32
 	mu          sync.RWMutex
 	log         *slog.Logger
+}
+
+type notifier struct {
+	ch     chan<- *nethernet.Signal
+	mu     sync.Mutex
+	closed bool
 }
 
 // Register adds signals to the set of channels notified by [Notifier.Notify]
@@ -34,7 +40,7 @@ func (n *Notifier) Register(signals chan<- *nethernet.Signal) (stop func()) {
 	n.mu.Lock()
 	i := n.notifyCount
 	n.notifyCount++
-	n.notifiers[i] = signals
+	n.notifiers[i] = &notifier{ch: signals}
 	n.mu.Unlock()
 
 	return func() {
@@ -48,42 +54,66 @@ func (n *Notifier) Register(signals chan<- *nethernet.Signal) (stop func()) {
 // to receive, the signal is dropped for that channel and a debug message is
 // logged.
 func (n *Notifier) Signal(signal *nethernet.Signal) {
-	n.mu.RLock()
-	for _, ch := range n.notifiers {
+	for _, entry := range n.snapshot() {
+		entry.mu.Lock()
+		if entry.closed {
+			entry.mu.Unlock()
+			continue
+		}
 		select {
-		case ch <- signal:
+		case entry.ch <- signal:
 		default:
 			n.log.Debug("dropping signal due to notifier being backed up", slog.String("signal", signal.String()))
 		}
+		entry.mu.Unlock()
 	}
-	n.mu.RUnlock()
 }
 
 // SignalContext sends signal to all registered channels, blocking until each
 // channel receives the signal or ctx is done. It returns ctx.Err if delivery
 // is interrupted by context cancellation.
 func (n *Notifier) SignalContext(ctx context.Context, signal *nethernet.Signal) error {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	for _, ch := range n.notifiers {
+	for _, entry := range n.snapshot() {
+		entry.mu.Lock()
+		if entry.closed {
+			entry.mu.Unlock()
+			continue
+		}
 		select {
-		case ch <- signal:
+		case entry.ch <- signal:
+			entry.mu.Unlock()
 		case <-ctx.Done():
+			entry.mu.Unlock()
 			return ctx.Err()
 		}
 	}
 	return nil
 }
 
+func (n *Notifier) snapshot() []*notifier {
+	n.mu.RLock()
+	entries := make([]*notifier, 0, len(n.notifiers))
+	for _, entry := range n.notifiers {
+		entries = append(entries, entry)
+	}
+	n.mu.RUnlock()
+	return entries
+}
+
 // stop removes the channel registered with the given ID and closes it.
 // The caller must hold mu before calling stop.
 func (n *Notifier) stop(i uint32) {
-	ch, ok := n.notifiers[i]
+	entry, ok := n.notifiers[i]
 	if !ok {
 		return
 	}
 	delete(n.notifiers, i)
-	close(ch)
+	entry.mu.Lock()
+	if !entry.closed {
+		entry.closed = true
+		close(entry.ch)
+	}
+	entry.mu.Unlock()
 }
 
 // Close unregisters and closes all registered channels.
