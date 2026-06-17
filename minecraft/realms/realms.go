@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
@@ -223,7 +225,7 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -235,10 +237,29 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 
 	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, fmt.Errorf("HTTP Error: %d", resp.StatusCode)
+		return body, resp.StatusCode, httpResponseError(resp.StatusCode, body)
 	}
 
 	return body, resp.StatusCode, nil
+}
+
+const maxHTTPErrorBodyPreview = 512
+
+// httpResponseError builds an error for an HTTP status >= 400, including a trimmed, truncated body preview when present.
+func httpResponseError(statusCode int, body []byte) error {
+	preview := body
+	truncated := len(preview) > maxHTTPErrorBodyPreview
+	if truncated {
+		preview = preview[:maxHTTPErrorBodyPreview]
+	}
+	snippet := strings.TrimSpace(string(preview))
+	if truncated {
+		snippet += "..."
+	}
+	if snippet != "" {
+		return fmt.Errorf("HTTP Error: %d: %s", statusCode, snippet)
+	}
+	return fmt.Errorf("HTTP Error: %d", statusCode)
 }
 
 // Realm gets a realm by its invite code.
