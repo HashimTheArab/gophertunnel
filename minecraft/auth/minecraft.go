@@ -15,6 +15,7 @@ import (
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -58,7 +59,7 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.HTTPClient().Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, client.HTTPClient(), request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
@@ -104,7 +105,7 @@ func RequestMinecraftChainWithTokenSource(ctx context.Context, src xsapi.TokenSo
 		return "", fmt.Errorf("sign request: %w", err)
 	}
 
-	resp, err := xal.ContextClient(ctx).Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, xal.ContextClient(ctx), request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
