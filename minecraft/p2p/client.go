@@ -146,9 +146,9 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	if err := json.Unmarshal(custom, &world); err != nil {
 		return fmt.Errorf("decode custom properties: %w", err)
 	}
-	connection, ok := world.Connection()
-	if !ok {
-		return errors.New("world has no supported signaling connections")
+	connection, err := world.Connection()
+	if err != nil {
+		return fmt.Errorf("select signaling connection: %w", err)
 	}
 
 	s.worldMu.Lock()
@@ -176,9 +176,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	return nil
 }
 
-// Connection returns the first entry on [World.SupportedConnections].
-// This is a convenience method for obtaining a connection without validating
-// for slices boundary.
+// Connection returns the supported connection selected from [World.SupportedConnections].
 func (s *Session) Connection() Connection {
 	s.worldMu.RLock()
 	defer s.worldMu.RUnlock()

@@ -3,11 +3,26 @@ package p2p
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
 	"github.com/google/uuid"
+)
+
+var (
+	// ErrNoSupportedConnection is returned when a World does not advertise a
+	// NetherNet signaling connection supported by this package.
+	ErrNoSupportedConnection = errors.New("minecraft/p2p: no supported signaling connection")
+	// ErrInvalidConnection is returned when a Connection cannot be converted
+	// into a usable dial address.
+	ErrInvalidConnection = errors.New("minecraft/p2p: invalid connection")
+	// ErrInvalidBroadcastSetting is returned when a BroadcastSetting cannot be
+	// converted into Xbox Live session restrictions.
+	ErrInvalidBroadcastSetting = errors.New("minecraft/p2p: invalid broadcast setting")
 )
 
 // World represents a player-hosted world that can be joined.
@@ -139,78 +154,88 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// NetherNetID is a NetherNet connection ID. MPSD custom properties may encode
-// this as either a JSON number or a JSON string.
+// NetherNetID is a NetherNet connection ID. MPSD custom properties encode it
+// as either a JSON number or a JSON string.
 type NetherNetID string
 
+// String returns id as a string.
 func (id NetherNetID) String() string {
 	return string(id)
 }
 
-func (id *NetherNetID) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+// UnmarshalJSON decodes the MPSD numeric and string forms. Null and empty
+// string values are accepted as missing so a single incomplete connection entry
+// does not fail the whole World decode.
+func (id *NetherNetID) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
 		*id = ""
 		return nil
 	}
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
+	if b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
 		*id = NetherNetID(s)
 		return nil
 	}
-	var number json.Number
-	if err := json.Unmarshal(data, &number); err != nil {
+	u, err := strconv.ParseUint(string(b), 10, 64)
+	if err != nil {
 		return err
 	}
-	*id = NetherNetID(number.String())
+	*id = NetherNetID(strconv.FormatUint(u, 10))
 	return nil
 }
 
-// Valid reports whether c is a complete NetherNet signaling connection
-// supported by this package. Unsupported, LAN-only, or future connection types
-// may still be decoded from MPSD data, but they are ignored when selecting a
-// connection to dial.
+// Valid reports whether Address can produce a dialable address for c.
 func (c Connection) Valid() bool {
-	netherNetID := c.NetherNetID.String()
-	if netherNetID == "" || netherNetID == "0" {
-		return false
-	}
-	switch c.Type {
-	case ConnectionTypeSignalingOverJSONRPC:
-		return c.PlayerMessagingID != uuid.Nil
-	case ConnectionTypeSignalingOverWebSocket:
-		return true
-	default:
-		return false
-	}
+	_, err := c.Address()
+	return err == nil
 }
 
 // Connection returns the first supported NetherNet signaling connection
 // advertised by w. Non-NetherNet worlds are rejected because this package
 // currently implements only NetherNet peer-to-peer joins. Unsupported connection
 // entries are ignored so a future or auxiliary entry does not make an otherwise
-// joinable world unusable.
-func (w World) Connection() (Connection, bool) {
+// joinable world unusable. If no connection can be selected, the returned error
+// wraps [ErrNoSupportedConnection].
+func (w World) Connection() (Connection, error) {
 	if w.TransportLayer != TransportLayerNetherNet {
-		return Connection{}, false
+		return Connection{}, fmt.Errorf("%w: transport layer %d", ErrNoSupportedConnection, w.TransportLayer)
 	}
+	var unsupported error
 	for _, c := range w.SupportedConnections {
-		if c.Valid() {
-			return c, true
+		if _, err := c.Address(); err == nil {
+			return c, nil
+		} else {
+			unsupported = errors.Join(unsupported, err)
 		}
 	}
-	return Connection{}, false
+	if unsupported == nil {
+		return Connection{}, ErrNoSupportedConnection
+	}
+	return Connection{}, fmt.Errorf("%w: %w", ErrNoSupportedConnection, unsupported)
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
-func (c Connection) Address() string {
+func (c Connection) Address() (string, error) {
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
-		return c.NetherNetID.String()
+		if c.NetherNetID == "" {
+			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
+		}
+		return c.NetherNetID.String(), nil
 	case ConnectionTypeSignalingOverJSONRPC:
-		return c.PlayerMessagingID.String()
+		if c.NetherNetID == "" {
+			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
+		}
+		if c.PlayerMessagingID == uuid.Nil {
+			return "", fmt.Errorf("%w: missing player messaging id", ErrInvalidConnection)
+		}
+		return c.PlayerMessagingID.String(), nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: unsupported type %d", ErrInvalidConnection, c.Type)
 	}
 }
 
@@ -268,28 +293,28 @@ type BroadcastSetting int
 // JoinRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.JoinRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) JoinRestriction() string {
+func (s BroadcastSetting) JoinRestriction() (string, error) {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, nil
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
 	}
 }
 
 // ReadRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.ReadRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) ReadRestriction() string {
+func (s BroadcastSetting) ReadRestriction() (string, error) {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal
+		return mpsd.SessionRestrictionLocal, nil
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
 	}
 }
 

@@ -46,9 +46,6 @@ type Conn struct {
 
 // Signal sends a [nethernet.Signal] to a network.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	id := uuid.New()
 	message := Message{
 		Type: MessageTypeSignal,
@@ -77,11 +74,11 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify registers a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel. Callers own the channel lifetime.
-func (conn *Conn) Notify(signals chan<- *nethernet.Signal) (stop func()) {
-	return conn.notifier.Register(signals)
+// The returned stop function unregisters and closes the channel.
+func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
+	return conn.notifier.Register()
 }
 
 // complete resolves the expectation registered for the outbound Message with
@@ -148,6 +145,9 @@ func (conn *Conn) close(cause error) (err error) {
 // ping starts periodically sending ping messages at the specified interval.
 // On failure, it closes the Conn immediately with the cause.
 func (conn *Conn) ping(frequency time.Duration) {
+	if frequency <= 0 {
+		frequency = DefaultPingFrequency
+	}
 	ticker := time.NewTicker(frequency)
 	defer ticker.Stop()
 
@@ -211,19 +211,16 @@ func (conn *Conn) handleMessage(message Message) {
 			log.Error("error delivering signal", slog.Any("error", err))
 		}
 	case MessageTypeError:
+		if message.ID == uuid.Nil {
+			log.Warn("received message without an ID", slog.Any("message", message))
+			return
+		}
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
-			if message.ID == uuid.Nil {
-				_ = conn.close(fmt.Errorf("decode connection-level error: %w", err2))
-			}
 			return
 		}
 		log.Debug("received error", slog.Any("message", message))
-		if message.ID == uuid.Nil {
-			_ = conn.close(err)
-			return
-		}
 		conn.complete(message.ID, err)
 	case MessageTypeDelivered:
 		if conn.d.IgnoreDeliveryNotification {
@@ -252,9 +249,7 @@ func (conn *Conn) handleMessage(message Message) {
 }
 
 // write encodes the given Message and sends it over the WebSocket connection.
+// An error may be returned if the message could not be sent.
 func (conn *Conn) write(ctx context.Context, message Message) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return wsjson.Write(ctx, conn.conn, message)
 }
