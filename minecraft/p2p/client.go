@@ -145,7 +145,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	}
 	connection, err := world.Connection()
 	if err != nil {
-		return fmt.Errorf("select connection: %w", err)
+		return fmt.Errorf("select signaling connection: %w", err)
 	}
 
 	s.worldMu.Lock()
