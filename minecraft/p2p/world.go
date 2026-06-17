@@ -11,6 +11,15 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	// ErrInvalidConnection is returned when a Connection cannot be converted
+	// into a usable dial address.
+	ErrInvalidConnection = errors.New("minecraft/p2p: invalid connection")
+	// ErrInvalidBroadcastSetting is returned when a BroadcastSetting cannot be
+	// converted into Xbox Live session restrictions.
+	ErrInvalidBroadcastSetting = errors.New("minecraft/p2p: invalid broadcast setting")
+)
+
 // World represents a player-hosted world that can be joined.
 // It typically mirrors the custom properties of the multiplayer
 // session published by the host.
@@ -163,14 +172,14 @@ func (c *Connection) UnmarshalJSON(b []byte) error {
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
-func (c Connection) Address() string {
+func (c Connection) Address() (string, error) {
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
-		return c.NetherNetID.String()
+		return c.NetherNetID.String(), nil
 	case ConnectionTypeSignalingOverJSONRPC:
-		return c.PlayerMessagingID.String()
+		return c.PlayerMessagingID.String(), nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: type %d", ErrInvalidConnection, c.Type)
 	}
 }
 
@@ -228,26 +237,26 @@ type BroadcastSetting int
 // JoinRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.JoinRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) JoinRestriction() string {
+func (s BroadcastSetting) JoinRestriction() (string, error) {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal
+		return mpsd.SessionRestrictionLocal, nil
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
 	}
 }
 
 // ReadRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.ReadRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) ReadRestriction() string {
+func (s BroadcastSetting) ReadRestriction() (string, error) {
 	switch s {
 	case BroadcastSettingInviteOnly, BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, nil
 	default:
-		panic("unreachable")
+		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
 	}
 }
 
