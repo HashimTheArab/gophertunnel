@@ -34,7 +34,7 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 		ctx = context.Background()
 	}
 
-	token, _, err := client.TokenAndSignature(ctx, minecraftAuthURL)
+	token, policy, err := client.TokenAndSignature(ctx, minecraftAuthURL)
 	if err != nil {
 		return "", fmt.Errorf("request token and signature: %w", err)
 	}
@@ -58,6 +58,9 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
+	if err := policy.Sign(request, []byte(body), client.TokenSource().ProofKey(), xal.ServerTime()); err != nil {
+		return "", fmt.Errorf("sign request: %w", err)
+	}
 
 	resp, err := authclient.SendRequestWithRetries(ctx, client.HTTPClient(), request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
