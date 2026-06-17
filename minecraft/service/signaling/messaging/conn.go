@@ -281,9 +281,7 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		if err := conn.notifier.SignalContext(ctx, signal); err != nil {
-			return fmt.Errorf("deliver signal: %w", err)
-		}
+		conn.notifier.Signal(signal)
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
 			"params": map[string]any{

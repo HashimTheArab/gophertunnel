@@ -157,6 +157,9 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	if err == nil {
 		s.connection = connection
 		s.connectionReady = true
+	} else {
+		s.connection = Connection{}
+		s.connectionReady = false
 	}
 
 	if s.nonce == "" {
