@@ -251,8 +251,5 @@ func (conn *Conn) handleMessage(message Message) {
 // write encodes the given Message and sends it over the WebSocket connection.
 // An error may be returned if the message could not be sent.
 func (conn *Conn) write(ctx context.Context, message Message) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	return wsjson.Write(ctx, conn.conn, message)
 }
