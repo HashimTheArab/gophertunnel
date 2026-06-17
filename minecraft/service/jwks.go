@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
@@ -160,7 +161,7 @@ func (r *refreshingKeySet) updateKeys() ([]jose.JSONWebKey, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := r.env.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(r.ctx, r.env.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
