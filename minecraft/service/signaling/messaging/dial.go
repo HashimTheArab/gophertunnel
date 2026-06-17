@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -18,18 +19,32 @@ import (
 
 // Dialer specifies options for connecting to the messaging service.
 type Dialer struct {
-	// Environment is the Environment of the 'signaling' service used to connect to messaging service.
-	// If nil, it will be automatically resolved from the discovery data returned from [service.Default].
-	Environment *signaling.Environment
+	// Environment is the environment used for connecting to the signaling service.
+	// If nil, it will be derived from [service.Default].
+	Environment signaling.ConfigurationProvider
 	// HTTPClient is the HTTP client used for WebSocket handshake messages and [Environment] discovery.
 	HTTPClient *http.Client
 	// Log is the logger used to log messages at various levels.
 	Log *slog.Logger
 	// NetworkID specifies a unique ID for the NetherNet network. If zero, a random value will
-	// be automatically set from [rand.Uint64]. When listening on friend worlds, this value
+	// be automatically set from [rand.Uint64]. When listening on peer-to-peer worlds, this value
 	// must match the NetworkID advertised in [p2p.Connection.NetherNetID] in order to successfully
 	// negotiate with vanilla clients.
 	NetworkID string
+	// IgnoreDeliveryNotification disables waiting for the DeliveryNotification
+	// acknowledgement after sending a signal to a remote peer.
+	//
+	// By default, [Conn.Signal] blocks until the remote peer sends back a
+	// DeliveryNotification message to confirm receipt. Enabling this field
+	// causes Signal to return as soon as the signaling service accepts the
+	// message, without waiting for acknowledgement by the remote peer.
+	//
+	// The vanilla client appears to be sending DeliveryNotification only for
+	// telemetry so this field is unlikely to affect the actual WebRTC negotiation.
+	//
+	// It may be useful when interoperating with third-party implementations
+	// that do not send DeliveryNotification.
+	IgnoreDeliveryNotification bool
 }
 
 // Dial connects to the messaging service with a 15 seconds timeout.
@@ -46,10 +61,11 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		if err != nil {
 			return nil, fmt.Errorf("discover network services: %w", err)
 		}
-		d.Environment = new(signaling.Environment)
-		if err := discovery.Environment(d.Environment); err != nil {
-			return nil, fmt.Errorf("resolve environment for %q: %w", d.Environment.ServiceName(), err)
+		env := new(signaling.AFDEnvironment)
+		if err := discovery.Environment(env); err != nil {
+			return nil, fmt.Errorf("resolve environment for %q: %w", env.ServiceName(), err)
 		}
+		d.Environment = env
 	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = http.DefaultClient
@@ -61,6 +77,10 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		d.NetworkID = strconv.FormatUint(rand.Uint64(), 10)
 	}
 
+	cfg, err := d.Environment.Configuration(ctx, d.HTTPClient, src)
+	if err != nil {
+		return nil, fmt.Errorf("request configuration: %w", err)
+	}
 	token, err := src.ServiceToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("request service token: %w", err)
@@ -71,7 +91,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		HTTPClient: d.HTTPClient,
 	}
 	opts.HTTPHeader.Set("Authorization", token.AuthorizationHeader)
-	requestURL := d.Environment.ServiceURI.JoinPath("/ws/v1.0/messaging/connect")
+	requestURL := cfg.ServiceURI.JoinPath("/ws/v1.0/messaging/connect")
 	c, _, err := websocket.Dial(ctx, requestURL.String(), opts)
 	if err != nil {
 		return nil, err
@@ -95,6 +115,12 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 				slog.String("id", request.ID()),
 				slog.String("params", request.ParamString()),
 			))
+		},
+		OnStop: func(_ *jrpc2.Client, err error) {
+			if err == nil {
+				err = net.ErrClosed
+			}
+			conn.stop(fmt.Errorf("jrpc2 client stopped: %w", err))
 		},
 		OnCallback: func(ctx context.Context, request *jrpc2.Request) (v any, err error) {
 			defer func() {
@@ -120,7 +146,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			return v, nil
 		},
 	})
-	go conn.ping()
+	go conn.ping(cfg.PingFrequency)
 	return conn, nil
 }
 

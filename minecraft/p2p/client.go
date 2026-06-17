@@ -143,15 +143,16 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	if err := json.Unmarshal(custom, &world); err != nil {
 		return fmt.Errorf("decode custom properties: %w", err)
 	}
-	if len(world.SupportedConnections) == 0 {
-		return errors.New("world has no supported connections")
+	connection, ok := world.Connection()
+	if !ok {
+		return errors.New("world has no supported signaling connections")
 	}
 
 	s.worldMu.Lock()
 	defer s.worldMu.Unlock()
 
 	s.world = world
-	s.connection = world.SupportedConnections[0]
+	s.connection = connection
 
 	if s.nonce == "" {
 		// If the host has not yet generated or published a nonce for the caller, check if
@@ -161,7 +162,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 			nonce, ok := nonces[xuid]
 			if ok {
 				if nonce == "" {
-					return errors.New("host published empty-nonce for caller")
+					return errors.New("host published empty nonce for caller")
 				}
 				s.log.Debug("received nonce from host", slog.String("xuid", xuid), slog.String("nonce", nonce))
 				s.nonce = nonce
