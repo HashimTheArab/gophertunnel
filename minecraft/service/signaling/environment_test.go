@@ -1,6 +1,7 @@
 package signaling
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -36,7 +37,7 @@ func TestEnvironmentConfigurationUsesDefaultPingFrequency(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"serviceUri":"wss://example.invalid"}`), &env); err != nil {
 		t.Fatalf("UnmarshalJSON() error = %v", err)
 	}
-	cfg, err := env.Configuration(nil, nil, nil)
+	cfg, err := env.Configuration(context.TODO(), nil, nil)
 	if err != nil {
 		t.Fatalf("Configuration() error = %v", err)
 	}
