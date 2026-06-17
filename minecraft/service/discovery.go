@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/oauth2"
@@ -128,7 +129,7 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 			httpClient = c
 		}
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
