@@ -168,18 +168,18 @@ func (w World) Connection() (Connection, error) {
 	if w.TransportLayer != TransportLayerNetherNet {
 		return Connection{}, fmt.Errorf("%w: transport layer %d", ErrNoSupportedConnection, w.TransportLayer)
 	}
-	var errs []error
+	var unsupported error
 	for _, c := range w.SupportedConnections {
 		if _, err := c.Address(); err == nil {
 			return c, nil
 		} else {
-			errs = append(errs, err)
+			unsupported = errors.Join(unsupported, err)
 		}
 	}
-	if len(errs) == 0 {
+	if unsupported == nil {
 		return Connection{}, ErrNoSupportedConnection
 	}
-	return Connection{}, errors.Join(append([]error{ErrNoSupportedConnection}, errs...)...)
+	return Connection{}, fmt.Errorf("%w: %w", ErrNoSupportedConnection, unsupported)
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
