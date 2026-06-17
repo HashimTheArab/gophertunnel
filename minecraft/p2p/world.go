@@ -152,10 +152,7 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// Valid reports whether c is a complete NetherNet signaling connection
-// supported by this package. Unsupported, LAN-only, or future connection types
-// may still be decoded from MPSD data, but they are ignored when selecting a
-// connection to dial.
+// Valid reports whether Address can produce a dialable address for c.
 func (c Connection) Valid() bool {
 	_, err := c.Address()
 	return err == nil
