@@ -211,13 +211,13 @@ func (conn *Conn) handleMessage(message Message) {
 			log.Error("error delivering signal", slog.Any("error", err))
 		}
 	case MessageTypeError:
+		if message.ID == uuid.Nil {
+			log.Warn("received message without an ID", slog.Any("message", message))
+			return
+		}
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
-			return
-		}
-		if message.ID == uuid.Nil {
-			_ = conn.close(err)
 			return
 		}
 		log.Debug("received error", slog.Any("message", message))
