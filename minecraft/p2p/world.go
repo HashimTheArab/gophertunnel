@@ -129,40 +129,13 @@ type Connection struct {
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
 	// NetherNetID is the network ID of the NetherNet network for the host.
-	NetherNetID NetherNetID `json:"NetherNetId"`
+	NetherNetID json.Number `json:"NetherNetId"`
 	// PlayerMessagingID is the player messaging ID of the host.
 	// When joining a World, clients use it together with [NetherNetID]
 	// as the destination for signaling messages needed to establish the
 	// WebRTC connection to the host.
 	// It is only populated when Type is [ConnectionTypeSignalingOverJSONRPC].
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
-}
-
-// NetherNetID is a NetherNet connection ID. MPSD custom properties encode it
-// as either a JSON number or a JSON string.
-type NetherNetID string
-
-// String returns id as a string.
-func (id NetherNetID) String() string {
-	return string(id)
-}
-
-// UnmarshalJSON decodes the MPSD numeric and string forms. Null and empty
-// string values are accepted as missing so a single incomplete connection entry
-// does not fail the whole World decode.
-func (id *NetherNetID) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		*id = NetherNetID(s)
-		return nil
-	}
-
-	var n json.Number
-	if err := json.Unmarshal(b, &n); err != nil {
-		return err
-	}
-	*id = NetherNetID(n.String())
-	return nil
 }
 
 // Valid reports whether c is a complete NetherNet signaling connection
