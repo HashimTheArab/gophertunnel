@@ -293,8 +293,7 @@ type Conn struct {
 	// texturePacksRequired specifies if clients that join must accept the texture pack in order for them to
 	// be able to join the server. If they don't accept, they can only leave the server.
 	texturePacksRequired bool
-	// forceDisableVibrantVisuals tells the client to forcibly disable Vibrant
-	// Visuals.
+	// forceDisableVibrantVisuals specifies whether the connection is forced to have vibrant visuals disabled.
 	forceDisableVibrantVisuals bool
 	packQueue                  *resourcePackQueue
 	// downloadResourcePack is an optional function passed to a Dial() call. If set, each resource pack received
@@ -392,6 +391,14 @@ func (conn *Conn) IdentityData() login.IdentityData {
 // that by the caller.
 func (conn *Conn) ClientData() login.ClientData {
 	return conn.clientData
+}
+
+// SetPacketBatchFunc sets a callback called after each outbound packet batch is
+// encoded. Passing nil disables the callback.
+func (conn *Conn) SetPacketBatchFunc(f packet.BatchEncodeObserver) {
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	conn.enc.SetBatchEncodeObserver(f)
 }
 
 // Authenticated returns true if the connection was authenticated through XBOX Live services.
@@ -1108,10 +1115,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	if conn.fetchResourcePacks != nil {
 		conn.resourcePacks = conn.fetchResourcePacks(conn.identityData, conn.clientData, slices.Clone(conn.resourcePacks))
 	}
-	pk := &packet.ResourcePacksInfo{
-		TexturePackRequired:        conn.texturePacksRequired,
-		ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
-	}
+	pk := &packet.ResourcePacksInfo{TexturePackRequired: conn.texturePacksRequired, ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals}
 	for _, pack := range conn.resourcePacks {
 		texturePack := protocol.TexturePackInfo{
 			UUID:        pack.UUID(),
@@ -1444,14 +1448,14 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := uint32(pk.Size / uint64(pk.DataChunkSize))
+	chunkCount := int32(pk.Size / uint64(pk.DataChunkSize))
 	if pk.Size%uint64(pk.DataChunkSize) != 0 {
 		chunkCount++
 	}
 
 	idCopy := pk.UUID
 	go func() {
-		for i := uint32(0); i < chunkCount; i++ {
+		for i := int32(0); i < chunkCount; i++ {
 			_ = conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
 				ChunkIndex: i,
@@ -1524,7 +1528,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	}
 	response := &packet.ResourcePackChunkData{
 		UUID:       pk.UUID,
-		ChunkIndex: pk.ChunkIndex,
+		ChunkIndex: uint32(pk.ChunkIndex),
 		DataOffset: conn.packQueue.currentOffset,
 		Data:       make([]byte, packChunkSize),
 	}
