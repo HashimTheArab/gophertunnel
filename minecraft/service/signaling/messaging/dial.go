@@ -126,12 +126,13 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			defer func() {
 				if err2 := recover(); err2 != nil {
 					d.Log.Error("callback handler panicked", slog.Any("error", err2))
-					conn.stop(fmt.Errorf("callback handler panicked: %v", err2))
 					v, err = nil, nil
 				}
 			}()
 			v, err = conn.handleCallback(ctx, request)
 			if err != nil {
+				// Returning non-nil error may cause the connection to stale
+				// so we catch it here and always return nil instead.
 				conn.d.Log.Error("error handling server message",
 					slog.GroupAttrs("request",
 						slog.String("id", request.ID()),
@@ -140,7 +141,6 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 					),
 					slog.Any("error", err),
 				)
-				conn.stop(fmt.Errorf("handle callback %q: %w", request.Method(), err))
 				return nil, nil
 			}
 			return v, nil

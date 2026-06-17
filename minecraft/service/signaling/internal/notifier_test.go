@@ -41,6 +41,37 @@ func TestSignalContextDoesNotBlockRegistrationWhileDelivering(t *testing.T) {
 	<-done
 }
 
+func TestCloseUnblocksSignalContext(t *testing.T) {
+	n := NewNotifier(slog.Default())
+	n.Register(make(chan *nethernet.Signal))
+
+	delivered := make(chan error, 1)
+	go func() {
+		delivered <- n.SignalContext(context.Background(), &nethernet.Signal{})
+	}()
+	time.Sleep(10 * time.Millisecond)
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- n.Close()
+	}()
+
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Close blocked while SignalContext waited on a receiver")
+	}
+
+	select {
+	case <-delivered:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("SignalContext did not return after Close")
+	}
+}
+
 func TestPendingMapDoneDoesNotBlockOnFullChannel(t *testing.T) {
 	pending := NewPendingMap()
 	id := uuid.New()

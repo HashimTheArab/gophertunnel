@@ -54,13 +54,13 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 		ID:   id,
 	}
 	if signal.Type != nethernet.SignalTypeOffer || conn.d.IgnoreDeliveryNotification {
-		return conn.write(message)
+		return conn.write(ctx, message)
 	}
 
 	ch := conn.pending.Add(id)
 	defer conn.pending.Remove(id)
 
-	if err := conn.write(message); err != nil {
+	if err := conn.write(ctx, message); err != nil {
 		return err
 	}
 
@@ -157,7 +157,7 @@ func (conn *Conn) ping(frequency time.Duration) {
 		case <-conn.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := conn.write(Message{
+			if err := conn.write(conn.ctx, Message{
 				Type: MessageTypePing,
 			}); err != nil {
 				_ = conn.close(fmt.Errorf("background: write ping: %w", err))
@@ -212,13 +212,13 @@ func (conn *Conn) handleMessage(message Message) {
 			log.Error("error delivering signal", slog.Any("error", err))
 		}
 	case MessageTypeError:
-		if message.ID == uuid.Nil {
-			log.Warn("received message without an ID", slog.Any("message", message))
-			return
-		}
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
+			return
+		}
+		if message.ID == uuid.Nil {
+			_ = conn.close(err)
 			return
 		}
 		log.Debug("received error", slog.Any("message", message))
@@ -249,9 +249,11 @@ func (conn *Conn) handleMessage(message Message) {
 	}
 }
 
-// write encodes the given Message and sends it over the WebSocket connection. It uses a background context
-// to avoid issues with context cancellation affecting the connection. An error may be returned if the message
-// could not be sent.
-func (conn *Conn) write(message Message) error {
-	return wsjson.Write(context.Background(), conn.conn, message)
+// write encodes the given Message and sends it over the WebSocket connection.
+// An error may be returned if the message could not be sent.
+func (conn *Conn) write(ctx context.Context, message Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return wsjson.Write(ctx, conn.conn, message)
 }

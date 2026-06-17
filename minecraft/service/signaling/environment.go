@@ -13,9 +13,9 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
-// DefaultPingFrequency is used when a signaling environment does not provide a
+// DefaultPingFrequency is used when the signaling service does not provide a
 // positive ping interval.
-const DefaultPingFrequency = 15 * time.Second
+const DefaultPingFrequency = time.Second * 15
 
 // Environment represents an environment for the signaling service.
 type Environment struct {
@@ -169,6 +169,10 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	cfg.ServiceURI, err = url.Parse(data.ServiceURI)
 	if err != nil {
 		return fmt.Errorf("service/signaling: parse Configuration.ServiceURI: %w", err)
+	}
+	if data.PingFrequency == "" {
+		cfg.PingFrequency = DefaultPingFrequency
+		return nil
 	}
 	var h, m, s int
 	if _, err := fmt.Sscanf(data.PingFrequency, "%d:%d:%d", &h, &m, &s); err != nil {

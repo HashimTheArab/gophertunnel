@@ -28,9 +28,13 @@ type Notifier struct {
 }
 
 type notifier struct {
-	ch     chan<- *nethernet.Signal
+	ch   chan<- *nethernet.Signal
+	done chan struct{}
+	once sync.Once
+
 	mu     sync.Mutex
 	closed bool
+	wg     sync.WaitGroup
 }
 
 // Register adds signals to the set of channels notified by [Notifier.Notify]
@@ -40,13 +44,16 @@ func (n *Notifier) Register(signals chan<- *nethernet.Signal) (stop func()) {
 	n.mu.Lock()
 	i := n.notifyCount
 	n.notifyCount++
-	n.notifiers[i] = &notifier{ch: signals}
+	n.notifiers[i] = &notifier{ch: signals, done: make(chan struct{})}
 	n.mu.Unlock()
 
 	return func() {
 		n.mu.Lock()
-		n.stop(i)
+		entry := n.stop(i)
 		n.mu.Unlock()
+		if entry != nil {
+			entry.close()
+		}
 	}
 }
 
@@ -55,17 +62,16 @@ func (n *Notifier) Register(signals chan<- *nethernet.Signal) (stop func()) {
 // logged.
 func (n *Notifier) Signal(signal *nethernet.Signal) {
 	for _, entry := range n.snapshot() {
-		entry.mu.Lock()
-		if entry.closed {
-			entry.mu.Unlock()
+		if !entry.acquire() {
 			continue
 		}
 		select {
 		case entry.ch <- signal:
+		case <-entry.done:
 		default:
 			n.log.Debug("dropping signal due to notifier being backed up", slog.String("signal", signal.String()))
 		}
-		entry.mu.Unlock()
+		entry.release()
 	}
 }
 
@@ -74,16 +80,16 @@ func (n *Notifier) Signal(signal *nethernet.Signal) {
 // is interrupted by context cancellation.
 func (n *Notifier) SignalContext(ctx context.Context, signal *nethernet.Signal) error {
 	for _, entry := range n.snapshot() {
-		entry.mu.Lock()
-		if entry.closed {
-			entry.mu.Unlock()
+		if !entry.acquire() {
 			continue
 		}
 		select {
 		case entry.ch <- signal:
-			entry.mu.Unlock()
+			entry.release()
+		case <-entry.done:
+			entry.release()
 		case <-ctx.Done():
-			entry.mu.Unlock()
+			entry.release()
 			return ctx.Err()
 		}
 	}
@@ -102,27 +108,51 @@ func (n *Notifier) snapshot() []*notifier {
 
 // stop removes the channel registered with the given ID and closes it.
 // The caller must hold mu before calling stop.
-func (n *Notifier) stop(i uint32) {
+func (n *Notifier) stop(i uint32) *notifier {
 	entry, ok := n.notifiers[i]
 	if !ok {
-		return
+		return nil
 	}
 	delete(n.notifiers, i)
-	entry.mu.Lock()
-	if !entry.closed {
-		entry.closed = true
-		close(entry.ch)
-	}
-	entry.mu.Unlock()
+	return entry
 }
 
 // Close unregisters and closes all registered channels.
 func (n *Notifier) Close() error {
 	n.mu.Lock()
+	entries := make([]*notifier, 0, len(n.notifiers))
 	for i := range n.notifiers {
-		n.stop(i)
+		entries = append(entries, n.stop(i))
 	}
 	n.mu.Unlock()
 
+	for _, entry := range entries {
+		entry.close()
+	}
 	return nil
+}
+
+func (n *notifier) acquire() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return false
+	}
+	n.wg.Add(1)
+	return true
+}
+
+func (n *notifier) release() {
+	n.wg.Done()
+}
+
+func (n *notifier) close() {
+	n.once.Do(func() {
+		n.mu.Lock()
+		n.closed = true
+		close(n.done)
+		n.mu.Unlock()
+		n.wg.Wait()
+		close(n.ch)
+	})
 }
