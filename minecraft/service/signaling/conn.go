@@ -74,12 +74,11 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify registers a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel and closes it. Callers must not close
-// the channel themselves.
-func (conn *Conn) Notify(signals chan<- *nethernet.Signal) (stop func()) {
-	return conn.notifier.Register(signals)
+// The returned stop function unregisters and closes the channel.
+func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
+	return conn.notifier.Register()
 }
 
 // complete resolves the expectation registered for the outbound Message with

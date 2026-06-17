@@ -18,8 +18,8 @@ func NewNotifier(log *slog.Logger) *Notifier {
 	}
 }
 
-// Notifier distributes incoming [nethernet.Signal] values to a set of
-// channels registered with [Notifier.Register].
+// Notifier distributes incoming [nethernet.Signal] values to registered
+// subscription channels.
 type Notifier struct {
 	notifiers   map[uint32]*notifier
 	notifyCount uint32
@@ -28,7 +28,7 @@ type Notifier struct {
 }
 
 type notifier struct {
-	ch   chan<- *nethernet.Signal
+	ch   chan *nethernet.Signal
 	done chan struct{}
 	once sync.Once
 
@@ -37,17 +37,18 @@ type notifier struct {
 	wg     sync.WaitGroup
 }
 
-// Register adds signals to the set of channels notified by [Notifier.Notify]
-// and returns a stop function that removes and closes the channel. The caller
-// must not close the channel themselves.
-func (n *Notifier) Register(signals chan<- *nethernet.Signal) (stop func()) {
+// Register returns a channel that receives incoming signals. The returned stop
+// function removes and closes the channel.
+func (n *Notifier) Register() (<-chan *nethernet.Signal, func()) {
+	signals := make(chan *nethernet.Signal, 64)
+
 	n.mu.Lock()
 	i := n.notifyCount
 	n.notifyCount++
 	n.notifiers[i] = &notifier{ch: signals, done: make(chan struct{})}
 	n.mu.Unlock()
 
-	return func() {
+	return signals, func() {
 		n.mu.Lock()
 		entry := n.stop(i)
 		n.mu.Unlock()

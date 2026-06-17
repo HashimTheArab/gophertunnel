@@ -105,12 +105,11 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	return nil
 }
 
-// Notify registers a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel and closes it. Callers must not close
-// the channel themselves.
-func (conn *Conn) Notify(signals chan<- *nethernet.Signal) (stop func()) {
-	return conn.notifier.Register(signals)
+// The returned stop function unregisters and closes the channel.
+func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
+	return conn.notifier.Register()
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
