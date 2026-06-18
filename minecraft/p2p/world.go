@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
 	"github.com/google/uuid"
@@ -97,6 +98,12 @@ type World struct {
 	// FriendID is the host's PlayFab ID.
 	// It is only populated when the host is playing a gathering experience.
 	FriendID string `json:"FriendId,omitempty"`
+
+	// RealmID is the ID of the Realm that the host is currently playing.
+	// When a player joins a Realm, it publishes a presence to Xbox Live
+	// to advertise its presence. It is only populated when the host is
+	// playing in a Realm.
+	RealmID int64 `json:"RealmId"`
 
 	// handleID is the identifier of the activity associated with the World.
 	handleID uuid.UUID
@@ -193,12 +200,12 @@ func (c Connection) Validate() error {
 // non-zero identifier. The ID is treated as an opaque string because it may be a
 // decimal network ID or a UUID depending on the host.
 func (c Connection) validateNetherNetID() error {
-	switch c.NetherNetID {
-	case "", "0":
-		return fmt.Errorf("minecraft/p2p: invalid Connection.NetherNetID: %q", string(c.NetherNetID))
-	default:
-		return nil
+	if _, err := strconv.ParseUint(string(c.NetherNetID), 10, 64); err != nil {
+		if err2 := uuid.Validate(string(c.NetherNetID)); err2 != nil {
+			return errors.Join(err, err2)
+		}
 	}
+	return nil
 }
 
 // Connection returns the first supported NetherNet signaling connection
