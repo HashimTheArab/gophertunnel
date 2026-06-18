@@ -47,4 +47,4 @@ require (
 	golang.org/x/time v0.10.0 // indirect
 )
 
-replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260618011049-d509488c9634
+replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260618051356-9a231ba4f4d9

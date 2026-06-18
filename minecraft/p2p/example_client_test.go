@@ -26,7 +26,9 @@ func ExampleClient() {
 	}
 	msa := auth.AndroidConfig.TokenSource(context.TODO(), token)
 
-	xbl, err := xsapi.NewClient(auth.AndroidConfig.New(msa, nil))
+	xbl, err := xsapi.ClientConfig{
+		RTAMode: xsapi.RTALazy,
+	}.New(context.TODO(), auth.AndroidConfig.New(msa, nil))
 	if err != nil {
 		var acct *sisu.AccountCreationRequiredError
 		if errors.As(err, &acct) {
