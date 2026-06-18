@@ -120,8 +120,7 @@ type Session struct {
 	connection Connection
 	worldMu    sync.RWMutex
 
-	connectionReady bool
-	nonce           string
+	nonce string
 
 	readyOnce sync.Once
 	readyErr  error
@@ -148,18 +147,15 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 		return fmt.Errorf("decode custom properties: %w", err)
 	}
 	connection, err := world.Connection()
+	if err != nil {
+		return fmt.Errorf("select connection method: %w", err)
+	}
 
 	s.worldMu.Lock()
 	defer s.worldMu.Unlock()
 
 	s.world = world
-	if err == nil {
-		s.connection = connection
-		s.connectionReady = true
-	} else {
-		s.connection = Connection{}
-		s.connectionReady = false
-	}
+	s.connection = connection
 
 	if s.nonce == "" {
 		// If the host has not yet generated or published a nonce for the caller, check if
@@ -176,7 +172,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 			}
 		}
 	}
-	if s.connectionReady && s.nonce != "" {
+	if s.nonce != "" {
 		s.readyOnce.Do(func() {
 			close(s.ready)
 		})
