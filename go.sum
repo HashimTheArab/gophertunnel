@@ -10,10 +10,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/df-mc/go-nethernet v1.0.15-0.20260617180759-48a921e29502 h1:KRsnyMVqAR9NxZihRKh7YUs8g8v7no5GPblv97K7KWE=
 github.com/df-mc/go-nethernet v1.0.15-0.20260617180759-48a921e29502/go.mod h1:APCda153OgX8K55egZh5w/H50vY0OojlD6hsKFbdQtU=
-github.com/df-mc/go-playfab/v2 v2.0.1 h1:UKOfa4r7xALUcd+SYXt2hhdLGYcJBOZgI/7YVLW2qbo=
-github.com/df-mc/go-playfab/v2 v2.0.1/go.mod h1:QzDrEVNhc1E/qENDSRKw7vdox2bMs5Zgsy5Fl5XfnW0=
-github.com/df-mc/go-xsapi/v2 v2.0.1-0.20260521011245-91de547c5eb6 h1:/4YQQ8bOl2CSBlNCAaX073iK/VvOm2nBEzhrZgSX7G0=
-github.com/df-mc/go-xsapi/v2 v2.0.1-0.20260521011245-91de547c5eb6/go.mod h1:Gi/zQG2DFMJOMt4DIjuBuINTnU4YnZINe+RyFyza8oo=
+github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232648-2ab297e0a08a h1:yyA6ljK2zLOgpTde3pYo4AdUA1o+nZSwk+rIEddcEZg=
+github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232648-2ab297e0a08a/go.mod h1:21Q50SUHyVXVd/oPkTEVriNoOmal3gY2qQ2hLhyMQrM=
+github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260618232321-7db98a0b7856 h1:6tmfs866ngZ8R6jFlDfXzBP9N+vmlkX4IlM1+0lVxlI=
+github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260618232321-7db98a0b7856/go.mod h1:Gi/zQG2DFMJOMt4DIjuBuINTnU4YnZINe+RyFyza8oo=
 github.com/df-mc/jsonc v1.0.5 h1:O7oh07kbS5AYY+l2Fji6l4h0iHcdjKbxCtK5VlZlLMU=
 github.com/df-mc/jsonc v1.0.5/go.mod h1:+Q++JuCE9IKiP8v7sWImdf/RjQX0nfXyfX6PdfTTmc4=
 github.com/go-gl/mathgl v1.1.0 h1:0lzZ+rntPX3/oGrDzYGdowSLC2ky8Osirvf5uAwfIEA=
