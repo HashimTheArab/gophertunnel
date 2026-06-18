@@ -211,25 +211,18 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	var (
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
+		xblSource        xsapi.TokenSource
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
-		if d.XBLClient == nil {
+		if d.TokenSource != nil {
 			x, ok := d.TokenSource.(xsapi.TokenSource)
 			if !ok {
 				x = auth.ContextSession(ctx, d.TokenSource)
 			}
-			client, err := xsapi.ClientConfig{
-				HTTPClient: d.HTTPClient,
-				RTAMode:    xsapi.RTALazy,
-			}.New(ctx, x)
-			if err != nil {
-				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to xbox live: %w", err)}
-			}
-			defer client.Close()
-			d.XBLClient = client
+			xblSource = x
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -246,10 +239,19 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				// If a MultiplayerTokenSource was not provided, log in to PlayFab
 				// account and use a default implementation instead.
 				if d.PlayFabClient == nil {
-					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, d.XBLClient, playfab.ClientConfig{
+					var (
+						client *playfab.Client
+						err    error
+					)
+					conf := playfab.ClientConfig{
 						HTTPClient:    d.HTTPClient,
 						CreateAccount: true,
-					})
+					}
+					if d.XBLClient != nil {
+						client, err = playfab.LoginWithXbox(ctx, e.PlayFabTitleID, d.XBLClient, conf)
+					} else {
+						client, err = playfab.Login(ctx, e.PlayFabTitleID, xblIdentityProvider{src: xblSource}, conf)
+					}
 					if err != nil {
 						return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to playfab: %w", err)}
 					}
@@ -264,7 +266,11 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, d.XBLClient, key)
+		if d.XBLClient != nil {
+			chainData, err = auth.RequestMinecraftChain(ctx, d.XBLClient, key)
+		} else {
+			chainData, err = auth.RequestMinecraftChainWithTokenSource(ctx, xblSource, key)
+		}
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
@@ -449,6 +455,30 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 		}
 	}
+}
+
+type xblIdentityProvider struct {
+	src xsapi.TokenSource
+}
+
+func (i xblIdentityProvider) Login(ctx context.Context, client *http.Client, request playfab.LoginRequest) (*playfab.LoginResult, error) {
+	if i.src == nil {
+		return nil, errors.New("minecraft: xblIdentityProvider: token source is nil")
+	}
+	requestURL := request.Title.URL().JoinPath("/Client/LoginWithXbox")
+	token, _, err := auth.TokenAndSignature(ctx, i.src, requestURL)
+	if err != nil {
+		return nil, fmt.Errorf("request XSTS token and signature: %w", err)
+	}
+	return request.Login(ctx, client, requestURL, xblLoginRequest{
+		LoginRequest: request,
+		XboxToken:    token.String(),
+	})
+}
+
+type xblLoginRequest struct {
+	playfab.LoginRequest
+	XboxToken string
 }
 
 //go:embed skin_resource_patch.json

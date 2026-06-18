@@ -325,7 +325,7 @@ type BroadcastSetting int
 func (s BroadcastSetting) JoinRestriction() string {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal
+		return mpsd.SessionRestrictionFollowed
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
 		return mpsd.SessionRestrictionFollowed
 	default:
@@ -338,7 +338,9 @@ func (s BroadcastSetting) JoinRestriction() string {
 // value for the BroadcastSetting.
 func (s BroadcastSetting) ReadRestriction() string {
 	switch s {
-	case BroadcastSettingInviteOnly, BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
+	case BroadcastSettingInviteOnly:
+		return mpsd.SessionRestrictionLocal
+	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
 		return mpsd.SessionRestrictionFollowed
 	default:
 		panic(fmt.Sprintf("minecraft/p2p: invalid BroadcastSetting value: %d", s))

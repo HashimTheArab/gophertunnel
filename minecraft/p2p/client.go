@@ -197,20 +197,14 @@ func (s *Session) failReadyLocked(err error) error {
 func (s *Session) waitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
-		return s.readyResult()
-	default:
-	}
-	select {
-	case <-s.ready:
-		return s.readyResult()
 	case <-ctx.Done():
 		select {
 		case <-s.ready:
-			return s.readyResult()
 		default:
 			return ctx.Err()
 		}
 	}
+	return s.readyResult()
 }
 
 func (s *Session) readyResult() error {

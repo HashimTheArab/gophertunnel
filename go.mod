@@ -8,7 +8,7 @@ require (
 	github.com/creachadair/jrpc2 v1.3.5
 	github.com/df-mc/go-nethernet v1.0.15-0.20260617180759-48a921e29502
 	github.com/df-mc/go-playfab/v2 v2.0.1
-	github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260616195522-d119f91b5fe2
+	github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260618231513-deb357a59728
 	github.com/df-mc/jsonc v1.0.5
 	github.com/go-gl/mathgl v1.1.0
 	github.com/go-jose/go-jose/v4 v4.1.4
@@ -46,5 +46,3 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 )
-
-replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260618051356-9a231ba4f4d9
