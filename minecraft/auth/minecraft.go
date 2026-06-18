@@ -110,13 +110,20 @@ func TokenAndSignature(ctx context.Context, src xsapi.TokenSource, u *url.URL) (
 	if err != nil {
 		return nil, policy, fmt.Errorf("request authorization token: %w", err)
 	}
-	resolver, err := nsal.NewResolver(ctx, authToken, src.ProofKey())
+	defaultTitle, err := nsal.Default(ctx)
 	if err != nil {
-		return nil, policy, fmt.Errorf("request NSAL resolver: %w", err)
+		return nil, policy, fmt.Errorf("request default title data: %w", err)
 	}
-	endpoint, policy, ok := resolver.Match(u)
+	currentTitle, err := nsal.Current(ctx, authToken, src.ProofKey())
+	if err != nil {
+		return nil, policy, fmt.Errorf("request current title data: %w", err)
+	}
+	endpoint, policy, ok := currentTitle.Match(u)
 	if !ok {
-		return nil, policy, fmt.Errorf("no endpoint was found for %s", u)
+		endpoint, policy, ok = defaultTitle.Match(u)
+		if !ok {
+			return nil, policy, fmt.Errorf("no endpoint was found for %s", u)
+		}
 	}
 	token, err := src.XSTSToken(ctx, endpoint.RelyingParty)
 	if err != nil {
