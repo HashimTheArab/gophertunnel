@@ -231,7 +231,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			}
 			resolver := nsal.NewResolver(x)
 			xblSigner = resolver
-			authClient = authenticatedHTTPClient(d.HTTPClient, resolver)
+			authClient = minecraftAuthHTTPClient(d.HTTPClient, resolver)
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -433,7 +433,9 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 	}
 }
 
-func authenticatedHTTPClient(base *http.Client, resolver *nsal.Resolver) *http.Client {
+// minecraftAuthHTTPClient returns a copy of base that adds Minecraft/Xbox
+// authentication headers through resolver without mutating the caller's client.
+func minecraftAuthHTTPClient(base *http.Client, resolver *nsal.Resolver) *http.Client {
 	if base == nil {
 		base = http.DefaultClient
 	}
