@@ -1,11 +1,13 @@
 package p2p
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
 	"github.com/google/uuid"
@@ -109,6 +111,12 @@ type World struct {
 	// It is only populated when the host is playing a gathering experience.
 	FriendID string `json:"FriendId,omitempty"`
 
+	// RealmID is the ID of the Realm that the host is currently playing.
+	// When a player joins a Realm, it publishes a presence to Xbox Live
+	// to advertise its presence. It is only populated when the host is
+	// playing in a Realm.
+	RealmID int64 `json:"RealmId"`
+
 	// handleID is the identifier of the activity associated with the World.
 	handleID uuid.UUID
 	// client is the API Client bound to this World.
@@ -143,7 +151,7 @@ type Connection struct {
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
 	// NetherNetID is the network ID of the NetherNet network for the host.
-	NetherNetID json.Number `json:"NetherNetId"`
+	NetherNetID NetherNetID `json:"NetherNetId"`
 	// PlayerMessagingID is the player messaging ID of the host.
 	// When joining a World, clients use it together with [NetherNetID]
 	// as the destination for signaling messages needed to establish the
@@ -152,10 +160,73 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// Valid reports whether Address can produce a dialable address for c.
-func (c Connection) Valid() bool {
-	_, err := c.Address()
-	return err == nil
+// NetherNetID is the NetherNet network ID advertised by a host. It is an opaque
+// identifier: MPSD custom properties encode it as either a JSON number or a JSON
+// string, and its value may be a decimal network ID or a UUID depending on the
+// host. It is always decoded into its string form regardless of the JSON
+// representation used.
+type NetherNetID string
+
+// String returns the string form of the advertised NetherNet network ID.
+func (id NetherNetID) String() string {
+	return string(id)
+}
+
+// UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
+// string into its string form. It never rejects a representable value; whether
+// the ID is actually usable is decided by [Connection.Validate].
+func (id *NetherNetID) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if bytes.Equal(b, []byte("null")) {
+		*id = ""
+		return nil
+	}
+	// A quoted value (a JSON string) may hold a decimal ID or a UUID.
+	if len(b) != 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*id = NetherNetID(s)
+		return nil
+	}
+	// Otherwise the value is a bare JSON number; keep its digits verbatim.
+	*id = NetherNetID(b)
+	return nil
+}
+
+// Validate validates whether the Connection is actually usable for connecting to the world.
+func (c Connection) Validate() error {
+	switch c.Type {
+	case ConnectionTypeSignalingOverJSONRPC:
+		if err := c.validateNetherNetID(); err != nil {
+			return err
+		}
+		if c.PlayerMessagingID == uuid.Nil {
+			return errors.New("minecraft/p2p: Connection.PlayerMessagingID is nil")
+		}
+		return nil
+	case ConnectionTypeSignalingOverWebSocket:
+		return c.validateNetherNetID()
+	default:
+		return fmt.Errorf("minecraft/p2p: invalid Connection.Type: %d", c.Type)
+	}
+}
+
+// validateNetherNetID validates that Connection.NetherNetID is a non-empty,
+// non-zero identifier. The ID is treated as an opaque string because it may be a
+// decimal network ID or a UUID depending on the host.
+func (c Connection) validateNetherNetID() error {
+	id := c.NetherNetID.String()
+	if id == "" || id == "0" {
+		return fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
+	}
+	if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+		if err2 := uuid.Validate(id); err2 != nil {
+			return errors.Join(fmt.Errorf("minecraft/p2p: parse Connection.NetherNetID: %w", err), err2)
+		}
+	}
+	return nil
 }
 
 // Connection returns the first supported NetherNet signaling connection
@@ -170,39 +241,30 @@ func (w World) Connection() (Connection, error) {
 	if w.TransportLayer != 0 && w.TransportLayer != TransportLayerNetherNet {
 		return Connection{}, fmt.Errorf("%w: transport layer %d", ErrNoSupportedConnection, w.TransportLayer)
 	}
-	var unsupported error
+	var err error
 	for _, c := range w.SupportedConnections {
-		if _, err := c.Address(); err == nil {
-			return c, nil
-		} else {
-			unsupported = errors.Join(unsupported, err)
+		if err2 := c.Validate(); err2 != nil {
+			err = errors.Join(err, err2)
+			continue
 		}
+		return c, nil
 	}
-	if unsupported == nil {
+	if err == nil {
 		return Connection{}, ErrNoSupportedConnection
 	}
-	return Connection{}, fmt.Errorf("%w: %w", ErrNoSupportedConnection, unsupported)
+	return Connection{}, fmt.Errorf("%w: %w", ErrNoSupportedConnection, err)
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
-func (c Connection) Address() (string, error) {
-	netherNetID := c.NetherNetID.String()
+// Caller should validate the Connection using [Connection.Validate] before calling this method.
+func (c Connection) Address() string {
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
-		if netherNetID == "" || netherNetID == "0" {
-			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
-		}
-		return netherNetID, nil
+		return c.NetherNetID.String()
 	case ConnectionTypeSignalingOverJSONRPC:
-		if netherNetID == "" || netherNetID == "0" {
-			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
-		}
-		if c.PlayerMessagingID == uuid.Nil {
-			return "", fmt.Errorf("%w: missing player messaging id", ErrInvalidConnection)
-		}
-		return c.PlayerMessagingID.String(), nil
+		return c.PlayerMessagingID.String()
 	default:
-		return "", fmt.Errorf("%w: unsupported type %d", ErrInvalidConnection, c.Type)
+		panic(fmt.Sprintf("minecraft/p2p: invalid connection type: %d", c.Type))
 	}
 }
 
@@ -260,28 +322,26 @@ type BroadcastSetting int
 // JoinRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.JoinRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) JoinRestriction() (string, error) {
+func (s BroadcastSetting) JoinRestriction() string {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionFollowed, nil
+		return mpsd.SessionRestrictionLocal
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed, nil
+		return mpsd.SessionRestrictionFollowed
 	default:
-		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
+		panic(fmt.Sprintf("minecraft/p2p: invalid BroadcastSetting value: %d", s))
 	}
 }
 
 // ReadRestriction returns the
 // [github.com/df-mc/go-xsapi/v2/mpsd.PublishConfig.ReadRestriction]
 // value for the BroadcastSetting.
-func (s BroadcastSetting) ReadRestriction() (string, error) {
+func (s BroadcastSetting) ReadRestriction() string {
 	switch s {
-	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal, nil
-	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
-		return mpsd.SessionRestrictionFollowed, nil
+	case BroadcastSettingInviteOnly, BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
+		return mpsd.SessionRestrictionFollowed
 	default:
-		return "", fmt.Errorf("%w: setting %d", ErrInvalidBroadcastSetting, s)
+		panic(fmt.Sprintf("minecraft/p2p: invalid BroadcastSetting value: %d", s))
 	}
 }
 
