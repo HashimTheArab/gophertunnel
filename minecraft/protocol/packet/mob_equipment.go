@@ -16,13 +16,13 @@ type MobEquipment struct {
 	NewItem protocol.ItemInstance
 	// InventorySlot is the slot in the inventory that was held. This is the same as HotBarSlot, and only
 	// remains for backwards compatibility.
-	InventorySlot byte
+	InventorySlot uint32
 	// HotBarSlot is the slot in the hot bar that was held. It is the same as InventorySlot, which is only
 	// there for backwards compatibility purposes.
-	HotBarSlot byte
+	HotBarSlot uint32
 	// WindowID is the window ID of the window that had its equipped item changed. This is usually the window
 	// ID of the normal inventory, but may also be something else, for example with the off hand.
-	WindowID byte
+	WindowID uint32
 }
 
 // ID ...
@@ -33,7 +33,7 @@ func (*MobEquipment) ID() uint32 {
 func (pk *MobEquipment) Marshal(io protocol.IO) {
 	io.Varuint64(&pk.EntityRuntimeID)
 	io.ItemInstanceNew(&pk.NewItem)
-	io.Uint8(&pk.InventorySlot)
-	io.Uint8(&pk.HotBarSlot)
-	io.Uint8(&pk.WindowID)
+	io.Varuint32(&pk.InventorySlot)
+	io.Varuint32(&pk.HotBarSlot)
+	io.Varuint32(&pk.WindowID)
 }

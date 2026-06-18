@@ -621,8 +621,8 @@ func (r *Reader) Recipe(x *Recipe) {
 
 // EventType reads an Event's type from the reader.
 func (r *Reader) EventType(x *Event) {
-	var t int32
-	r.Varint32(&t)
+	var t uint32
+	r.Varuint32(&t)
 	if !lookupEvent(t, x) {
 		r.UnknownEnumOption(t, "event packet event type")
 	}

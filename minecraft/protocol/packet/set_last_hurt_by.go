@@ -9,7 +9,7 @@ import (
 // packet is sent or not.
 type SetLastHurtBy struct {
 	// EntityType is the numerical type of the entity that the player was last hurt by.
-	EntityType int32
+	EntityType uint32
 }
 
 // ID ...
@@ -18,5 +18,5 @@ func (*SetLastHurtBy) ID() uint32 {
 }
 
 func (pk *SetLastHurtBy) Marshal(io protocol.IO) {
-	io.Varint32(&pk.EntityType)
+	io.Varuint32(&pk.EntityType)
 }

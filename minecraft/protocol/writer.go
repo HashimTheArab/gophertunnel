@@ -527,11 +527,11 @@ func (w *Writer) Recipe(x *Recipe) {
 
 // EventType writes an Event to the writer.
 func (w *Writer) EventType(x *Event) {
-	var t int32
+	var t uint32
 	if !lookupEventType(*x, &t) {
 		w.UnknownEnumOption(*x, "event packet event type")
 	}
-	w.Varint32(&t)
+	w.Varuint32(&t)
 }
 
 // EventOrdinal writes an Event ordinal to the writer.

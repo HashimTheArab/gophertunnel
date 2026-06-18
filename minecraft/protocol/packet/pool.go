@@ -61,7 +61,9 @@ func init() {
 		IDAddActor:                   func() Packet { return &AddActor{} },
 		IDRemoveActor:                func() Packet { return &RemoveActor{} },
 		IDAddItemActor:               func() Packet { return &AddItemActor{} },
-		// ---
+		IDServerPlayerPostMovePosition: func() Packet {
+			return &ServerPlayerPostMovePosition{}
+		},
 		IDTakeItemActor:     func() Packet { return &TakeItemActor{} },
 		IDMoveActorAbsolute: func() Packet { return &MoveActorAbsolute{} },
 		IDMovePlayer:        func() Packet { return &MovePlayer{} },

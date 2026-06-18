@@ -12,7 +12,7 @@ type PlayerAction struct {
 	EntityRuntimeID uint64
 	// ActionType is the ID of the action that was executed by the player. It is one of the constants that may
 	// be found in protocol/player.go.
-	ActionType int32
+	ActionType uint32
 	// BlockPosition is the position of the target block, if the action with the ActionType set concerned a
 	// block. If that is not the case, the block position will be zero.
 	BlockPosition protocol.BlockPos
@@ -31,7 +31,7 @@ func (*PlayerAction) ID() uint32 {
 
 func (pk *PlayerAction) Marshal(io protocol.IO) {
 	io.Varuint64(&pk.EntityRuntimeID)
-	io.Varint32(&pk.ActionType)
+	io.Varuint32(&pk.ActionType)
 	io.BlockPos(&pk.BlockPosition)
 	io.BlockPos(&pk.ResultPosition)
 	io.Varint32(&pk.BlockFace)

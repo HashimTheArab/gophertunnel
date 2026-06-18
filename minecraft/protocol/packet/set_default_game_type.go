@@ -10,7 +10,7 @@ import (
 type SetDefaultGameType struct {
 	// GameType is the new game type that is set. When sent by the client, this is the requested new default
 	// game type.
-	GameType int32
+	GameType uint32
 }
 
 // ID ...
@@ -19,5 +19,5 @@ func (*SetDefaultGameType) ID() uint32 {
 }
 
 func (pk *SetDefaultGameType) Marshal(io protocol.IO) {
-	io.Varint32(&pk.GameType)
+	io.Varuint32(&pk.GameType)
 }

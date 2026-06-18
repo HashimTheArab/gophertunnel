@@ -49,7 +49,7 @@ type BossEvent struct {
 	// unregistered from the boss fight.
 	PlayerUniqueID int64
 	// EventType is the type of the event. It is one of the BossEvent constants above.
-	EventType uint8
+	EventType uint32
 	// BossBarTitle is the title shown above the boss bar. It may be set to set
 	// a different title if the BossEntityUniqueID matches the client's entity
 	// unique ID.
@@ -64,11 +64,11 @@ type BossEvent struct {
 	HealthPercentage float32
 	// Colour is the colour of the boss bar that is shown when a player is
 	// subscribed. It is one of the BossEventColour constants listed above.
-	Colour uint8
+	Colour uint32
 	// Overlay is the overlay of the boss bar that is shown on top of the boss
 	// bar when a player is subscribed. It is one of the BossEventOverlay
 	// constants listed above.
-	Overlay uint8
+	Overlay uint32
 }
 
 // ID ...
@@ -79,10 +79,10 @@ func (*BossEvent) ID() uint32 {
 func (pk *BossEvent) Marshal(io protocol.IO) {
 	io.Varint64(&pk.BossEntityUniqueID)
 	io.Varint64(&pk.PlayerUniqueID)
-	io.Uint8(&pk.EventType)
+	io.Varuint32(&pk.EventType)
 	io.String(&pk.BossBarTitle)
 	io.String(&pk.FilteredBossBarTitle)
 	io.Float32(&pk.HealthPercentage)
-	io.Uint8(&pk.Colour)
-	io.Uint8(&pk.Overlay)
+	io.Varuint32(&pk.Colour)
+	io.Varuint32(&pk.Overlay)
 }

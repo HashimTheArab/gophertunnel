@@ -37,7 +37,7 @@ const (
 
 // lookupEvent looks up an Event matching the event type passed. False is
 // returned if no such event data exists.
-func lookupEvent(eventType int32, x *Event) bool {
+func lookupEvent(eventType uint32, x *Event) bool {
 	switch eventType {
 	case EventTypeAchievementAwarded:
 		*x = &AchievementAwardedEvent{}
@@ -110,7 +110,7 @@ func lookupEvent(eventType int32, x *Event) bool {
 }
 
 // lookupEventType looks up an event type that matches the Event passed.
-func lookupEventType(x Event, eventType *int32) bool {
+func lookupEventType(x Event, eventType *uint32) bool {
 	switch x.(type) {
 	case *AchievementAwardedEvent:
 		*eventType = EventTypeAchievementAwarded

@@ -21,7 +21,7 @@ const (
 type SetTitle struct {
 	// ActionType is the type of the action that should be executed upon the title of a player. It is one of
 	// the constants above and specifies the response of the client to the packet.
-	ActionType int32
+	ActionType uint32
 	// Text is the text of the title, which has a different meaning depending on the ActionType that the
 	// packet has. The text is the text of a title, subtitle or action bar, depending on the type set.
 	Text string
@@ -50,7 +50,7 @@ func (*SetTitle) ID() uint32 {
 }
 
 func (pk *SetTitle) Marshal(io protocol.IO) {
-	io.Varint32(&pk.ActionType)
+	io.Varuint32(&pk.ActionType)
 	io.String(&pk.Text)
 	io.Varint32(&pk.FadeInDuration)
 	io.Varint32(&pk.RemainDuration)

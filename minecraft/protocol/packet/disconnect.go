@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	DisconnectReasonUnknown int32 = iota
+	DisconnectReasonUnknown uint32 = iota
 	DisconnectReasonCantConnectNoInternet
 	DisconnectReasonNoPermissions
 	DisconnectReasonUnrecoverableError
@@ -152,7 +152,7 @@ const (
 type Disconnect struct {
 	// Reason is the reason for the disconnection. This affects the error code displayed on the Ore UI
 	// disconnection screen and is one of the constants above.
-	Reason int32
+	Reason uint32
 	// HideDisconnectionScreen specifies if the disconnection screen should be hidden when the client is
 	// disconnected, meaning it will be sent directly to the main menu.
 	HideDisconnectionScreen bool
@@ -170,7 +170,7 @@ func (*Disconnect) ID() uint32 {
 }
 
 func (pk *Disconnect) Marshal(io protocol.IO) {
-	io.Varint32(&pk.Reason)
+	io.Varuint32(&pk.Reason)
 	io.Bool(&pk.HideDisconnectionScreen)
 	if !pk.HideDisconnectionScreen {
 		io.String(&pk.Message)

@@ -15,7 +15,7 @@ type SetSpawnPosition struct {
 	// SpawnType is the type of spawn to set. It is either SpawnTypePlayer or SpawnTypeWorld, and specifies
 	// the behaviour of the spawn set. If SpawnTypeWorld is set, the position to which compasses will point is
 	// also changed.
-	SpawnType int32
+	SpawnType uint32
 	// Position is the new position of the spawn that was set. If SpawnType is SpawnTypeWorld, compasses will
 	// point to this position. As of 1.16, Position is always the position of the player.
 	Position protocol.BlockPos
@@ -34,7 +34,7 @@ func (*SetSpawnPosition) ID() uint32 {
 }
 
 func (pk *SetSpawnPosition) Marshal(io protocol.IO) {
-	io.Varint32(&pk.SpawnType)
+	io.Varuint32(&pk.SpawnType)
 	io.BlockPos(&pk.Position)
 	io.Varint32(&pk.Dimension)
 	io.BlockPos(&pk.SpawnPosition)

@@ -31,9 +31,9 @@ type AgentAction struct {
 	// Identifier is a JSON identifier referenced in the initial action.
 	Identifier string
 	// Action represents the action type that was requested. It is one of the constants defined above.
-	Action int32
+	Action uint32
 	// Response is a JSON string containing the response to the action.
-	Response []byte
+	Response string
 }
 
 // ID ...
@@ -43,6 +43,6 @@ func (*AgentAction) ID() uint32 {
 
 func (pk *AgentAction) Marshal(io protocol.IO) {
 	io.String(&pk.Identifier)
-	io.Int32(&pk.Action)
-	io.ByteSlice(&pk.Response)
+	io.Uint32(&pk.Action)
+	io.String(&pk.Response)
 }

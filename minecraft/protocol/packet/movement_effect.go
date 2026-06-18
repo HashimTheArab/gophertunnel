@@ -18,7 +18,7 @@ type MovementEffect struct {
 	// entities are generally identified in packets using this runtime ID.
 	EntityRuntimeID uint64
 	// Type is the type of movement effect being updated. It is one of the constants found above.
-	Type int32
+	Type uint32
 	// Duration is the duration of the effect, measured in ticks.
 	Duration int32
 	// Tick is the server tick at which the packet was sent. It is used in relation to CorrectPlayerMovePrediction.
@@ -32,7 +32,7 @@ func (*MovementEffect) ID() uint32 {
 
 func (pk *MovementEffect) Marshal(io protocol.IO) {
 	io.Varuint64(&pk.EntityRuntimeID)
-	io.Varint32(&pk.Type)
+	io.Varuint32(&pk.Type)
 	io.Varint32(&pk.Duration)
 	io.Varuint64(&pk.Tick)
 }

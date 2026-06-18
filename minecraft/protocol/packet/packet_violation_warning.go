@@ -19,10 +19,10 @@ const (
 // noinspection GoNameStartsWithPackageName
 type PacketViolationWarning struct {
 	// Type is the type of violation. It is one of the constants above.
-	Type int32
+	Type uint32
 	// Severity specifies the severity of the packet violation. The action the client takes after this
 	// violation depends on the severity sent.
-	Severity int32
+	Severity uint32
 	// PacketID is the ID of the invalid packet that was received.
 	PacketID int32
 	// ViolationContext holds a description on the violation of the packet.
@@ -35,8 +35,8 @@ func (*PacketViolationWarning) ID() uint32 {
 }
 
 func (pk *PacketViolationWarning) Marshal(io protocol.IO) {
-	io.Varint32(&pk.Type)
-	io.Varint32(&pk.Severity)
+	io.Varuint32(&pk.Type)
+	io.Varuint32(&pk.Severity)
 	io.Varint32(&pk.PacketID)
 	io.String(&pk.ViolationContext)
 }
