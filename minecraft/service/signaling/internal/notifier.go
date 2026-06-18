@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
@@ -57,6 +58,24 @@ func (n *Notifier) Signal(signal *nethernet.Signal) {
 		}
 	}
 	n.mu.RUnlock()
+}
+
+// SignalContext sends signal to all registered channels, blocking until each
+// channel accepts the signal or ctx is canceled.
+func (n *Notifier) SignalContext(ctx context.Context, signal *nethernet.Signal) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	for _, ch := range n.notifiers {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ch <- signal:
+		}
+	}
+	return nil
 }
 
 // stop removes the channel registered with the given ID and closes it.

@@ -207,7 +207,9 @@ func (conn *Conn) handleMessage(message Message) {
 			return
 		}
 		signal.NetworkID = message.From
-		conn.notifier.Signal(signal)
+		if err := conn.notifier.SignalContext(conn.ctx, signal); err != nil {
+			log.Error("error delivering signal", slog.Any("error", err))
+		}
 	case MessageTypeError:
 		if message.ID == uuid.Nil {
 			log.Warn("received message without an ID", slog.Any("message", message))

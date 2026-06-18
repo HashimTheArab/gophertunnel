@@ -186,14 +186,15 @@ func (w World) Connection() (Connection, error) {
 
 // Address returns a string that can be used as the address when dialing a new Conn.
 func (c Connection) Address() (string, error) {
+	netherNetID := c.NetherNetID.String()
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
-		if c.NetherNetID == "" {
+		if netherNetID == "" || netherNetID == "0" {
 			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
 		}
-		return c.NetherNetID.String(), nil
+		return netherNetID, nil
 	case ConnectionTypeSignalingOverJSONRPC:
-		if c.NetherNetID == "" {
+		if netherNetID == "" || netherNetID == "0" {
 			return "", fmt.Errorf("%w: missing nethernet id", ErrInvalidConnection)
 		}
 		if c.PlayerMessagingID == uuid.Nil {
