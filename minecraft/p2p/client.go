@@ -35,8 +35,7 @@ func (conf ClientConfig) New(client *xsapi.Client) *Client {
 
 // NewClient returns a new Client using the underlying [xsapi.Client].
 func NewClient(client *xsapi.Client) *Client {
-	var c ClientConfig
-	return c.New(client)
+	return ClientConfig{}.New(client)
 }
 
 // Client implements an API client for searching peer-to-peer worlds hosted by players.
@@ -195,6 +194,9 @@ func (s *Session) failReadyLocked(err error) error {
 	return err
 }
 
+// waitReady blocks until updateWorldData observes both a usable connection and
+// the caller nonce, or until ctx is canceled. If both happen together, it
+// returns the ready result so terminal host errors are not hidden by ctx.
 func (s *Session) waitReady(ctx context.Context) error {
 	select {
 	case <-s.ready:
