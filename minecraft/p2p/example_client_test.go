@@ -76,7 +76,7 @@ func ExampleClient() {
 	var s nethernet.Signaling
 	switch connection.Type {
 	case ConnectionTypeSignalingOverJSONRPC:
-		var d messaging.Dialer
+		d := messaging.Dialer{NetworkID: connection.NetherNetID.String()}
 		conn, err := d.DialContext(context.TODO(), src)
 		if err != nil {
 			panic(fmt.Sprintf("error dialing messaging conn: %s", err))
