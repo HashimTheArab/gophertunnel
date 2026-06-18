@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"context"
 	"log/slog"
 	"sync"
 
@@ -13,7 +12,7 @@ import (
 // channel is full.
 func NewNotifier(log *slog.Logger) *Notifier {
 	return &Notifier{
-		notifiers: make(map[uint32]*notifier),
+		notifiers: make(map[uint32]chan *nethernet.Signal),
 		log:       log,
 	}
 }
@@ -21,20 +20,10 @@ func NewNotifier(log *slog.Logger) *Notifier {
 // Notifier distributes incoming [nethernet.Signal] values to registered
 // subscription channels.
 type Notifier struct {
-	notifiers   map[uint32]*notifier
+	notifiers   map[uint32]chan *nethernet.Signal
 	notifyCount uint32
 	mu          sync.RWMutex
 	log         *slog.Logger
-}
-
-type notifier struct {
-	ch   chan *nethernet.Signal
-	done chan struct{}
-	once sync.Once
-
-	mu     sync.Mutex
-	closed bool
-	wg     sync.WaitGroup
 }
 
 // Register returns a channel that receives incoming signals. The returned stop
@@ -45,16 +34,13 @@ func (n *Notifier) Register() (<-chan *nethernet.Signal, func()) {
 	n.mu.Lock()
 	i := n.notifyCount
 	n.notifyCount++
-	n.notifiers[i] = &notifier{ch: signals, done: make(chan struct{})}
+	n.notifiers[i] = signals
 	n.mu.Unlock()
 
 	return signals, func() {
 		n.mu.Lock()
-		entry := n.stop(i)
+		n.stop(i)
 		n.mu.Unlock()
-		if entry != nil {
-			entry.close()
-		}
 	}
 }
 
@@ -62,98 +48,35 @@ func (n *Notifier) Register() (<-chan *nethernet.Signal, func()) {
 // to receive, the signal is dropped for that channel and a debug message is
 // logged.
 func (n *Notifier) Signal(signal *nethernet.Signal) {
-	for _, entry := range n.snapshot() {
-		if !entry.acquire() {
-			continue
-		}
+	n.mu.RLock()
+	for _, ch := range n.notifiers {
 		select {
-		case entry.ch <- signal:
-		case <-entry.done:
+		case ch <- signal:
 		default:
 			n.log.Debug("dropping signal due to notifier being backed up", slog.String("signal", signal.String()))
 		}
-		entry.release()
-	}
-}
-
-// SignalContext sends signal to all registered channels, blocking until each
-// channel receives the signal or ctx is done. It returns ctx.Err if delivery
-// is interrupted by context cancellation.
-func (n *Notifier) SignalContext(ctx context.Context, signal *nethernet.Signal) error {
-	for _, entry := range n.snapshot() {
-		if !entry.acquire() {
-			continue
-		}
-		select {
-		case entry.ch <- signal:
-			entry.release()
-		case <-entry.done:
-			entry.release()
-		case <-ctx.Done():
-			entry.release()
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
-func (n *Notifier) snapshot() []*notifier {
-	n.mu.RLock()
-	entries := make([]*notifier, 0, len(n.notifiers))
-	for _, entry := range n.notifiers {
-		entries = append(entries, entry)
 	}
 	n.mu.RUnlock()
-	return entries
 }
 
 // stop removes the channel registered with the given ID and closes it.
 // The caller must hold mu before calling stop.
-func (n *Notifier) stop(i uint32) *notifier {
-	entry, ok := n.notifiers[i]
+func (n *Notifier) stop(i uint32) {
+	ch, ok := n.notifiers[i]
 	if !ok {
-		return nil
+		return
 	}
 	delete(n.notifiers, i)
-	return entry
+	close(ch)
 }
 
 // Close unregisters and closes all registered channels.
 func (n *Notifier) Close() error {
 	n.mu.Lock()
-	entries := make([]*notifier, 0, len(n.notifiers))
 	for i := range n.notifiers {
-		entries = append(entries, n.stop(i))
+		n.stop(i)
 	}
 	n.mu.Unlock()
 
-	for _, entry := range entries {
-		entry.close()
-	}
 	return nil
-}
-
-func (n *notifier) acquire() bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.closed {
-		return false
-	}
-	n.wg.Add(1)
-	return true
-}
-
-func (n *notifier) release() {
-	n.wg.Done()
-}
-
-func (n *notifier) close() {
-	n.once.Do(func() {
-		n.mu.Lock()
-		n.closed = true
-		close(n.done)
-		n.mu.Unlock()
-		n.wg.Wait()
-		close(n.ch)
-	})
 }
