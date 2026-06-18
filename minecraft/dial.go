@@ -212,19 +212,15 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
+		var xblSource xsapi.TokenSource
 		if d.XBLClient == nil {
 			x, ok := d.TokenSource.(xsapi.TokenSource)
 			if !ok {
 				x = auth.ContextSession(ctx, d.TokenSource)
 			}
-			client, err := xsapi.ClientConfig{
-				HTTPClient: d.HTTPClient,
-			}.New(ctx, x)
-			if err != nil {
-				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to xbox live: %w", err)}
-			}
-			defer client.Close()
-			d.XBLClient = client
+			xblSource = x
+		} else {
+			xblSource = d.XBLClient.TokenSource()
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -241,6 +237,16 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				// If a MultiplayerTokenSource was not provided, log in to PlayFab
 				// account and use a default implementation instead.
 				if d.PlayFabClient == nil {
+					if d.XBLClient == nil {
+						client, err := xsapi.ClientConfig{
+							HTTPClient: d.HTTPClient,
+						}.New(ctx, xblSource)
+						if err != nil {
+							return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to xbox live: %w", err)}
+						}
+						defer client.Close()
+						d.XBLClient = client
+					}
 					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, d.XBLClient, playfab.ClientConfig{
 						HTTPClient:    d.HTTPClient,
 						CreateAccount: true,
@@ -259,7 +265,11 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, d.XBLClient, key)
+		if d.XBLClient != nil {
+			chainData, err = auth.RequestMinecraftChain(ctx, d.XBLClient, key)
+		} else {
+			chainData, err = auth.RequestMinecraftChainWithTokenSource(ctx, xblSource, d.HTTPClient, key)
+		}
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
