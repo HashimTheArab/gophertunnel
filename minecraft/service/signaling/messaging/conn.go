@@ -94,7 +94,7 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	if err != nil {
 		return fmt.Errorf("encode inner message: %w", err)
 	}
-	_, err = conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
+	resp, err := conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
 		"toPlayerId": messagingID,
 		"messageId":  id,
 		"message":    string(data),
@@ -102,14 +102,17 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	if err != nil {
 		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
 	}
+	if err := resp.Error(); err != nil {
+		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
+	}
 	return nil
 }
 
-// Notify returns a channel that receives incoming NetherNet signals.
+// Notify registers and returns a channel to receive incoming NetherNet signals.
 //
-// The returned stop function unregisters and closes the channel.
+// The returned stop function unregisters the channel and closes it.
 func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Register()
+	return conn.notifier.Notify()
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -281,7 +284,9 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		conn.notifier.Signal(signal)
+		if err := conn.notifier.SignalContext(ctx, signal); err != nil {
+			return fmt.Errorf("deliver signal: %w", err)
+		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
 			"params": map[string]any{

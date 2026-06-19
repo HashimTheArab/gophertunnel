@@ -74,11 +74,11 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify returns a channel that receives incoming NetherNet signals.
+// Notify registers and returns a channel to receive incoming NetherNet signals.
 //
-// The returned stop function unregisters and closes the channel.
+// The returned stop function unregisters the channel and closes it.
 func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Register()
+	return conn.notifier.Notify()
 }
 
 // complete resolves the expectation registered for the outbound Message with
@@ -207,18 +207,23 @@ func (conn *Conn) handleMessage(message Message) {
 			return
 		}
 		signal.NetworkID = message.From
-		conn.notifier.Signal(signal)
-	case MessageTypeError:
-		if message.ID == uuid.Nil {
-			log.Warn("received message without an ID", slog.Any("message", message))
-			return
+		if err := conn.notifier.SignalContext(conn.ctx, signal); err != nil {
+			log.Error("error delivering signal", slog.Any("error", err))
 		}
+	case MessageTypeError:
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
+			if message.ID == uuid.Nil {
+				_ = conn.close(fmt.Errorf("decode connection-level error: %w", err2))
+			}
 			return
 		}
 		log.Debug("received error", slog.Any("message", message))
+		if message.ID == uuid.Nil {
+			_ = conn.close(err)
+			return
+		}
 		conn.complete(message.ID, err)
 	case MessageTypeDelivered:
 		if conn.d.IgnoreDeliveryNotification {
