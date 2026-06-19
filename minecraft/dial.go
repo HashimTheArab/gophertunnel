@@ -196,10 +196,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	if d.FlushRate == 0 {
 		d.FlushRate = time.Second / 20
 	}
-	if d.HTTPClient != nil {
-		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
-			ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
-		}
+	if d.HTTPClient == nil {
+		d.HTTPClient = http.DefaultClient
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
@@ -210,7 +208,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
 		xblSigner        xsapi.TokenAndSignaturer
-		authClient       *http.Client
+		httpClient       *http.Client
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -218,20 +216,20 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	if d.TokenSource != nil || d.XBLClient != nil {
 		if d.XBLClient != nil {
 			xblSigner = d.XBLClient
-			authClient = d.XBLClient.HTTPClient()
+			httpClient = d.XBLClient.HTTPClient()
 		} else {
 			x, ok := d.TokenSource.(xsapi.TokenSource)
 			if !ok {
 				x = auth.ContextSession(ctx, d.TokenSource)
 			}
-			if d.HTTPClient != nil {
-				if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
-					ctx = context.WithValue(ctx, xal.HTTPClient, d.HTTPClient)
-				}
+			if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
+				ctx = context.WithValue(ctx, xal.HTTPClient, d.HTTPClient)
 			}
-			resolver := nsal.NewResolver(x)
-			xblSigner = resolver
-			authClient = minecraftAuthHTTPClient(d.HTTPClient, resolver)
+			if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
+				ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
+			}
+			xblSigner = nsal.NewResolver(x)
+			httpClient = d.HTTPClient
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -266,7 +264,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, authClient, key)
+		chainData, err = auth.RequestMinecraftChain(ctx, xblSigner, httpClient, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
@@ -431,22 +429,6 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 		}
 	}
-}
-
-// minecraftAuthHTTPClient returns a copy of base that authenticates Minecraft
-// chain requests with resolver. The client is copied so timeout, cookie jar and
-// redirect settings are preserved while only the transport is wrapped.
-func minecraftAuthHTTPClient(base *http.Client, resolver *nsal.Resolver) *http.Client {
-	if base == nil {
-		base = http.DefaultClient
-	}
-	client := *base
-	transport := base.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	client.Transport = &nsal.Transport{Base: transport, Resolver: resolver}
-	return &client
 }
 
 //go:embed skin_resource_patch.json
