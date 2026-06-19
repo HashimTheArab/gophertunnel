@@ -90,16 +90,6 @@ func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
 	return AndroidConfig.New(src, nil)
 }
 
-func ContextClient(ctx context.Context, defaultClient *http.Client) *http.Client {
-	if defaultClient == nil {
-		defaultClient = http.DefaultClient
-	}
-	if hc, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		return hc
-	}
-	return defaultClient
-}
-
 // NewTokenCache returns an XBLTokenCache that can be used to re-use XBL tokens
 // in [RequestXBLToken].
 func (conf Config) NewTokenCache() *XBLTokenCache {
