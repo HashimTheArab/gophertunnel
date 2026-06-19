@@ -74,11 +74,9 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify returns a channel that receives incoming NetherNet signals.
-//
-// The returned stop function unregisters and closes the channel.
-func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Register()
+// Notify registers n to receive incoming NetherNet signals.
+func (conn *Conn) Notify(n nethernet.Notifier) func() {
+	return conn.notifier.Notify(n)
 }
 
 // complete resolves the expectation registered for the outbound Message with
@@ -116,7 +114,6 @@ func (conn *Conn) NetworkID() string {
 }
 
 // Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
-// It unregisters all notifiers registered on the Conn with notifying [nethernet.ErrSignalingStopped].
 func (conn *Conn) Close() (err error) {
 	return conn.close(net.ErrClosed)
 }
@@ -135,7 +132,7 @@ func (conn *Conn) close(cause error) (err error) {
 		conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 
 		conn.cancel(cause)
-		_ = conn.notifier.Close()
+		conn.notifier.Close()
 
 		err = conn.conn.Close(websocket.StatusNormalClosure, "")
 	})

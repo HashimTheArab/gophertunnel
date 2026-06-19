@@ -105,11 +105,9 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	return nil
 }
 
-// Notify returns a channel that receives incoming NetherNet signals.
-//
-// The returned stop function unregisters and closes the channel.
-func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Register()
+// Notify registers n to receive incoming NetherNet signals.
+func (conn *Conn) Notify(n nethernet.Notifier) func() {
+	return conn.notifier.Notify(n)
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -154,7 +152,6 @@ func (conn *Conn) PlayerMessagingID() uuid.UUID {
 }
 
 // Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
-// It unregisters all notifiers registered on the Conn with notifying [nethernet.ErrSignalingStopped].
 func (conn *Conn) Close() (err error) {
 	return conn.close(net.ErrClosed)
 }
@@ -179,7 +176,7 @@ func (conn *Conn) close(cause error) (err error) {
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
-	_ = conn.notifier.Close()
+	conn.notifier.Close()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.

@@ -1,82 +1,65 @@
 package internal
 
 import (
-	"log/slog"
 	"sync"
 
 	"github.com/df-mc/go-nethernet"
 )
 
-// NewNotifier returns a Notifier that is ready for use. The given logger is
-// used to log a debug message when a signal is dropped because a registered
-// channel is full.
-func NewNotifier(log *slog.Logger) *Notifier {
+// NewNotifier returns a Notifier that is ready for use.
+func NewNotifier() *Notifier {
 	return &Notifier{
-		notifiers: make(map[uint32]chan *nethernet.Signal),
-		log:       log,
+		notifiers: make(map[uint32]nethernet.Notifier),
 	}
 }
 
 // Notifier distributes incoming [nethernet.Signal] values to registered
-// subscription channels.
+// signal notifiers.
 type Notifier struct {
-	notifiers   map[uint32]chan *nethernet.Signal
+	notifiers   map[uint32]nethernet.Notifier
 	notifyCount uint32
 	mu          sync.RWMutex
-	log         *slog.Logger
 }
 
-// Register returns a channel that receives incoming signals. The returned stop
-// function removes and closes the channel.
-func (n *Notifier) Register() (<-chan *nethernet.Signal, func()) {
-	signals := make(chan *nethernet.Signal, 64)
-
+// Notify registers notifier for incoming signals and returns a stop function
+// that unregisters it.
+func (n *Notifier) Notify(notifier nethernet.Notifier) func() {
+	if notifier == nil {
+		panic("signaling: nil Notifier")
+	}
 	n.mu.Lock()
 	i := n.notifyCount
 	n.notifyCount++
-	n.notifiers[i] = signals
+	n.notifiers[i] = notifier
 	n.mu.Unlock()
 
-	return signals, func() {
-		n.mu.Lock()
-		n.stop(i)
-		n.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			n.mu.Lock()
+			delete(n.notifiers, i)
+			n.mu.Unlock()
+		})
 	}
 }
 
-// Signal sends signal to all registered channels. If a channel is not ready
-// to receive, the signal is dropped for that channel and a debug message is
-// logged.
+// Signal sends signal to all registered notifiers.
 func (n *Notifier) Signal(signal *nethernet.Signal) {
 	n.mu.RLock()
-	for _, ch := range n.notifiers {
-		select {
-		case ch <- signal:
-		default:
-			n.log.Debug("dropping signal due to notifier being backed up", slog.String("signal", signal.String()))
-		}
+	notifiers := make([]nethernet.Notifier, 0, len(n.notifiers))
+	for _, notifier := range n.notifiers {
+		notifiers = append(notifiers, notifier)
 	}
 	n.mu.RUnlock()
-}
 
-// stop removes the channel registered with the given ID and closes it.
-// The caller must hold mu before calling stop.
-func (n *Notifier) stop(i uint32) {
-	ch, ok := n.notifiers[i]
-	if !ok {
-		return
+	for _, notifier := range notifiers {
+		notifier.NotifySignal(signal)
 	}
-	delete(n.notifiers, i)
-	close(ch)
 }
 
-// Close unregisters and closes all registered channels.
-func (n *Notifier) Close() error {
+// Close unregisters all notifiers.
+func (n *Notifier) Close() {
 	n.mu.Lock()
-	for i := range n.notifiers {
-		n.stop(i)
-	}
+	clear(n.notifiers)
 	n.mu.Unlock()
-
-	return nil
 }

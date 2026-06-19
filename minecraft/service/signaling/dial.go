@@ -102,7 +102,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 
 		credentialsReceived: make(chan struct{}),
 
-		notifier: internal.NewNotifier(d.Log),
+		notifier: internal.NewNotifier(),
 		pending:  internal.NewPendingMap(),
 	}
 	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
