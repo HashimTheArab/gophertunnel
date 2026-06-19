@@ -210,7 +210,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
 		xblSigner        xsapi.TokenAndSignaturer
-		authClient       = d.HTTPClient
+		authClient       *http.Client
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -231,6 +231,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			}
 			resolver := nsal.NewResolver(x)
 			xblSigner = resolver
+			authClient = minecraftAuthHTTPClient(d.HTTPClient, resolver)
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -265,7 +266,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, xblSigner, authClient, key)
+		chainData, err = auth.RequestMinecraftChain(ctx, authClient, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
@@ -430,6 +431,21 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 		}
 	}
+}
+
+// minecraftAuthHTTPClient returns a copy of base that authenticates Minecraft
+// chain requests with resolver without mutating the caller's client.
+func minecraftAuthHTTPClient(base *http.Client, resolver *nsal.Resolver) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = &nsal.Transport{Base: transport, Resolver: resolver}
+	return &client
 }
 
 //go:embed skin_resource_patch.json

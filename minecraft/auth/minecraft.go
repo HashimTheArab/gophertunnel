@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/df-mc/go-xsapi/v2"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -24,23 +23,19 @@ var minecraftAuthURL = &url.URL{
 } // https://multiplayer.minecraft.net/authentication
 
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using
-// signer and the ECDSA private key passed. The key will later be used to
+// client and the ECDSA private key passed. The key will later be used to
 // initialise encryption, and must be saved for when packets need to be
 // decrypted/encrypted.
-func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
+//
+// The client must authenticate requests to multiplayer.minecraft.net, for
+// example by using [github.com/df-mc/go-xsapi/v2.Client.HTTPClient] or an
+// [github.com/df-mc/go-xsapi/v2/xal/nsal.Transport].
+func RequestMinecraftChain(ctx context.Context, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if signer == nil {
-		return "", errors.New("xbox live token signer is nil")
-	}
 	if client == nil {
-		client = http.DefaultClient
-	}
-
-	token, _, err := signer.TokenAndSignature(ctx, minecraftAuthURL)
-	if err != nil {
-		return "", fmt.Errorf("request token and signature: %w", err)
+		return "", errors.New("HTTP client is nil")
 	}
 
 	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
@@ -56,7 +51,6 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
 
-	token.SetAuthHeader(request)
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
