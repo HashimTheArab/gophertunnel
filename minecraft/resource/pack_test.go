@@ -1,6 +1,8 @@
 package resource
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,5 +41,15 @@ func TestReadPathFindsManifestInNestedDirectory(t *testing.T) {
 	}
 	if pack.Name() != "nested" {
 		t.Fatalf("pack name = %q, want nested", pack.Name())
+	}
+}
+
+func TestReadURLContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ReadURLContext(ctx, "http://127.0.0.1/resource.mcpack"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadURLContext error = %v, want context canceled", err)
 	}
 }

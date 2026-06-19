@@ -1235,11 +1235,12 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURL(pack.DownloadURL)
+			newPack, err := resource.ReadURLContext(conn.ctx, pack.DownloadURL)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
 			} else {
 				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				conn.packQueue.packAmount--
 				continue
 			}
 		}

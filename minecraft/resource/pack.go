@@ -3,6 +3,7 @@ package resource
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -64,7 +65,17 @@ func ReadBytes(data []byte) (*Pack, error) {
 // zip archive where the manifest.json file is inside a subdirectory rather than the root itself. If the resource
 // pack is not a valid zip or there is no manifest.json file, an error is returned.
 func ReadURL(url string) (*Pack, error) {
-	resp, err := http.Get(url)
+	return ReadURLContext(context.Background(), url)
+}
+
+// ReadURLContext downloads a resource pack found at the URL passed and compiles it. The request is canceled
+// when ctx is done.
+func ReadURLContext(ctx context.Context, url string) (*Pack, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create resource pack request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download resource pack: %w", err)
 	}
