@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -36,7 +37,9 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	notifier *internal.Notifier
+	notifiersMu sync.RWMutex
+	notifyCount uint32
+	notifiers   map[uint32]nethernet.Notifier
 
 	pending *internal.PendingMap
 
@@ -107,7 +110,23 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 
 // Notify registers n to receive incoming NetherNet signals.
 func (conn *Conn) Notify(n nethernet.Notifier) func() {
-	return conn.notifier.Notify(n)
+	if n == nil {
+		panic("signaling/messaging: nil Notifier")
+	}
+	conn.notifiersMu.Lock()
+	id := conn.notifyCount
+	conn.notifyCount++
+	conn.notifiers[id] = n
+	conn.notifiersMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			conn.notifiersMu.Lock()
+			delete(conn.notifiers, id)
+			conn.notifiersMu.Unlock()
+		})
+	}
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -151,7 +170,7 @@ func (conn *Conn) PlayerMessagingID() uuid.UUID {
 	return conn.pmid
 }
 
-// Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
+// Close closes the Conn. It ensures that the Conn is closed only once.
 func (conn *Conn) Close() (err error) {
 	return conn.close(net.ErrClosed)
 }
@@ -176,7 +195,6 @@ func (conn *Conn) close(cause error) (err error) {
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
-	conn.notifier.Close()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
@@ -278,7 +296,13 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		conn.notifier.Signal(signal)
+
+		conn.notifiersMu.RLock()
+		notifiers := maps.Clone(conn.notifiers)
+		conn.notifiersMu.RUnlock()
+		for _, n := range notifiers {
+			n.NotifySignal(signal)
+		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
 			"params": map[string]any{
