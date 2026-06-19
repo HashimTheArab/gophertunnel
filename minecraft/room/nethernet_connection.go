@@ -39,14 +39,12 @@ func NetherNetConnectionInfo(status Status) (NetherNetConnection, bool) {
 		if c.ConnectionType != ConnectionTypeWebSocketsWebRTCSignaling && c.ConnectionType != ConnectionTypeJSONRPCSignaling {
 			continue
 		}
-		parsed, err := strconv.ParseUint(string(c.NetherNetID), 10, 64)
-		if err != nil || parsed == 0 {
-			continue
-		}
 		conn := NetherNetConnection{
-			RawID:          parsed,
 			MessagingID:    c.PmsgID,
 			ConnectionType: c.ConnectionType,
+		}
+		if parsed, err := strconv.ParseUint(string(c.NetherNetID), 10, 64); err == nil {
+			conn.RawID = parsed
 		}
 		if conn.DialID() == "" {
 			continue

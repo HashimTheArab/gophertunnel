@@ -35,6 +35,16 @@ func TestNetherNetConnectionInfo(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "jsonrpc messaging id with uuid nethernet id",
+			status: Status{SupportedConnections: []Connection{{
+				ConnectionType: ConnectionTypeJSONRPCSignaling,
+				NetherNetID:    NetherNetID("6f7c9f7a-0b1f-4b77-8b16-cf4b47b1a0e5"),
+				PmsgID:         uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
+			}}},
+			wantID: "550e8400-e29b-41d4-a716-446655440000",
+			wantOK: true,
+		},
+		{
 			name: "jsonrpc without messaging id is rejected",
 			status: Status{SupportedConnections: []Connection{{
 				ConnectionType: ConnectionTypeJSONRPCSignaling,
