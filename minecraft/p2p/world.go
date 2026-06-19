@@ -212,11 +212,13 @@ func (c Connection) validateNetherNetID() error {
 
 // Connection returns the first supported NetherNet signaling connection
 // advertised by w. Non-NetherNet worlds are rejected because this package
-// currently implements only NetherNet peer-to-peer joins. Unsupported connection
-// entries are ignored so a future or auxiliary entry does not make an otherwise
-// joinable world unusable.
+// currently implements only NetherNet peer-to-peer joins. Worlds with an omitted
+// transport layer are still scanned because MPSD sessions may publish usable
+// NetherNet connection entries without setting TransportLayer. Unsupported
+// connection entries are ignored so a future or auxiliary entry does not make an
+// otherwise joinable world unusable.
 func (w World) Connection() (Connection, error) {
-	if w.TransportLayer != TransportLayerNetherNet {
+	if w.TransportLayer != 0 && w.TransportLayer != TransportLayerNetherNet {
 		return Connection{}, fmt.Errorf("invalid transport layer: %d", w.TransportLayer)
 	}
 	var err error
