@@ -105,11 +105,11 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	return nil
 }
 
-// Notify registers and returns a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel and closes it.
+// The returned stop function unregisters and closes the channel.
 func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Notify()
+	return conn.notifier.Register()
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -281,9 +281,7 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		if err := conn.notifier.SignalContext(ctx, signal); err != nil {
-			return fmt.Errorf("deliver signal: %w", err)
-		}
+		conn.notifier.Signal(signal)
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
 			"params": map[string]any{
