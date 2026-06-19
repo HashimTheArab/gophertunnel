@@ -208,7 +208,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
 		xblSigner        xsapi.TokenAndSignaturer
-		httpClient       *http.Client
+		httpClient       = d.HTTPClient
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -229,10 +229,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
 			}
 			xblSigner = nsal.NewResolver(x)
-			httpClient = d.HTTPClient
-		}
-		if httpClient == nil {
-			httpClient = http.DefaultClient
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
