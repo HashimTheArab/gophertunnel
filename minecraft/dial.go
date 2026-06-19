@@ -377,6 +377,9 @@ func readChainIdentityData(chainData []byte) (login.IdentityData, error) {
 	if err := json.Unmarshal(chainData, &chain); err != nil {
 		return login.IdentityData{}, fmt.Errorf("read chain: read json: %w", err)
 	}
+	if len(chain.Chain) < 2 {
+		return login.IdentityData{}, fmt.Errorf("read chain: expected at least 2 entries, got %d", len(chain.Chain))
+	}
 	data := chain.Chain[1]
 	claims := struct {
 		ExtraData login.IdentityData `json:"extraData"`
