@@ -13,18 +13,6 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	// ErrNoSupportedConnection is returned when a World does not advertise a
-	// NetherNet signaling connection supported by this package.
-	ErrNoSupportedConnection = errors.New("minecraft/p2p: no supported signaling connection")
-	// ErrInvalidConnection is returned when a Connection cannot be converted
-	// into a usable dial address.
-	ErrInvalidConnection = errors.New("minecraft/p2p: invalid connection")
-	// ErrInvalidBroadcastSetting is returned when a BroadcastSetting cannot be
-	// converted into Xbox Live session restrictions.
-	ErrInvalidBroadcastSetting = errors.New("minecraft/p2p: invalid broadcast setting")
-)
-
 // World represents a player-hosted world that can be joined.
 // It typically mirrors the custom properties of the multiplayer
 // session published by the host.
@@ -167,11 +155,6 @@ type Connection struct {
 // representation used.
 type NetherNetID string
 
-// String returns the string form of the advertised NetherNet network ID.
-func (id NetherNetID) String() string {
-	return string(id)
-}
-
 // UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
 // string into its string form. It never rejects a representable value; whether
 // the ID is actually usable is decided by [Connection.Validate].
@@ -229,15 +212,12 @@ func (c Connection) validateNetherNetID() error {
 
 // Connection returns the first supported NetherNet signaling connection
 // advertised by w. Non-NetherNet worlds are rejected because this package
-// currently implements only NetherNet peer-to-peer joins. Worlds with an omitted
-// transport layer are still scanned because MPSD sessions may publish usable
-// NetherNet connection entries without setting TransportLayer. Unsupported
-// connection entries are ignored so a future or auxiliary entry does not make
-// an otherwise joinable world unusable. If no connection can be selected, the
-// returned error wraps [ErrNoSupportedConnection].
+// currently implements only NetherNet peer-to-peer joins. Unsupported connection
+// entries are ignored so a future or auxiliary entry does not make an otherwise
+// joinable world unusable.
 func (w World) Connection() (Connection, error) {
-	if w.TransportLayer != 0 && w.TransportLayer != TransportLayerNetherNet {
-		return Connection{}, fmt.Errorf("%w: transport layer %d", ErrNoSupportedConnection, w.TransportLayer)
+	if w.TransportLayer != TransportLayerNetherNet {
+		return Connection{}, fmt.Errorf("invalid transport layer: %d", w.TransportLayer)
 	}
 	var err error
 	for _, c := range w.SupportedConnections {
@@ -248,9 +228,9 @@ func (w World) Connection() (Connection, error) {
 		return c, nil
 	}
 	if err == nil {
-		return Connection{}, ErrNoSupportedConnection
+		err = errors.New("minecraft/p2p: no supported signaling connection")
 	}
-	return Connection{}, fmt.Errorf("%w: %w", ErrNoSupportedConnection, err)
+	return Connection{}, err
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
@@ -258,7 +238,7 @@ func (w World) Connection() (Connection, error) {
 func (c Connection) Address() string {
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
-		return c.NetherNetID.String()
+		return string(c.NetherNetID)
 	case ConnectionTypeSignalingOverJSONRPC:
 		return c.PlayerMessagingID.String()
 	default:
@@ -323,7 +303,7 @@ type BroadcastSetting int
 func (s BroadcastSetting) JoinRestriction() string {
 	switch s {
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionLocal
 	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
 		return mpsd.SessionRestrictionFollowed
 	default:
@@ -336,9 +316,7 @@ func (s BroadcastSetting) JoinRestriction() string {
 // value for the BroadcastSetting.
 func (s BroadcastSetting) ReadRestriction() string {
 	switch s {
-	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal
-	case BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
+	case BroadcastSettingInviteOnly, BroadcastSettingFriendsOnly, BroadcastSettingFriendsOfFriends:
 		return mpsd.SessionRestrictionFollowed
 	default:
 		panic(fmt.Sprintf("minecraft/p2p: invalid BroadcastSetting value: %d", s))

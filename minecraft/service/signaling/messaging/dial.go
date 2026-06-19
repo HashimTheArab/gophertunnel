@@ -57,9 +57,6 @@ func (d Dialer) Dial(src service.TokenSource) (*Conn, error) {
 
 // DialContext connects to the messaging service using the provided [service.TokenSource] for authorization.
 func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = http.DefaultClient
 	}

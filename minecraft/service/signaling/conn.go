@@ -74,11 +74,11 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify registers and returns a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel and closes it.
+// The returned stop function unregisters and closes the channel.
 func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Notify()
+	return conn.notifier.Register()
 }
 
 // complete resolves the expectation registered for the outbound Message with
@@ -207,23 +207,18 @@ func (conn *Conn) handleMessage(message Message) {
 			return
 		}
 		signal.NetworkID = message.From
-		if err := conn.notifier.SignalContext(conn.ctx, signal); err != nil {
-			log.Error("error delivering signal", slog.Any("error", err))
-		}
+		conn.notifier.Signal(signal)
 	case MessageTypeError:
+		if message.ID == uuid.Nil {
+			log.Warn("received message without an ID", slog.Any("message", message))
+			return
+		}
 		err := &Error{}
 		if err2 := json.Unmarshal([]byte(message.Data), err); err2 != nil {
 			log.Error("error decoding error", slog.Any("error", err2))
-			if message.ID == uuid.Nil {
-				_ = conn.close(fmt.Errorf("decode connection-level error: %w", err2))
-			}
 			return
 		}
 		log.Debug("received error", slog.Any("message", message))
-		if message.ID == uuid.Nil {
-			_ = conn.close(err)
-			return
-		}
 		conn.complete(message.ID, err)
 	case MessageTypeDelivered:
 		if conn.d.IgnoreDeliveryNotification {
@@ -252,6 +247,7 @@ func (conn *Conn) handleMessage(message Message) {
 }
 
 // write encodes the given Message and sends it over the WebSocket connection.
+// An error may be returned if the message could not be sent.
 func (conn *Conn) write(ctx context.Context, message Message) error {
 	return wsjson.Write(ctx, conn.conn, message)
 }

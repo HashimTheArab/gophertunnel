@@ -49,7 +49,8 @@ type Conn struct {
 	credentialsMu sync.Mutex
 }
 
-// Signal sends a [nethernet.Signal] to a network.
+// Signal sends a [nethernet.Signal] to a network. In the JSON-RPC signaling path,
+// signal.NetworkID is the remote player's messaging UUID rather than a NetherNet ID.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	messagingID, err := uuid.Parse(signal.NetworkID)
 	if err != nil {
@@ -93,7 +94,7 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	if err != nil {
 		return fmt.Errorf("encode inner message: %w", err)
 	}
-	resp, err := conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
+	_, err = conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
 		"toPlayerId": messagingID,
 		"messageId":  id,
 		"message":    string(data),
@@ -101,17 +102,14 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	if err != nil {
 		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
 	}
-	if err := resp.Error(); err != nil {
-		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
-	}
 	return nil
 }
 
-// Notify registers and returns a channel to receive incoming NetherNet signals.
+// Notify returns a channel that receives incoming NetherNet signals.
 //
-// The returned stop function unregisters the channel and closes it.
+// The returned stop function unregisters and closes the channel.
 func (conn *Conn) Notify() (<-chan *nethernet.Signal, func()) {
-	return conn.notifier.Notify()
+	return conn.notifier.Register()
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -143,9 +141,9 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 func (conn *Conn) PongData(b []byte) {
 }
 
-// NetworkID returns the network ID of the Conn. It may be specified from [Dialer.NetworkID], otherwise a random
-// value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext]. It is utilized by
-// [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
+// NetworkID returns the local NetherNet network ID of the Conn. It may be specified from [Dialer.NetworkID],
+// otherwise a random value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext].
+// It is utilized by [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
 func (conn *Conn) NetworkID() string {
 	return conn.d.NetworkID
 }
@@ -283,9 +281,7 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		if err := conn.notifier.SignalContext(ctx, signal); err != nil {
-			return fmt.Errorf("deliver signal: %w", err)
-		}
+		conn.notifier.Signal(signal)
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
 			"params": map[string]any{
