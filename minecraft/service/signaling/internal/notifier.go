@@ -79,9 +79,6 @@ func (n *Notifier) Signal(signal *nethernet.Signal) {
 // active channel receives the signal, is stopped, or ctx is done. It returns
 // ctx.Err if delivery is interrupted by context cancellation.
 func (n *Notifier) SignalContext(ctx context.Context, signal *nethernet.Signal) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	for _, notify := range n.snapshot() {
 		if !notify.startSend() {
 			continue

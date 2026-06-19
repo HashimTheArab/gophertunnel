@@ -46,9 +46,6 @@ type Conn struct {
 
 // Signal sends a [nethernet.Signal] to a network.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	id := uuid.New()
 	message := Message{
 		Type: MessageTypeSignal,
@@ -256,8 +253,5 @@ func (conn *Conn) handleMessage(message Message) {
 
 // write encodes the given Message and sends it over the WebSocket connection.
 func (conn *Conn) write(ctx context.Context, message Message) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return wsjson.Write(ctx, conn.conn, message)
 }
