@@ -757,14 +757,13 @@ func (r *Reader) InvalidValue(value any, forField, reason string) {
 
 // errVarIntOverflow is an error set if one of the Varint methods encounters a varint that does not terminate
 // after 5 or 10 bytes, depending on the data type read into.
-// var errVarIntOverflow = errors.New("varint overflows integer")
+var errVarIntOverflow = errors.New("varint overflows integer")
 var errBitsetOverflow = errors.New("bitset overflows size")
 
 // Varint64 reads up to 10 bytes from the underlying buffer into an int64.
 func (r *Reader) Varint64(x *int64) {
 	var ux uint64
-	var i int
-	for {
+	for i := uint(0); i < 70; i += 7 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -778,15 +777,14 @@ func (r *Reader) Varint64(x *int64) {
 			}
 			return
 		}
-		i += 7
 	}
+	r.panic(errVarIntOverflow)
 }
 
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64
-	var i int
-	for {
+	for i := uint(0); i < 70; i += 7 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -797,15 +795,14 @@ func (r *Reader) Varuint64(x *uint64) {
 			*x = v
 			return
 		}
-		i += 7
 	}
+	r.panic(errVarIntOverflow)
 }
 
 // Varint32 reads up to 5 bytes from the underlying buffer into an int32.
 func (r *Reader) Varint32(x *int32) {
 	var ux uint32
-	var i int
-	for {
+	for i := uint(0); i < 35; i += 7 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -819,15 +816,14 @@ func (r *Reader) Varint32(x *int32) {
 			}
 			return
 		}
-		i += 7
 	}
+	r.panic(errVarIntOverflow)
 }
 
 // Varuint32 reads up to 5 bytes from the underlying buffer into a uint32.
 func (r *Reader) Varuint32(x *uint32) {
 	var v uint32
-	var i int
-	for {
+	for i := uint(0); i < 35; i += 7 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -838,8 +834,8 @@ func (r *Reader) Varuint32(x *uint32) {
 			*x = v
 			return
 		}
-		i += 7
 	}
+	r.panic(errVarIntOverflow)
 }
 
 // panicf panics with the format and values passed and assigns the error created to the Reader.
