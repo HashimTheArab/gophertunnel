@@ -44,6 +44,9 @@ func (conf ListenConfig) Wrap(n minecraft.NetworkListener) *Listener {
 	if conf.StatusProvider == nil {
 		conf.StatusProvider = NewStatusProvider(DefaultStatus())
 	}
+	if conf.Log == nil {
+		conf.Log = slog.Default()
+	}
 
 	return &Listener{
 		conf: conf,

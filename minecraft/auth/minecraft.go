@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/df-mc/go-xsapi/v2"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -23,13 +24,17 @@ var minecraftAuthURL = &url.URL{
 } // https://multiplayer.minecraft.net/authentication
 
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using
-// client and the ECDSA private key passed. The client must authenticate
-// requests to Minecraft services, for example by using an Xbox Live
-// authenticated transport.
-func RequestMinecraftChain(ctx context.Context, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
+// signer and the ECDSA private key passed. The key will later be used to
+// initialise encryption, and must be saved for when packets need to be
+// decrypted/encrypted.
+func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
 	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+	token, _, err := signer.TokenAndSignature(ctx, minecraftAuthURL)
+	if err != nil {
+		return "", fmt.Errorf("request XSTS token: %w", err)
 	}
 
 	// The body of the requests holds a JSON object with one key in it, the 'identityPublicKey', which holds
@@ -43,6 +48,7 @@ func RequestMinecraftChain(ctx context.Context, client *http.Client, key *ecdsa.
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
+	token.SetAuthHeader(request)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, client, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {

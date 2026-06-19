@@ -128,7 +128,7 @@ func (a *XBLAnnouncer) restrictions(setting int32) (read, join string) {
 	case BroadcastSettingFriendsOfFriends, BroadcastSettingFriendsOnly:
 		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionFollowed
 	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionLocal, mpsd.SessionRestrictionFollowed
+		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionLocal
 	default:
 		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionFollowed
 	}
