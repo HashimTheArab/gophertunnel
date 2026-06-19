@@ -1,6 +1,35 @@
 package minecraft
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+)
+
+func TestDialContextNilContext(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DialContext panicked with nil context: %v", r)
+		}
+	}()
+	_, err := Dialer{}.DialContext(nil, "missing", "127.0.0.1:19132")
+	if err == nil || !strings.Contains(err.Error(), "no network") {
+		t.Fatalf("DialContext error = %v, want no network error", err)
+	}
+}
+
+func TestHandleNetworkSettingsRejectsUnknownCompression(t *testing.T) {
+	t.Parallel()
+
+	conn := &Conn{}
+	err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: 255})
+	if err == nil || !strings.Contains(err.Error(), "unknown compression algorithm") {
+		t.Fatalf("handleNetworkSettings error = %v, want unknown compression error", err)
+	}
+}
 
 func TestReadChainIdentityDataRejectsShortChain(t *testing.T) {
 	t.Parallel()

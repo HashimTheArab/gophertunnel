@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -495,18 +496,31 @@ func (r zipPackReader) find(fileName string) (io.ReadCloser, error) {
 }
 
 func (r dirPackReader) find(fileName string) (io.ReadCloser, error) {
-	p := filepath.Join(r.base, fileName)
-	info, err := os.Stat(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("'%v' not found in directory", fileName)
+	var found string
+	errFound := errors.New("found resource pack file")
+	err := filepath.WalkDir(r.base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() || filepath.Base(p) != fileName {
+			return nil
+		}
+		found = p
+		return errFound
+	})
+	if err != nil && !errors.Is(err, errFound) {
 		return nil, err
 	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("'%v' is a directory, not a file", fileName)
+	if found == "" {
+		return nil, fmt.Errorf("'%v' not found in directory", fileName)
 	}
-	return os.Open(p)
+	return os.Open(found)
 }
 
 // readManifest reads the manifest from the resource pack located at the path passed. If not found in the root
