@@ -231,6 +231,9 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			xblSigner = nsal.NewResolver(x)
 			httpClient = d.HTTPClient
 		}
+		if httpClient == nil {
+			httpClient = http.DefaultClient
+		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
 			if err != nil {

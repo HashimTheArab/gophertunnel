@@ -23,7 +23,7 @@ var minecraftAuthURL = &url.URL{
 } // https://multiplayer.minecraft.net/authentication
 
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using
-// client and the ECDSA private key passed. The key will later be used to
+// signer and the ECDSA private key passed. The key will later be used to
 // initialise encryption, and must be saved for when packets need to be
 // decrypted/encrypted.
 func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
