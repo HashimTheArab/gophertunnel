@@ -155,7 +155,7 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 	if connectionErr == nil {
 		s.connection = connection
 	} else if err := s.connection.Validate(); err != nil {
-		return s.failReadyLocked(fmt.Errorf("select connection method: %w", connectionErr))
+		return nil
 	}
 
 	if s.nonce == "" {
@@ -174,6 +174,9 @@ func (s *Session) updateWorldData(custom json.RawMessage) error {
 		}
 	}
 	if s.nonce != "" {
+		if err := s.connection.Validate(); err != nil {
+			return nil
+		}
 		s.readyOnce.Do(func() {
 			close(s.ready)
 		})
