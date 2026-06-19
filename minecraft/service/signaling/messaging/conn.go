@@ -94,15 +94,12 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	if err != nil {
 		return fmt.Errorf("encode inner message: %w", err)
 	}
-	resp, err := conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
+	_, err = conn.client.Call(ctx, MethodSignalingSendMessage, map[string]any{
 		"toPlayerId": messagingID,
 		"messageId":  id,
 		"message":    string(data),
 	})
 	if err != nil {
-		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
-	}
-	if err := resp.Error(); err != nil {
 		return fmt.Errorf("call %q: %w", MethodSignalingSendMessage, err)
 	}
 	return nil
