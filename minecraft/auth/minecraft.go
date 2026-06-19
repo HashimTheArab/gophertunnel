@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/df-mc/go-xsapi/v2"
+	"github.com/df-mc/go-xsapi/v2/xal/nsal"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -32,10 +33,6 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 	if err != nil {
 		return "", fmt.Errorf("marshal public key: %w", err)
 	}
-	token, _, err := signer.TokenAndSignature(ctx, minecraftAuthURL)
-	if err != nil {
-		return "", fmt.Errorf("request XSTS token: %w", err)
-	}
 
 	// The body of the requests holds a JSON object with one key in it, the 'identityPublicKey', which holds
 	// the public key data of the private key passed.
@@ -48,7 +45,15 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
-	token.SetAuthHeader(request)
+
+	client, signedByClient := minecraftChainHTTPClient(signer, client)
+	if !signedByClient {
+		token, _, err := signer.TokenAndSignature(ctx, minecraftAuthURL)
+		if err != nil {
+			return "", fmt.Errorf("request XSTS token: %w", err)
+		}
+		token.SetAuthHeader(request)
+	}
 
 	resp, err := authclient.SendRequestWithRetries(ctx, client, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -60,4 +65,27 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 	}
 	data, err = io.ReadAll(resp.Body)
 	return string(data), err
+}
+
+func minecraftChainHTTPClient(signer xsapi.TokenAndSignaturer, client *http.Client) (*http.Client, bool) {
+	if c, ok := signer.(interface{ HTTPClient() *http.Client }); ok {
+		return c.HTTPClient(), true
+	}
+	if resolver, ok := signer.(*nsal.Resolver); ok {
+		if client == nil {
+			client = http.DefaultClient
+		}
+		c := new(http.Client)
+		*c = *client
+		base := client.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		c.Transport = &nsal.Transport{Base: base, Resolver: resolver}
+		return c, true
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return client, false
 }

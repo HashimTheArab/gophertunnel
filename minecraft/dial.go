@@ -461,11 +461,11 @@ var skinResourcePatch []byte
 var skinGeometry []byte
 
 func DefaultSkinGeometry() []byte {
-	return skinGeometry
+	return bytes.Clone(skinGeometry)
 }
 
 func DefaultSkinResourcePatch() []byte {
-	return skinResourcePatch
+	return bytes.Clone(skinResourcePatch)
 }
 
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
