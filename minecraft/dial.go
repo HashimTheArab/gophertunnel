@@ -434,7 +434,8 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 }
 
 // minecraftAuthHTTPClient returns a copy of base that authenticates Minecraft
-// chain requests with resolver without mutating the caller's client.
+// chain requests with resolver. The client is copied so timeout, cookie jar and
+// redirect settings are preserved while only the transport is wrapped.
 func minecraftAuthHTTPClient(base *http.Client, resolver *nsal.Resolver) *http.Client {
 	if base == nil {
 		base = http.DefaultClient

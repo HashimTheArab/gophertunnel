@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,9 +32,6 @@ var minecraftAuthURL = &url.URL{
 func RequestMinecraftChain(ctx context.Context, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if client == nil {
-		return "", errors.New("HTTP client is nil")
 	}
 
 	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
