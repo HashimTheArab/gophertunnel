@@ -50,6 +50,57 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	}
 }
 
+func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	log := slog.New(internal.DiscardHandler{})
+	listener := &Listener{
+		cfg: ListenConfig{
+			ErrorLog:              log,
+			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			DisablePacketHandling: true,
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		incoming: make(chan *Conn, 1),
+		close:    make(chan struct{}),
+	}
+	listener.playerCount.Store(1)
+
+	conn := newConn(server, nil, log, proto{}, -1, true)
+	conn.pool = conn.proto.Packets(true)
+	conn.disablePacketHandling = true
+	conn.expect(packet.IDClientToServerHandshake)
+	go listener.handleConn(conn)
+
+	if err := writePacket(client, &packet.ClientToServerHandshake{}); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+
+	select {
+	case accepted := <-listener.incoming:
+		if accepted != conn {
+			t.Fatalf("accepted connection = %p, want %p", accepted, conn)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not publish passthrough connection")
+	}
+
+	if err := client.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var b [1]byte
+	n, err := client.Read(b[:])
+	if err == nil || n != 0 {
+		t.Fatalf("listener wrote %d byte(s) while consuming client handshake; expected no local response", n)
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("read error = %v, want timeout", err)
+	}
+}
+
 func writePacket(w io.Writer, pk packet.Packet) error {
 	buf := new(bytes.Buffer)
 	header := &packet.Header{PacketID: pk.ID()}

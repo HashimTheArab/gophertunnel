@@ -1106,6 +1106,10 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
 	conn.handshakeComplete = true
+	if conn.disablePacketHandling {
+		conn.disablePacketHandlingReady = true
+		return nil
+	}
 	// The next expected packet is a resource pack client response.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
