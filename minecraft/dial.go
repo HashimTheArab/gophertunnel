@@ -24,7 +24,6 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
-	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -214,7 +213,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
-		ctx = withDialAuthHTTPClient(ctx, d.HTTPClient)
+		ctx = auth.WithContextClient(ctx, d.HTTPClient)
 		if d.XBLClient != nil {
 			xblSigner = d.XBLClient
 			httpClient = d.XBLClient.HTTPClient()
@@ -353,18 +352,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			return conn, nil
 		}
 	}
-}
-
-// withDialAuthHTTPClient stores client in ctx for auth code paths that read
-// HTTP clients from the OAuth2 or XAL context keys.
-func withDialAuthHTTPClient(ctx context.Context, client *http.Client) context.Context {
-	if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
-		ctx = context.WithValue(ctx, xal.HTTPClient, client)
-	}
-	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
-	}
-	return ctx
 }
 
 // readChainIdentityData reads a login.IdentityData from the Mojang chain
