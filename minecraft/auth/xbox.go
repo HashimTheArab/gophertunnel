@@ -83,15 +83,15 @@ func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
 		if cache.session == nil {
 			cache.session = cache.conf.New(src, &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        xblHTTPClient(ctx),
+				HTTPClient:        authHTTPClientFromContext(ctx),
 			})
 		}
 		return cache.session
 	}
-	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: xblHTTPClient(ctx)})
+	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: authHTTPClientFromContext(ctx)})
 }
 
-func xblHTTPClient(ctx context.Context) *http.Client {
+func authHTTPClientFromContext(ctx context.Context) *http.Client {
 	if ctx == nil {
 		return nil
 	}
@@ -102,25 +102,6 @@ func xblHTTPClient(ctx context.Context) *http.Client {
 		return client
 	}
 	return nil
-}
-
-func withXBLHTTPClient(ctx context.Context, client *http.Client) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if client == nil {
-		client = xblHTTPClient(ctx)
-	}
-	if client == nil {
-		return ctx
-	}
-	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
-	}
-	if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
-		ctx = context.WithValue(ctx, xal.HTTPClient, client)
-	}
-	return ctx
 }
 
 // NewTokenCache returns an XBLTokenCache that can be used to re-use XBL tokens
@@ -280,7 +261,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		if cache.session == nil {
 			cache.session = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        xblHTTPClient(ctx),
+				HTTPClient:        authHTTPClientFromContext(ctx),
 			})
 		}
 		s = cache.session
@@ -289,7 +270,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		// If the cache storage does not exist, we request a new session every time
 		// which may cause rate-limiting issues.
 		s = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
-			HTTPClient: xblHTTPClient(ctx),
+			HTTPClient: authHTTPClientFromContext(ctx),
 		})
 	}
 	token, err := s.XSTSToken(ctx, relyingParty)
