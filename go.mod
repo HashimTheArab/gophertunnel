@@ -47,3 +47,5 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 )
+
+replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260620075559-27754088f5c9
