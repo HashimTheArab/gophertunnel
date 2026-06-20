@@ -142,6 +142,48 @@ func TestHandleResourcePacksInfoFallsBackWhenURLExceedsAdvertisedSize(t *testing
 	}
 }
 
+func TestHandleResourcePacksInfoFallsBackWhenURLPackIdentityMismatch(t *testing.T) {
+	t.Parallel()
+
+	advertisedPackID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	urlPack := testResourcePackArchive(t, uuid.MustParse("550e8400-e29b-41d4-a716-446655440002"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(urlPack)
+	}))
+	defer server.Close()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, time.Second/20, false)
+	defer conn.Close()
+
+	err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{
+		{
+			UUID:        advertisedPackID,
+			Version:     "1.0.0",
+			Size:        uint64(len(urlPack)),
+			DownloadURL: server.URL,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("handleResourcePacksInfo: %v", err)
+	}
+	if conn.packQueue.packAmount != 1 {
+		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
+	}
+	if _, ok := conn.packQueue.downloadingPacks[advertisedPackID.String()]; !ok {
+		t.Fatalf("mismatched URL pack was not queued for chunk download fallback")
+	}
+	if len(conn.resourcePacks) != 0 {
+		t.Fatalf("resourcePacks length = %d, want 0", len(conn.resourcePacks))
+	}
+}
+
 func testResourcePackArchive(t *testing.T, id uuid.UUID) []byte {
 	t.Helper()
 

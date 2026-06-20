@@ -1238,6 +1238,8 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
+			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
+				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
 				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
