@@ -91,6 +91,9 @@ func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
 	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: httpClientFromContext(ctx)})
 }
 
+// httpClientFromContext returns the HTTP client configured on ctx for auth
+// requests. A nil return value lets the underlying auth session use its
+// default client.
 func httpClientFromContext(ctx context.Context) *http.Client {
 	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
 		return client
