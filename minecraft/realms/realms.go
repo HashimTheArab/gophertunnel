@@ -200,9 +200,7 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 	if r.tokenSrc == nil {
 		return nil, fmt.Errorf("token source is nil")
 	}
-	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); (!ok || c == nil) && r.authHTTPClient != nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, r.authHTTPClient)
-	}
+	ctx = auth.WithContextClient(ctx, r.authHTTPClient)
 
 	t, err := r.tokenSrc.Token()
 	if err != nil {
