@@ -11,6 +11,8 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
 
 // XBLAnnouncer announces a Status through the Multiplayer Session Directory (MPSD) of Xbox Live.
@@ -77,7 +79,7 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 			return errors.New("room: XBLAnnouncer.Client is nil")
 		}
 		if a.SessionReference.ServiceConfigID == uuid.Nil {
-			a.SessionReference.ServiceConfigID = uuid.MustParse("4fc10100-5f7a-4470-899b-280835760c07")
+			a.SessionReference.ServiceConfigID = auth.ServiceConfigID
 		}
 		if a.SessionReference.TemplateName == "" {
 			a.SessionReference.TemplateName = "MinecraftLobby"
@@ -106,7 +108,11 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 
 // publishConfig returns the effective [mpsd.PublishConfig] for status.
 func (a *XBLAnnouncer) publishConfig(status Status, custom []byte) (mpsd.PublishConfig, string, string) {
-	read, join := a.restrictions(status.BroadcastSetting)
+	setting := status.BroadcastSetting
+	if !setting.Valid() {
+		setting = p2p.BroadcastSettingFriendsOfFriends
+	}
+	read, join := setting.ReadRestriction(), setting.JoinRestriction()
 	config := a.PublishConfig
 	config.CustomProperties = custom
 	if config.ReadRestriction == "" {
@@ -120,18 +126,6 @@ func (a *XBLAnnouncer) publishConfig(status Status, custom []byte) (mpsd.Publish
 		join = config.JoinRestriction
 	}
 	return config, read, join
-}
-
-// restrictions determines the read and join restrictions for the session based on [Status.BroadcastSetting].
-func (a *XBLAnnouncer) restrictions(setting int32) (read, join string) {
-	switch setting {
-	case BroadcastSettingFriendsOfFriends, BroadcastSettingFriendsOnly:
-		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionFollowed
-	case BroadcastSettingInviteOnly:
-		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionLocal
-	default:
-		return mpsd.SessionRestrictionFollowed, mpsd.SessionRestrictionFollowed
-	}
 }
 
 func (a *XBLAnnouncer) Close() (err error) {

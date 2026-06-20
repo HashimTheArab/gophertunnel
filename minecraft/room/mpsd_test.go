@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/df-mc/go-xsapi/v2/mpsd"
+	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
 
-func TestXBLAnnouncerInviteOnlyRestrictions(t *testing.T) {
+func TestXBLAnnouncerPublishConfigUsesBroadcastRestrictions(t *testing.T) {
 	t.Parallel()
 
-	read, join := (&XBLAnnouncer{}).restrictions(BroadcastSettingInviteOnly)
+	_, read, join := (&XBLAnnouncer{}).publishConfig(Status{BroadcastSetting: p2p.BroadcastSettingInviteOnly}, nil)
 	if read != mpsd.SessionRestrictionFollowed {
 		t.Fatalf("read restriction mismatch: got %q", read)
 	}
