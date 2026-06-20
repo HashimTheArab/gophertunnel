@@ -141,9 +141,6 @@ func (r *Realm) Address(ctx context.Context) (RealmAddress, error) {
 // RealmAddress requests the address and protocol used to connect to a realm
 // from the api, and waits for the realm to start if it is currently offline.
 func (r *Client) RealmAddress(ctx context.Context, realmID int) (RealmAddress, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
 	for {
@@ -203,9 +200,6 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 	if r.tokenSrc == nil {
 		return nil, fmt.Errorf("token source is nil")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); (!ok || c == nil) && r.authHTTPClient != nil {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, r.authHTTPClient)
 	}
@@ -228,9 +222,6 @@ func (r *Client) requestPost(ctx context.Context, path string) (body []byte, sta
 }
 
 func (r *Client) request(ctx context.Context, method, path string) (body []byte, status int, err error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}

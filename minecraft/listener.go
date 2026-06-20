@@ -252,9 +252,6 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		return authEnvCache, nil
 	}
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -277,10 +274,6 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 // authenticating new multiplayer tokens issued by the authorization service
 // of Minecraft.
 func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 

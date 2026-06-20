@@ -11,20 +11,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func TestDialContextNilContext(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("DialContext panicked with nil context: %v", r)
-		}
-	}()
-	_, err := Dialer{}.DialContext(nil, "missing", "127.0.0.1:19132")
-	if err == nil || !strings.Contains(err.Error(), "no network") {
-		t.Fatalf("DialContext error = %v, want no network error", err)
-	}
-}
-
 func TestDialAuthContextPropagatesHTTPClient(t *testing.T) {
 	t.Parallel()
 
