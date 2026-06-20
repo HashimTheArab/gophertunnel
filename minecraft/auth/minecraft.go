@@ -56,7 +56,11 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("POST %v: %v", minecraftAuthURL, resp.Status)
+		var body []byte
+		if resp.Body != nil {
+			body, _ = io.ReadAll(resp.Body)
+		}
+		return "", fmt.Errorf("POST %v: %v, body: %s", minecraftAuthURL, resp.Status, string(body))
 	}
 	data, err = io.ReadAll(resp.Body)
 	return string(data), err
