@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/df-mc/go-xsapi/v2"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -49,7 +50,7 @@ func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer,
 	request.Header.Set("Content-Type", "application/json")
 	token.SetAuthHeader(request)
 
-	resp, err := client.Do(request)
+	resp, err := authclient.SendRequestWithRetries(ctx, client, request, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
