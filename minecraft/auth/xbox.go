@@ -83,18 +83,15 @@ func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
 		if cache.session == nil {
 			cache.session = cache.conf.New(src, &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        authHTTPClientFromContext(ctx),
+				HTTPClient:        httpClientFromContext(ctx),
 			})
 		}
 		return cache.session
 	}
-	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: authHTTPClientFromContext(ctx)})
+	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: httpClientFromContext(ctx)})
 }
 
-func authHTTPClientFromContext(ctx context.Context) *http.Client {
-	if ctx == nil {
-		return nil
-	}
+func httpClientFromContext(ctx context.Context) *http.Client {
 	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
 		return client
 	}
@@ -261,7 +258,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		if cache.session == nil {
 			cache.session = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        authHTTPClientFromContext(ctx),
+				HTTPClient:        httpClientFromContext(ctx),
 			})
 		}
 		s = cache.session
@@ -270,7 +267,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		// If the cache storage does not exist, we request a new session every time
 		// which may cause rate-limiting issues.
 		s = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
-			HTTPClient: authHTTPClientFromContext(ctx),
+			HTTPClient: httpClientFromContext(ctx),
 		})
 	}
 	token, err := s.XSTSToken(ctx, relyingParty)
