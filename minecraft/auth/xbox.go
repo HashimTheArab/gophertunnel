@@ -300,9 +300,6 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 // RequestXBLToken requests an Xbox Live token using the OAuth2 token identifying the user's Microsoft Account.
 // If an [XBLTokenCache] is present in ctx (via [WithXBLTokenCache]), it reuses or newly creates a SISU session inside the cache.
 func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var s *sisu.Session
 	if cache, ok := ctx.Value(tokenCacheContextKey).(*XBLTokenCache); ok {
 		if cache.conf != conf {
