@@ -487,6 +487,7 @@ func (listener *Listener) handleConn(conn *Conn) {
 		}
 		for _, data := range packets {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
+			passthroughReadyBefore := conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				conn.log.Error(err.Error())
 				return
@@ -497,7 +498,11 @@ func (listener *Listener) handleConn(conn *Conn) {
 					return
 				}
 			}
-			if !loggedInBefore && conn.loggedIn {
+			publish := !loggedInBefore && conn.loggedIn
+			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
+				publish = true
+			}
+			if publish {
 				select {
 				case <-listener.close:
 					// The listener was closed while this one was logged in, so the incoming channel will be
