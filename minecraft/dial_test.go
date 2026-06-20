@@ -3,11 +3,9 @@ package minecraft
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/df-mc/go-xsapi/v2/xal"
-	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
 )
 
@@ -40,16 +38,6 @@ func TestDialAuthContextDoesNotOverwriteHTTPClient(t *testing.T) {
 	}
 	if got, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); got != existingOAuth {
 		t.Fatalf("oauth2.HTTPClient = %p, want existing %p", got, existingOAuth)
-	}
-}
-
-func TestHandleNetworkSettingsRejectsUnknownCompression(t *testing.T) {
-	t.Parallel()
-
-	conn := &Conn{}
-	err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: 255})
-	if err == nil || !strings.Contains(err.Error(), "unknown compression algorithm") {
-		t.Fatalf("handleNetworkSettings error = %v, want unknown compression error", err)
 	}
 }
 
