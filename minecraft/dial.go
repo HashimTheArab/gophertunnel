@@ -366,6 +366,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	}
 }
 
+// withDialAuthHTTPClient stores client in ctx for auth code paths that read
+// HTTP clients from the OAuth2 or XAL context keys.
 func withDialAuthHTTPClient(ctx context.Context, client *http.Client) context.Context {
 	if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
 		ctx = context.WithValue(ctx, xal.HTTPClient, client)
