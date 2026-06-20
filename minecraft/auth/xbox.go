@@ -103,9 +103,6 @@ func (cache *XBLTokenCache) Device() xasd.TokenSource {
 // The [oauth2.TokenSource] is used to create a SISU session on the cache when needed.
 // Callers can set their own session to the context by using [ReuseTokenCache].
 func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if cache, ok := ctx.Value(tokenCacheContextKey).(*XBLTokenCache); ok {
 		cache.sessionMu.Lock()
 		defer cache.sessionMu.Unlock()
@@ -285,9 +282,6 @@ var (
 // RequestXBLToken requests an Xbox Live token using a default device config.
 // If an [XBLTokenCache] is present in ctx (via [WithXBLTokenCache]), its Config is used instead.
 func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	var conf Config
 	if cache, ok := ctx.Value(tokenCacheContextKey).(*XBLTokenCache); ok {
 		conf = cache.conf
