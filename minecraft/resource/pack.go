@@ -538,9 +538,21 @@ func (r zipPackReader) find(fileName string) (io.ReadCloser, error) {
 }
 
 func (r dirPackReader) find(fileName string) (io.ReadCloser, error) {
+	p := filepath.Join(r.base, fileName)
+	info, err := os.Stat(p)
+	if err == nil {
+		if info.IsDir() {
+			return nil, fmt.Errorf("'%v' is a directory, not a file", fileName)
+		}
+		return os.Open(p)
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+
 	var found string
 	errFound := errors.New("found resource pack file")
-	err := filepath.WalkDir(r.base, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(r.base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
