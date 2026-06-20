@@ -218,6 +218,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
+		ctx = withDialAuthHTTPClient(ctx, d.HTTPClient)
 		if d.XBLClient != nil {
 			xblSigner = d.XBLClient
 			httpClient = d.XBLClient.HTTPClient()
@@ -225,12 +226,6 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			x, ok := d.TokenSource.(xsapi.TokenSource)
 			if !ok {
 				x = auth.ContextSession(ctx, d.TokenSource)
-			}
-			if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
-				ctx = context.WithValue(ctx, xal.HTTPClient, d.HTTPClient)
-			}
-			if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
-				ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
 			}
 			xblSigner = nsal.NewResolver(x)
 		}
@@ -369,6 +364,16 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			return conn, nil
 		}
 	}
+}
+
+func withDialAuthHTTPClient(ctx context.Context, client *http.Client) context.Context {
+	if c, ok := ctx.Value(xal.HTTPClient).(*http.Client); !ok || c == nil {
+		ctx = context.WithValue(ctx, xal.HTTPClient, client)
+	}
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
+	}
+	return ctx
 }
 
 // readChainIdentityData reads a login.IdentityData from the Mojang chain

@@ -17,6 +17,41 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+func TestStartGameWritesPropertyData(t *testing.T) {
+	t.Parallel()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var got map[string]any
+	conn.packetFunc = func(header packet.Header, payload []byte, _, _ net.Addr) {
+		if header.PacketID != packet.IDStartGame {
+			return
+		}
+		var start packet.StartGame
+		start.Marshal(protocol.NewReader(bytes.NewBuffer(payload), 0, false))
+		got = start.PropertyData
+	}
+
+	conn.gameData = GameData{
+		PropertyData: map[string]any{
+			"gophertunnel:test": int32(1),
+		},
+	}
+	conn.startGame()
+
+	if got["gophertunnel:test"] != int32(1) {
+		t.Fatalf("StartGame.PropertyData = %#v, want gophertunnel:test=1", got)
+	}
+}
+
 func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	t.Parallel()
 
