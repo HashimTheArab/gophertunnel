@@ -229,18 +229,18 @@ var (
 
 // authEnv returns the authorization environment that can be used for issuing
 // or verifying the multiplayer token for OpenID authentication.
-// This method is only called once and cached globally which means it will
-// use the HTTP client from the first caller's context (oauth2.HTTPClient).
+// The discovered environment metadata is cached globally, but any HTTP client
+// from ctx is applied to the returned environment only.
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
-	authEnvCacheMu.Lock()
-	defer authEnvCacheMu.Unlock()
-	if authEnvCache != nil {
-		return authEnvCache, nil
-	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	authEnvCacheMu.Lock()
+	defer authEnvCacheMu.Unlock()
+	if authEnvCache != nil {
+		return authEnvWithHTTPClient(ctx, authEnvCache), nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -252,11 +252,23 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	if err := discovery.Environment(e); err != nil {
 		return nil, fmt.Errorf("decode environment for auth: %w", err)
 	}
-	if client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); client != nil {
-		e.HTTPClient = client
-	}
 	authEnvCache = e
-	return e, nil
+	return authEnvWithHTTPClient(ctx, e), nil
+}
+
+func authEnvWithHTTPClient(ctx context.Context, e *service.AuthorizationEnvironment) *service.AuthorizationEnvironment {
+	client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client)
+	if client == nil {
+		return e
+	}
+	return &service.AuthorizationEnvironment{
+		ServiceURI:         e.ServiceURI,
+		Issuer:             e.Issuer,
+		PlayFabTitleID:     e.PlayFabTitleID,
+		EduPlayFabTitleID:  e.EduPlayFabTitleID,
+		HTTPClient:         client,
+		KeyRefreshInterval: e.KeyRefreshInterval,
+	}
 }
 
 // oidcVerifier returns the OpenID token verifier that could be used for
