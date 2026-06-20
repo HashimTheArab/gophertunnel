@@ -52,6 +52,70 @@ func TestStartGameWritesPropertyData(t *testing.T) {
 	}
 }
 
+func TestDisconnectWritesDisconnectPacket(t *testing.T) {
+	t.Parallel()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+
+	conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- conn.Disconnect("closing")
+	}()
+
+	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	packets, err := packet.NewDecoder(client).Decode()
+	if err != nil {
+		t.Fatalf("decode disconnect packet: %v", err)
+	}
+	if len(packets) != 1 {
+		t.Fatalf("decoded packet count = %d, want 1", len(packets))
+	}
+	buf := bytes.NewBuffer(packets[0])
+	var header packet.Header
+	if err := header.Read(buf); err != nil {
+		t.Fatalf("read packet header: %v", err)
+	}
+	if header.PacketID != packet.IDDisconnect {
+		t.Fatalf("packet ID = %d, want Disconnect", header.PacketID)
+	}
+	var disconnect packet.Disconnect
+	disconnect.Marshal(protocol.NewReader(buf, 0, false))
+	if disconnect.Message != "closing" {
+		t.Fatalf("disconnect message = %q, want closing", disconnect.Message)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Disconnect: %v", err)
+	}
+}
+
+func TestClientToServerHandshakeMarksComplete(t *testing.T) {
+	t.Parallel()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	if conn.handshakeComplete {
+		t.Fatal("handshakeComplete was true before ClientToServerHandshake")
+	}
+	if err := conn.handleClientToServerHandshake(); err != nil {
+		t.Fatalf("handleClientToServerHandshake: %v", err)
+	}
+	if !conn.handshakeComplete {
+		t.Fatal("handshakeComplete was false after ClientToServerHandshake")
+	}
+}
+
 func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	t.Parallel()
 

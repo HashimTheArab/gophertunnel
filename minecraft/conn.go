@@ -832,7 +832,7 @@ func (conn *Conn) Context() context.Context {
 // closing the connection after. If the message passed is empty, the client will be immediately sent to the
 // server list instead of a disconnect screen.
 func (conn *Conn) Disconnect(message string) error {
-	_ = conn.WritePacket(&packet.Disconnect{
+	_ = conn.WritePacketImmediate(&packet.Disconnect{
 		HideDisconnectionScreen: message == "",
 		Message:                 message,
 	})
@@ -1100,12 +1100,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
 		return fmt.Errorf("enable encryption: %w", err)
 	}
-	conn.handshakeComplete = true
 	return nil
 }
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	conn.handshakeComplete = true
 	// The next expected packet is a resource pack client response.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
