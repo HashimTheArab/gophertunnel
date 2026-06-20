@@ -52,7 +52,7 @@ func (src *tokenSource) Token() (*oauth2.Token, error) {
 		if err != nil {
 			return nil, err
 		}
-		src.t = src.conf.TokenSource(withXBLHTTPClient(context.Background(), nil), t)
+		src.t = src.conf.TokenSource(context.Background(), t)
 	}
 	tok, err := src.t.Token()
 	if err != nil {
@@ -90,7 +90,7 @@ func RefreshTokenSourceWriter(t *oauth2.Token, w io.Writer) oauth2.TokenSource {
 func (conf Config) RefreshTokenSourceWriter(t *oauth2.Token, w io.Writer) oauth2.TokenSource {
 	var src oauth2.TokenSource
 	if t != nil {
-		src = conf.TokenSource(withXBLHTTPClient(context.Background(), nil), t)
+		src = conf.TokenSource(context.Background(), t)
 	}
 	return &tokenSource{w: w, conf: conf, t: src}
 }
@@ -128,7 +128,6 @@ func RequestLiveTokenContext(ctx context.Context, w io.Writer) (*oauth2.Token, e
 }
 
 func (conf Config) RequestLiveTokenContext(ctx context.Context, w io.Writer) (*oauth2.Token, error) {
-	ctx = withXBLHTTPClient(ctx, nil)
 	d, err := conf.DeviceAuth(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("start device auth: %w", err)

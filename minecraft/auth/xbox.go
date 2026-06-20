@@ -2,11 +2,9 @@ package auth
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/df-mc/go-xsapi/v2/xal/sisu"
@@ -15,30 +13,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
-
-// defaultXBLHTTPClient is the default HTTP client used for Xbox Live auth helpers.
-var defaultXBLHTTPClient = newDefaultXBLHTTPClient()
-
-func newDefaultXBLHTTPClient() *http.Client {
-	baseTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok || baseTransport == nil {
-		baseTransport = &http.Transport{}
-	}
-	transport := baseTransport.Clone()
-	tlsConfig := transport.TLSClientConfig
-	if tlsConfig == nil {
-		tlsConfig = &tls.Config{}
-	} else {
-		tlsConfig = tlsConfig.Clone()
-	}
-	tlsConfig.Renegotiation = tls.RenegotiateOnceAsClient
-	transport.TLSClientConfig = tlsConfig
-
-	return &http.Client{
-		Timeout:   time.Second * 15,
-		Transport: transport,
-	}
-}
 
 // XBLToken holds info on the authorization token used for authenticating with XBOX Live.
 type XBLToken struct {
@@ -119,7 +93,7 @@ func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
 
 func xblHTTPClient(ctx context.Context) *http.Client {
 	if ctx == nil {
-		return defaultXBLHTTPClient
+		return nil
 	}
 	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
 		return client
@@ -127,7 +101,7 @@ func xblHTTPClient(ctx context.Context) *http.Client {
 	if client, ok := ctx.Value(xal.HTTPClient).(*http.Client); ok && client != nil {
 		return client
 	}
-	return defaultXBLHTTPClient
+	return nil
 }
 
 func withXBLHTTPClient(ctx context.Context, client *http.Client) context.Context {
@@ -136,6 +110,9 @@ func withXBLHTTPClient(ctx context.Context, client *http.Client) context.Context
 	}
 	if client == nil {
 		client = xblHTTPClient(ctx)
+	}
+	if client == nil {
+		return ctx
 	}
 	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
