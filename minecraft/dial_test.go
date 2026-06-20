@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/df-mc/go-xsapi/v2/xal"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"golang.org/x/oauth2"
 )
 
@@ -13,7 +14,7 @@ func TestDialAuthContextPropagatesHTTPClient(t *testing.T) {
 	t.Parallel()
 
 	client := &http.Client{}
-	ctx := withDialAuthHTTPClient(context.Background(), client)
+	ctx := auth.WithContextClient(context.Background(), client)
 
 	if got, _ := ctx.Value(xal.HTTPClient).(*http.Client); got != client {
 		t.Fatalf("xal.HTTPClient = %p, want %p", got, client)
@@ -31,7 +32,7 @@ func TestDialAuthContextDoesNotOverwriteHTTPClient(t *testing.T) {
 	replacement := &http.Client{}
 	ctx := context.WithValue(context.Background(), xal.HTTPClient, existingXAL)
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, existingOAuth)
-	ctx = withDialAuthHTTPClient(ctx, replacement)
+	ctx = auth.WithContextClient(ctx, replacement)
 
 	if got, _ := ctx.Value(xal.HTTPClient).(*http.Client); got != existingXAL {
 		t.Fatalf("xal.HTTPClient = %p, want existing %p", got, existingXAL)
