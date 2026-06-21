@@ -22,6 +22,7 @@ type Client struct {
 	xblToken       *auth.XBLToken
 	httpClient     *http.Client
 	authHTTPClient *http.Client
+	requestFunc    func(ctx context.Context, method, path string) ([]byte, int, error)
 }
 
 const (
@@ -144,29 +145,29 @@ func (r *Client) RealmAddress(ctx context.Context, realmID int) (RealmAddress, e
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ctx.Done():
-			return RealmAddress{}, ctx.Err()
-		case <-ticker.C:
-			body, status, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
-			if err != nil {
-				switch status {
-				case 503:
+		body, status, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
+		if err != nil {
+			switch status {
+			case 503:
+				select {
+				case <-ctx.Done():
+					return RealmAddress{}, ctx.Err()
+				case <-ticker.C:
 					continue
-				case 404:
-					return RealmAddress{}, ErrRealmNotFound
-				case 403:
-					return RealmAddress{}, ErrPlayerNotInRealm
 				}
-				return RealmAddress{}, err
+			case 404:
+				return RealmAddress{}, ErrRealmNotFound
+			case 403:
+				return RealmAddress{}, ErrPlayerNotInRealm
 			}
-
-			var address RealmAddress
-			if err := json.Unmarshal(body, &address); err != nil {
-				return RealmAddress{}, err
-			}
-			return address, nil
+			return RealmAddress{}, err
 		}
+
+		var address RealmAddress
+		if err := json.Unmarshal(body, &address); err != nil {
+			return RealmAddress{}, err
+		}
+		return address, nil
 	}
 }
 
@@ -220,6 +221,9 @@ func (r *Client) requestPost(ctx context.Context, path string) (body []byte, sta
 }
 
 func (r *Client) request(ctx context.Context, method, path string) (body []byte, status int, err error) {
+	if r.requestFunc != nil {
+		return r.requestFunc(ctx, method, path)
+	}
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}
