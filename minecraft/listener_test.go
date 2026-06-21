@@ -50,6 +50,55 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	}
 }
 
+func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	handled := make(chan *Conn, 1)
+	log := slog.New(internal.DiscardHandler{})
+	listener := &Listener{
+		cfg: ListenConfig{
+			ErrorLog:              log,
+			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			DisablePacketHandling: true,
+			ConnHandler: func(conn *Conn) error {
+				handled <- conn
+				return nil
+			},
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		incoming: make(chan *Conn, 1),
+		close:    make(chan struct{}),
+	}
+	listener.playerCount.Store(1)
+
+	conn := newConn(server, nil, log, proto{}, -1, true)
+	conn.pool = conn.proto.Packets(true)
+	conn.disablePacketHandling = true
+	go listener.handleConn(conn)
+
+	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+
+	select {
+	case accepted := <-handled:
+		if accepted != conn {
+			t.Fatalf("handled connection = %p, want %p", accepted, conn)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not deliver passthrough connection to ConnHandler")
+	}
+
+	select {
+	case accepted := <-listener.incoming:
+		t.Fatalf("listener published connection %p to Accept despite ConnHandler", accepted)
+	default:
+	}
+}
+
 func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	t.Parallel()
 
