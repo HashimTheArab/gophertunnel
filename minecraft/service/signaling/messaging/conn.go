@@ -142,7 +142,7 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 
 	var credentials *nethernet.Credentials
 	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
-		return nil, fmt.Errorf("call %q: %w", MethodSignalingCredentials, err)
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
 	}
 	if credentials == nil || credentials.ExpirationInSeconds == 0 {
 		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
