@@ -16,8 +16,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -274,18 +272,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("dial: no network under id %v", network)}
 	}
 
-	var pong []byte
-	var netConn net.Conn
-	// Try pinging first with a short timeout so we don't block the dial
-	// if the server has pinging blocked.
-	pingCtx, pingCancel := context.WithTimeout(ctx, time.Second*3)
-	pong, err = n.PingContext(pingCtx, address)
-	pingCancel()
-	if err == nil {
-		netConn, err = n.DialContext(ctx, addressWithPongPort(pong, address))
-	} else {
-		netConn, err = n.DialContext(ctx, address)
-	}
+	netConn, err := n.DialContext(ctx, address)
 	if err != nil {
 		return nil, err
 	}
@@ -584,24 +571,4 @@ func splitPong(s string) []string {
 		}
 	}
 	return append(tokens, string(runes))
-}
-
-// addressWithPongPort parses the redirect IPv4 port from the pong and returns the address passed with the port
-// found if present, or the original address if not.
-func addressWithPongPort(pong []byte, address string) string {
-	frag := splitPong(string(pong))
-	if len(frag) > 10 {
-		portStr := frag[10]
-		port, err := strconv.Atoi(portStr)
-		// Vanilla (realms, in particular) will sometimes send port 19132 when you ping a port that isn't 19132 already,
-		// but we should ignore that.
-		if err != nil || port == 19132 {
-			return address
-		}
-		// Remove the port from the address.
-		addressParts := strings.Split(address, ":")
-		address = strings.Join(strings.Split(address, ":")[:len(addressParts)-1], ":")
-		return address + ":" + portStr
-	}
-	return address
 }

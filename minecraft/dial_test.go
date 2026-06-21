@@ -2,6 +2,9 @@ package minecraft
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"net"
 	"net/http"
 	"testing"
 
@@ -42,6 +45,40 @@ func TestDialAuthContextDoesNotOverwriteHTTPClient(t *testing.T) {
 	}
 }
 
+func TestDialContextDialsOriginalAddressWithoutPinging(t *testing.T) {
+	const networkID = "test-pong-port"
+	dialErr := errors.New("stop after address capture")
+	var dialAddress string
+	pingCalled := false
+
+	RegisterNetwork(networkID, func(*slog.Logger) Network {
+		return dialTestNetwork{
+			dial: func(_ context.Context, address string) (net.Conn, error) {
+				dialAddress = address
+				return nil, dialErr
+			},
+			ping: func(context.Context, string) ([]byte, error) {
+				pingCalled = true
+				return []byte("MCPE;InsaneSMP;800;1.21.80;0;100;123;World;Survival;1;25565;19133;"), nil
+			},
+		}
+	})
+	t.Cleanup(func() {
+		UnregisterNetwork(networkID)
+	})
+
+	_, err := Dialer{}.DialContext(context.Background(), networkID, "insanesmp.net:19132")
+	if !errors.Is(err, dialErr) {
+		t.Fatalf("DialContext error = %v, want %v", err, dialErr)
+	}
+	if dialAddress != "insanesmp.net:19132" {
+		t.Fatalf("dial address = %q, want insanesmp.net:19132", dialAddress)
+	}
+	if pingCalled {
+		t.Fatal("DialContext called PingContext before dialing")
+	}
+}
+
 func TestReadChainIdentityDataRejectsShortChain(t *testing.T) {
 	t.Parallel()
 
@@ -63,4 +100,24 @@ func TestReadChainIdentityDataRejectsShortChain(t *testing.T) {
 			}
 		})
 	}
+}
+
+type dialTestNetwork struct {
+	dial func(context.Context, string) (net.Conn, error)
+	ping func(context.Context, string) ([]byte, error)
+}
+
+func (n dialTestNetwork) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	return n.dial(ctx, address)
+}
+
+func (n dialTestNetwork) PingContext(ctx context.Context, address string) ([]byte, error) {
+	if n.ping != nil {
+		return n.ping(ctx, address)
+	}
+	return nil, errors.New("not implemented")
+}
+
+func (dialTestNetwork) Listen(string) (NetworkListener, error) {
+	return nil, errors.New("not implemented")
 }
