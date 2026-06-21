@@ -227,7 +227,7 @@ func (conn *Conn) handleMessage(message Message) {
 		notifiers := maps.Clone(conn.notifiers)
 		conn.notifiersMu.RUnlock()
 		for _, n := range notifiers {
-			n.NotifySignal(signal)
+			_ = n.NotifySignal(signal)
 		}
 	case MessageTypeError:
 		if message.ID == uuid.Nil {

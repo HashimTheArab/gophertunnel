@@ -301,7 +301,7 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		notifiers := maps.Clone(conn.notifiers)
 		conn.notifiersMu.RUnlock()
 		for _, n := range notifiers {
-			n.NotifySignal(signal)
+			_ = n.NotifySignal(signal)
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{

@@ -1,3 +1,5 @@
+github.com/HashimTheArab/go-nethernet v0.0.0-20260621185016-ac3e14475524 h1:/ddlpK/SdiAKNWJKMb65qPU3F+Mc7Fvzz6vNKVExMSk=
+github.com/HashimTheArab/go-nethernet v0.0.0-20260621185016-ac3e14475524/go.mod h1:4yrQZMotdkZJvdYnRQr5L8OnokZtSzqJ6EU3dntAaIU=
 github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260620084425-d4a68a0fa178 h1:AxVabv+ZfaC0g4XHFQ40Pqfmj2O5hbF4OWMKCkbNO8s=
 github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260620084425-d4a68a0fa178/go.mod h1:Gi/zQG2DFMJOMt4DIjuBuINTnU4YnZINe+RyFyza8oo=
 github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9g=
@@ -10,10 +12,6 @@ github.com/creachadair/mds v0.26.1 h1:CQG8f4cueHX/c20q5Sy/Ubk8Bvy+aRzVgbpxVieMBA
 github.com/creachadair/mds v0.26.1/go.mod h1:dMBTCSy3iS3dwh4Rb1zxeZz2d7K8+N24GCTsayWtQRI=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/df-mc/go-nethernet v1.0.15-0.20260619173129-a2ca473609ab h1:Q9q3df9vn/hq+lbLI6qDOi/iJPRNz6LWgFdMcXF1zHI=
-github.com/df-mc/go-nethernet v1.0.15-0.20260619173129-a2ca473609ab/go.mod h1:4yrQZMotdkZJvdYnRQr5L8OnokZtSzqJ6EU3dntAaIU=
-github.com/df-mc/go-nethernet v1.0.16-0.20260620175855-c6e08be827b9 h1:y5gtQsq4ARwPYhYcRG11v6WVCCTqgSR4dy93ZTp37ao=
-github.com/df-mc/go-nethernet v1.0.16-0.20260620175855-c6e08be827b9/go.mod h1:4yrQZMotdkZJvdYnRQr5L8OnokZtSzqJ6EU3dntAaIU=
 github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232935-6d86fc87875f h1:LDC3aXERNBpbhF0X56u4h7CjAFre4YvI8i5C4EP5xyg=
 github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232935-6d86fc87875f/go.mod h1:21Q50SUHyVXVd/oPkTEVriNoOmal3gY2qQ2hLhyMQrM=
 github.com/df-mc/jsonc v1.0.5 h1:O7oh07kbS5AYY+l2Fji6l4h0iHcdjKbxCtK5VlZlLMU=

@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
-	github.com/df-mc/go-nethernet v1.0.16-0.20260620175855-c6e08be827b9
+	github.com/df-mc/go-nethernet v1.0.16
 	github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232935-6d86fc87875f
 	github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260618232321-7db98a0b7856
 	github.com/df-mc/jsonc v1.0.5
@@ -49,3 +49,5 @@ require (
 )
 
 replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260620084425-d4a68a0fa178
+
+replace github.com/df-mc/go-nethernet => github.com/HashimTheArab/go-nethernet v0.0.0-20260621185016-ac3e14475524
