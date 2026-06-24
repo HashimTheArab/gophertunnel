@@ -55,7 +55,7 @@ func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 	}
 }
 
-func TestConvertToLatestConvertsExactDynamicFallbackPackets(t *testing.T) {
+func TestConvertToLatestConvertsInternalDynamicPackets(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"RequestNetworkSettingsPacket.json": `{
 			"x-minecraft-version": "1.26.30",
@@ -97,7 +97,7 @@ func TestConvertToLatestConvertsExactDynamicFallbackPackets(t *testing.T) {
 	}
 }
 
-func TestConvertToLatestKeepsDynamicWithTrailingPayload(t *testing.T) {
+func TestConvertToLatestRejectsInternalDynamicWithTrailingPayload(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"RequestNetworkSettingsPacket.json": `{
 			"x-minecraft-version": "1.26.30",
@@ -126,36 +126,6 @@ func TestConvertToLatestKeepsDynamicWithTrailingPayload(t *testing.T) {
 		"ClientNetworkVersion": int32(1001),
 		"Unexpected":           "extra",
 	}
-
-	converted := proto.ConvertToLatest(dynamic, nil)
-	if len(converted) != 1 {
-		t.Fatalf("converted packet count = %v, want 1", len(converted))
-	}
-	if converted[0] != dynamic {
-		t.Fatalf("converted packet type = %T, want original dynamic packet", converted[0])
-	}
-}
-
-func TestConvertToLatestKeepsDynamicWhenFallbackDecodeFails(t *testing.T) {
-	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"TextPacket.json": `{
-			"x-minecraft-version": "1.26.30",
-			"x-protocol-version": 1001,
-			"title": "TextPacket",
-			"description": "Sent from server to client.",
-			"type": "object",
-			"properties": {
-				"Message": {"type": "string", "x-ordinal-index": 0}
-			},
-			"$metaProperties": {"[cereal:packet]": 9}
-		}`,
-	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
-	if err != nil {
-		t.Fatalf("LoadMojangJSON: %v", err)
-	}
-
-	dynamic := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
-	dynamic.Values = map[string]any{"Message": "hello"}
 
 	converted := proto.ConvertToLatest(dynamic, nil)
 	if len(converted) != 1 {
