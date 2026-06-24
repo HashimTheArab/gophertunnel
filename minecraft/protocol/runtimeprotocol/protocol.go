@@ -150,11 +150,23 @@ func (p *Protocol) convertInternalDynamic(pk *DynamicPacket, conn *minecraft.Con
 	shieldID, readerLimits := conversionIOSettings(conn)
 	pk.Marshal(p.NewWriter(&buf, shieldID))
 	payload := bytes.NewBuffer(buf.Bytes())
-	converted.Marshal(p.fallback.NewReader(payload, shieldID, readerLimits))
+	if !tryMarshal(converted, p.fallback.NewReader(payload, shieldID, readerLimits)) {
+		return nil
+	}
 	if payload.Len() != 0 {
 		return nil
 	}
 	return converted
+}
+
+func tryMarshal(pk packet.Packet, io protocol.IO) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	pk.Marshal(io)
+	return true
 }
 
 func conversionIOSettings(conn *minecraft.Conn) (int32, bool) {
