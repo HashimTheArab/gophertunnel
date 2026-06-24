@@ -240,11 +240,12 @@ func variantFieldsMatch(fields []fieldSpec, values map[string]any) bool {
 	return true
 }
 
-func asMap(value any) map[string]any {
+func asMap(io protocol.IO, fieldName string, value any) (map[string]any, bool) {
 	if v, ok := value.(map[string]any); ok {
-		return v
+		return v, true
 	}
-	return map[string]any{}
+	io.InvalidValue(value, fieldName, "object value must be a map")
+	return nil, false
 }
 
 func asSlice(value any) []any {

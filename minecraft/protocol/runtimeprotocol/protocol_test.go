@@ -299,6 +299,41 @@ func TestDynamicPacketRejectsInvalidOneOfValue(t *testing.T) {
 	pk.Marshal(proto.NewWriter(&out, 0))
 }
 
+func TestDynamicPacketRejectsInvalidObjectValue(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Body": {
+					"type": "object",
+					"properties": {
+						"Message": {"type": "string", "x-ordinal-index": 0}
+					},
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected invalid object value to panic")
+		}
+	}()
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{"Body": "not an object"}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
+}
+
 func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"CommandRequestPacket.json": `{
@@ -331,6 +366,31 @@ func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {
 		if _, ok := pkFunc().(*runtimeprotocol.DynamicPacket); ok {
 			t.Fatalf("dial CommandRequest packet should not be overlaid as dynamic")
 		}
+	}
+	if _, ok := proto.Packets(false)[packet.IDSetTime]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("dial SetTime packet was not dynamic")
+	}
+	if pkFunc, ok := proto.Packets(true)[packet.IDSetTime]; ok {
+		if _, ok := pkFunc().(*runtimeprotocol.DynamicPacket); ok {
+			t.Fatalf("listener SetTime packet should not be overlaid as dynamic")
+		}
+	}
+}
+
+func TestLoadMojangJSONIgnoresDirectionSubstringFalsePositives(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"SetTimePacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "SetTimePacket",
+			"description": "Different from client clock state.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 10}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
 	}
 	if _, ok := proto.Packets(false)[packet.IDSetTime]().(*runtimeprotocol.DynamicPacket); !ok {
 		t.Fatalf("dial SetTime packet was not dynamic")

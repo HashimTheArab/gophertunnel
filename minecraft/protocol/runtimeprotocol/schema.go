@@ -259,7 +259,11 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 				return values
 			},
 			encode: func(io protocol.IO, value any) {
-				encodeFields(io, fields, asMap(value))
+				values, ok := asMap(io, name, value)
+				if !ok {
+					return
+				}
+				encodeFields(io, fields, values)
 			},
 		}, nil
 	}
@@ -350,12 +354,10 @@ func (c *compiler) packetDirection(id uint32, fallback minecraft.Protocol) packe
 	text := strings.ToLower(c.doc.Title + " " + c.doc.Description)
 	client := strings.Contains(text, "serverbound") ||
 		strings.Contains(text, "client to server") ||
-		strings.Contains(text, "client-to-server") ||
-		strings.Contains(text, "from client")
+		strings.Contains(text, "client-to-server")
 	server := strings.Contains(text, "clientbound") ||
 		strings.Contains(text, "server to client") ||
-		strings.Contains(text, "server-to-client") ||
-		strings.Contains(text, "from server")
+		strings.Contains(text, "server-to-client")
 	switch {
 	case client && server:
 		return directionBoth
