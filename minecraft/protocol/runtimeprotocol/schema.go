@@ -355,16 +355,20 @@ func (c *compiler) resolveNode(node rawNode) (rawNode, error) {
 
 func (c *compiler) packetDirection(id uint32, fallback minecraft.Protocol) packetDirection {
 	text := strings.ToLower(c.doc.Title + " " + c.doc.Description)
-	switch {
-	case strings.Contains(text, "serverbound") ||
+	client := strings.Contains(text, "serverbound") ||
 		strings.Contains(text, "client to server") ||
 		strings.Contains(text, "client-to-server") ||
-		strings.Contains(text, "from client"):
-		return directionClient
-	case strings.Contains(text, "clientbound") ||
+		strings.Contains(text, "from client")
+	server := strings.Contains(text, "clientbound") ||
 		strings.Contains(text, "server to client") ||
 		strings.Contains(text, "server-to-client") ||
-		strings.Contains(text, "from server"):
+		strings.Contains(text, "from server")
+	switch {
+	case client && server:
+		return directionBoth
+	case client:
+		return directionClient
+	case server:
 		return directionServer
 	}
 

@@ -342,6 +342,29 @@ func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {
 	}
 }
 
+func TestLoadMojangJSONKeepsBidirectionalDescriptionsBidirectional(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent client to server and server to client.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+	if _, ok := proto.Packets(true)[packet.IDText]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("listener Text packet was not dynamic")
+	}
+	if _, ok := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("dial Text packet was not dynamic")
+	}
+}
+
 func TestLoadMojangJSONHandlesChainedRefsAndFloatSpelling(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"TextPacket.json": `{
@@ -379,6 +402,86 @@ func TestLoadMojangJSONHandlesChainedRefsAndFloatSpelling(t *testing.T) {
 	body := decoded.Values["Body"].(map[string]any)
 	if got := body["Scalar"]; got != float32(1.25) {
 		t.Fatalf("decoded Body.Scalar = %#v, want float32(1.25)", got)
+	}
+}
+
+func TestDynamicPacketEncodesTypedArraySlices(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Messages": {
+					"type": "array",
+					"items": {"type": "string"},
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{"Messages": []string{"hello", "world"}}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
+
+	decoded := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	decoded.Marshal(proto.NewReader(bytes.NewBuffer(out.Bytes()), 0, true))
+	messages, ok := decoded.Values["Messages"].([]any)
+	if !ok {
+		t.Fatalf("decoded Messages type = %T, want []any", decoded.Values["Messages"])
+	}
+	if len(messages) != 2 || messages[0] != "hello" || messages[1] != "world" {
+		t.Fatalf("decoded Messages = %#v, want hello/world", messages)
+	}
+}
+
+func TestDynamicPacketEncodesNumericAliases(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Count": {"type": "integer", "x-underlying-type": "uint16", "x-ordinal-index": 0},
+				"Offset": {"type": "integer", "x-underlying-type": "int32", "x-ordinal-index": 1},
+				"Ratio": {"type": "number", "x-underlying-type": "float", "x-ordinal-index": 2}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{
+		"Count":  uint8(7),
+		"Offset": int16(-3),
+		"Ratio":  float64(1.5),
+	}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
+
+	decoded := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	decoded.Marshal(proto.NewReader(bytes.NewBuffer(out.Bytes()), 0, true))
+	if got := decoded.Values["Count"]; got != uint16(7) {
+		t.Fatalf("decoded Count = %#v, want uint16(7)", got)
+	}
+	if got := decoded.Values["Offset"]; got != int32(-3) {
+		t.Fatalf("decoded Offset = %#v, want int32(-3)", got)
+	}
+	if got := decoded.Values["Ratio"]; got != float32(1.5) {
+		t.Fatalf("decoded Ratio = %#v, want float32(1.5)", got)
 	}
 }
 

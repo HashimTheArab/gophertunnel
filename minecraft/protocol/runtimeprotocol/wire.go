@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -251,15 +252,17 @@ func asMap(value any) map[string]any {
 }
 
 func asSlice(value any) []any {
-	switch v := value.(type) {
-	case []any:
+	if v, ok := value.([]any); ok {
 		return v
-	case []map[string]any:
-		out := make([]any, len(v))
-		for i := range v {
-			out[i] = v[i]
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		values := make([]any, v.Len())
+		for i := range values {
+			values[i] = v.Index(i).Interface()
 		}
-		return out
+		return values
 	default:
 		return nil
 	}
@@ -283,23 +286,18 @@ func asBool(value any) bool {
 
 func asFloat64(value any) float64 {
 	switch v := value.(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int32:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case uint32:
-		return float64(v)
-	case uint64:
-		return float64(v)
 	case json.Number:
 		f, _ := v.Float64()
 		return f
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return v.Float()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(v.Uint())
 	default:
 		return 0
 	}
@@ -307,35 +305,19 @@ func asFloat64(value any) float64 {
 
 func asInt64(value any) int64 {
 	switch v := value.(type) {
-	case int:
-		return int64(v)
-	case int8:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case int32:
-		return int64(v)
-	case int64:
-		return v
-	case uint:
-		if uint64(v) > math.MaxInt64 {
-			return 0
-		}
-		return int64(v)
-	case uint8:
-		return int64(v)
-	case uint16:
-		return int64(v)
-	case uint32:
-		return int64(v)
-	case uint64:
-		if v > math.MaxInt64 {
-			return 0
-		}
-		return int64(v)
 	case json.Number:
 		i, _ := v.Int64()
 		return i
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if v.Uint() > math.MaxInt64 {
+			return 0
+		}
+		return int64(v.Uint())
 	default:
 		return 0
 	}
@@ -343,47 +325,22 @@ func asInt64(value any) int64 {
 
 func asUint64(value any) uint64 {
 	switch v := value.(type) {
-	case int:
-		if v < 0 {
-			return 0
-		}
-		return uint64(v)
-	case int8:
-		if v < 0 {
-			return 0
-		}
-		return uint64(v)
-	case int16:
-		if v < 0 {
-			return 0
-		}
-		return uint64(v)
-	case int32:
-		if v < 0 {
-			return 0
-		}
-		return uint64(v)
-	case int64:
-		if v < 0 {
-			return 0
-		}
-		return uint64(v)
-	case uint:
-		return uint64(v)
-	case uint8:
-		return uint64(v)
-	case uint16:
-		return uint64(v)
-	case uint32:
-		return uint64(v)
-	case uint64:
-		return v
 	case json.Number:
 		i, err := v.Int64()
 		if err == nil && i >= 0 {
 			return uint64(i)
 		}
 		return 0
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if v.Int() < 0 {
+			return 0
+		}
+		return uint64(v.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return v.Uint()
 	default:
 		return 0
 	}
