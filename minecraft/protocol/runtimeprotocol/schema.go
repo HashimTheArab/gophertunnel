@@ -202,11 +202,16 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 			return fieldSpec{}, fmt.Errorf("%s: %w", name, err)
 		}
 		variants := make([]variantSpec, 0, len(node.OneOf))
+		seenIndices := map[uint32]struct{}{}
 		for i, rawVariant := range node.OneOf {
 			index := uint32(i)
 			if rawVariant.Ordinal != nil {
 				index = uint32(*rawVariant.Ordinal)
 			}
+			if _, ok := seenIndices[index]; ok {
+				return fieldSpec{}, fmt.Errorf("%s: duplicate oneOf variant index %d", name, index)
+			}
+			seenIndices[index] = struct{}{}
 			resolved := rawVariant
 			if rawVariant.Ref != "" {
 				var err error
@@ -288,7 +293,10 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 				return values
 			},
 			encode: func(io protocol.IO, value any) {
-				values := asSlice(value)
+				values, ok := asSlice(io, name, value)
+				if !ok {
+					return
+				}
 				protocol.FuncSlice(io, &values, func(value *any) {
 					elem.encode(io, *value)
 				})

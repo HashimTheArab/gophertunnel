@@ -341,6 +341,48 @@ func TestDynamicPacketRejectsInvalidOneOfValue(t *testing.T) {
 	pk.Marshal(proto.NewWriter(&out, 0))
 }
 
+func TestLoadMojangJSONRejectsDuplicateOneOfIndices(t *testing.T) {
+	_, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"type": "object",
+			"definitions": {
+				"message_only": {
+					"title": "MessageOnly",
+					"type": "object",
+					"properties": {
+						"Message": {"type": "string", "x-ordinal-index": 0}
+					}
+				},
+				"authored": {
+					"title": "AuthorAndMessage",
+					"type": "object",
+					"properties": {
+						"Author": {"type": "string", "x-ordinal-index": 0},
+						"Message": {"type": "string", "x-ordinal-index": 1}
+					}
+				}
+			},
+			"properties": {
+				"Body": {
+					"oneOf": [
+						{"$ref": "#/definitions/message_only", "x-ordinal-index": 1},
+						{"$ref": "#/definitions/authored", "x-ordinal-index": 1}
+					],
+					"x-control-value-type": "uint8",
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err == nil {
+		t.Fatalf("LoadMojangJSON succeeded with duplicate oneOf indices")
+	}
+}
+
 func TestDynamicPacketRejectsInvalidObjectValue(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"TextPacket.json": `{
@@ -543,6 +585,39 @@ func TestDynamicPacketEncodesTypedArraySlices(t *testing.T) {
 	if len(messages) != 2 || messages[0] != "hello" || messages[1] != "world" {
 		t.Fatalf("decoded Messages = %#v, want hello/world", messages)
 	}
+}
+
+func TestDynamicPacketRejectsByteSliceStringArray(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Messages": {
+					"type": "array",
+					"items": {"type": "string"},
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected byte slice array value to panic")
+		}
+	}()
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{"Messages": []byte("hello")}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
 }
 
 func TestDynamicPacketEncodesNumericAliases(t *testing.T) {

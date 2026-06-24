@@ -249,20 +249,29 @@ func asMap(io protocol.IO, fieldName string, value any) (map[string]any, bool) {
 	return nil, false
 }
 
-func asSlice(value any) []any {
+func asSlice(io protocol.IO, fieldName string, value any) ([]any, bool) {
 	if v, ok := value.([]any); ok {
-		return v
+		return v, true
+	}
+	if _, ok := value.([]byte); ok {
+		io.InvalidValue(value, fieldName, "array value must not be []byte")
+		return nil, false
 	}
 	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		io.InvalidValue(value, fieldName, "array value must be a slice or array")
+		return nil, false
+	}
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
 		values := make([]any, v.Len())
 		for i := range values {
 			values[i] = v.Index(i).Interface()
 		}
-		return values
+		return values, true
 	default:
-		return nil
+		io.InvalidValue(value, fieldName, "array value must be a slice or array")
+		return nil, false
 	}
 }
 
