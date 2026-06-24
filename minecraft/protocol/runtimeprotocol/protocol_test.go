@@ -155,6 +155,116 @@ func TestDynamicPacketHandlesOneOfVariants(t *testing.T) {
 	}
 }
 
+func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"RequestNetworkSettingsPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "RequestNetworkSettingsPacket",
+			"description": "Sent from client to server to initiate a connection.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 193}
+		}`,
+		"NetworkSettingsPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "NetworkSettingsPacket",
+			"description": "Sent from the server to client with network settings.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 143}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	if _, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("listener RequestNetworkSettings packet was not dynamic")
+	}
+	if _, ok := proto.Packets(false)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket); ok {
+		t.Fatalf("dial RequestNetworkSettings packet should not be overlaid as dynamic")
+	}
+	if _, ok := proto.Packets(false)[packet.IDNetworkSettings]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("dial NetworkSettings packet was not dynamic")
+	}
+	if _, ok := proto.Packets(true)[packet.IDNetworkSettings]; ok {
+		t.Fatalf("listener NetworkSettings packet should not be present")
+	}
+}
+
+func TestLoadMojangJSONHandlesChainedRefsAndFloatSpelling(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"definitions": {
+				"alias": {"$ref": "#/definitions/body"},
+				"body": {
+					"type": "object",
+					"properties": {
+						"Scalar": {"type": "number", "x-underlying-type": "float", "x-ordinal-index": 0}
+					}
+				}
+			},
+			"properties": {
+				"Body": {"$ref": "#/definitions/alias", "x-ordinal-index": 0}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{"Body": map[string]any{"Scalar": float32(1.25)}}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
+
+	decoded := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	decoded.Marshal(proto.NewReader(bytes.NewBuffer(out.Bytes()), 0, true))
+	body := decoded.Values["Body"].(map[string]any)
+	if got := body["Scalar"]; got != float32(1.25) {
+		t.Fatalf("decoded Body.Scalar = %#v, want float32(1.25)", got)
+	}
+}
+
+func TestDynamicPacketChecksArrayLengthBeforeAllocating(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from client to server.",
+			"type": "object",
+			"properties": {
+				"Messages": {
+					"type": "array",
+					"items": {"type": "string"},
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected array length check to panic")
+		}
+	}()
+	pk := proto.Packets(true)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Marshal(proto.NewReader(bytes.NewBuffer([]byte{0x81, 0x20}), 0, true))
+}
+
 func schemaFS(files map[string]string) fs.FS {
 	out := fstest.MapFS{}
 	for name, data := range files {

@@ -1,16 +1,21 @@
 package runtimeprotocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 type schemaDocument struct {
 	Title           string             `json:"title"`
+	Description     string             `json:"description"`
 	MinecraftVer    string             `json:"x-minecraft-version"`
 	ProtocolVersion int32              `json:"x-protocol-version"`
 	Definitions     map[string]rawNode `json:"definitions"`
@@ -33,65 +38,45 @@ type rawNode struct {
 }
 
 type packetSpec struct {
-	id     uint32
-	title  string
-	fields []fieldSpec
+	direction packetDirection
+	fields    []fieldSpec
 }
 
-func (s *packetSpec) decode(io interfaceIO) map[string]any {
+func (s *packetSpec) decode(io protocol.IO) map[string]any {
 	values := make(map[string]any, len(s.fields))
 	decodeFields(io, s.fields, values)
 	return values
 }
 
-func (s *packetSpec) encode(io interfaceIO, values map[string]any) {
+func (s *packetSpec) encode(io protocol.IO, values map[string]any) {
 	encodeFields(io, s.fields, values)
 }
 
-type interfaceIO = interface {
-	Uint16(*uint16)
-	Int16(*int16)
-	Uint32(*uint32)
-	Int32(*int32)
-	BEInt32(*int32)
-	Uint64(*uint64)
-	Int64(*int64)
-	Float32(*float32)
-	Float64(*float64)
-	Uint8(*uint8)
-	Int8(*int8)
-	Bool(*bool)
-	Varint64(*int64)
-	Varuint64(*uint64)
-	Varint32(*int32)
-	Varuint32(*uint32)
-	String(*string)
-	InvalidValue(any, string, string)
-}
-
-type fieldKind uint8
-
-const (
-	fieldScalar fieldKind = iota
-	fieldObject
-	fieldArray
-	fieldVariant
-)
-
 type fieldSpec struct {
-	name     string
-	kind     fieldKind
-	wire     wireType
-	enum     []string
-	fields   []fieldSpec
-	elem     *fieldSpec
-	variants []variantSpec
+	name   string
+	decode func(protocol.IO) any
+	encode func(protocol.IO, any)
 }
 
 type variantSpec struct {
 	index  uint32
 	title  string
 	fields []fieldSpec
+}
+
+type packetDirection uint8
+
+const (
+	directionClient packetDirection = 1 << iota
+	directionServer
+	directionBoth = directionClient | directionServer
+)
+
+func (d packetDirection) allowed(listener bool) bool {
+	if listener {
+		return d&directionClient != 0
+	}
+	return d&directionServer != 0
 }
 
 type compiler struct {
@@ -120,7 +105,7 @@ func loadSchemas(fsys fs.FS, protocolID int32, cfg loadConfig) (*Protocol, error
 			return err
 		}
 		var doc schemaDocument
-		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.UseNumber()
 		if err := dec.Decode(&doc); err != nil {
 			return fmt.Errorf("decode %s: %w", name, err)
@@ -135,7 +120,7 @@ func loadSchemas(fsys fs.FS, protocolID int32, cfg loadConfig) (*Protocol, error
 		if !ok {
 			return nil
 		}
-		spec, err := (&compiler{doc: &doc}).compilePacket(id)
+		spec, err := (&compiler{doc: &doc}).compilePacket(id, p.fallback)
 		if err != nil {
 			return fmt.Errorf("compile %s: %w", name, err)
 		}
@@ -169,12 +154,12 @@ func schemaPacketID(meta map[string]any) (uint32, bool, error) {
 	return id, true, nil
 }
 
-func (c *compiler) compilePacket(id uint32) (*packetSpec, error) {
+func (c *compiler) compilePacket(id uint32, fallback minecraft.Protocol) (*packetSpec, error) {
 	fields, err := c.compileProperties(c.doc.Properties)
 	if err != nil {
 		return nil, err
 	}
-	return &packetSpec{id: id, title: c.doc.Title, fields: fields}, nil
+	return &packetSpec{direction: c.packetDirection(id, fallback), fields: fields}, nil
 }
 
 func (c *compiler) compileProperties(properties map[string]rawNode) ([]fieldSpec, error) {
@@ -199,11 +184,11 @@ func (c *compiler) compileProperties(properties map[string]rawNode) ([]fieldSpec
 
 func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 	if node.Ref != "" && len(node.OneOf) == 0 {
-		resolved, err := c.resolve(node.Ref)
+		resolved, err := c.resolveNode(node)
 		if err != nil {
 			return fieldSpec{}, err
 		}
-		node = mergeNode(resolved, node)
+		node = resolved
 	}
 	if len(node.OneOf) != 0 {
 		wire, err := controlWire(node.ControlValueType)
@@ -219,7 +204,7 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 			resolved := rawVariant
 			if rawVariant.Ref != "" {
 				var err error
-				resolved, err = c.resolve(rawVariant.Ref)
+				resolved, err = c.resolveNode(rawVariant)
 				if err != nil {
 					return fieldSpec{}, err
 				}
@@ -230,14 +215,47 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 			}
 			variants = append(variants, variantSpec{index: index, title: resolved.Title, fields: fields})
 		}
-		return fieldSpec{name: name, kind: fieldVariant, wire: wire, variants: variants}, nil
+		return fieldSpec{
+			name: name,
+			decode: func(io protocol.IO) any {
+				index := readControl(io, wire)
+				variant, ok := variantByIndex(variants, index)
+				if !ok {
+					io.InvalidValue(index, name, "unknown oneOf variant index")
+					return Variant{Index: index}
+				}
+				values := make(map[string]any, len(variant.fields))
+				decodeFields(io, variant.fields, values)
+				return Variant{Index: index, Title: variant.title, Value: values}
+			},
+			encode: func(io protocol.IO, value any) {
+				variant := asVariant(value)
+				spec, ok := variantByIndex(variants, variant.Index)
+				if !ok {
+					io.InvalidValue(variant.Index, name, "unknown oneOf variant index")
+					return
+				}
+				writeControl(io, wire, variant.Index)
+				encodeFields(io, spec.fields, variant.Value)
+			},
+		}, nil
 	}
 	if len(node.Properties) != 0 || node.Type == "object" {
 		fields, err := c.compileProperties(node.Properties)
 		if err != nil {
 			return fieldSpec{}, err
 		}
-		return fieldSpec{name: name, kind: fieldObject, fields: fields}, nil
+		return fieldSpec{
+			name: name,
+			decode: func(io protocol.IO) any {
+				values := make(map[string]any, len(fields))
+				decodeFields(io, fields, values)
+				return values
+			},
+			encode: func(io protocol.IO, value any) {
+				encodeFields(io, fields, asMap(value))
+			},
+		}, nil
 	}
 	if node.Type == "array" {
 		if node.Items == nil {
@@ -247,7 +265,29 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 		if err != nil {
 			return fieldSpec{}, err
 		}
-		return fieldSpec{name: name, kind: fieldArray, elem: &elem}, nil
+		return fieldSpec{
+			name: name,
+			decode: func(io protocol.IO) any {
+				var count uint32
+				io.Varuint32(&count)
+				if checker, ok := io.(interface{ CheckSliceLength(uint32, uint32) }); ok {
+					checker.CheckSliceLength(count, maxRuntimeArrayLength)
+				}
+				values := make([]any, count)
+				for i := range values {
+					values[i] = elem.decode(io)
+				}
+				return values
+			},
+			encode: func(io protocol.IO, value any) {
+				values := asSlice(value)
+				count := uint32(len(values))
+				io.Varuint32(&count)
+				for _, elemValue := range values {
+					elem.encode(io, elemValue)
+				}
+			},
+		}, nil
 	}
 	wire, err := scalarWire(node)
 	if err != nil {
@@ -257,7 +297,22 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 	if isEnumAsValue(node) {
 		enum = node.Enum
 	}
-	return fieldSpec{name: name, kind: fieldScalar, wire: wire, enum: enum}, nil
+	return fieldSpec{
+		name: name,
+		decode: func(io protocol.IO) any {
+			value := wire.decode(io)
+			if len(enum) != 0 {
+				return decodeEnum(io, name, enum, value)
+			}
+			return value
+		},
+		encode: func(io protocol.IO, value any) {
+			if len(enum) != 0 {
+				value = encodeEnumValue(io, name, enum, value)
+			}
+			wire.encode(io, value)
+		},
+	}, nil
 }
 
 func (c *compiler) resolve(ref string) (rawNode, error) {
@@ -276,6 +331,53 @@ func (c *compiler) resolve(ref string) (rawNode, error) {
 func mergeNode(base, overlay rawNode) rawNode {
 	base.Ordinal = overlay.Ordinal
 	return base
+}
+
+func (c *compiler) resolveNode(node rawNode) (rawNode, error) {
+	ordinal := node.Ordinal
+	seen := map[string]struct{}{}
+	for node.Ref != "" {
+		if _, ok := seen[node.Ref]; ok {
+			return rawNode{}, fmt.Errorf("cyclic ref %q", node.Ref)
+		}
+		seen[node.Ref] = struct{}{}
+
+		resolved, err := c.resolve(node.Ref)
+		if err != nil {
+			return rawNode{}, err
+		}
+		node = mergeNode(resolved, node)
+	}
+	node.Ordinal = ordinal
+	return node, nil
+}
+
+func (c *compiler) packetDirection(id uint32, fallback minecraft.Protocol) packetDirection {
+	text := strings.ToLower(c.doc.Title + " " + c.doc.Description)
+	switch {
+	case strings.Contains(text, "serverbound") ||
+		strings.Contains(text, "client to server") ||
+		strings.Contains(text, "client-to-server") ||
+		strings.Contains(text, "from client"):
+		return directionClient
+	case strings.Contains(text, "clientbound") ||
+		strings.Contains(text, "server to client") ||
+		strings.Contains(text, "server-to-client") ||
+		strings.Contains(text, "from server"):
+		return directionServer
+	}
+
+	var direction packetDirection
+	if _, ok := fallback.Packets(true)[id]; ok {
+		direction |= directionClient
+	}
+	if _, ok := fallback.Packets(false)[id]; ok {
+		direction |= directionServer
+	}
+	if direction == 0 {
+		return directionBoth
+	}
+	return direction
 }
 
 func ordinal(node rawNode) int {

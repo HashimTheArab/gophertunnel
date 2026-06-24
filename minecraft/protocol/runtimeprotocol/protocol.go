@@ -60,6 +60,9 @@ func (p *Protocol) Ver() string {
 func (p *Protocol) Packets(listener bool) packet.Pool {
 	pool := p.fallback.Packets(listener)
 	for id, spec := range p.packets {
+		if !spec.direction.allowed(listener) {
+			continue
+		}
 		id, spec := id, spec
 		pool[id] = func() packet.Packet {
 			return &DynamicPacket{PacketID: id, Values: map[string]any{}, spec: spec}

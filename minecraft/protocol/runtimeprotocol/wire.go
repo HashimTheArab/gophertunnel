@@ -6,105 +6,78 @@ import (
 	"math"
 	"slices"
 	"strings"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-type wireType uint8
+const maxRuntimeArrayLength = 4096
 
-const (
-	wireBool wireType = iota
-	wireString
-	wireUint8
-	wireInt8
-	wireUint16
-	wireInt16
-	wireUint32
-	wireInt32
-	wireBEInt32
-	wireVaruint32
-	wireVarint32
-	wireUint64
-	wireInt64
-	wireVaruint64
-	wireVarint64
-	wireFloat32
-	wireFloat64
-)
+type wireType struct {
+	name  string
+	read  func(protocol.IO) any
+	write func(protocol.IO, any)
+}
 
-func decodeFields(io interfaceIO, fields []fieldSpec, values map[string]any) {
-	for _, field := range fields {
-		values[field.name] = decodeField(io, field)
+func wire[T any](name string, ioFunc func(protocol.IO, *T), coerce func(any) T) wireType {
+	return wireType{
+		name: name,
+		read: func(io protocol.IO) any {
+			var v T
+			ioFunc(io, &v)
+			return v
+		},
+		write: func(io protocol.IO, value any) {
+			v := coerce(value)
+			ioFunc(io, &v)
+		},
 	}
 }
 
-func decodeField(io interfaceIO, field fieldSpec) any {
-	switch field.kind {
-	case fieldScalar:
-		value := decodeScalar(io, field.wire)
-		if len(field.enum) != 0 {
-			return decodeEnum(io, field, value)
-		}
-		return value
-	case fieldObject:
-		values := make(map[string]any, len(field.fields))
-		decodeFields(io, field.fields, values)
-		return values
-	case fieldArray:
-		var count uint32
-		io.Varuint32(&count)
-		values := make([]any, count)
-		for i := range values {
-			values[i] = decodeField(io, *field.elem)
-		}
-		return values
-	case fieldVariant:
-		index := readControl(io, field.wire)
-		variant, ok := variantByIndex(field.variants, index)
-		if !ok {
-			io.InvalidValue(index, field.name, "unknown oneOf variant index")
-			return Variant{Index: index}
-		}
-		values := make(map[string]any, len(variant.fields))
-		decodeFields(io, variant.fields, values)
-		return Variant{Index: index, Title: variant.title, Value: values}
-	default:
-		io.InvalidValue(field.name, "runtime schema field", "unknown field kind")
+var (
+	wireBool      = wire("bool", protocol.IO.Bool, asBool)
+	wireString    = wire("string", protocol.IO.String, asString)
+	wireUint8     = wire("uint8", protocol.IO.Uint8, func(v any) uint8 { return uint8(asUint64(v)) })
+	wireInt8      = wire("int8", protocol.IO.Int8, func(v any) int8 { return int8(asInt64(v)) })
+	wireUint16    = wire("uint16", protocol.IO.Uint16, func(v any) uint16 { return uint16(asUint64(v)) })
+	wireInt16     = wire("int16", protocol.IO.Int16, func(v any) int16 { return int16(asInt64(v)) })
+	wireUint32    = wire("uint32", protocol.IO.Uint32, func(v any) uint32 { return uint32(asUint64(v)) })
+	wireInt32     = wire("int32", protocol.IO.Int32, func(v any) int32 { return int32(asInt64(v)) })
+	wireBEInt32   = wire("big endian int32", protocol.IO.BEInt32, func(v any) int32 { return int32(asInt64(v)) })
+	wireVaruint32 = wire("varuint32", protocol.IO.Varuint32, func(v any) uint32 { return uint32(asUint64(v)) })
+	wireVarint32  = wire("varint32", protocol.IO.Varint32, func(v any) int32 { return int32(asInt64(v)) })
+	wireUint64    = wire("uint64", protocol.IO.Uint64, asUint64)
+	wireInt64     = wire("int64", protocol.IO.Int64, asInt64)
+	wireVaruint64 = wire("varuint64", protocol.IO.Varuint64, asUint64)
+	wireVarint64  = wire("varint64", protocol.IO.Varint64, asInt64)
+	wireFloat32   = wire("float32", protocol.IO.Float32, func(v any) float32 { return float32(asFloat64(v)) })
+	wireFloat64   = wire("float64", protocol.IO.Float64, asFloat64)
+)
+
+func (w wireType) decode(io protocol.IO) any {
+	if w.read == nil {
+		io.InvalidValue(w.name, "runtime schema scalar", "unknown wire type")
 		return nil
 	}
+	return w.read(io)
 }
 
-func encodeFields(io interfaceIO, fields []fieldSpec, values map[string]any) {
+func (w wireType) encode(io protocol.IO, value any) {
+	if w.write == nil {
+		io.InvalidValue(w.name, "runtime schema scalar", "unknown wire type")
+		return
+	}
+	w.write(io, value)
+}
+
+func decodeFields(io protocol.IO, fields []fieldSpec, values map[string]any) {
 	for _, field := range fields {
-		encodeField(io, field, values[field.name])
+		values[field.name] = field.decode(io)
 	}
 }
 
-func encodeField(io interfaceIO, field fieldSpec, value any) {
-	switch field.kind {
-	case fieldScalar:
-		if len(field.enum) != 0 {
-			value = encodeEnumValue(io, field, value)
-		}
-		encodeScalar(io, field.wire, value)
-	case fieldObject:
-		encodeFields(io, field.fields, asMap(value))
-	case fieldArray:
-		values := asSlice(value)
-		count := uint32(len(values))
-		io.Varuint32(&count)
-		for _, elem := range values {
-			encodeField(io, *field.elem, elem)
-		}
-	case fieldVariant:
-		variant := asVariant(value)
-		spec, ok := variantByIndex(field.variants, variant.Index)
-		if !ok {
-			io.InvalidValue(variant.Index, field.name, "unknown oneOf variant index")
-			return
-		}
-		writeControl(io, field.wire, variant.Index)
-		encodeFields(io, spec.fields, variant.Value)
-	default:
-		io.InvalidValue(field.name, "runtime schema field", "unknown field kind")
+func encodeFields(io protocol.IO, fields []fieldSpec, values map[string]any) {
+	for _, field := range fields {
+		field.encode(io, values[field.name])
 	}
 }
 
@@ -119,17 +92,17 @@ func scalarWire(node rawNode) (wireType, error) {
 		return wireString, nil
 	case "number":
 		switch node.UnderlyingType {
-		case "", "float32":
+		case "", "float", "float32":
 			return wireFloat32, nil
 		case "float64":
 			return wireFloat64, nil
 		default:
-			return 0, fmt.Errorf("unsupported number wire type %q", node.UnderlyingType)
+			return wireType{}, fmt.Errorf("unsupported number wire type %q", node.UnderlyingType)
 		}
 	case "integer":
 		return integerWire(node.UnderlyingType, node.SerializationOptions)
 	default:
-		return 0, fmt.Errorf("unsupported schema type %q", node.Type)
+		return wireType{}, fmt.Errorf("unsupported schema type %q", node.Type)
 	}
 }
 
@@ -146,7 +119,7 @@ func controlWire(typ string) (wireType, error) {
 	case "int32":
 		return wireVarint32, nil
 	default:
-		return 0, fmt.Errorf("unsupported oneOf control type %q", typ)
+		return wireType{}, fmt.Errorf("unsupported oneOf control type %q", typ)
 	}
 }
 
@@ -186,7 +159,7 @@ func integerWire(typ string, options []string) (wireType, error) {
 		}
 		return wireInt64, nil
 	default:
-		return 0, fmt.Errorf("unsupported integer wire type %q", typ)
+		return wireType{}, fmt.Errorf("unsupported integer wire type %q", typ)
 	}
 }
 
@@ -196,191 +169,38 @@ func hasOption(options []string, option string) bool {
 	})
 }
 
-func decodeScalar(io interfaceIO, wire wireType) any {
-	switch wire {
-	case wireBool:
-		var v bool
-		io.Bool(&v)
-		return v
-	case wireString:
-		var v string
-		io.String(&v)
-		return v
-	case wireUint8:
-		var v uint8
-		io.Uint8(&v)
-		return v
-	case wireInt8:
-		var v int8
-		io.Int8(&v)
-		return v
-	case wireUint16:
-		var v uint16
-		io.Uint16(&v)
-		return v
-	case wireInt16:
-		var v int16
-		io.Int16(&v)
-		return v
-	case wireUint32:
-		var v uint32
-		io.Uint32(&v)
-		return v
-	case wireInt32:
-		var v int32
-		io.Int32(&v)
-		return v
-	case wireBEInt32:
-		var v int32
-		io.BEInt32(&v)
-		return v
-	case wireVaruint32:
-		var v uint32
-		io.Varuint32(&v)
-		return v
-	case wireVarint32:
-		var v int32
-		io.Varint32(&v)
-		return v
-	case wireUint64:
-		var v uint64
-		io.Uint64(&v)
-		return v
-	case wireInt64:
-		var v int64
-		io.Int64(&v)
-		return v
-	case wireVaruint64:
-		var v uint64
-		io.Varuint64(&v)
-		return v
-	case wireVarint64:
-		var v int64
-		io.Varint64(&v)
-		return v
-	case wireFloat32:
-		var v float32
-		io.Float32(&v)
-		return v
-	case wireFloat64:
-		var v float64
-		io.Float64(&v)
-		return v
-	default:
-		io.InvalidValue(wire, "runtime schema scalar", "unknown wire type")
-		return nil
-	}
-}
-
-func encodeScalar(io interfaceIO, wire wireType, value any) {
-	switch wire {
-	case wireBool:
-		v := asBool(value)
-		io.Bool(&v)
-	case wireString:
-		v := asString(value)
-		io.String(&v)
-	case wireUint8:
-		v := uint8(asUint64(value))
-		io.Uint8(&v)
-	case wireInt8:
-		v := int8(asInt64(value))
-		io.Int8(&v)
-	case wireUint16:
-		v := uint16(asUint64(value))
-		io.Uint16(&v)
-	case wireInt16:
-		v := int16(asInt64(value))
-		io.Int16(&v)
-	case wireUint32:
-		v := uint32(asUint64(value))
-		io.Uint32(&v)
-	case wireInt32:
-		v := int32(asInt64(value))
-		io.Int32(&v)
-	case wireBEInt32:
-		v := int32(asInt64(value))
-		io.BEInt32(&v)
-	case wireVaruint32:
-		v := uint32(asUint64(value))
-		io.Varuint32(&v)
-	case wireVarint32:
-		v := int32(asInt64(value))
-		io.Varint32(&v)
-	case wireUint64:
-		v := asUint64(value)
-		io.Uint64(&v)
-	case wireInt64:
-		v := asInt64(value)
-		io.Int64(&v)
-	case wireVaruint64:
-		v := asUint64(value)
-		io.Varuint64(&v)
-	case wireVarint64:
-		v := asInt64(value)
-		io.Varint64(&v)
-	case wireFloat32:
-		v := float32(asFloat64(value))
-		io.Float32(&v)
-	case wireFloat64:
-		v := asFloat64(value)
-		io.Float64(&v)
-	default:
-		io.InvalidValue(wire, "runtime schema scalar", "unknown wire type")
-	}
-}
-
-func readControl(io interfaceIO, wire wireType) uint32 {
-	switch wire {
-	case wireUint8:
-		var v uint8
-		io.Uint8(&v)
+func readControl(io protocol.IO, wire wireType) uint32 {
+	switch v := wire.decode(io).(type) {
+	case int32:
 		return uint32(v)
-	case wireVaruint32:
-		var v uint32
-		io.Varuint32(&v)
-		return v
-	case wireVarint32:
-		var v int32
-		io.Varint32(&v)
+	case int64:
 		return uint32(v)
 	default:
-		return uint32(asUint64(decodeScalar(io, wire)))
+		return uint32(asUint64(v))
 	}
 }
 
-func writeControl(io interfaceIO, wire wireType, value uint32) {
-	switch wire {
-	case wireUint8:
-		v := uint8(value)
-		io.Uint8(&v)
-	case wireVaruint32:
-		io.Varuint32(&value)
-	case wireVarint32:
-		v := int32(value)
-		io.Varint32(&v)
-	default:
-		encodeScalar(io, wire, value)
-	}
+func writeControl(io protocol.IO, wire wireType, value uint32) {
+	wire.encode(io, value)
 }
 
-func decodeEnum(io interfaceIO, field fieldSpec, value any) any {
+func decodeEnum(io protocol.IO, name string, enum []string, value any) any {
 	index := asUint64(value)
-	if index >= uint64(len(field.enum)) {
-		io.InvalidValue(index, field.name, "unknown enum ordinal")
+	if index >= uint64(len(enum)) {
+		io.InvalidValue(index, name, "unknown enum ordinal")
 		return value
 	}
-	return field.enum[index]
+	return enum[index]
 }
 
-func encodeEnumValue(io interfaceIO, field fieldSpec, value any) any {
+func encodeEnumValue(io protocol.IO, fieldName string, enum []string, value any) any {
 	name, ok := value.(string)
 	if !ok {
 		return value
 	}
-	index := slices.Index(field.enum, name)
+	index := slices.Index(enum, name)
 	if index < 0 {
-		io.InvalidValue(name, field.name, "unknown enum value")
+		io.InvalidValue(name, fieldName, "unknown enum value")
 		return value
 	}
 	return uint64(index)
