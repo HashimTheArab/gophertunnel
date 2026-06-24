@@ -119,7 +119,7 @@ func (p *Protocol) NewWriter(w minecraft.ByteWriter, shieldID int32) protocol.IO
 // to the fallback protocol.
 func (p *Protocol) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
 	if pk, ok := pk.(*DynamicPacket); ok {
-		if converted := p.convertInternalDynamic(pk); converted != nil {
+		if converted := p.convertInternalDynamic(pk, conn); converted != nil {
 			return p.fallback.ConvertToLatest(converted, conn)
 		}
 		return []packet.Packet{pk}
@@ -136,7 +136,7 @@ func (p *Protocol) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []p
 	return p.fallback.ConvertFromLatest(pk, conn)
 }
 
-func (p *Protocol) convertInternalDynamic(pk *DynamicPacket) packet.Packet {
+func (p *Protocol) convertInternalDynamic(pk *DynamicPacket, conn *minecraft.Conn) packet.Packet {
 	if !internalPacket(pk.PacketID) {
 		return nil
 	}
@@ -147,13 +147,21 @@ func (p *Protocol) convertInternalDynamic(pk *DynamicPacket) packet.Packet {
 
 	converted := pkFunc()
 	var buf bytes.Buffer
-	pk.Marshal(p.NewWriter(&buf, 0))
+	shieldID, readerLimits := conversionIOSettings(conn)
+	pk.Marshal(p.NewWriter(&buf, shieldID))
 	payload := bytes.NewBuffer(buf.Bytes())
-	converted.Marshal(p.fallback.NewReader(payload, 0, true))
+	converted.Marshal(p.fallback.NewReader(payload, shieldID, readerLimits))
 	if payload.Len() != 0 {
 		return nil
 	}
 	return converted
+}
+
+func conversionIOSettings(conn *minecraft.Conn) (int32, bool) {
+	if conn == nil {
+		return 0, true
+	}
+	return conn.ShieldID(), conn.ReaderLimitsEnabled()
 }
 
 func (p *Protocol) fallbackPacket(id uint32) func() packet.Packet {
