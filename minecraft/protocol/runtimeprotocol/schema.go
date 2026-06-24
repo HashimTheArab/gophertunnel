@@ -229,7 +229,10 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 				return Variant{Index: index, Title: variant.title, Value: values}
 			},
 			encode: func(io protocol.IO, value any) {
-				variant := asVariant(value)
+				variant, ok := asVariant(io, name, variants, value)
+				if !ok {
+					return
+				}
 				spec, ok := variantByIndex(variants, variant.Index)
 				if !ok {
 					io.InvalidValue(variant.Index, name, "unknown oneOf variant index")

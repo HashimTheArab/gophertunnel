@@ -7,26 +7,22 @@ import (
 	"testing/fstest"
 
 	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/runtimeprotocol"
 )
 
 func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"RequestNetworkSettingsPacket.json": `{
+		"TextPacket.json": `{
 			"x-minecraft-version": "1.26.30",
 			"x-protocol-version": 1001,
-			"title": "RequestNetworkSettingsPacket",
+			"title": "TextPacket",
 			"type": "object",
 			"properties": {
-				"ClientNetworkVersion": {
-					"type": "integer",
-					"x-underlying-type": "int32",
-					"x-serialization-options": ["Big Endian"],
-					"x-ordinal-index": 0
-				}
+				"Message": {"type": "string", "x-ordinal-index": 0}
 			},
-			"$metaProperties": {"[cereal:packet]": 193}
+			"$metaProperties": {"[cereal:packet]": 9}
 		}`,
 	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
 	if err != nil {
@@ -39,23 +35,81 @@ func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 		t.Fatalf("protocol version = %q, want 1.26.30", proto.Ver())
 	}
 
-	pk := proto.Packets(true)[packet.IDRequestNetworkSettings]()
+	pk := proto.Packets(true)[packet.IDText]()
 	dynamic, ok := pk.(*runtimeprotocol.DynamicPacket)
 	if !ok {
 		t.Fatalf("packet type = %T, want *runtimeprotocol.DynamicPacket", pk)
 	}
 
-	in := bytes.NewBuffer([]byte{0, 0, 3, 233})
+	in := bytes.NewBuffer([]byte{5, 'h', 'e', 'l', 'l', 'o'})
 	dynamic.Marshal(proto.NewReader(in, 0, true))
-	if got := dynamic.Values["ClientNetworkVersion"]; got != int32(1001) {
-		t.Fatalf("decoded ClientNetworkVersion = %#v, want int32(1001)", got)
+	if got := dynamic.Values["Message"]; got != "hello" {
+		t.Fatalf("decoded Message = %#v, want hello", got)
 	}
 
-	dynamic.Values = map[string]any{"ClientNetworkVersion": int32(1001)}
+	dynamic.Values = map[string]any{"Message": "hello"}
 	var out bytes.Buffer
 	dynamic.Marshal(proto.NewWriter(&out, 0))
-	if got, want := out.Bytes(), []byte{0, 0, 3, 233}; !bytes.Equal(got, want) {
+	if got, want := out.Bytes(), []byte{5, 'h', 'e', 'l', 'l', 'o'}; !bytes.Equal(got, want) {
 		t.Fatalf("encoded payload = %x, want %x", got, want)
+	}
+}
+
+func TestLoadMojangJSONDoesNotOverlayInternalPackets(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"RequestNetworkSettingsPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "RequestNetworkSettingsPacket",
+			"description": "Sent from client to server to initiate a connection.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 193}
+		}`,
+		"NetworkSettingsPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "NetworkSettingsPacket",
+			"description": "Sent from the server to client with network settings.",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 143}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+	if _, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*packet.RequestNetworkSettings); !ok {
+		t.Fatalf("listener RequestNetworkSettings packet should remain compiled")
+	}
+	if _, ok := proto.Packets(false)[packet.IDNetworkSettings]().(*packet.NetworkSettings); !ok {
+		t.Fatalf("dial NetworkSettings packet should remain compiled")
+	}
+}
+
+func TestPacketsDoesNotMutateFallbackPool(t *testing.T) {
+	pool := packet.Pool{
+		packet.IDText: func() packet.Packet { return &packet.Text{} },
+	}
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(sharedFallback{pool: pool}))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	if _, ok := proto.Packets(true)[packet.IDText]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("runtime pool Text packet was not dynamic")
+	}
+	if _, ok := pool[packet.IDText]().(*packet.Text); !ok {
+		t.Fatalf("fallback pool Text packet was mutated")
 	}
 }
 
@@ -153,44 +207,61 @@ func TestDynamicPacketHandlesOneOfVariants(t *testing.T) {
 	if got := body.Value["Message Type"]; got != "raw" {
 		t.Fatalf("decoded Body.Message Type = %#v, want raw", got)
 	}
+
+	pk.Values = map[string]any{
+		"Localize?": false,
+		"Body": map[string]any{
+			"Author":  "Steve",
+			"Message": "hello",
+		},
+	}
+	out.Reset()
+	pk.Marshal(proto.NewWriter(&out, 0))
+	if got := out.Bytes()[1]; got != 1 {
+		t.Fatalf("encoded bare map Body index = %v, want 1", got)
+	}
 }
 
 func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"RequestNetworkSettingsPacket.json": `{
+		"CommandRequestPacket.json": `{
 			"x-minecraft-version": "1.26.30",
 			"x-protocol-version": 1001,
-			"title": "RequestNetworkSettingsPacket",
-			"description": "Sent from client to server to initiate a connection.",
+			"title": "CommandRequestPacket",
+			"description": "Sent from client to server.",
 			"type": "object",
 			"properties": {},
-			"$metaProperties": {"[cereal:packet]": 193}
+			"$metaProperties": {"[cereal:packet]": 77}
 		}`,
-		"NetworkSettingsPacket.json": `{
+		"SetTimePacket.json": `{
 			"x-minecraft-version": "1.26.30",
 			"x-protocol-version": 1001,
-			"title": "NetworkSettingsPacket",
-			"description": "Sent from the server to client with network settings.",
+			"title": "SetTimePacket",
+			"description": "Sent from the server to client.",
 			"type": "object",
 			"properties": {},
-			"$metaProperties": {"[cereal:packet]": 143}
+			"$metaProperties": {"[cereal:packet]": 10}
 		}`,
 	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
 	if err != nil {
 		t.Fatalf("LoadMojangJSON: %v", err)
 	}
 
-	if _, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket); !ok {
-		t.Fatalf("listener RequestNetworkSettings packet was not dynamic")
+	if _, ok := proto.Packets(true)[packet.IDCommandRequest]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("listener CommandRequest packet was not dynamic")
 	}
-	if _, ok := proto.Packets(false)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket); ok {
-		t.Fatalf("dial RequestNetworkSettings packet should not be overlaid as dynamic")
+	if pkFunc, ok := proto.Packets(false)[packet.IDCommandRequest]; ok {
+		if _, ok := pkFunc().(*runtimeprotocol.DynamicPacket); ok {
+			t.Fatalf("dial CommandRequest packet should not be overlaid as dynamic")
+		}
 	}
-	if _, ok := proto.Packets(false)[packet.IDNetworkSettings]().(*runtimeprotocol.DynamicPacket); !ok {
-		t.Fatalf("dial NetworkSettings packet was not dynamic")
+	if _, ok := proto.Packets(false)[packet.IDSetTime]().(*runtimeprotocol.DynamicPacket); !ok {
+		t.Fatalf("dial SetTime packet was not dynamic")
 	}
-	if _, ok := proto.Packets(true)[packet.IDNetworkSettings]; ok {
-		t.Fatalf("listener NetworkSettings packet should not be present")
+	if pkFunc, ok := proto.Packets(true)[packet.IDSetTime]; ok {
+		if _, ok := pkFunc().(*runtimeprotocol.DynamicPacket); ok {
+			t.Fatalf("listener SetTime packet should not be overlaid as dynamic")
+		}
 	}
 }
 
@@ -284,4 +355,26 @@ func writeVaruint32(buf *bytes.Buffer, x uint32) {
 		x >>= 7
 	}
 	_ = buf.WriteByte(byte(x))
+}
+
+type sharedFallback struct {
+	pool packet.Pool
+}
+
+func (s sharedFallback) ID() int32   { return minecraft.DefaultProtocol.ID() }
+func (s sharedFallback) Ver() string { return minecraft.DefaultProtocol.Ver() }
+func (s sharedFallback) Packets(bool) packet.Pool {
+	return s.pool
+}
+func (s sharedFallback) NewReader(r minecraft.ByteReader, shieldID int32, enableLimits bool) protocol.IO {
+	return minecraft.DefaultProtocol.NewReader(r, shieldID, enableLimits)
+}
+func (s sharedFallback) NewWriter(w minecraft.ByteWriter, shieldID int32) protocol.IO {
+	return minecraft.DefaultProtocol.NewWriter(w, shieldID)
+}
+func (s sharedFallback) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
+	return minecraft.DefaultProtocol.ConvertToLatest(pk, conn)
+}
+func (s sharedFallback) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
+	return minecraft.DefaultProtocol.ConvertFromLatest(pk, conn)
 }

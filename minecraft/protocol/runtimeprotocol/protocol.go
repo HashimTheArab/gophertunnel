@@ -58,9 +58,13 @@ func (p *Protocol) Ver() string {
 // Packets returns the fallback packet pool with loaded dynamic packet schemas
 // overlaid by packet ID.
 func (p *Protocol) Packets(listener bool) packet.Pool {
-	pool := p.fallback.Packets(listener)
+	fallback := p.fallback.Packets(listener)
+	pool := make(packet.Pool, len(fallback)+len(p.packets))
+	for id, pk := range fallback {
+		pool[id] = pk
+	}
 	for id, spec := range p.packets {
-		if !spec.direction.allowed(listener) {
+		if internalPacket(id) || !spec.direction.allowed(listener) {
 			continue
 		}
 		id, spec := id, spec
@@ -69,6 +73,33 @@ func (p *Protocol) Packets(listener bool) packet.Pool {
 		}
 	}
 	return pool
+}
+
+func internalPacket(id uint32) bool {
+	switch id {
+	case packet.IDRequestNetworkSettings,
+		packet.IDLogin,
+		packet.IDClientToServerHandshake,
+		packet.IDClientCacheStatus,
+		packet.IDResourcePackClientResponse,
+		packet.IDResourcePackChunkRequest,
+		packet.IDRequestChunkRadius,
+		packet.IDSetLocalPlayerAsInitialised,
+		packet.IDNetworkSettings,
+		packet.IDServerToClientHandshake,
+		packet.IDPlayStatus,
+		packet.IDResourcePacksInfo,
+		packet.IDResourcePackDataInfo,
+		packet.IDResourcePackChunkData,
+		packet.IDResourcePackStack,
+		packet.IDStartGame,
+		packet.IDItemRegistry,
+		packet.IDChunkRadiusUpdated,
+		packet.IDDimensionData:
+		return true
+	default:
+		return false
+	}
 }
 
 // NewReader returns a protocol reader for p. Runtime dynamic packets use the

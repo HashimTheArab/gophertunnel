@@ -201,20 +201,44 @@ func variantByIndex(variants []variantSpec, index uint32) (variantSpec, bool) {
 	return variantSpec{}, false
 }
 
-func asVariant(value any) Variant {
+func asVariant(io protocol.IO, fieldName string, variants []variantSpec, value any) (Variant, bool) {
 	switch v := value.(type) {
 	case Variant:
-		return v
+		return v, true
 	case *Variant:
 		if v == nil {
-			return Variant{Value: map[string]any{}}
+			return Variant{Value: map[string]any{}}, true
 		}
-		return *v
+		return *v, true
 	case map[string]any:
-		return Variant{Value: v}
+		var matched variantSpec
+		matches := 0
+		for _, variant := range variants {
+			if variantFieldsMatch(variant.fields, v) {
+				matched = variant
+				matches++
+			}
+		}
+		if matches == 1 {
+			return Variant{Index: matched.index, Title: matched.title, Value: v}, true
+		}
+		io.InvalidValue(value, fieldName, "oneOf map value must match exactly one variant")
+		return Variant{}, false
 	default:
-		return Variant{Value: map[string]any{}}
+		return Variant{Value: map[string]any{}}, true
 	}
+}
+
+func variantFieldsMatch(fields []fieldSpec, values map[string]any) bool {
+	if len(fields) != len(values) {
+		return false
+	}
+	for _, field := range fields {
+		if _, ok := values[field.name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func asMap(value any) map[string]any {
