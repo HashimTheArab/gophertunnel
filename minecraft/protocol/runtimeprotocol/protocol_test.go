@@ -55,7 +55,7 @@ func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 	}
 }
 
-func TestConvertToLatestConvertsInternalDynamicPackets(t *testing.T) {
+func TestPacketsKeepsInternalFallbackPackets(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"RequestNetworkSettingsPacket.json": `{
 			"x-minecraft-version": "1.26.30",
@@ -78,121 +78,9 @@ func TestConvertToLatestConvertsInternalDynamicPackets(t *testing.T) {
 		t.Fatalf("LoadMojangJSON: %v", err)
 	}
 
-	dynamic, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
-	if !ok {
-		t.Fatalf("listener RequestNetworkSettings packet type = %T, want *runtimeprotocol.DynamicPacket", dynamic)
-	}
-	dynamic.Values = map[string]any{"ClientNetworkVersion": int32(1001)}
-
-	converted := proto.ConvertToLatest(dynamic, nil)
-	if len(converted) != 1 {
-		t.Fatalf("converted packet count = %v, want 1", len(converted))
-	}
-	request, ok := converted[0].(*packet.RequestNetworkSettings)
-	if !ok {
-		t.Fatalf("converted packet type = %T, want *packet.RequestNetworkSettings", converted[0])
-	}
-	if request.ClientProtocol != 1001 {
-		t.Fatalf("converted ClientProtocol = %v, want 1001", request.ClientProtocol)
-	}
-}
-
-func TestConvertToLatestRejectsInternalDynamicWithTrailingPayload(t *testing.T) {
-	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"RequestNetworkSettingsPacket.json": `{
-			"x-minecraft-version": "1.26.30",
-			"x-protocol-version": 1001,
-			"title": "RequestNetworkSettingsPacket",
-			"description": "Sent from client to server to initiate a connection.",
-			"type": "object",
-			"properties": {
-				"ClientNetworkVersion": {
-					"type": "integer",
-					"x-underlying-type": "int32",
-					"x-serialization-options": ["Big Endian"],
-					"x-ordinal-index": 0
-				},
-				"Unexpected": {"type": "string", "x-ordinal-index": 1}
-			},
-			"$metaProperties": {"[cereal:packet]": 193}
-		}`,
-	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
-	if err != nil {
-		t.Fatalf("LoadMojangJSON: %v", err)
-	}
-
-	dynamic := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
-	dynamic.Values = map[string]any{
-		"ClientNetworkVersion": int32(1001),
-		"Unexpected":           "extra",
-	}
-
-	converted := proto.ConvertToLatest(dynamic, nil)
-	if len(converted) != 1 {
-		t.Fatalf("converted packet count = %v, want 1", len(converted))
-	}
-	if converted[0] != dynamic {
-		t.Fatalf("converted packet type = %T, want original dynamic packet", converted[0])
-	}
-}
-
-func TestConvertToLatestRejectsInternalDynamicWithShortPayload(t *testing.T) {
-	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"RequestNetworkSettingsPacket.json": `{
-			"x-minecraft-version": "1.26.30",
-			"x-protocol-version": 1001,
-			"title": "RequestNetworkSettingsPacket",
-			"description": "Sent from client to server to initiate a connection.",
-			"type": "object",
-			"properties": {},
-			"$metaProperties": {"[cereal:packet]": 193}
-		}`,
-	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
-	if err != nil {
-		t.Fatalf("LoadMojangJSON: %v", err)
-	}
-
-	dynamic := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
-
-	converted := proto.ConvertToLatest(dynamic, nil)
-	if len(converted) != 1 {
-		t.Fatalf("converted packet count = %v, want 1", len(converted))
-	}
-	if converted[0] != dynamic {
-		t.Fatalf("converted packet type = %T, want original dynamic packet", converted[0])
-	}
-}
-
-func TestConvertToLatestUsesConnectionIOSettings(t *testing.T) {
-	fallback := &recordingFallback{}
-	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
-		"RequestNetworkSettingsPacket.json": `{
-			"x-minecraft-version": "1.26.30",
-			"x-protocol-version": 1001,
-			"title": "RequestNetworkSettingsPacket",
-			"description": "Sent from client to server to initiate a connection.",
-			"type": "object",
-			"properties": {
-				"ClientNetworkVersion": {
-					"type": "integer",
-					"x-underlying-type": "int32",
-					"x-serialization-options": ["Big Endian"],
-					"x-ordinal-index": 0
-				}
-			},
-			"$metaProperties": {"[cereal:packet]": 193}
-		}`,
-	}), 1001, runtimeprotocol.WithFallback(fallback))
-	if err != nil {
-		t.Fatalf("LoadMojangJSON: %v", err)
-	}
-
-	dynamic := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
-	dynamic.Values = map[string]any{"ClientNetworkVersion": int32(1001)}
-	proto.ConvertToLatest(dynamic, &minecraft.Conn{})
-
-	if fallback.readerLimits {
-		t.Fatalf("fallback reader limits = true, want connection reader limits false")
+	pk := proto.Packets(true)[packet.IDRequestNetworkSettings]()
+	if _, ok := pk.(*packet.RequestNetworkSettings); !ok {
+		t.Fatalf("listener RequestNetworkSettings packet type = %T, want *packet.RequestNetworkSettings", pk)
 	}
 }
 
@@ -770,28 +658,5 @@ func (s sharedFallback) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) 
 	return minecraft.DefaultProtocol.ConvertToLatest(pk, conn)
 }
 func (s sharedFallback) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
-	return minecraft.DefaultProtocol.ConvertFromLatest(pk, conn)
-}
-
-type recordingFallback struct {
-	readerLimits bool
-}
-
-func (r *recordingFallback) ID() int32   { return minecraft.DefaultProtocol.ID() }
-func (r *recordingFallback) Ver() string { return minecraft.DefaultProtocol.Ver() }
-func (r *recordingFallback) Packets(listener bool) packet.Pool {
-	return minecraft.DefaultProtocol.Packets(listener)
-}
-func (r *recordingFallback) NewReader(reader minecraft.ByteReader, shieldID int32, enableLimits bool) protocol.IO {
-	r.readerLimits = enableLimits
-	return minecraft.DefaultProtocol.NewReader(reader, shieldID, enableLimits)
-}
-func (r *recordingFallback) NewWriter(writer minecraft.ByteWriter, shieldID int32) protocol.IO {
-	return minecraft.DefaultProtocol.NewWriter(writer, shieldID)
-}
-func (r *recordingFallback) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
-	return minecraft.DefaultProtocol.ConvertToLatest(pk, conn)
-}
-func (r *recordingFallback) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
 	return minecraft.DefaultProtocol.ConvertFromLatest(pk, conn)
 }

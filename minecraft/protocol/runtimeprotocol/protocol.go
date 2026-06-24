@@ -3,7 +3,6 @@
 package runtimeprotocol
 
 import (
-	"bytes"
 	"io/fs"
 
 	"github.com/sandertv/gophertunnel/minecraft"
@@ -65,7 +64,7 @@ func (p *Protocol) Packets(listener bool) packet.Pool {
 		pool[id] = pk
 	}
 	for id, spec := range p.packets {
-		if !spec.direction.allowed(listener) {
+		if internalPacket(id) || !spec.direction.allowed(listener) {
 			continue
 		}
 		id, spec := id, spec
@@ -118,10 +117,7 @@ func (p *Protocol) NewWriter(w minecraft.ByteWriter, shieldID int32) protocol.IO
 // ConvertToLatest keeps dynamic packets as-is and delegates compiled packets
 // to the fallback protocol.
 func (p *Protocol) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
-	if pk, ok := pk.(*DynamicPacket); ok {
-		if converted := p.convertInternalDynamic(pk, conn); converted != nil {
-			return p.fallback.ConvertToLatest(converted, conn)
-		}
+	if _, ok := pk.(*DynamicPacket); ok {
 		return []packet.Packet{pk}
 	}
 	return p.fallback.ConvertToLatest(pk, conn)
@@ -134,53 +130,6 @@ func (p *Protocol) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []p
 		return []packet.Packet{pk}
 	}
 	return p.fallback.ConvertFromLatest(pk, conn)
-}
-
-func (p *Protocol) convertInternalDynamic(pk *DynamicPacket, conn *minecraft.Conn) packet.Packet {
-	if !internalPacket(pk.PacketID) {
-		return nil
-	}
-	pkFunc := p.fallbackPacket(pk.PacketID)
-	if pkFunc == nil {
-		return nil
-	}
-
-	converted := pkFunc()
-	var buf bytes.Buffer
-	shieldID, readerLimits := conversionIOSettings(conn)
-	pk.Marshal(p.NewWriter(&buf, shieldID))
-	payload := bytes.NewBuffer(buf.Bytes())
-	if !tryMarshal(converted, p.fallback.NewReader(payload, shieldID, readerLimits)) {
-		return nil
-	}
-	if payload.Len() != 0 {
-		return nil
-	}
-	return converted
-}
-
-func tryMarshal(pk packet.Packet, io protocol.IO) (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	pk.Marshal(io)
-	return true
-}
-
-func conversionIOSettings(conn *minecraft.Conn) (int32, bool) {
-	if conn == nil {
-		return 0, true
-	}
-	return conn.ShieldID(), conn.ReaderLimitsEnabled()
-}
-
-func (p *Protocol) fallbackPacket(id uint32) func() packet.Packet {
-	if pkFunc := p.fallback.Packets(true)[id]; pkFunc != nil {
-		return pkFunc
-	}
-	return p.fallback.Packets(false)[id]
 }
 
 // DynamicPacket is a schema-backed packet. Values contains decoded field values

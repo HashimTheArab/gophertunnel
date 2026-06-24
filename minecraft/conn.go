@@ -323,17 +323,6 @@ type Conn struct {
 	disablePacketHandlingReady bool
 }
 
-// ShieldID returns the runtime ID used for shield item stack encoding on conn.
-func (conn *Conn) ShieldID() int32 {
-	return conn.shieldID.Load()
-}
-
-// ReaderLimitsEnabled reports whether packet reader bounds checks are enabled
-// on conn.
-func (conn *Conn) ReaderLimitsEnabled() bool {
-	return conn.readerLimits
-}
-
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
 // Minecraft packets to that net.Conn.
 // newConn accepts a private key which will be used to identify the connection. If a nil key is passed, the
