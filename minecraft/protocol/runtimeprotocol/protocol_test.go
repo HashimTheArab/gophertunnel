@@ -57,6 +57,22 @@ func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 
 func TestPacketsKeepsInternalFallbackPackets(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"DisconnectPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "DisconnectPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Reason": {
+					"type": "integer",
+					"x-underlying-type": "int32",
+					"x-serialization-options": ["Compression"],
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 5}
+		}`,
 		"RequestNetworkSettingsPacket.json": `{
 			"x-minecraft-version": "1.26.30",
 			"x-protocol-version": 1001,
@@ -81,6 +97,10 @@ func TestPacketsKeepsInternalFallbackPackets(t *testing.T) {
 	pk := proto.Packets(true)[packet.IDRequestNetworkSettings]()
 	if _, ok := pk.(*packet.RequestNetworkSettings); !ok {
 		t.Fatalf("listener RequestNetworkSettings packet type = %T, want *packet.RequestNetworkSettings", pk)
+	}
+	pk = proto.Packets(false)[packet.IDDisconnect]()
+	if _, ok := pk.(*packet.Disconnect); !ok {
+		t.Fatalf("dial Disconnect packet type = %T, want *packet.Disconnect", pk)
 	}
 }
 

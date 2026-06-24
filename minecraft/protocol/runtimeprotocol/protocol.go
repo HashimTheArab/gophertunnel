@@ -81,6 +81,7 @@ func internalPacket(id uint32) bool {
 		packet.IDLogin,
 		packet.IDClientToServerHandshake,
 		packet.IDClientCacheStatus,
+		packet.IDDisconnect,
 		packet.IDResourcePackClientResponse,
 		packet.IDResourcePackChunkRequest,
 		packet.IDRequestChunkRadius,
