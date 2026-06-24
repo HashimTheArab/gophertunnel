@@ -11,8 +11,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-const maxRuntimeArrayLength = 4096
-
 type wireType struct {
 	read  func(protocol.IO) any
 	write func(protocol.IO, any)

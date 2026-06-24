@@ -274,24 +274,17 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 		return fieldSpec{
 			name: name,
 			decode: func(io protocol.IO) any {
-				var count uint32
-				io.Varuint32(&count)
-				if checker, ok := io.(interface{ CheckSliceLength(uint32, uint32) }); ok {
-					checker.CheckSliceLength(count, maxRuntimeArrayLength)
-				}
-				values := make([]any, count)
-				for i := range values {
-					values[i] = elem.decode(io)
-				}
+				var values []any
+				protocol.FuncSlice(io, &values, func(value *any) {
+					*value = elem.decode(io)
+				})
 				return values
 			},
 			encode: func(io protocol.IO, value any) {
 				values := asSlice(value)
-				count := uint32(len(values))
-				io.Varuint32(&count)
-				for _, elemValue := range values {
-					elem.encode(io, elemValue)
-				}
+				protocol.FuncSlice(io, &values, func(value *any) {
+					elem.encode(io, *value)
+				})
 			},
 		}, nil
 	}
