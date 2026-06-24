@@ -140,6 +140,7 @@ func integerWire(typ string, options []string) (wireType, error) {
 		if wire, ok := compressedIntegerWires[typ]; ok {
 			return wire, nil
 		}
+		return wireType{}, fmt.Errorf("unsupported compressed integer wire type %q", typ)
 	}
 	if hasOption(options, "Big Endian") && (typ == "" || typ == "int32") {
 		return wireBEInt32, nil

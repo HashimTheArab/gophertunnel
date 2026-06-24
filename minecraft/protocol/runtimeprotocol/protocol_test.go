@@ -246,6 +246,29 @@ func TestLoadMojangJSONRejectsDuplicatePacketIDs(t *testing.T) {
 	}
 }
 
+func TestLoadMojangJSONRejectsUnsupportedCompressedInteger(t *testing.T) {
+	_, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"type": "object",
+			"properties": {
+				"Message Type": {
+					"type": "integer",
+					"x-underlying-type": "uint8",
+					"x-serialization-options": ["Compression"],
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err == nil {
+		t.Fatalf("LoadMojangJSON succeeded with unsupported compressed integer")
+	}
+}
+
 func TestDynamicPacketOrdersEqualOrdinalsByFieldName(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"TextPacket.json": `{
