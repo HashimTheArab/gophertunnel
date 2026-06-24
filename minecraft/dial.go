@@ -207,7 +207,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	var (
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
-		xblSigner        xsapi.TokenAndSignaturer
+		playFabSigner    xsapi.TokenAndSignaturer
+		minecraftSigner  xsapi.TokenAndSignaturer
 		httpClient       = d.HTTPClient
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
@@ -215,7 +216,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
 		if d.XBLClient != nil {
-			xblSigner = d.XBLClient
+			playFabSigner = d.XBLClient
+			minecraftSigner = auth.MinecraftTokenSigner{Source: d.XBLClient.TokenSource()}
 			httpClient = d.XBLClient.HTTPClient()
 		} else {
 			x, ok := d.TokenSource.(xsapi.TokenSource)
@@ -228,7 +230,8 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 			if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
 				ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
 			}
-			xblSigner = nsal.NewResolver(x)
+			playFabSigner = nsal.NewResolver(x)
+			minecraftSigner = auth.MinecraftTokenSigner{Source: x}
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -245,7 +248,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				// If a MultiplayerTokenSource was not provided, log in to PlayFab
 				// account and use a default implementation instead.
 				if d.PlayFabClient == nil {
-					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, xblSigner, playfab.ClientConfig{
+					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, playFabSigner, playfab.ClientConfig{
 						HTTPClient:    d.HTTPClient,
 						CreateAccount: true,
 					})
@@ -263,7 +266,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, xblSigner, httpClient, key)
+		chainData, err = auth.RequestMinecraftChain(ctx, minecraftSigner, httpClient, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
