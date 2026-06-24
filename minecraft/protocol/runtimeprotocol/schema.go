@@ -171,10 +171,15 @@ func (c *compiler) compileProperties(properties map[string]rawNode) ([]fieldSpec
 		names = append(names, name)
 	}
 	slices.SortFunc(names, func(a, b string) int {
-		if diff := ordinal(properties[a]) - ordinal(properties[b]); diff != 0 {
-			return diff
+		ordinalA, ordinalB := ordinal(properties[a]), ordinal(properties[b])
+		switch {
+		case ordinalA < ordinalB:
+			return -1
+		case ordinalA > ordinalB:
+			return 1
+		default:
+			return strings.Compare(a, b)
 		}
-		return strings.Compare(a, b)
 	})
 
 	fields := make([]fieldSpec, 0, len(names))
