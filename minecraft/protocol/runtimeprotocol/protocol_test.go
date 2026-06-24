@@ -545,6 +545,66 @@ func TestDynamicPacketEncodesNumericAliases(t *testing.T) {
 	}
 }
 
+func TestDynamicPacketEncodesCompressedSmallIntegers(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.40",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"description": "Sent from server to client.",
+			"type": "object",
+			"properties": {
+				"Unsigned Small": {
+					"type": "integer",
+					"x-underlying-type": "uint8",
+					"x-serialization-options": ["Compression"],
+					"x-ordinal-index": 0
+				},
+				"Signed Small": {
+					"type": "integer",
+					"x-underlying-type": "int8",
+					"x-serialization-options": ["Compression"],
+					"x-ordinal-index": 1
+				},
+				"Signed Medium": {
+					"type": "integer",
+					"x-underlying-type": "int16",
+					"x-serialization-options": ["Compression"],
+					"x-ordinal-index": 2
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{
+		"Unsigned Small": uint8(130),
+		"Signed Small":   int8(-3),
+		"Signed Medium":  int16(300),
+	}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
+	if got, want := out.Bytes(), []byte{0x82, 0x01, 0x05, 0xd8, 0x04}; !bytes.Equal(got, want) {
+		t.Fatalf("encoded payload = %x, want %x", got, want)
+	}
+
+	decoded := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	decoded.Marshal(proto.NewReader(bytes.NewBuffer(out.Bytes()), 0, true))
+	if got := decoded.Values["Unsigned Small"]; got != uint8(130) {
+		t.Fatalf("decoded Unsigned Small = %#v, want uint8(130)", got)
+	}
+	if got := decoded.Values["Signed Small"]; got != int8(-3) {
+		t.Fatalf("decoded Signed Small = %#v, want int8(-3)", got)
+	}
+	if got := decoded.Values["Signed Medium"]; got != int16(300) {
+		t.Fatalf("decoded Signed Medium = %#v, want int16(300)", got)
+	}
+}
+
 func TestDynamicPacketChecksArrayLengthBeforeAllocating(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"TextPacket.json": `{
