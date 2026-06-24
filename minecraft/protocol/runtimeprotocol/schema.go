@@ -124,6 +124,9 @@ func loadSchemas(fsys fs.FS, protocolID int32, cfg loadConfig) (*Protocol, error
 		if err != nil {
 			return fmt.Errorf("compile %s: %w", name, err)
 		}
+		if _, ok := p.packets[id]; ok {
+			return fmt.Errorf("duplicate packet ID %d in %s", id, name)
+		}
 		p.packets[id] = spec
 		if p.version == "" {
 			p.version = doc.MinecraftVer

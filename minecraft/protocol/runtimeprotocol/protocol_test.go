@@ -123,6 +123,30 @@ func TestPacketsDoesNotMutateFallbackPool(t *testing.T) {
 	}
 }
 
+func TestLoadMojangJSONRejectsDuplicatePacketIDs(t *testing.T) {
+	_, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+		"TextPacketDuplicate.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacketDuplicate",
+			"type": "object",
+			"properties": {},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err == nil {
+		t.Fatalf("LoadMojangJSON succeeded with duplicate packet IDs")
+	}
+}
+
 func TestDynamicPacketHandlesOneOfVariants(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"TextPacket.json": `{
@@ -230,6 +254,49 @@ func TestDynamicPacketHandlesOneOfVariants(t *testing.T) {
 	if got := out.Bytes()[1]; got != 1 {
 		t.Fatalf("encoded bare map Body index = %v, want 1", got)
 	}
+}
+
+func TestDynamicPacketRejectsInvalidOneOfValue(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"TextPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "TextPacket",
+			"type": "object",
+			"definitions": {
+				"message_only": {
+					"title": "MessageOnly",
+					"type": "object",
+					"properties": {
+						"Message": {"type": "string", "x-ordinal-index": 0}
+					}
+				}
+			},
+			"properties": {
+				"Body": {
+					"oneOf": [
+						{"$ref": "#/definitions/message_only", "x-ordinal-index": 0}
+					],
+					"x-control-value-type": "uint8",
+					"x-ordinal-index": 0
+				}
+			},
+			"$metaProperties": {"[cereal:packet]": 9}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected invalid oneOf value to panic")
+		}
+	}()
+	pk := proto.Packets(false)[packet.IDText]().(*runtimeprotocol.DynamicPacket)
+	pk.Values = map[string]any{"Body": "not a variant"}
+	var out bytes.Buffer
+	pk.Marshal(proto.NewWriter(&out, 0))
 }
 
 func TestLoadMojangJSONRespectsPacketDirection(t *testing.T) {

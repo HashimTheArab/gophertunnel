@@ -207,7 +207,8 @@ func asVariant(io protocol.IO, fieldName string, variants []variantSpec, value a
 		return v, true
 	case *Variant:
 		if v == nil {
-			return Variant{Value: map[string]any{}}, true
+			io.InvalidValue(value, fieldName, "oneOf value must be a Variant or map matching exactly one variant")
+			return Variant{}, false
 		}
 		return *v, true
 	case map[string]any:
@@ -225,7 +226,8 @@ func asVariant(io protocol.IO, fieldName string, variants []variantSpec, value a
 		io.InvalidValue(value, fieldName, "oneOf map value must match exactly one variant")
 		return Variant{}, false
 	default:
-		return Variant{Value: map[string]any{}}, true
+		io.InvalidValue(value, fieldName, "oneOf value must be a Variant or map matching exactly one variant")
+		return Variant{}, false
 	}
 }
 
