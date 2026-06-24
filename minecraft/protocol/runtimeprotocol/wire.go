@@ -30,34 +30,6 @@ func wire[T any](ioFunc func(protocol.IO, *T), coerce func(any) T) wireType {
 	}
 }
 
-func varint32Wire[T ~int8 | ~int16 | ~int32](coerce func(any) T) wireType {
-	return wireType{
-		read: func(io protocol.IO) any {
-			var v int32
-			io.Varint32(&v)
-			return T(v)
-		},
-		write: func(io protocol.IO, value any) {
-			v := int32(coerce(value))
-			io.Varint32(&v)
-		},
-	}
-}
-
-func varuint32Wire[T ~uint8 | ~uint16 | ~uint32](coerce func(any) T) wireType {
-	return wireType{
-		read: func(io protocol.IO) any {
-			var v uint32
-			io.Varuint32(&v)
-			return T(v)
-		},
-		write: func(io protocol.IO, value any) {
-			v := uint32(coerce(value))
-			io.Varuint32(&v)
-		},
-	}
-}
-
 var (
 	wireBool      = wire(protocol.IO.Bool, asBool)
 	wireString    = wire(protocol.IO.String, asString)
@@ -68,12 +40,8 @@ var (
 	wireUint32    = wire(protocol.IO.Uint32, func(v any) uint32 { return uint32(asUint64(v)) })
 	wireInt32     = wire(protocol.IO.Int32, func(v any) int32 { return int32(asInt64(v)) })
 	wireBEInt32   = wire(protocol.IO.BEInt32, func(v any) int32 { return int32(asInt64(v)) })
-	wireVaruint8  = varuint32Wire(func(v any) uint8 { return uint8(asUint64(v)) })
-	wireVarint8   = varint32Wire(func(v any) int8 { return int8(asInt64(v)) })
-	wireVaruint16 = varuint32Wire(func(v any) uint16 { return uint16(asUint64(v)) })
-	wireVarint16  = varint32Wire(func(v any) int16 { return int16(asInt64(v)) })
-	wireVaruint32 = varuint32Wire(func(v any) uint32 { return uint32(asUint64(v)) })
-	wireVarint32  = varint32Wire(func(v any) int32 { return int32(asInt64(v)) })
+	wireVaruint32 = wire(protocol.IO.Varuint32, func(v any) uint32 { return uint32(asUint64(v)) })
+	wireVarint32  = wire(protocol.IO.Varint32, func(v any) int32 { return int32(asInt64(v)) })
 	wireUint64    = wire(protocol.IO.Uint64, asUint64)
 	wireInt64     = wire(protocol.IO.Int64, asInt64)
 	wireVaruint64 = wire(protocol.IO.Varuint64, asUint64)
@@ -108,12 +76,8 @@ var (
 	}
 	compressedIntegerWires = map[string]wireType{
 		"":       wireVarint32,
-		"int8":   wireVarint8,
-		"int16":  wireVarint16,
 		"int32":  wireVarint32,
 		"int64":  wireVarint64,
-		"uint8":  wireVaruint8,
-		"uint16": wireVaruint16,
 		"uint32": wireVaruint32,
 		"uint64": wireVaruint64,
 	}
