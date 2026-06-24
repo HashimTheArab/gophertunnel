@@ -76,33 +76,6 @@ func (p *Protocol) Packets(listener bool) packet.Pool {
 	return pool
 }
 
-func internalPacket(id uint32) bool {
-	switch id {
-	case packet.IDRequestNetworkSettings,
-		packet.IDLogin,
-		packet.IDClientToServerHandshake,
-		packet.IDClientCacheStatus,
-		packet.IDResourcePackClientResponse,
-		packet.IDResourcePackChunkRequest,
-		packet.IDRequestChunkRadius,
-		packet.IDSetLocalPlayerAsInitialised,
-		packet.IDNetworkSettings,
-		packet.IDServerToClientHandshake,
-		packet.IDPlayStatus,
-		packet.IDResourcePacksInfo,
-		packet.IDResourcePackDataInfo,
-		packet.IDResourcePackChunkData,
-		packet.IDResourcePackStack,
-		packet.IDStartGame,
-		packet.IDItemRegistry,
-		packet.IDChunkRadiusUpdated,
-		packet.IDDimensionData:
-		return true
-	default:
-		return false
-	}
-}
-
 // NewReader returns a protocol reader for p. Runtime dynamic packets use the
 // same primitive IO implementation as the fallback protocol.
 func (p *Protocol) NewReader(r minecraft.ByteReader, shieldID int32, enableLimits bool) protocol.IO {
@@ -115,11 +88,11 @@ func (p *Protocol) NewWriter(w minecraft.ByteWriter, shieldID int32) protocol.IO
 	return p.fallback.NewWriter(w, shieldID)
 }
 
-// ConvertToLatest keeps dynamic packets as-is and delegates compiled packets
-// to the fallback protocol.
+// ConvertToLatest converts dynamic packets through the fallback protocol when
+// their payload exactly matches the fallback packet layout.
 func (p *Protocol) ConvertToLatest(pk packet.Packet, conn *minecraft.Conn) []packet.Packet {
 	if pk, ok := pk.(*DynamicPacket); ok {
-		if converted := p.convertInternalDynamic(pk); converted != nil {
+		if converted := p.convertDynamic(pk); converted != nil {
 			return p.fallback.ConvertToLatest(converted, conn)
 		}
 		return []packet.Packet{pk}
@@ -136,16 +109,19 @@ func (p *Protocol) ConvertFromLatest(pk packet.Packet, conn *minecraft.Conn) []p
 	return p.fallback.ConvertFromLatest(pk, conn)
 }
 
-func (p *Protocol) convertInternalDynamic(pk *DynamicPacket) packet.Packet {
-	if !internalPacket(pk.PacketID) {
-		return nil
-	}
+func (p *Protocol) convertDynamic(pk *DynamicPacket) (converted packet.Packet) {
 	pkFunc := p.fallbackPacket(pk.PacketID)
 	if pkFunc == nil {
 		return nil
 	}
 
-	converted := pkFunc()
+	defer func() {
+		if recover() != nil {
+			converted = nil
+		}
+	}()
+
+	converted = pkFunc()
 	var buf bytes.Buffer
 	pk.Marshal(p.NewWriter(&buf, 0))
 	payload := bytes.NewBuffer(buf.Bytes())
