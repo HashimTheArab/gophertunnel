@@ -50,6 +50,39 @@ var (
 	wireFloat64   = wire(protocol.IO.Float64, asFloat64)
 )
 
+var (
+	numberWires = map[string]wireType{
+		"":        wireFloat32,
+		"float":   wireFloat32,
+		"float32": wireFloat32,
+		"float64": wireFloat64,
+	}
+	controlWires = map[string]wireType{
+		"":       wireVaruint32,
+		"uint32": wireVaruint32,
+		"uint8":  wireUint8,
+		"int32":  wireVarint32,
+	}
+	integerWires = map[string]wireType{
+		"":       wireInt32,
+		"int8":   wireInt8,
+		"int16":  wireInt16,
+		"int32":  wireInt32,
+		"int64":  wireInt64,
+		"uint8":  wireUint8,
+		"uint16": wireUint16,
+		"uint32": wireUint32,
+		"uint64": wireUint64,
+	}
+	compressedIntegerWires = map[string]wireType{
+		"":       wireVarint32,
+		"int32":  wireVarint32,
+		"int64":  wireVarint64,
+		"uint32": wireVaruint32,
+		"uint64": wireVaruint64,
+	}
+)
+
 func (w wireType) decode(io protocol.IO) any {
 	return w.read(io)
 }
@@ -80,14 +113,10 @@ func scalarWire(node rawNode) (wireType, error) {
 	case "string":
 		return wireString, nil
 	case "number":
-		switch node.UnderlyingType {
-		case "", "float", "float32":
-			return wireFloat32, nil
-		case "float64":
-			return wireFloat64, nil
-		default:
-			return wireType{}, fmt.Errorf("unsupported number wire type %q", node.UnderlyingType)
+		if wire, ok := numberWires[node.UnderlyingType]; ok {
+			return wire, nil
 		}
+		return wireType{}, fmt.Errorf("unsupported number wire type %q", node.UnderlyingType)
 	case "integer":
 		return integerWire(node.UnderlyingType, node.SerializationOptions)
 	default:
@@ -100,56 +129,25 @@ func isEnumAsValue(node rawNode) bool {
 }
 
 func controlWire(typ string) (wireType, error) {
-	switch typ {
-	case "", "uint32":
-		return wireVaruint32, nil
-	case "uint8":
-		return wireUint8, nil
-	case "int32":
-		return wireVarint32, nil
-	default:
-		return wireType{}, fmt.Errorf("unsupported oneOf control type %q", typ)
+	if wire, ok := controlWires[typ]; ok {
+		return wire, nil
 	}
+	return wireType{}, fmt.Errorf("unsupported oneOf control type %q", typ)
 }
 
 func integerWire(typ string, options []string) (wireType, error) {
-	compressed := hasOption(options, "Compression")
-	bigEndian := hasOption(options, "Big Endian")
-	switch typ {
-	case "uint8":
-		return wireUint8, nil
-	case "int8":
-		return wireInt8, nil
-	case "uint16":
-		return wireUint16, nil
-	case "int16":
-		return wireInt16, nil
-	case "uint32":
-		if compressed {
-			return wireVaruint32, nil
+	if hasOption(options, "Compression") {
+		if wire, ok := compressedIntegerWires[typ]; ok {
+			return wire, nil
 		}
-		return wireUint32, nil
-	case "", "int32":
-		if compressed {
-			return wireVarint32, nil
-		}
-		if bigEndian {
-			return wireBEInt32, nil
-		}
-		return wireInt32, nil
-	case "uint64":
-		if compressed {
-			return wireVaruint64, nil
-		}
-		return wireUint64, nil
-	case "int64":
-		if compressed {
-			return wireVarint64, nil
-		}
-		return wireInt64, nil
-	default:
-		return wireType{}, fmt.Errorf("unsupported integer wire type %q", typ)
 	}
+	if hasOption(options, "Big Endian") && (typ == "" || typ == "int32") {
+		return wireBEInt32, nil
+	}
+	if wire, ok := integerWires[typ]; ok {
+		return wire, nil
+	}
+	return wireType{}, fmt.Errorf("unsupported integer wire type %q", typ)
 }
 
 func hasOption(options []string, option string) bool {
