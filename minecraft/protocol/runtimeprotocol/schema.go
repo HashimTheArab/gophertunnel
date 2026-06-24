@@ -235,7 +235,7 @@ func (c *compiler) compileField(name string, node rawNode) (fieldSpec, error) {
 					io.InvalidValue(variant.Index, name, "unknown oneOf variant index")
 					return
 				}
-				writeControl(io, wire, variant.Index)
+				wire.encode(io, variant.Index)
 				encodeFields(io, spec.fields, variant.Value)
 			},
 		}, nil
@@ -328,11 +328,6 @@ func (c *compiler) resolve(ref string) (rawNode, error) {
 	return node, nil
 }
 
-func mergeNode(base, overlay rawNode) rawNode {
-	base.Ordinal = overlay.Ordinal
-	return base
-}
-
 func (c *compiler) resolveNode(node rawNode) (rawNode, error) {
 	ordinal := node.Ordinal
 	seen := map[string]struct{}{}
@@ -346,7 +341,7 @@ func (c *compiler) resolveNode(node rawNode) (rawNode, error) {
 		if err != nil {
 			return rawNode{}, err
 		}
-		node = mergeNode(resolved, node)
+		node = resolved
 	}
 	node.Ordinal = ordinal
 	return node, nil

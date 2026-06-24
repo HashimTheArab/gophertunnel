@@ -13,14 +13,12 @@ import (
 const maxRuntimeArrayLength = 4096
 
 type wireType struct {
-	name  string
 	read  func(protocol.IO) any
 	write func(protocol.IO, any)
 }
 
-func wire[T any](name string, ioFunc func(protocol.IO, *T), coerce func(any) T) wireType {
+func wire[T any](ioFunc func(protocol.IO, *T), coerce func(any) T) wireType {
 	return wireType{
-		name: name,
 		read: func(io protocol.IO) any {
 			var v T
 			ioFunc(io, &v)
@@ -34,38 +32,30 @@ func wire[T any](name string, ioFunc func(protocol.IO, *T), coerce func(any) T) 
 }
 
 var (
-	wireBool      = wire("bool", protocol.IO.Bool, asBool)
-	wireString    = wire("string", protocol.IO.String, asString)
-	wireUint8     = wire("uint8", protocol.IO.Uint8, func(v any) uint8 { return uint8(asUint64(v)) })
-	wireInt8      = wire("int8", protocol.IO.Int8, func(v any) int8 { return int8(asInt64(v)) })
-	wireUint16    = wire("uint16", protocol.IO.Uint16, func(v any) uint16 { return uint16(asUint64(v)) })
-	wireInt16     = wire("int16", protocol.IO.Int16, func(v any) int16 { return int16(asInt64(v)) })
-	wireUint32    = wire("uint32", protocol.IO.Uint32, func(v any) uint32 { return uint32(asUint64(v)) })
-	wireInt32     = wire("int32", protocol.IO.Int32, func(v any) int32 { return int32(asInt64(v)) })
-	wireBEInt32   = wire("big endian int32", protocol.IO.BEInt32, func(v any) int32 { return int32(asInt64(v)) })
-	wireVaruint32 = wire("varuint32", protocol.IO.Varuint32, func(v any) uint32 { return uint32(asUint64(v)) })
-	wireVarint32  = wire("varint32", protocol.IO.Varint32, func(v any) int32 { return int32(asInt64(v)) })
-	wireUint64    = wire("uint64", protocol.IO.Uint64, asUint64)
-	wireInt64     = wire("int64", protocol.IO.Int64, asInt64)
-	wireVaruint64 = wire("varuint64", protocol.IO.Varuint64, asUint64)
-	wireVarint64  = wire("varint64", protocol.IO.Varint64, asInt64)
-	wireFloat32   = wire("float32", protocol.IO.Float32, func(v any) float32 { return float32(asFloat64(v)) })
-	wireFloat64   = wire("float64", protocol.IO.Float64, asFloat64)
+	wireBool      = wire(protocol.IO.Bool, asBool)
+	wireString    = wire(protocol.IO.String, asString)
+	wireUint8     = wire(protocol.IO.Uint8, func(v any) uint8 { return uint8(asUint64(v)) })
+	wireInt8      = wire(protocol.IO.Int8, func(v any) int8 { return int8(asInt64(v)) })
+	wireUint16    = wire(protocol.IO.Uint16, func(v any) uint16 { return uint16(asUint64(v)) })
+	wireInt16     = wire(protocol.IO.Int16, func(v any) int16 { return int16(asInt64(v)) })
+	wireUint32    = wire(protocol.IO.Uint32, func(v any) uint32 { return uint32(asUint64(v)) })
+	wireInt32     = wire(protocol.IO.Int32, func(v any) int32 { return int32(asInt64(v)) })
+	wireBEInt32   = wire(protocol.IO.BEInt32, func(v any) int32 { return int32(asInt64(v)) })
+	wireVaruint32 = wire(protocol.IO.Varuint32, func(v any) uint32 { return uint32(asUint64(v)) })
+	wireVarint32  = wire(protocol.IO.Varint32, func(v any) int32 { return int32(asInt64(v)) })
+	wireUint64    = wire(protocol.IO.Uint64, asUint64)
+	wireInt64     = wire(protocol.IO.Int64, asInt64)
+	wireVaruint64 = wire(protocol.IO.Varuint64, asUint64)
+	wireVarint64  = wire(protocol.IO.Varint64, asInt64)
+	wireFloat32   = wire(protocol.IO.Float32, func(v any) float32 { return float32(asFloat64(v)) })
+	wireFloat64   = wire(protocol.IO.Float64, asFloat64)
 )
 
 func (w wireType) decode(io protocol.IO) any {
-	if w.read == nil {
-		io.InvalidValue(w.name, "runtime schema scalar", "unknown wire type")
-		return nil
-	}
 	return w.read(io)
 }
 
 func (w wireType) encode(io protocol.IO, value any) {
-	if w.write == nil {
-		io.InvalidValue(w.name, "runtime schema scalar", "unknown wire type")
-		return
-	}
 	w.write(io, value)
 }
 
@@ -178,10 +168,6 @@ func readControl(io protocol.IO, wire wireType) uint32 {
 	default:
 		return uint32(asUint64(v))
 	}
-}
-
-func writeControl(io protocol.IO, wire wireType, value uint32) {
-	wire.encode(io, value)
 }
 
 func decodeEnum(io protocol.IO, name string, enum []string, value any) any {
