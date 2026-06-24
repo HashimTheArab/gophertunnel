@@ -148,7 +148,11 @@ func (p *Protocol) convertInternalDynamic(pk *DynamicPacket) packet.Packet {
 	converted := pkFunc()
 	var buf bytes.Buffer
 	pk.Marshal(p.NewWriter(&buf, 0))
-	converted.Marshal(p.fallback.NewReader(bytes.NewBuffer(buf.Bytes()), 0, true))
+	payload := bytes.NewBuffer(buf.Bytes())
+	converted.Marshal(p.fallback.NewReader(payload, 0, true))
+	if payload.Len() != 0 {
+		return nil
+	}
 	return converted
 }
 

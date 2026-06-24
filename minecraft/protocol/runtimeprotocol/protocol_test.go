@@ -97,6 +97,45 @@ func TestConvertToLatestConvertsInternalDynamicPackets(t *testing.T) {
 	}
 }
 
+func TestConvertToLatestRejectsInternalDynamicWithTrailingPayload(t *testing.T) {
+	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
+		"RequestNetworkSettingsPacket.json": `{
+			"x-minecraft-version": "1.26.30",
+			"x-protocol-version": 1001,
+			"title": "RequestNetworkSettingsPacket",
+			"description": "Sent from client to server to initiate a connection.",
+			"type": "object",
+			"properties": {
+				"ClientNetworkVersion": {
+					"type": "integer",
+					"x-underlying-type": "int32",
+					"x-serialization-options": ["Big Endian"],
+					"x-ordinal-index": 0
+				},
+				"Unexpected": {"type": "string", "x-ordinal-index": 1}
+			},
+			"$metaProperties": {"[cereal:packet]": 193}
+		}`,
+	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
+	if err != nil {
+		t.Fatalf("LoadMojangJSON: %v", err)
+	}
+
+	dynamic := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
+	dynamic.Values = map[string]any{
+		"ClientNetworkVersion": int32(1001),
+		"Unexpected":           "extra",
+	}
+
+	converted := proto.ConvertToLatest(dynamic, nil)
+	if len(converted) != 1 {
+		t.Fatalf("converted packet count = %v, want 1", len(converted))
+	}
+	if converted[0] != dynamic {
+		t.Fatalf("converted packet type = %T, want original dynamic packet", converted[0])
+	}
+}
+
 func TestPacketsDoesNotMutateFallbackPool(t *testing.T) {
 	pool := packet.Pool{
 		packet.IDText: func() packet.Packet { return &packet.Text{} },
