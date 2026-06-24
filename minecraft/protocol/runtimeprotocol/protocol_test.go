@@ -55,7 +55,7 @@ func TestLoadMojangJSONOverlaysFallbackPool(t *testing.T) {
 	}
 }
 
-func TestLoadMojangJSONDoesNotOverlayInternalPackets(t *testing.T) {
+func TestConvertToLatestConvertsInternalDynamicPackets(t *testing.T) {
 	proto, err := runtimeprotocol.LoadMojangJSON(schemaFS(map[string]string{
 		"RequestNetworkSettingsPacket.json": `{
 			"x-minecraft-version": "1.26.30",
@@ -63,27 +63,37 @@ func TestLoadMojangJSONDoesNotOverlayInternalPackets(t *testing.T) {
 			"title": "RequestNetworkSettingsPacket",
 			"description": "Sent from client to server to initiate a connection.",
 			"type": "object",
-			"properties": {},
+			"properties": {
+				"ClientNetworkVersion": {
+					"type": "integer",
+					"x-underlying-type": "int32",
+					"x-serialization-options": ["Big Endian"],
+					"x-ordinal-index": 0
+				}
+			},
 			"$metaProperties": {"[cereal:packet]": 193}
-		}`,
-		"NetworkSettingsPacket.json": `{
-			"x-minecraft-version": "1.26.30",
-			"x-protocol-version": 1001,
-			"title": "NetworkSettingsPacket",
-			"description": "Sent from the server to client with network settings.",
-			"type": "object",
-			"properties": {},
-			"$metaProperties": {"[cereal:packet]": 143}
 		}`,
 	}), 1001, runtimeprotocol.WithFallback(minecraft.DefaultProtocol))
 	if err != nil {
 		t.Fatalf("LoadMojangJSON: %v", err)
 	}
-	if _, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*packet.RequestNetworkSettings); !ok {
-		t.Fatalf("listener RequestNetworkSettings packet should remain compiled")
+
+	dynamic, ok := proto.Packets(true)[packet.IDRequestNetworkSettings]().(*runtimeprotocol.DynamicPacket)
+	if !ok {
+		t.Fatalf("listener RequestNetworkSettings packet type = %T, want *runtimeprotocol.DynamicPacket", dynamic)
 	}
-	if _, ok := proto.Packets(false)[packet.IDNetworkSettings]().(*packet.NetworkSettings); !ok {
-		t.Fatalf("dial NetworkSettings packet should remain compiled")
+	dynamic.Values = map[string]any{"ClientNetworkVersion": int32(1001)}
+
+	converted := proto.ConvertToLatest(dynamic, nil)
+	if len(converted) != 1 {
+		t.Fatalf("converted packet count = %v, want 1", len(converted))
+	}
+	request, ok := converted[0].(*packet.RequestNetworkSettings)
+	if !ok {
+		t.Fatalf("converted packet type = %T, want *packet.RequestNetworkSettings", converted[0])
+	}
+	if request.ClientProtocol != 1001 {
+		t.Fatalf("converted ClientProtocol = %v, want 1001", request.ClientProtocol)
 	}
 }
 
