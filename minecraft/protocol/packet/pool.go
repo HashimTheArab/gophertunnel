@@ -283,6 +283,8 @@ func init() {
 		IDClientBoundAttributeLayerSync:      func() Packet { return &ClientBoundAttributeLayerSync{} },
 		IDServerStoreInfo:                    func() Packet { return &ServerStoreInfo{} },
 		IDServerPresenceInfo:                 func() Packet { return &ServerPresenceInfo{} },
+		IDClientboundUpdateSoundData:         func() Packet { return &ClientboundUpdateSoundData{} },
+		IDSendPartyDestinationCookie:         func() Packet { return &SendPartyDestinationCookie{} },
 	}
 	for id, pk := range serverOriginating {
 		RegisterPacketFromServer(id, pk)
@@ -310,8 +312,10 @@ func init() {
 		IDContainerOpen:                     func() Packet { return &ContainerOpen{} },
 		IDContainerClose:                    func() Packet { return &ContainerClose{} },
 		IDAdventureSettings:                 func() Packet { return &AdventureSettings{} },
+		IDSetDifficulty:                     func() Packet { return &SetDifficulty{} },
 		IDSetPlayerGameType:                 func() Packet { return &SetPlayerGameType{} },
 		IDSimpleEvent:                       func() Packet { return &SimpleEvent{} },
+		IDSpawnExperienceOrb:                func() Packet { return &SpawnExperienceOrb{} },
 		IDMapInfoRequest:                    func() Packet { return &MapInfoRequest{} },
 		IDRequestChunkRadius:                func() Packet { return &RequestChunkRadius{} },
 		IDBossEvent:                         func() Packet { return &BossEvent{} },
@@ -376,6 +380,7 @@ func init() {
 		IDResourcePacksReadyForValidation:   func() Packet { return &ResourcePacksReadyForValidation{} },
 		IDPartyChanged:                      func() Packet { return &PartyChanged{} },
 		IDServerBoundDataDrivenScreenClosed: func() Packet { return &ServerBoundDataDrivenScreenClosed{} },
+		IDPartyDestinationCookieResponse:    func() Packet { return &PartyDestinationCookieResponse{} },
 	}
 	for id, pk := range clientOriginating {
 		RegisterPacketFromClient(id, pk)

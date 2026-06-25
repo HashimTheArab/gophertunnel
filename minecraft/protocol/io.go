@@ -6,6 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/nbt"
+	"golang.org/x/exp/constraints"
 )
 
 // IO represents a packet IO direction. Implementations of this interface are Reader and Writer. Reader reads
@@ -146,13 +147,13 @@ func FuncIOSliceUint32Length[T any, S ~*[]T](r IO, x S, f func(IO, *T)) {
 	FuncIOSliceOfLen(r, count, x, f)
 }
 
-const maxSliceLength = 1024
+const maxSliceLength = 4096
 
 // SliceOfLen reads/writes the elements of a slice of type T with length l.
 func SliceOfLen[T any, S ~*[]T, A PtrMarshaler[T]](r IO, l uint32, x S) {
-	limit, ok := r.(sliceReader)
+	checker, ok := r.(sliceLengthChecker)
 	if ok {
-		limit.SliceLimit(l, maxSliceLength)
+		checker.CheckSliceLength(l, maxSliceLength)
 		*x = make([]T, l)
 	}
 
@@ -163,9 +164,9 @@ func SliceOfLen[T any, S ~*[]T, A PtrMarshaler[T]](r IO, l uint32, x S) {
 
 // FuncSliceOfLen reads/writes the elements of a slice of type T with length l using func f.
 func FuncSliceOfLen[T any, S ~*[]T](r IO, l uint32, x S, f func(*T)) {
-	limit, ok := r.(sliceReader)
+	checker, ok := r.(sliceLengthChecker)
 	if ok {
-		limit.SliceLimit(l, maxSliceLength)
+		checker.CheckSliceLength(l, maxSliceLength)
 		*x = make([]T, l)
 	}
 
@@ -174,8 +175,8 @@ func FuncSliceOfLen[T any, S ~*[]T](r IO, l uint32, x S, f func(*T)) {
 	}
 }
 
-type sliceReader interface {
-	SliceLimit(value uint32, max uint32)
+type sliceLengthChecker interface {
+	CheckSliceLength(value uint32, max uint32)
 }
 
 // FuncIOSliceOfLen reads/writes the elements of a slice of type T with length l using func f.
@@ -194,6 +195,13 @@ type PtrMarshaler[T any] interface {
 // Single reads/writes a single Marshaler x.
 func Single[T any, S PtrMarshaler[T]](r IO, x S) {
 	x.Marshal(r)
+}
+
+// IntegerFunc reads/writes a value of type S using f, converting between S and the wire type W.
+func IntegerFunc[S, W constraints.Integer](x *S, f func(*W)) {
+	w := W(*x)
+	f(&w)
+	*x = S(w)
 }
 
 // Optional is an optional type in the protocol. If not set, only a false bool is written. If set, a true bool is

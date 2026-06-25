@@ -6,16 +6,17 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
-	github.com/df-mc/go-nethernet v1.0.10
-	github.com/df-mc/go-playfab/v2 v2.0.1
-	github.com/df-mc/go-xsapi/v2 v2.0.1-0.20260521011245-91de547c5eb6
+	github.com/df-mc/go-nethernet v1.0.16
+	github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232935-6d86fc87875f
+	github.com/df-mc/go-xsapi/v2 v2.0.2-0.20260618232321-7db98a0b7856
 	github.com/df-mc/jsonc v1.0.5
 	github.com/go-gl/mathgl v1.1.0
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.1
 	github.com/pelletier/go-toml v1.9.5
-	github.com/sandertv/go-raknet v1.14.3-0.20250305181847-6af3e95113d6
+	github.com/sandertv/go-raknet v1.15.0
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
 	golang.org/x/net v0.50.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.35.0
@@ -42,7 +43,13 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/image v0.21.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
 )
+
+replace github.com/df-mc/go-xsapi/v2 => github.com/HashimTheArab/go-xsapi/v2 v2.0.0-20260620084425-d4a68a0fa178
+
+replace github.com/df-mc/go-nethernet => github.com/HashimTheArab/go-nethernet v0.0.0-20260621185016-ac3e14475524
+
+replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.14.2-0.20260625072737-109968c5e6ff

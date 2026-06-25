@@ -7,18 +7,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
 
 // Client is an instance of the realms api with a token.
 type Client struct {
-	tokenSrc   oauth2.TokenSource
-	xblToken   *auth.XBLToken
-	httpClient *http.Client
+	tokenSrc       oauth2.TokenSource
+	xblToken       *auth.XBLToken
+	httpClient     *http.Client
+	authHTTPClient *http.Client
+	requestFunc    func(ctx context.Context, method, path string) ([]byte, int, error)
 }
 
 const (
@@ -33,13 +37,17 @@ var (
 
 // NewClient returns a new Client instance with the supplied token source for authentication.
 // If httpClient is nil, http.DefaultClient will be used to request the realms api.
+// Xbox auth requests keep using the auth package's default client unless a
+// caller explicitly supplies a client here or in ctx.
 func NewClient(src oauth2.TokenSource, httpClient *http.Client) *Client {
+	authHTTPClient := httpClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &Client{
-		tokenSrc:   src,
-		httpClient: httpClient,
+		tokenSrc:       src,
+		httpClient:     httpClient,
+		authHTTPClient: authHTTPClient,
 	}
 }
 
@@ -137,36 +145,36 @@ func (r *Client) RealmAddress(ctx context.Context, realmID int) (RealmAddress, e
 	ticker := time.NewTicker(time.Second * 3)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ctx.Done():
-			return RealmAddress{}, ctx.Err()
-		case <-ticker.C:
-			body, status, err := r.request(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
-			if err != nil {
-				switch status {
-				case 503:
+		body, status, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
+		if err != nil {
+			switch status {
+			case 503:
+				select {
+				case <-ctx.Done():
+					return RealmAddress{}, ctx.Err()
+				case <-ticker.C:
 					continue
-				case 404:
-					return RealmAddress{}, ErrRealmNotFound
-				case 403:
-					return RealmAddress{}, ErrPlayerNotInRealm
 				}
-				return RealmAddress{}, err
+			case 404:
+				return RealmAddress{}, ErrRealmNotFound
+			case 403:
+				return RealmAddress{}, ErrPlayerNotInRealm
 			}
-
-			var address RealmAddress
-			if err := json.Unmarshal(body, &address); err != nil {
-				return RealmAddress{}, err
-			}
-			return address, nil
+			return RealmAddress{}, err
 		}
+
+		var address RealmAddress
+		if err := json.Unmarshal(body, &address); err != nil {
+			return RealmAddress{}, err
+		}
+		return address, nil
 	}
 }
 
 // OnlinePlayers gets all the players currently on this realm,
 // Returns a 403 error if the current user is not the owner of the Realm.
 func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error) {
-	body, status, err := r.client.request(ctx, fmt.Sprintf("/worlds/%d", r.ID))
+	body, status, err := r.client.requestGet(ctx, fmt.Sprintf("/worlds/%d", r.ID))
 	if err != nil {
 		switch status {
 		case 403:
@@ -193,6 +201,7 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 	if r.tokenSrc == nil {
 		return nil, fmt.Errorf("token source is nil")
 	}
+	ctx = auth.WithContextClient(ctx, r.authHTTPClient)
 
 	t, err := r.tokenSrc.Token()
 	if err != nil {
@@ -203,15 +212,25 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 	return r.xblToken, err
 }
 
-// request sends an http get request to path with the right headers for the api set.
-func (r *Client) request(ctx context.Context, path string) (body []byte, status int, err error) {
+func (r *Client) requestGet(ctx context.Context, path string) (body []byte, status int, err error) {
+	return r.request(ctx, http.MethodGet, path)
+}
+
+func (r *Client) requestPost(ctx context.Context, path string) (body []byte, status int, err error) {
+	return r.request(ctx, http.MethodPost, path)
+}
+
+func (r *Client) request(ctx context.Context, method, path string) (body []byte, status int, err error) {
+	if r.requestFunc != nil {
+		return r.requestFunc(ctx, method, path)
+	}
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}
 	if path[0] != '/' {
 		path = "/" + path
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", realmsBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, realmsBaseURL+path, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -223,7 +242,7 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := r.httpClient.Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -235,15 +254,34 @@ func (r *Client) request(ctx context.Context, path string) (body []byte, status 
 	}
 
 	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, fmt.Errorf("HTTP Error: %d", resp.StatusCode)
+		return body, resp.StatusCode, httpResponseError(resp.StatusCode, body)
 	}
 
 	return body, resp.StatusCode, nil
 }
 
+const maxHTTPErrorBodyPreview = 512
+
+// httpResponseError builds an error for an HTTP status >= 400, including a trimmed, truncated body preview when present.
+func httpResponseError(statusCode int, body []byte) error {
+	preview := body
+	truncated := len(preview) > maxHTTPErrorBodyPreview
+	if truncated {
+		preview = preview[:maxHTTPErrorBodyPreview]
+	}
+	snippet := strings.TrimSpace(string(preview))
+	if truncated {
+		snippet += "..."
+	}
+	if snippet != "" {
+		return fmt.Errorf("HTTP Error: %d: %s", statusCode, snippet)
+	}
+	return fmt.Errorf("HTTP Error: %d", statusCode)
+}
+
 // Realm gets a realm by its invite code.
 func (c *Client) Realm(ctx context.Context, code string) (Realm, error) {
-	body, _, err := c.request(ctx, fmt.Sprintf("/worlds/v1/link/%s", code))
+	body, _, err := c.requestGet(ctx, fmt.Sprintf("/worlds/v1/link/%s", code))
 	if err != nil {
 		return Realm{}, err
 	}
@@ -257,9 +295,24 @@ func (c *Client) Realm(ctx context.Context, code string) (Realm, error) {
 	return realm, nil
 }
 
+// AcceptRealmInviteCode accepts a Realm invite code and returns the joined Realm.
+func (c *Client) AcceptRealmInviteCode(ctx context.Context, code string) (Realm, error) {
+	body, _, err := c.requestPost(ctx, fmt.Sprintf("/invites/v1/link/accept/%s", code))
+	if err != nil {
+		return Realm{}, err
+	}
+
+	var realm Realm
+	if err := json.Unmarshal(body, &realm); err != nil {
+		return Realm{}, err
+	}
+	realm.client = c
+	return realm, nil
+}
+
 // Realms gets a list of all realms the token has access to.
 func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
-	body, _, err := c.request(ctx, "/worlds")
+	body, _, err := c.requestGet(ctx, "/worlds")
 	if err != nil {
 		return nil, err
 	}

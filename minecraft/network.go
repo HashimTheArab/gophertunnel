@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 )
 
 // Network represents an implementation of a supported network layers, such as RakNet.
@@ -12,6 +13,9 @@ type Network interface {
 	// hostname, combined with a port that is separated with ':'.
 	// DialContext will use the deadline (ctx.Deadline) of the context.Context passed for the maximum amount of time that
 	// the dialing can take. DialContext will terminate as soon as possible when the context.Context is closed.
+	//
+	// If the returned connection implements optional packet transport capabilities from the packet package, wrappers around
+	// the connection must preserve those methods. Hiding them can change packet framing, encryption or read behaviour.
 	DialContext(ctx context.Context, address string) (net.Conn, error)
 	// PingContext sends a ping to an address and returns the response obtained. If successful, a non-nil response byte
 	// slice containing the data is returned. If the ping failed, an error is returned describing the failure.
@@ -43,15 +47,26 @@ type NetworkListener interface {
 // networks holds a map of id => Network to be used for looking up the network by an ID. It is registered to when calling
 // RegisterNetwork.
 var networks = map[string]func(l *slog.Logger) Network{}
+var networksMu sync.Mutex
 
 // RegisterNetwork registers a network so that it can be used for Gophertunnel.
 func RegisterNetwork(id string, n func(l *slog.Logger) Network) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
 	networks[id] = n
+}
+
+func UnregisterNetwork(id string) {
+	networksMu.Lock()
+	defer networksMu.Unlock()
+	delete(networks, id)
 }
 
 // networkByID returns the network with the ID passed. If no network is found, the second return value will be false.
 func networkByID(id string, l *slog.Logger) (Network, bool) {
+	networksMu.Lock()
 	n, ok := networks[id]
+	networksMu.Unlock()
 	if ok {
 		return n(l), true
 	}

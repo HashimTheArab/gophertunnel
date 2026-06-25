@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -39,7 +40,9 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	notifier *internal.Notifier
+	notifiersMu sync.RWMutex
+	notifyCount uint32
+	notifiers   map[uint32]nethernet.Notifier
 
 	pending *internal.PendingMap
 }
@@ -54,13 +57,13 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 		ID:   id,
 	}
 	if signal.Type != nethernet.SignalTypeOffer || conn.d.IgnoreDeliveryNotification {
-		return conn.write(message)
+		return conn.write(ctx, message)
 	}
 
 	ch := conn.pending.Add(id)
 	defer conn.pending.Remove(id)
 
-	if err := conn.write(message); err != nil {
+	if err := conn.write(ctx, message); err != nil {
 		return err
 	}
 
@@ -74,12 +77,25 @@ func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	}
 }
 
-// Notify registers a channel to receive incoming NetherNet signals.
-//
-// The returned stop function unregisters the channel and closes it. Callers must not close
-// the channel themselves.
-func (conn *Conn) Notify(signals chan<- *nethernet.Signal) (stop func()) {
-	return conn.notifier.Register(signals)
+// Notify registers n to receive incoming NetherNet signals.
+func (conn *Conn) Notify(n nethernet.Notifier) func() {
+	if n == nil {
+		panic("signaling: nil Notifier")
+	}
+	conn.notifiersMu.Lock()
+	id := conn.notifyCount
+	conn.notifyCount++
+	conn.notifiers[id] = n
+	conn.notifiersMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			conn.notifiersMu.Lock()
+			delete(conn.notifiers, id)
+			conn.notifiersMu.Unlock()
+		})
+	}
 }
 
 // complete resolves the expectation registered for the outbound Message with
@@ -116,8 +132,7 @@ func (conn *Conn) NetworkID() string {
 	return conn.d.NetworkID
 }
 
-// Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
-// It unregisters all notifiers registered on the Conn with notifying [nethernet.ErrSignalingStopped].
+// Close closes the Conn. It ensures that the Conn is closed only once.
 func (conn *Conn) Close() (err error) {
 	return conn.close(net.ErrClosed)
 }
@@ -136,7 +151,6 @@ func (conn *Conn) close(cause error) (err error) {
 		conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 
 		conn.cancel(cause)
-		_ = conn.notifier.Close()
 
 		err = conn.conn.Close(websocket.StatusNormalClosure, "")
 	})
@@ -146,6 +160,9 @@ func (conn *Conn) close(cause error) (err error) {
 // ping starts periodically sending ping messages at the specified interval.
 // On failure, it closes the Conn immediately with the cause.
 func (conn *Conn) ping(frequency time.Duration) {
+	if frequency <= 0 {
+		frequency = DefaultPingFrequency
+	}
 	ticker := time.NewTicker(frequency)
 	defer ticker.Stop()
 
@@ -154,7 +171,7 @@ func (conn *Conn) ping(frequency time.Duration) {
 		case <-conn.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := conn.write(Message{
+			if err := conn.write(conn.ctx, Message{
 				Type: MessageTypePing,
 			}); err != nil {
 				_ = conn.close(fmt.Errorf("background: write ping: %w", err))
@@ -205,8 +222,12 @@ func (conn *Conn) handleMessage(message Message) {
 			return
 		}
 		signal.NetworkID = message.From
-		if err := conn.notifier.SignalContext(conn.ctx, signal); err != nil {
-			log.Error("error delivering signal", slog.Any("error", err))
+
+		conn.notifiersMu.RLock()
+		notifiers := maps.Clone(conn.notifiers)
+		conn.notifiersMu.RUnlock()
+		for _, n := range notifiers {
+			_ = n.NotifySignal(signal)
 		}
 	case MessageTypeError:
 		if message.ID == uuid.Nil {
@@ -246,9 +267,8 @@ func (conn *Conn) handleMessage(message Message) {
 	}
 }
 
-// write encodes the given Message and sends it over the WebSocket connection. It uses a background context
-// to avoid issues with context cancellation affecting the connection. An error may be returned if the message
-// could not be sent.
-func (conn *Conn) write(message Message) error {
-	return wsjson.Write(context.Background(), conn.conn, message)
+// write encodes the given Message and sends it over the WebSocket connection.
+// An error may be returned if the message could not be sent.
+func (conn *Conn) write(ctx context.Context, message Message) error {
+	return wsjson.Write(ctx, conn.conn, message)
 }

@@ -12,9 +12,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/creachadair/jrpc2"
+	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
 	"github.com/sandertv/gophertunnel/minecraft/service/signaling/internal"
+	"golang.org/x/oauth2"
 )
 
 // Dialer specifies options for connecting to the messaging service.
@@ -26,10 +28,8 @@ type Dialer struct {
 	HTTPClient *http.Client
 	// Log is the logger used to log messages at various levels.
 	Log *slog.Logger
-	// NetworkID specifies a unique ID for the NetherNet network. If zero, a random value will
-	// be automatically set from [rand.Uint64]. When listening on peer-to-peer worlds, this value
-	// must match the NetworkID advertised in [p2p.Connection.NetherNetID] in order to successfully
-	// negotiate with vanilla clients.
+	// NetworkID specifies the local NetherNet network ID. If zero, a random value will
+	// be automatically set from [rand.Uint64].
 	NetworkID string
 	// IgnoreDeliveryNotification disables waiting for the DeliveryNotification
 	// acknowledgement after sending a signal to a remote peer.
@@ -56,6 +56,12 @@ func (d Dialer) Dial(src service.TokenSource) (*Conn, error) {
 
 // DialContext connects to the messaging service using the provided [service.TokenSource] for authorization.
 func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn, error) {
+	if d.HTTPClient == nil {
+		d.HTTPClient = http.DefaultClient
+	}
+	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); !ok || c == nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, d.HTTPClient)
+	}
 	if d.Environment == nil {
 		discovery, err := service.Default(ctx)
 		if err != nil {
@@ -66,9 +72,6 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			return nil, fmt.Errorf("resolve environment for %q: %w", env.ServiceName(), err)
 		}
 		d.Environment = env
-	}
-	if d.HTTPClient == nil {
-		d.HTTPClient = http.DefaultClient
 	}
 	if d.Log == nil {
 		d.Log = slog.Default()
@@ -102,8 +105,8 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		d:    d,
 		pmid: token.Claims.PlayerMessagingID,
 
-		notifier: internal.NewNotifier(d.Log),
-		pending:  internal.NewPendingMap(),
+		notifiers: make(map[uint32]nethernet.Notifier),
+		pending:   internal.NewPendingMap(),
 	}
 	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
 	conn.client = jrpc2.NewClient(&websocketChannel{c}, &jrpc2.ClientOptions{

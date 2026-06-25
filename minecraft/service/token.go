@@ -20,6 +20,7 @@ import (
 	"github.com/df-mc/go-playfab/v2/title"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/text/language"
@@ -142,7 +143,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +186,7 @@ func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +257,7 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +303,7 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	req.Header.Set("Accept", "application/json")
 	token.SetAuthHeader(req)
 
-	resp, err := e.httpClient().Do(req)
+	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return "", err
 	}
@@ -441,7 +442,7 @@ func decodeClaims(token *Token) error {
 	if err := json.Unmarshal(payload, &token.Claims); err != nil {
 		return fmt.Errorf("decode JWT claims: %w", err)
 	}
-	if err := token.Claims.Validate(jwt.Expected{}); err != nil {
+	if err := token.Claims.ValidateWithLeeway(jwt.Expected{}, serviceTokenClaimsLeeway); err != nil {
 		return fmt.Errorf("validate JWT claims: %w", err)
 	}
 	return nil
@@ -462,13 +463,23 @@ type Claims struct {
 
 // Validate validates the fields claimed by the JWT token.
 func (c Claims) Validate(e jwt.Expected) error {
+	return c.ValidateWithLeeway(e, jwt.DefaultLeeway)
+}
+
+// ValidateWithLeeway validates the fields claimed by the JWT token using a
+// caller-specified time leeway for exp, nbf, and iat.
+func (c Claims) ValidateWithLeeway(e jwt.Expected, leeway time.Duration) error {
 	if c.PlayerMessagingID == uuid.Nil {
 		return errors.New("service: Token.Claims.PlayerMessagingID is uuid.Nil")
 	}
-	return c.Claims.Validate(e)
+	return c.Claims.ValidateWithLeeway(e, leeway)
 }
 
 const expirationDelta = time.Minute
+
+// serviceTokenClaimsLeeway tolerates small clock skew between the Minecraft
+// authorization service and clients validating freshly issued service tokens.
+const serviceTokenClaimsLeeway = 5 * time.Minute
 
 // Valid returns a bool indicating if the Token is valid.
 func (t *Token) Valid() bool {

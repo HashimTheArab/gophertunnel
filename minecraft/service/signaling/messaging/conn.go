@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -36,7 +37,9 @@ type Conn struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	notifier *internal.Notifier
+	notifiersMu sync.RWMutex
+	notifyCount uint32
+	notifiers   map[uint32]nethernet.Notifier
 
 	pending *internal.PendingMap
 
@@ -49,7 +52,8 @@ type Conn struct {
 	credentialsMu sync.Mutex
 }
 
-// Signal sends a [nethernet.Signal] to a network.
+// Signal sends a [nethernet.Signal] to a network. In the JSON-RPC signaling path,
+// signal.NetworkID is the remote player's messaging UUID rather than a NetherNet ID.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
 	messagingID, err := uuid.Parse(signal.NetworkID)
 	if err != nil {
@@ -104,12 +108,25 @@ func (conn *Conn) send(ctx context.Context, id uuid.UUID, inner any, messagingID
 	return nil
 }
 
-// Notify registers a channel to receive incoming NetherNet signals.
-//
-// The returned stop function unregisters the channel and closes it. Callers must not close
-// the channel themselves.
-func (conn *Conn) Notify(signals chan<- *nethernet.Signal) (stop func()) {
-	return conn.notifier.Register(signals)
+// Notify registers n to receive incoming NetherNet signals.
+func (conn *Conn) Notify(n nethernet.Notifier) func() {
+	if n == nil {
+		panic("signaling/messaging: nil Notifier")
+	}
+	conn.notifiersMu.Lock()
+	id := conn.notifyCount
+	conn.notifyCount++
+	conn.notifiers[id] = n
+	conn.notifiersMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			conn.notifiersMu.Lock()
+			delete(conn.notifiers, id)
+			conn.notifiersMu.Unlock()
+		})
+	}
 }
 
 // Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
@@ -125,7 +142,7 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 
 	var credentials *nethernet.Credentials
 	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
-		return nil, fmt.Errorf("call %q: %w", MethodSignalingCredentials, err)
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
 	}
 	if credentials == nil || credentials.ExpirationInSeconds == 0 {
 		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
@@ -141,9 +158,9 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 func (conn *Conn) PongData(b []byte) {
 }
 
-// NetworkID returns the network ID of the Conn. It may be specified from [Dialer.NetworkID], otherwise a random
-// value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext]. It is utilized by
-// [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
+// NetworkID returns the local NetherNet network ID of the Conn. It may be specified from [Dialer.NetworkID],
+// otherwise a random value will be automatically set from [rand.Uint64] in set up during [Dialer.DialContext].
+// It is utilized by [nethernet.Listener] and [nethernet.Dialer] to obtain its local network ID to listen.
 func (conn *Conn) NetworkID() string {
 	return conn.d.NetworkID
 }
@@ -153,8 +170,7 @@ func (conn *Conn) PlayerMessagingID() uuid.UUID {
 	return conn.pmid
 }
 
-// Close closes the Conn and unregisters any notifiers. It ensures that the Conn is closed only once.
-// It unregisters all notifiers registered on the Conn with notifying [nethernet.ErrSignalingStopped].
+// Close closes the Conn. It ensures that the Conn is closed only once.
 func (conn *Conn) Close() (err error) {
 	return conn.close(net.ErrClosed)
 }
@@ -179,7 +195,6 @@ func (conn *Conn) close(cause error) (err error) {
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
-	_ = conn.notifier.Close()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
@@ -281,8 +296,12 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
 			return fmt.Errorf("decode signal: %w", err)
 		}
-		if err := conn.notifier.SignalContext(ctx, signal); err != nil {
-			return fmt.Errorf("deliver signal: %w", err)
+
+		conn.notifiersMu.RLock()
+		notifiers := maps.Clone(conn.notifiers)
+		conn.notifiersMu.RUnlock()
+		for _, n := range notifiers {
+			_ = n.NotifySignal(signal)
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
@@ -314,6 +333,9 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 // ping starts calling [MethodSystemPing] at 50 seconds interval.
 // On failure, it closes the Conn immediately with the cause.
 func (conn *Conn) ping(frequency time.Duration) {
+	if frequency <= 0 {
+		frequency = signaling.DefaultPingFrequency
+	}
 	ticker := time.NewTicker(frequency)
 	defer ticker.Stop()
 

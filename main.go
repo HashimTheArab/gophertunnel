@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"os"
@@ -12,14 +13,39 @@ import (
 	"golang.org/x/oauth2"
 )
 
+func requestToken() *oauth2.Token {
+	token, err := auth.RequestLiveToken()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	return token
+}
+
+func tokenSource() oauth2.TokenSource {
+	token := new(oauth2.Token)
+	tokenData, err := os.ReadFile("token.tok")
+	if err == nil {
+		_ = json.Unmarshal(tokenData, token)
+	} else {
+		token = requestToken()
+	}
+	src := auth.RefreshTokenSource(token)
+	_, err = src.Token()
+	if err != nil {
+		// The cached refresh token expired and can no longer be used to obtain a new token. We require the
+		// user to log in again and use that token instead.
+		src = auth.RefreshTokenSource(requestToken())
+	}
+	tok, _ := src.Token()
+	b, _ := json.Marshal(tok)
+	_ = os.WriteFile("token.tok", b, 0600)
+	return src
+}
+
 // The following program implements a proxy that forwards players from one local address to a remote address.
 func main() {
 	config := readConfig()
-	token, err := auth.RequestLiveToken()
-	if err != nil {
-		panic(err)
-	}
-	src := auth.RefreshTokenSource(token)
+	src := tokenSource()
 
 	p, err := minecraft.NewForeignStatusProvider(config.Connection.RemoteAddress)
 	if err != nil {
@@ -44,8 +70,8 @@ func main() {
 // handleConn handles a new incoming minecraft.Conn from the minecraft.Listener passed.
 func handleConn(conn *minecraft.Conn, listener *minecraft.Listener, config config, src oauth2.TokenSource) {
 	serverConn, err := minecraft.Dialer{
-		TokenSource: src,
 		ClientData:  conn.ClientData(),
+		TokenSource: src,
 	}.Dial("raknet", config.Connection.RemoteAddress)
 	if err != nil {
 		panic(err)

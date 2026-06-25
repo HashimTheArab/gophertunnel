@@ -65,14 +65,14 @@ func (data IdentityData) Validate() error {
 	if _, err := strconv.ParseInt(data.XUID, 10, 64); err != nil && len(data.XUID) != 0 {
 		return fmt.Errorf("XUID must be parseable as an int64, but got %v", data.XUID)
 	}
+	if data.XUID == "" {
+		// Non-authenticated clients don't have DisplayName nor Identity. This will be filled with their ClientData when parsing their request.
+		return nil
+	}
 	if id, err := uuid.Parse(data.Identity); err != nil || id == uuid.Nil {
 		return fmt.Errorf("UUID must be parseable as a valid UUID, but got %v", data.Identity)
 	}
 	nameLimit := 15
-	if data.XUID == "" {
-		// Non-authenticated clients can have up to 16 characters in their name.
-		nameLimit = 16
-	}
 	if len(data.DisplayName) == 0 || len(data.DisplayName) > nameLimit {
 		return fmt.Errorf("DisplayName must not be empty or longer than %d characters, but got %v characters", nameLimit, len(data.DisplayName))
 	}
@@ -82,14 +82,8 @@ func (data IdentityData) Validate() error {
 	if data.DisplayName[0] >= '0' && data.DisplayName[0] <= '9' {
 		return fmt.Errorf("DisplayName may not have a number as first character, but got %v", data.DisplayName)
 	}
-	if data.XUID != "" {
-		if !checkOnlineUsername(data.DisplayName) {
-			return fmt.Errorf("DisplayName for authorized client must only contain numbers, Latin letters and spaces, but got %v", data.DisplayName)
-		}
-	} else {
-		if !checkOfflineUsername(data.DisplayName) {
-			return fmt.Errorf("DisplayName for unauthorized client must only contain numbers, letters and spaces, but got %v", data.DisplayName)
-		}
+	if !checkOnlineUsername(data.DisplayName) {
+		return fmt.Errorf("DisplayName for authorized client must only contain numbers, Latin letters and spaces, but got %v", data.DisplayName)
 	}
 	// We check here if the name contains at least 2 spaces after each other, which is not allowed. The name
 	// is only allowed to have single spaces.
@@ -139,8 +133,10 @@ type ClientData struct {
 	// GUIScale is the GUI scale of the player. It is by default 0, and is otherwise -1 or -2 for a smaller
 	// GUI scale than usual.
 	GUIScale int `json:"GuiScale"`
-	// IsEditorMode is a value to dictate if the player is in editor mode.
-	IsEditorMode bool
+	// FilterProfanity indicates if the client has profanity filtering enabled.
+	FilterProfanity bool
+	// ClientIsEditorCapable is a value to dictate if the player is capable of entering editor mode.
+	ClientIsEditorCapable bool
 	// LanguageCode is the language code of the player. It looks like 'en_UK'. It follows the ISO language
 	// codes, but hyphens ('-') are replaced with underscores. ('_')
 	LanguageCode string
@@ -182,7 +178,7 @@ type ClientData struct {
 	// is a semi-hex encoded string, usually consisting of 16 characters. That
 	// said, this is not always valid hex, because the last character may be
 	// omitted.
-	PlayFabID string `json:"PlayFabId"`
+	PlayFabID string `json:"PlayFabId,omitempty"`
 	// SkinImageHeight and SkinImageWidth are the dimensions of the skin's image data.
 	SkinImageHeight, SkinImageWidth int
 	// SkinResourcePatch is a base64 encoded string which holds JSON data. The content of the JSON data points
@@ -252,6 +248,8 @@ type ClientData struct {
 	// This prevents unauthorized clients from connecting using only the host's connection details,
 	// such as its Player Messaging ID.
 	Nonce string `json:",omitempty"`
+	// ClientEditorConnectionIntent is the editor mode connection intent requested by the client.
+	ClientEditorConnectionIntent int
 }
 
 // PersonaPiece represents a piece of a persona skin. All pieces are sent separately.
@@ -352,7 +350,7 @@ func (data ClientData) Validate() error {
 	if _, err := uuid.Parse(data.SelfSignedID); err != nil {
 		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
 	}
-	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); err != nil {
+	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); strings.Contains(data.ServerAddress, ":") && err != nil {
 		return fmt.Errorf("ServerAddress must be resolveable as a UDP address, but got %v", data.ServerAddress)
 	}
 	if err := base64DecLength(data.SkinData, data.SkinImageHeight*data.SkinImageWidth*4); err != nil {
@@ -386,15 +384,24 @@ func (data ClientData) Validate() error {
 	if err != nil {
 		return fmt.Errorf("SkinResourcePatch was not a valid base64 string: %w", err)
 	}
-	m := make(map[string]any)
-	if err := json.Unmarshal(b, &m); err != nil {
-		return fmt.Errorf("SkinResourcePatch base64 decoded was not a valid JSON string: %w", err)
+	if len(b) != 0 {
+		m := make(map[string]any)
+		if err := json.Unmarshal(b, &m); err != nil {
+			return fmt.Errorf("SkinResourcePatch base64 decoded was not a valid JSON string: %w", err)
+		}
 	}
 	if data.SkinID == "" {
 		return fmt.Errorf("SkinID must not be an empty string")
 	}
 	if data.UIProfile < 0 || data.UIProfile > 2 {
 		return fmt.Errorf("UIProfile must be between 0-2, but got %v", data.UIProfile)
+	}
+	nameLimit := 16
+	if len(data.ThirdPartyName) == 0 || len(data.ThirdPartyName) > nameLimit {
+		return fmt.Errorf("ThirdPartyName must not be empty or longer than %d characters, but got %v characters", nameLimit, len(data.ThirdPartyName))
+	}
+	if !checkOfflineUsername(data.ThirdPartyName) {
+		return fmt.Errorf("ThirdPartyName for client must only contain numbers, Latin letters and spaces, but got %v", data.ThirdPartyName)
 	}
 	return nil
 }
