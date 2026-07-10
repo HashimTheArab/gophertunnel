@@ -1125,10 +1125,17 @@ func (conn *Conn) flushBatch() {
 	default:
 	}
 	if len(deferred) != 0 {
-		conn.deferBatch(deferred)
+		// Packets deferred during a wire batch precede the ones collected from it, so combining them
+		// keeps one network batch mapped to one ReadPackets result. The combined batch goes through the
+		// unbounded deferred list because deferral happens during login, before the connection is
+		// delivered and read, where a send to the bounded channel could block.
+		conn.deferBatch(append(deferred, batch...))
+		return
 	}
-	if len(batch) == 0 || conn.ctx.Err() != nil {
-		// Packets processed after the connection closed are dropped, like queuePacket drops them.
+	if conn.ctx.Err() != nil {
+		// The connection closed: keep the packets readable without risking a blocking send, matching
+		// ReadPackets draining queued batches ahead of the close error.
+		conn.deferBatch(batch)
 		return
 	}
 	conn.packetBatches <- batch
