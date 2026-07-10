@@ -203,7 +203,7 @@ var disconnectReasons = map[int32]string{
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
-// ReadPackets must not be called on multiple goroutines simultaneously.
+// ReadBatch must not be called on multiple goroutines simultaneously.
 type Conn struct {
 	// closeOnce and abortOnce coordinate graceful and immediate shutdown independently. Abort must remain able to
 	// close the raw transport while Close is blocked flushing it.
@@ -256,7 +256,7 @@ type Conn struct {
 	// packetBatches holds the packets from one decoder batch when batch reading is enabled.
 	packetBatches chan []*packetData
 	// batchReading, if true, preserves incoming network batch boundaries: packets must be read through
-	// ReadPackets and the single-packet read methods are unavailable.
+	// ReadBatch and the single-packet read methods are unavailable.
 	batchReading bool
 	// pendingBatch collects the packets of the network batch currently being processed when batch
 	// reading is enabled. It is only accessed by the goroutine processing incoming packets.
@@ -270,7 +270,7 @@ type Conn struct {
 	// were not used by the connection yet. These packets are read the first when calling to Read or
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
-	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadPackets
+	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadBatch
 	// returns before the batches queued in packetBatches.
 	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
@@ -686,16 +686,16 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	}
 }
 
-// ReadPackets reads all packets from one network batch. If a read deadline is set, an error is returned if
-// the deadline is reached before a batch is received. ReadPackets must not be called on multiple goroutines
+// ReadBatch reads all packets from one network batch. If a read deadline is set, an error is returned if
+// the deadline is reached before a batch is received. ReadBatch must not be called on multiple goroutines
 // simultaneously.
 //
 // If a packet read was not implemented, a *packet.Unknown is returned for it, containing its raw payload.
 // Packets that fail to decode are skipped and logged; when such an error closes the connection, the packets
 // after the offending one in the batch are not delivered. Batch reading must be enabled through
-// Dialer.EnableBatchReading or ListenConfig.EnableBatchReading. Do not mix ReadPackets with ReadPacket,
+// Dialer.EnableBatchReading or ListenConfig.EnableBatchReading. Do not mix ReadBatch with ReadPacket,
 // ReadBytes or Read on the same connection.
-func (conn *Conn) ReadPackets() ([]packet.Packet, error) {
+func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 	if !conn.batchReading {
 		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
 	}
@@ -1005,7 +1005,7 @@ func (conn *Conn) takeDeferredBatch() ([]*packetData, bool) {
 	return batch, true
 }
 
-// deferBatch defers a batch so that it is returned by ReadPackets before any batch queued after it.
+// deferBatch defers a batch so that it is returned by ReadBatch before any batch queued after it.
 func (conn *Conn) deferBatch(batch []*packetData) {
 	conn.deferredPacketMu.Lock()
 	conn.deferredBatches = append(conn.deferredBatches, batch)
@@ -1124,7 +1124,7 @@ func (conn *Conn) reserveBatch(n int) {
 }
 
 // flushBatch queues the network batch currently being collected, along with any packets deferred while
-// it was processed, so that ReadPackets returns them. The goroutine processing incoming packets must
+// it was processed, so that ReadBatch returns them. The goroutine processing incoming packets must
 // call it after each decoded batch, including when processing ends in an error. It is a no-op when
 // batch reading is disabled.
 func (conn *Conn) flushBatch() {
@@ -1143,7 +1143,7 @@ func (conn *Conn) flushBatch() {
 	}
 	if len(deferred) != 0 {
 		// Packets deferred during a wire batch precede the ones collected from it, so combining them
-		// keeps one network batch mapped to one ReadPackets result. The combined batch goes through the
+		// keeps one network batch mapped to one ReadBatch result. The combined batch goes through the
 		// unbounded deferred list because deferral happens during login, before the connection is
 		// delivered and read, where a send to the bounded channel could block. Deferred packets stay
 		// readable after a close, matching deferredPackets in single-packet mode.

@@ -176,7 +176,7 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	}
 }
 
-func TestListenerReadPacketsPreservesNetworkBatch(t *testing.T) {
+func TestListenerReadBatchPreservesNetworkBatch(t *testing.T) {
 	t.Parallel()
 
 	client, server := net.Pipe()
@@ -211,15 +211,15 @@ func TestListenerReadPacketsPreservesNetworkBatch(t *testing.T) {
 		t.Fatal("listener did not publish passthrough connection")
 	}
 
-	packets, err := accepted.ReadPackets()
+	packets, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets: %v", err)
+		t.Fatalf("ReadBatch: %v", err)
 	}
 	if len(packets) != 2 {
-		t.Fatalf("ReadPackets returned %d packets, want 2", len(packets))
+		t.Fatalf("ReadBatch returned %d packets, want 2", len(packets))
 	}
 	if packets[0].ID() != packet.IDResourcePacksInfo || packets[1].ID() != 777 {
-		t.Fatalf("ReadPackets IDs = [%d %d], want [%d 777]", packets[0].ID(), packets[1].ID(), packet.IDResourcePacksInfo)
+		t.Fatalf("ReadBatch IDs = [%d %d], want [%d 777]", packets[0].ID(), packets[1].ID(), packet.IDResourcePacksInfo)
 	}
 
 	writeErr := make(chan error, 1)
@@ -234,13 +234,13 @@ func TestListenerReadPacketsPreservesNetworkBatch(t *testing.T) {
 		writeErr <- writePackets(client, &packet.Unknown{PacketID: 780})
 	}()
 
-	first, err := accepted.ReadPackets()
+	first, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets first subsequent batch: %v", err)
+		t.Fatalf("ReadBatch first subsequent batch: %v", err)
 	}
-	second, err := accepted.ReadPackets()
+	second, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets second subsequent batch: %v", err)
+		t.Fatalf("ReadBatch second subsequent batch: %v", err)
 	}
 	if err := <-writeErr; err != nil {
 		t.Fatalf("write subsequent batches: %v", err)
@@ -273,7 +273,7 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 			EnableBatchReading:    true,
 			AllowUnknownPackets:   true,
 			ConnHandler: func(conn *Conn) error {
-				packets, err := conn.ReadPackets()
+				packets, err := conn.ReadBatch()
 				resultCh <- result{packets: packets, err: err}
 				return err
 			},
@@ -294,10 +294,10 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 	select {
 	case got := <-resultCh:
 		if got.err != nil {
-			t.Fatalf("ReadPackets: %v", got.err)
+			t.Fatalf("ReadBatch: %v", got.err)
 		}
 		if len(got.packets) != 2 {
-			t.Fatalf("ReadPackets returned %d packets, want 2", len(got.packets))
+			t.Fatalf("ReadBatch returned %d packets, want 2", len(got.packets))
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ConnHandler blocked reading the batch that published the connection")
@@ -342,7 +342,7 @@ func acceptConn(t *testing.T, listener *Listener) *Conn {
 	}
 }
 
-func TestListenerReadPacketsDeliversBatchBeforeMidBatchError(t *testing.T) {
+func TestListenerReadBatchDeliversBatchBeforeMidBatchError(t *testing.T) {
 	t.Parallel()
 
 	listener, client := newBatchReadingListener(t, nil)
@@ -358,12 +358,12 @@ func TestListenerReadPacketsDeliversBatchBeforeMidBatchError(t *testing.T) {
 	}
 
 	accepted := acceptConn(t, listener)
-	packets, err := accepted.ReadPackets()
+	packets, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets: %v", err)
+		t.Fatalf("ReadBatch: %v", err)
 	}
 	if len(packets) != 1 || packets[0].ID() != packet.IDResourcePacksInfo {
-		t.Fatalf("ReadPackets IDs = %v, want [%d]", packetIDs(packets), packet.IDResourcePacksInfo)
+		t.Fatalf("ReadBatch IDs = %v, want [%d]", packetIDs(packets), packet.IDResourcePacksInfo)
 	}
 }
 
@@ -398,17 +398,17 @@ func TestListenerBatchReadingDoesNotStallDecodeLoop(t *testing.T) {
 	}
 
 	accepted := acceptConn(t, listener)
-	first, err := accepted.ReadPackets()
+	first, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets publishing batch: %v", err)
+		t.Fatalf("ReadBatch publishing batch: %v", err)
 	}
 	if ids := packetIDs(first); !slices.Equal(ids, []uint32{packet.IDResourcePacksInfo}) {
 		t.Fatalf("publishing batch IDs = %v, want [%d]", ids, packet.IDResourcePacksInfo)
 	}
 	for i := range batches {
-		packets, err := accepted.ReadPackets()
+		packets, err := accepted.ReadBatch()
 		if err != nil {
-			t.Fatalf("ReadPackets batch %d: %v", i, err)
+			t.Fatalf("ReadBatch batch %d: %v", i, err)
 		}
 		if ids := packetIDs(packets); !slices.Equal(ids, []uint32{uint32(1000 + i)}) {
 			t.Fatalf("batch %d IDs = %v, want [%d]", i, ids, 1000+i)
@@ -427,16 +427,16 @@ func TestListenerDeliversClientDisconnectMissingFromPool(t *testing.T) {
 		t.Fatalf("write publishing batch: %v", err)
 	}
 	accepted := acceptConn(t, listener)
-	if _, err := accepted.ReadPackets(); err != nil {
-		t.Fatalf("ReadPackets publishing batch: %v", err)
+	if _, err := accepted.ReadBatch(); err != nil {
+		t.Fatalf("ReadBatch publishing batch: %v", err)
 	}
 
 	if err := writePackets(client, &packet.Unknown{PacketID: 777}, &packet.Disconnect{}); err != nil {
 		t.Fatalf("write disconnect batch: %v", err)
 	}
-	packets, err := accepted.ReadPackets()
+	packets, err := accepted.ReadBatch()
 	if err != nil {
-		t.Fatalf("ReadPackets: %v", err)
+		t.Fatalf("ReadBatch: %v", err)
 	}
 	if ids := packetIDs(packets); !slices.Equal(ids, []uint32{777, packet.IDDisconnect}) {
 		t.Fatalf("batch IDs = %v, want [777 %d]", ids, packet.IDDisconnect)
@@ -454,13 +454,13 @@ func TestListenerConnHandlerCanBlockReadingBatches(t *testing.T) {
 	ready := make(chan struct{})
 	listener, client := newBatchReadingListener(t, func(cfg *ListenConfig) {
 		cfg.ConnHandler = func(conn *Conn) error {
-			first, err := conn.ReadPackets()
+			first, err := conn.ReadBatch()
 			if err != nil {
 				resultCh <- result{err: err}
 				return err
 			}
 			close(ready)
-			second, err := conn.ReadPackets()
+			second, err := conn.ReadBatch()
 			resultCh <- result{first: first, second: second, err: err}
 			return err
 		}
@@ -485,7 +485,7 @@ func TestListenerConnHandlerCanBlockReadingBatches(t *testing.T) {
 	select {
 	case got := <-resultCh:
 		if got.err != nil {
-			t.Fatalf("ConnHandler second ReadPackets: %v", got.err)
+			t.Fatalf("ConnHandler second ReadBatch: %v", got.err)
 		}
 		if ids := packetIDs(got.first); !slices.Equal(ids, []uint32{packet.IDResourcePacksInfo, 777}) {
 			t.Fatalf("first batch IDs = %v, want [%d 777]", ids, packet.IDResourcePacksInfo)
