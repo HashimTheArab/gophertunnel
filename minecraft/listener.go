@@ -529,11 +529,8 @@ func (listener *Listener) handleConn(conn *Conn) {
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
+					// A non-nil AfterHandshake error aborts the connection, so it is not delivered.
 					conn.log.Error(err.Error())
-					conn.flushBatch()
-					if publishBatch {
-						listener.deliverConn(conn)
-					}
 					return
 				}
 			}
