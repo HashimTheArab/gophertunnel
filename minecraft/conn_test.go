@@ -23,6 +23,227 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+func TestReadPacketsRequiresBatchReading(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	if _, err := conn.ReadPackets(); !errors.Is(err, errBatchReadingDisabled) {
+		t.Fatalf("ReadPackets error = %v, want %v", err, errBatchReadingDisabled)
+	}
+}
+
+func TestBatchReadingRejectsSinglePacketReads(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	tests := []struct {
+		name string
+		read func() error
+	}{
+		{name: "ReadPacket", read: func() error {
+			_, err := conn.ReadPacket()
+			return err
+		}},
+		{name: "ReadBytes", read: func() error {
+			_, err := conn.ReadBytes()
+			return err
+		}},
+		{name: "Read", read: func() error {
+			_, err := conn.Read(make([]byte, 1))
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn.readDeadline = time.After(time.Millisecond)
+			if err := test.read(); !errors.Is(err, errSinglePacketReadInBatchMode) {
+				t.Fatalf("%s error = %v, want %v", test.name, err, errSinglePacketReadInBatchMode)
+			}
+		})
+	}
+}
+
+func TestReadPacketsReturnsAllDeferredPackets(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 701}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	packets, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets: %v", err)
+	}
+	if len(packets) != 2 || packets[0].ID() != 700 || packets[1].ID() != 701 {
+		t.Fatalf("ReadPackets IDs = %v, want [700 701]", packetIDs(packets))
+	}
+}
+
+func TestReadPacketsPreservesDeferredBatchBoundaries(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 701}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 702}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	first, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets first batch: %v", err)
+	}
+	if ids := packetIDs(first); len(ids) != 2 || ids[0] != 700 || ids[1] != 701 {
+		t.Fatalf("first batch IDs = %v, want [700 701]", ids)
+	}
+	second, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets second batch: %v", err)
+	}
+	if ids := packetIDs(second); len(ids) != 1 || ids[0] != 702 {
+		t.Fatalf("second batch IDs = %v, want [702]", ids)
+	}
+}
+
+func TestReadPacketsOrdersDeferredAfterQueuedBatches(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	// A batch is queued for reading first; a packet deferred afterwards must not overtake it.
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 701}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	first, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets first batch: %v", err)
+	}
+	if ids := packetIDs(first); len(ids) != 1 || ids[0] != 700 {
+		t.Fatalf("first batch IDs = %v, want [700]", ids)
+	}
+	second, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets second batch: %v", err)
+	}
+	if ids := packetIDs(second); len(ids) != 1 || ids[0] != 701 {
+		t.Fatalf("second batch IDs = %v, want [701]", ids)
+	}
+}
+
+func TestReadPacketsStopsAfterConnClosingDecodeError(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.disconnectOnInvalidPacket = true
+
+	// A batch [valid, invalid, valid]: decoding the invalid packet closes the connection, so the valid
+	// packet after it must not be delivered.
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 777}, payload: bytes.NewBuffer(nil)})
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: packet.IDText}, payload: bytes.NewBuffer([]byte{0xff})})
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 778}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	packets, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets: %v", err)
+	}
+	if ids := packetIDs(packets); len(ids) != 1 || ids[0] != 777 {
+		t.Fatalf("ReadPackets IDs = %v, want only [777]", ids)
+	}
+	if conn.ctx.Err() == nil {
+		t.Fatal("invalid packet with disconnectOnInvalidPacket did not close the connection")
+	}
+}
+
+func TestReadPacketsDeliversPacketsBeforeDisconnect(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	// A dialer-side conn: its pool contains Disconnect, so receiving one closes the connection.
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+
+	type result struct {
+		packets []packet.Packet
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		packets, err := conn.ReadPackets()
+		resultCh <- result{packets: packets, err: err}
+	}()
+
+	frame, err := encodePacket(&packet.Unknown{PacketID: 777})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
+	if err := conn.receive(frame); err != nil {
+		t.Fatalf("receive packet: %v", err)
+	}
+	if frame, err = encodePacket(&packet.Disconnect{}); err != nil {
+		t.Fatalf("encode disconnect: %v", err)
+	}
+	if err := conn.receive(frame); err != nil {
+		t.Fatalf("receive disconnect: %v", err)
+	}
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("ReadPackets lost the packets before the disconnect: %v", got.err)
+		}
+		if len(got.packets) != 1 || got.packets[0].ID() != 777 {
+			t.Fatalf("pre-disconnect batch IDs = %v, want [777]", packetIDs(got.packets))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadPackets did not return the batch preceding the disconnect")
+	}
+	if _, err := conn.ReadPackets(); err == nil {
+		t.Fatal("ReadPackets after disconnect returned no error")
+	}
+}
+
+func packetIDs(packets []packet.Packet) []uint32 {
+	ids := make([]uint32, len(packets))
+	for i, pk := range packets {
+		ids[i] = pk.ID()
+	}
+	return ids
+}
+
 func TestStartGameWritesPropertyData(t *testing.T) {
 	t.Parallel()
 

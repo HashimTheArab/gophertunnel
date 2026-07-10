@@ -202,8 +202,8 @@ var disconnectReasons = map[int32]string{
 }
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
-// methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket
-// must not be called on multiple goroutines simultaneously.
+// methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
+// ReadPackets must not be called on multiple goroutines simultaneously.
 type Conn struct {
 	// once is used to ensure the Conn is closed only a single time. It protects the channel below from being
 	// closed multiple times.
@@ -250,12 +250,26 @@ type Conn struct {
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.
 	packets chan *packetData
+	// packetBatches holds the packets from one decoder batch when batch reading is enabled.
+	packetBatches chan []*packetData
+	// batchReading, if true, preserves incoming network batch boundaries: packets must be read through
+	// ReadPackets and the single-packet read methods are unavailable.
+	batchReading bool
+	// pendingBatch collects the packets of the network batch currently being processed when batch
+	// reading is enabled. It is only accessed by the goroutine processing incoming packets.
+	pendingBatch []*packetData
+	// batchDeferred collects the packets deferred while the current network batch is processed when
+	// batch reading is enabled. Like pendingBatch, it is owned by the processing goroutine.
+	batchDeferred []*packetData
 
 	deferredPacketMu sync.Mutex
 	// deferredPackets is a list of packets that were pushed back during the login sequence because they
 	// were not used by the connection yet. These packets are read the first when calling to Read or
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
+	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadPackets
+	// returns before the batches queued in packetBatches.
+	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
 
 	// sendMu protects bufferedSend/bufferedSendSpare.
@@ -340,6 +354,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		salt:                 make([]byte, 16),
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
+		packetBatches:        make(chan []*packetData, 8),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
 		conn:                 netConn,
@@ -618,6 +633,9 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 // If the packet read was not implemented, a *packet.Unknown is returned, containing the raw payload of the
 // packet read.
 func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
+	if conn.batchReading {
+		return nil, conn.wrap(errSinglePacketReadInBatchMode, "read packet")
+	}
 	if len(conn.additional) > 0 {
 		return <-conn.additional, nil
 	}
@@ -657,6 +675,57 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	}
 }
 
+// ReadPackets reads all packets from one network batch. If a read deadline is set, an error is returned if
+// the deadline is reached before a batch is received. ReadPackets must not be called on multiple goroutines
+// simultaneously.
+//
+// If a packet read was not implemented, a *packet.Unknown is returned for it, containing its raw payload.
+// Packets that fail to decode are skipped and logged; when such an error closes the connection, the packets
+// after the offending one in the batch are not delivered. Batch reading must be enabled through
+// Dialer.EnableBatchReading or ListenConfig.EnableBatchReading. Do not mix ReadPackets with ReadPacket,
+// ReadBytes or Read on the same connection.
+func (conn *Conn) ReadPackets() ([]packet.Packet, error) {
+	if !conn.batchReading {
+		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
+	}
+	for {
+		batch, ok := conn.takeDeferredBatch()
+		if !ok {
+			// Prefer batches already queued over reporting a closed connection or an expired deadline,
+			// so that packets received before a disconnect are still delivered.
+			select {
+			case batch = <-conn.packetBatches:
+			default:
+				select {
+				case <-conn.ctx.Done():
+					return nil, conn.closeErr("read packets")
+				case <-conn.readDeadline:
+					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
+				case batch = <-conn.packetBatches:
+				}
+			}
+		}
+
+		packets := make([]packet.Packet, 0, len(batch))
+		for _, data := range batch {
+			pks, err := data.decode(conn)
+			if err != nil {
+				conn.log.Error("read packets: " + err.Error())
+				if conn.ctx.Err() != nil {
+					// The error closed the connection: packets sequenced after the offending one must
+					// not be delivered.
+					break
+				}
+				continue
+			}
+			packets = append(packets, pks...)
+		}
+		if len(packets) != 0 {
+			return packets, nil
+		}
+	}
+}
+
 // ResourcePacks returns a slice of all resource packs the connection holds. For a Conn obtained using a
 // Listener, this holds all resource packs set to the Listener. For a Conn obtained using Dial, the resource
 // packs include all packs sent by the server connected to.
@@ -677,6 +746,9 @@ func (conn *Conn) Write(b []byte) (n int, err error) {
 // ReadBytes reads a packet from the connection without decoding it directly.
 // For direct reading, consider using ReadPacket() which decodes the packet.
 func (conn *Conn) ReadBytes() ([]byte, error) {
+	if conn.batchReading {
+		return nil, conn.wrap(errSinglePacketReadInBatchMode, "read")
+	}
 	if data, ok := conn.takeDeferredPacket(); ok {
 		return data.full, nil
 	}
@@ -694,6 +766,9 @@ func (conn *Conn) ReadBytes() ([]byte, error) {
 // to carry the full packet.
 // It is recommended to use ReadPacket() and ReadBytes() rather than Read() in cases where reading is done directly.
 func (conn *Conn) Read(b []byte) (n int, err error) {
+	if conn.batchReading {
+		return 0, conn.wrap(errSinglePacketReadInBatchMode, "read")
+	}
 	if data, ok := conn.takeDeferredPacket(); ok {
 		if len(b) < len(data.full) {
 			return 0, conn.wrap(errBufferTooSmall, "read")
@@ -886,8 +961,37 @@ func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
 	return data, true
 }
 
-// deferPacket defers a packet so that it is obtained in the next ReadPacket call
+// takeDeferredBatch takes the next batch from the list of deferred batches, reporting whether one was
+// found.
+func (conn *Conn) takeDeferredBatch() ([]*packetData, bool) {
+	conn.deferredPacketMu.Lock()
+	defer conn.deferredPacketMu.Unlock()
+
+	if len(conn.deferredBatches) == 0 {
+		return nil, false
+	}
+	batch := conn.deferredBatches[0]
+	// Explicitly clear out the batch at offset 0 so that it may be garbage collected, like
+	// takeDeferredPacket does.
+	conn.deferredBatches[0] = nil
+	conn.deferredBatches = conn.deferredBatches[1:]
+	return batch, true
+}
+
+// deferBatch defers a batch so that it is returned by ReadPackets before any batch queued after it.
+func (conn *Conn) deferBatch(batch []*packetData) {
+	conn.deferredPacketMu.Lock()
+	conn.deferredBatches = append(conn.deferredBatches, batch)
+	conn.deferredPacketMu.Unlock()
+}
+
+// deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
+// mode, the packet becomes part of the deferred batch flushed by the next flushBatch call.
 func (conn *Conn) deferPacket(pk *packetData) {
+	if conn.batchReading {
+		conn.batchDeferred = append(conn.batchDeferred, pk)
+		return
+	}
 	conn.deferredPacketMu.Lock()
 	conn.deferredPackets = append(conn.deferredPackets, pk)
 	conn.deferredPacketMu.Unlock()
@@ -901,21 +1005,30 @@ func (conn *Conn) receive(data []byte) error {
 		return err
 	}
 	if pkData.h.PacketID == packet.IDDisconnect {
-		// We always handle disconnect packets and close the connection if one comes in.
+		// We always handle disconnect packets and close the connection if one comes in. The payload is
+		// snapshotted first because decoding drains it and the packet may turn out not to be a
+		// Disconnect at all.
+		payload := bytes.Clone(pkData.payload.Bytes())
 		pks, err := pkData.decode(conn)
 		if err != nil {
 			return err
 		}
-		disconnectPacket := pks[0].(*packet.Disconnect)
-		disconnectMessage := conn.disconnectPacketMessage(disconnectPacket)
-		_ = conn.close(conn.wrap(&DisconnectPacketError{
-			Reason:                  disconnectPacket.Reason,
-			HideDisconnectionScreen: disconnectPacket.HideDisconnectionScreen,
-			Message:                 disconnectPacket.Message,
-			FilteredMessage:         disconnectPacket.FilteredMessage,
-			DisplayMessage:          disconnectMessage,
-		}, "receive"))
-		return nil
+		if disconnectPacket, ok := pks[0].(*packet.Disconnect); ok {
+			// Make the packets received earlier in this batch readable before the connection closes.
+			conn.flushBatch()
+			disconnectMessage := conn.disconnectPacketMessage(disconnectPacket)
+			_ = conn.close(conn.wrap(&DisconnectPacketError{
+				Reason:                  disconnectPacket.Reason,
+				HideDisconnectionScreen: disconnectPacket.HideDisconnectionScreen,
+				Message:                 disconnectPacket.Message,
+				FilteredMessage:         disconnectPacket.FilteredMessage,
+				DisplayMessage:          disconnectMessage,
+			}, "receive"))
+			return nil
+		}
+		// The Disconnect packet is not in this connection's pool (clients do not normally send one), so
+		// it decoded to something else. Restore the payload and deliver it like any other packet.
+		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
 		if conn.handshakeComplete || conn.loggedIn {
@@ -932,29 +1045,83 @@ func (conn *Conn) receive(data []byte) error {
 			if pkData.h.PacketID == packet.IDClientToServerHandshake {
 				return nil // don't forward it
 			}
-			select {
-			case <-conn.ctx.Done():
-			case conn.packets <- pkData:
+			if !conn.collectPacket(pkData) {
+				select {
+				case <-conn.ctx.Done():
+				case conn.packets <- pkData:
+				}
 			}
 			return nil
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
-		select {
-		case <-conn.ctx.Done():
-		case previous := <-conn.packets:
-			// There was already a packet in this channel, so take it out and defer it so that it is read
-			// next.
-			conn.deferPacket(previous)
-		default:
-		}
-		select {
-		case <-conn.ctx.Done():
-		case conn.packets <- pkData:
+		if !conn.collectPacket(pkData) {
+			conn.queuePacket(pkData)
 		}
 		return nil
 	}
 	return conn.handle(pkData)
+}
+
+// queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
+// read first. It never blocks the goroutine processing incoming packets.
+func (conn *Conn) queuePacket(data *packetData) {
+	select {
+	case <-conn.ctx.Done():
+	case previous := <-conn.packets:
+		// There was already a packet in this channel, so take it out and defer it so that it is read next.
+		conn.deferPacket(previous)
+	default:
+	}
+	select {
+	case <-conn.ctx.Done():
+	case conn.packets <- data:
+	}
+}
+
+// collectPacket adds a packet to the network batch currently being collected and reports whether it did
+// so. It returns false when batch reading is disabled and the packet must be delivered directly.
+func (conn *Conn) collectPacket(data *packetData) bool {
+	if !conn.batchReading {
+		return false
+	}
+	conn.pendingBatch = append(conn.pendingBatch, data)
+	return true
+}
+
+// reserveBatch pre-allocates the pending batch for n packets when batch reading is enabled.
+func (conn *Conn) reserveBatch(n int) {
+	if conn.batchReading && conn.pendingBatch == nil && n > 0 {
+		conn.pendingBatch = make([]*packetData, 0, n)
+	}
+}
+
+// flushBatch queues the network batch currently being collected, along with any packets deferred while
+// it was processed, so that ReadPackets returns them. The goroutine processing incoming packets must
+// call it after each decoded batch, including when processing ends in an error. It is a no-op when
+// batch reading is disabled.
+func (conn *Conn) flushBatch() {
+	deferred, batch := conn.batchDeferred, conn.pendingBatch
+	conn.batchDeferred, conn.pendingBatch = nil, nil
+	if len(deferred) == 0 && len(batch) == 0 {
+		return
+	}
+	// Move a batch still queued to the deferred list first, so that the entries below cannot overtake
+	// it. This goroutine is the only sender, meaning the channel never holds more than one batch and
+	// the send below cannot block.
+	select {
+	case previous := <-conn.packetBatches:
+		conn.deferBatch(previous)
+	default:
+	}
+	if len(deferred) != 0 {
+		conn.deferBatch(deferred)
+	}
+	if len(batch) == 0 || conn.ctx.Err() != nil {
+		// Packets processed after the connection closed are dropped, like queuePacket drops them.
+		return
+	}
+	conn.packetBatches <- batch
 }
 
 // handle tries to handle the incoming packetData.
