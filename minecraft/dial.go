@@ -105,6 +105,9 @@ type Dialer struct {
 
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
+	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
+	// Conn.ReadPackets instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
+	EnableBatchReading bool
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
@@ -273,6 +276,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = math.MaxInt
 	conn.disablePacketHandling = d.DisablePacketHandling
+	conn.batchReading = d.EnableBatchReading
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
@@ -369,9 +373,11 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 			return
 		}
+		conn.reserveBatch(len(packets))
 		for _, data := range packets {
 			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
+				conn.flushBatch()
 				if cancelContext {
 					cancel(err)
 				} else {
@@ -404,6 +410,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 				cancelContext = false
 			}
 		}
+		conn.flushBatch()
 	}
 }
 

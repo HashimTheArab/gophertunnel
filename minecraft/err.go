@@ -9,6 +9,8 @@ import (
 )
 
 var errBufferTooSmall = errors.New("a message sent was larger than the buffer used to receive the message into")
+var errBatchReadingDisabled = errors.New("batch reading is not enabled for this connection")
+var errSinglePacketReadInBatchMode = errors.New("single-packet reads are unavailable while batch reading is enabled")
 
 // TransferError is returned when a server transfers the connection before the
 // login sequence completes.
