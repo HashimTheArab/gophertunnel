@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -354,6 +356,119 @@ func TestReceiveDisconnectPreservesPacketReason(t *testing.T) {
 	if legacyErr.Error() != "Server Full" {
 		t.Fatalf("legacy error = %q, want Server Full", legacyErr.Error())
 	}
+}
+
+func TestAbortCancelsContextAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not cancel connection context")
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := peer.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("peer read error = %v, want terminal close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer read remained blocked after Abort")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("second Abort: %v", err)
+	}
+}
+
+func TestAbortUnblocksCloseStuckFlushing(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	observed := &writeObservedConn{Conn: client, started: make(chan struct{})}
+	conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case <-observed.started:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not begin its flush")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not unblock Close")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection context remained active")
+	}
+}
+
+func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	panicking := &panicWriteConn{Conn: client, closed: make(chan struct{})}
+	conn := newConn(panicking, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	err := conn.Close()
+	if err == nil || !strings.Contains(err.Error(), "panic flushing connection") {
+		t.Fatalf("Close error = %v, want recovered flush panic", err)
+	}
+	select {
+	case <-panicking.closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left raw transport open")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left context active")
+	}
+}
+
+type writeObservedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeObservedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+type panicWriteConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *panicWriteConn) Write([]byte) (int, error) {
+	panic("write panic")
+}
+
+func (c *panicWriteConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 func TestClientToServerHandshakeMarksComplete(t *testing.T) {
