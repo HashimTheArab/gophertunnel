@@ -116,7 +116,7 @@ type ListenConfig struct {
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
-	// Conn.ReadPackets instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
+	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
 
 	// PacketFunc is called whenever a packet is read from or written to a connection delivered through ConnHandler or
@@ -319,7 +319,7 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
-// use Conn.ReadPacket (or Conn.ReadPackets when batch reading is enabled) and Conn.WritePacket.
+// use Conn.ReadPacket (or Conn.ReadBatch when batch reading is enabled) and Conn.WritePacket.
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-listener.incoming

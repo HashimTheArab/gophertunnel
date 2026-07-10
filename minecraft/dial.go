@@ -106,7 +106,7 @@ type Dialer struct {
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
-	// Conn.ReadPackets instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
+	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
