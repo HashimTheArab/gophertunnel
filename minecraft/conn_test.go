@@ -187,54 +187,61 @@ func TestReadPacketsStopsAfterConnClosingDecodeError(t *testing.T) {
 }
 
 func TestReadPacketsDeliversPacketsBeforeDisconnect(t *testing.T) {
-	client, serverConn := net.Pipe()
-	defer client.Close()
-	defer serverConn.Close()
-
-	// A dialer-side conn: its pool contains Disconnect, so receiving one closes the connection.
-	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
-	defer conn.Close()
-	conn.pool = conn.proto.Packets(false)
-	conn.batchReading = true
-	conn.loggedIn = true
-
-	type result struct {
-		packets []packet.Packet
-		err     error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		packets, err := conn.ReadPackets()
-		resultCh <- result{packets: packets, err: err}
-	}()
-
-	frame, err := encodePacket(&packet.Unknown{PacketID: 777})
+	packetFrame, err := encodePacket(&packet.Unknown{PacketID: 777})
 	if err != nil {
 		t.Fatalf("encode packet: %v", err)
 	}
-	if err := conn.receive(frame); err != nil {
-		t.Fatalf("receive packet: %v", err)
-	}
-	if frame, err = encodePacket(&packet.Disconnect{}); err != nil {
+	disconnectFrame, err := encodePacket(&packet.Disconnect{})
+	if err != nil {
 		t.Fatalf("encode disconnect: %v", err)
 	}
-	if err := conn.receive(frame); err != nil {
-		t.Fatalf("receive disconnect: %v", err)
-	}
 
-	select {
-	case got := <-resultCh:
-		if got.err != nil {
-			t.Fatalf("ReadPackets lost the packets before the disconnect: %v", got.err)
+	// The batch is flushed and the context cancelled from the same goroutine, so a reader already
+	// blocked on ReadPackets sees both ready at once. Repeat with a short pause so the reader reaches
+	// the blocking select before the disconnect arrives, exposing the race.
+	for range 50 {
+		client, serverConn := net.Pipe()
+
+		// A dialer-side conn: its pool contains Disconnect, so receiving one closes the connection.
+		conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+		conn.pool = conn.proto.Packets(false)
+		conn.batchReading = true
+		conn.loggedIn = true
+
+		type result struct {
+			packets []packet.Packet
+			err     error
 		}
-		if len(got.packets) != 1 || got.packets[0].ID() != 777 {
-			t.Fatalf("pre-disconnect batch IDs = %v, want [777]", packetIDs(got.packets))
+		resultCh := make(chan result, 1)
+		go func() {
+			packets, err := conn.ReadPackets()
+			resultCh <- result{packets: packets, err: err}
+		}()
+		time.Sleep(time.Millisecond)
+
+		if err := conn.receive(packetFrame); err != nil {
+			t.Fatalf("receive packet: %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("ReadPackets did not return the batch preceding the disconnect")
-	}
-	if _, err := conn.ReadPackets(); err == nil {
-		t.Fatal("ReadPackets after disconnect returned no error")
+		if err := conn.receive(disconnectFrame); err != nil {
+			t.Fatalf("receive disconnect: %v", err)
+		}
+
+		select {
+		case got := <-resultCh:
+			if got.err != nil {
+				t.Fatalf("ReadPackets lost the packets before the disconnect: %v", got.err)
+			}
+			if len(got.packets) != 1 || got.packets[0].ID() != 777 {
+				t.Fatalf("pre-disconnect batch IDs = %v, want [777]", packetIDs(got.packets))
+			}
+		case <-time.After(time.Second):
+			t.Fatal("ReadPackets did not return the batch preceding the disconnect")
+		}
+		if _, err := conn.ReadPackets(); err == nil {
+			t.Fatal("ReadPackets after disconnect returned no error")
+		}
+		_ = conn.Close()
+		_ = serverConn.Close()
 	}
 }
 
