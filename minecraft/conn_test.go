@@ -151,6 +151,42 @@ func TestReadPacketsMergesDeferredAndCollectedFromSameBatch(t *testing.T) {
 	}
 }
 
+func TestReadPacketsDropsPacketsCollectedAfterClose(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	// A dialer-side conn: its pool contains Disconnect, so receiving one closes the connection.
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+
+	disconnectFrame, err := encodePacket(&packet.Disconnect{})
+	if err != nil {
+		t.Fatalf("encode disconnect: %v", err)
+	}
+	gameplayFrame, err := encodePacket(&packet.Unknown{PacketID: 778})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
+
+	// A batch [Disconnect, gameplay]: the disconnect closes the connection, so the gameplay packet
+	// after it must be dropped, matching single-packet mode.
+	if err := conn.receive(disconnectFrame); err != nil {
+		t.Fatalf("receive disconnect: %v", err)
+	}
+	if err := conn.receive(gameplayFrame); err != nil {
+		t.Fatalf("receive gameplay: %v", err)
+	}
+	conn.flushBatch()
+
+	if packets, err := conn.ReadPackets(); err == nil {
+		t.Fatalf("ReadPackets delivered post-close packets %v, want a close error", packetIDs(packets))
+	}
+}
+
 func TestReadPacketsOrdersDeferredAfterQueuedBatches(t *testing.T) {
 	client, serverConn := net.Pipe()
 	defer client.Close()
