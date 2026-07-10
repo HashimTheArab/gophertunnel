@@ -109,11 +109,15 @@ type ListenConfig struct {
 	AfterHandshake func(c *Conn) error
 
 	// ConnHandler is called when a connection is ready for caller-owned packet handling. If set, ready connections
-	// are delivered to ConnHandler instead of Listener.Accept.
+	// are delivered to ConnHandler instead of Listener.Accept. The handler runs on its own goroutine and may block
+	// reading the connection; returning a non-nil error closes the connection.
 	ConnHandler func(c *Conn) error
 
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
+	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
+	// Conn.ReadPackets instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
+	EnableBatchReading bool
 
 	// PacketFunc is called whenever a packet is read from or written to a connection delivered through ConnHandler or
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the Login
@@ -323,7 +327,7 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
-// use the Conn.ReadPacket() and Conn.WritePacket() methods.
+// use Conn.ReadPacket (or Conn.ReadPackets when batch reading is enabled) and Conn.WritePacket.
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-listener.incoming
@@ -469,6 +473,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
+	conn.batchReading = listener.cfg.EnableBatchReading
 
 	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
 		// The server was full. We kick the player immediately and close the connection.
@@ -509,16 +514,23 @@ func (listener *Listener) handleConn(conn *Conn) {
 			}
 			return
 		}
+		conn.reserveBatch(len(packets))
+		publishBatch := false
 		for _, data := range packets {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			passthroughReadyBefore := conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				conn.log.Error(err.Error())
+				conn.flushBatch()
+				if publishBatch {
+					listener.deliverConn(conn)
+				}
 				return
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
 					conn.log.Error(err.Error())
+					conn.flushBatch()
 					return
 				}
 			}
@@ -526,9 +538,19 @@ func (listener *Listener) handleConn(conn *Conn) {
 			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
 				publish = true
 			}
-			if publish && !listener.deliverConn(conn) {
-				return
+			if publish {
+				if conn.batchReading {
+					publishBatch = true
+				} else if !listener.deliverConn(conn) {
+					return
+				}
 			}
+		}
+		// In batch-reading mode, the connection is published only after its batch has been flushed, so
+		// the owner can immediately read the batch that completed the login.
+		conn.flushBatch()
+		if publishBatch && !listener.deliverConn(conn) {
+			return
 		}
 	}
 }
@@ -537,10 +559,14 @@ func (listener *Listener) handleConn(conn *Conn) {
 // connections delivered through it are not published to listener.incoming.
 func (listener *Listener) deliverConn(conn *Conn) bool {
 	if listener.cfg.ConnHandler != nil {
-		if err := listener.cfg.ConnHandler(conn); err != nil {
-			conn.log.Error(err.Error())
-			return false
-		}
+		// The handler runs on its own goroutine so that it may block reading the connection without
+		// stalling the goroutine that queues its incoming packets.
+		go func() {
+			if err := listener.cfg.ConnHandler(conn); err != nil {
+				conn.log.Error(err.Error())
+				_ = conn.Close()
+			}
+		}()
 		return true
 	}
 	select {
