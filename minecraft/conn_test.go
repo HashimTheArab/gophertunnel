@@ -125,6 +125,34 @@ func TestReadPacketsPreservesDeferredBatchBoundaries(t *testing.T) {
 	}
 }
 
+func TestReadPacketsMergesDeferredAndCollectedFromSameBatch(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	// One wire batch where a packet was deferred during login and a later packet was collected after
+	// login completed must map to a single ReadPackets result, in wire order.
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 701}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	packets, err := conn.ReadPackets()
+	if err != nil {
+		t.Fatalf("ReadPackets: %v", err)
+	}
+	if ids := packetIDs(packets); len(ids) != 2 || ids[0] != 700 || ids[1] != 701 {
+		t.Fatalf("ReadPackets IDs = %v, want [700 701] in one batch", ids)
+	}
+	conn.readDeadline = time.After(10 * time.Millisecond)
+	if extra, err := conn.ReadPackets(); err == nil {
+		t.Fatalf("wire batch was split: second ReadPackets returned %v", packetIDs(extra))
+	}
+}
+
 func TestReadPacketsOrdersDeferredAfterQueuedBatches(t *testing.T) {
 	client, serverConn := net.Pipe()
 	defer client.Close()
