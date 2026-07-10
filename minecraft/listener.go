@@ -522,6 +522,9 @@ func (listener *Listener) handleConn(conn *Conn) {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
 					conn.log.Error(err.Error())
 					conn.flushBatch()
+					if publishBatch {
+						listener.deliverConn(conn)
+					}
 					return
 				}
 			}

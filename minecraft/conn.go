@@ -692,16 +692,26 @@ func (conn *Conn) ReadPackets() ([]packet.Packet, error) {
 		batch, ok := conn.takeDeferredBatch()
 		if !ok {
 			// Prefer batches already queued over reporting a closed connection or an expired deadline,
-			// so that packets received before a disconnect are still delivered.
+			// so that packets received before a disconnect are still delivered. A batch is flushed
+			// before the context is cancelled, so once either fires a queued batch is already visible
+			// and a final non-blocking receive drains it ahead of the error.
 			select {
 			case batch = <-conn.packetBatches:
 			default:
 				select {
-				case <-conn.ctx.Done():
-					return nil, conn.closeErr("read packets")
-				case <-conn.readDeadline:
-					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
 				case batch = <-conn.packetBatches:
+				case <-conn.ctx.Done():
+					select {
+					case batch = <-conn.packetBatches:
+					default:
+						return nil, conn.closeErr("read packets")
+					}
+				case <-conn.readDeadline:
+					select {
+					case batch = <-conn.packetBatches:
+					default:
+						return nil, conn.wrap(context.DeadlineExceeded, "read packets")
+					}
 				}
 			}
 		}
