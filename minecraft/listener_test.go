@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -197,6 +198,59 @@ func TestListenerPongDataUsesStatusProviderSubtitle(t *testing.T) {
 	if status.ServerSubName != "Provider Subtitle" {
 		t.Fatalf("server subtitle = %q, want Provider Subtitle", status.ServerSubName)
 	}
+}
+
+func TestListenerPongDataPorts(t *testing.T) {
+	tests := []struct {
+		name         string
+		cfg          ListenConfig
+		addr         net.Addr
+		wantIPv4Port string
+		wantIPv6Port string
+	}{
+		{
+			name:         "address port",
+			addr:         addrPortAddr{port: 19132},
+			wantIPv4Port: "19132",
+			wantIPv6Port: "19132",
+		},
+		{
+			name:         "configured ports",
+			cfg:          ListenConfig{IPv4Port: 19132, IPv6Port: 19133},
+			addr:         addrPortAddr{port: 20000},
+			wantIPv4Port: "19132",
+			wantIPv6Port: "19133",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pongData []byte
+			tt.cfg.StatusProvider = NewStatusProvider("Minecraft Server", "Gophertunnel")
+			listener := &Listener{
+				cfg:      tt.cfg,
+				listener: fakeNetworkListener{addr: tt.addr, pongData: &pongData},
+			}
+			listener.updatePongData()
+
+			parts := splitPong(string(pongData))
+			if got := parts[10]; got != tt.wantIPv4Port {
+				t.Fatalf("IPv4 port = %q, want %q", got, tt.wantIPv4Port)
+			}
+			if got := parts[11]; got != tt.wantIPv6Port {
+				t.Fatalf("IPv6 port = %q, want %q", got, tt.wantIPv6Port)
+			}
+		})
+	}
+}
+
+type addrPortAddr struct {
+	port uint16
+}
+
+func (a addrPortAddr) Network() string { return "test" }
+func (a addrPortAddr) String() string  { return "test" }
+func (a addrPortAddr) AddrPort() netip.AddrPort {
+	return netip.AddrPortFrom(netip.IPv4Unspecified(), a.port)
 }
 
 func writePacket(w io.Writer, pk packet.Packet) error {
