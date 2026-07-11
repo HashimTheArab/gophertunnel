@@ -502,11 +502,13 @@ func (t *Token) Valid() bool {
 	return t.AuthorizationHeader != "" && t.now().Before(t.ValidUntil.Add(-expirationDelta))
 }
 
+// setServerTime anchors serverTime to the local monotonic clock.
 func (t *Token) setServerTime(serverTime time.Time) {
 	t.serverTime = serverTime
 	t.serverTimeReceivedAt = time.Now()
 }
 
+// now returns the current server time, falling back to local time.
 func (t *Token) now() time.Time {
 	if t.serverTime.IsZero() {
 		return time.Now()
