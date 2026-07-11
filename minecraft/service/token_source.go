@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/df-mc/go-playfab/v2"
 )
@@ -53,7 +54,7 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 
 	// Renewal authenticates with the existing token, so it only works before the
 	// token's hard expiry; otherwise, or on a rejected renewal, start fresh.
-	if s.token.Renewable() {
+	if tokenRenewable(s.token) {
 		if token, err := s.env.Renew(ctx, s.token, s.config.User); err == nil {
 			s.token = token
 			return s.token, nil
@@ -66,4 +67,10 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	}
 	s.token = token
 	return s.token, nil
+}
+
+// tokenRenewable reports whether tok can still authenticate a renewal request,
+// i.e. it has not passed its hard expiry (ValidUntil).
+func tokenRenewable(tok *Token) bool {
+	return tok != nil && tok.AuthorizationHeader != "" && time.Now().Before(tok.ValidUntil)
 }
