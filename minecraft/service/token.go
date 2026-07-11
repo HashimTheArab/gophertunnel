@@ -154,7 +154,10 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response body: %w", err)
 	}
-	validationTime := responseValidationTime(resp)
+	validationTime, hasServerTime := responseValidationTime(resp)
+	if result.Data != nil && hasServerTime {
+		result.Data.setServerTime(validationTime)
+	}
 	if result.Data == nil || result.Data.AuthorizationHeader == "" || !validationTime.Before(result.Data.ValidUntil.Add(-expirationDelta)) {
 		return nil, errors.New("minecraft/service: AuthorizationEnvironment: invalid token result")
 	}
@@ -198,7 +201,10 @@ func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response body: %w", err)
 	}
-	validationTime := responseValidationTime(resp)
+	validationTime, hasServerTime := responseValidationTime(resp)
+	if result.Data != nil && hasServerTime {
+		result.Data.setServerTime(validationTime)
+	}
 	if result.Data == nil || result.Data.AuthorizationHeader == "" || !validationTime.Before(result.Data.ValidUntil.Add(-expirationDelta)) {
 		return nil, errors.New("minecraft/service: invalid renew token result")
 	}
@@ -316,7 +322,7 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("decode response body: %w", err)
 	}
-	validationTime := responseValidationTime(resp)
+	validationTime, _ := responseValidationTime(resp)
 	if result.Data == nil || result.Data.SignedToken == "" || !validationTime.Before(result.Data.ValidUntil) {
 		return "", errors.New("minecraft/service: invalid multiplayer token result")
 	}
@@ -343,13 +349,13 @@ func (t *multiplayerToken) Valid() bool {
 	return t.SignedToken != "" && time.Now().Before(t.ValidUntil)
 }
 
-func responseValidationTime(resp *http.Response) time.Time {
+func responseValidationTime(resp *http.Response) (time.Time, bool) {
 	if resp != nil {
 		if t, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
-			return t
+			return t, true
 		}
 	}
-	return time.Now()
+	return time.Now(), false
 }
 
 // defaultUserConfig sets default values for some of the fields that is
@@ -434,6 +440,9 @@ type Token struct {
 
 	// Claims are the service-defined metadata claimed by the JWT token embedded in [Token.AuthorizationHeader].
 	Claims Claims `json:"-"`
+
+	serverTime           time.Time
+	serverTimeReceivedAt time.Time
 }
 
 // decodeClaims parses the JWT embedded in [Token.AuthorizationHeader] and
@@ -457,7 +466,7 @@ func decodeClaims(token *Token, validationTime time.Time) error {
 	if !validationTime.IsZero() {
 		expected.Time = validationTime
 	}
-	if err := token.Claims.ValidateWithLeeway(expected, serviceTokenClockSkew); err != nil {
+	if err := token.Claims.Validate(expected); err != nil {
 		return fmt.Errorf("validate JWT claims: %w", err)
 	}
 	return nil
@@ -486,13 +495,21 @@ func (c Claims) Validate(e jwt.Expected) error {
 
 const expirationDelta = time.Minute
 
-// serviceTokenClockSkew tolerates small clock drift when validating freshly
-// issued service-token claims.
-const serviceTokenClockSkew = 5 * time.Minute
-
 // Valid returns a bool indicating if the Token is valid.
 func (t *Token) Valid() bool {
-	return t.AuthorizationHeader != "" && time.Now().Before(t.ValidUntil.Add(-expirationDelta))
+	return t.AuthorizationHeader != "" && t.now().Before(t.ValidUntil.Add(-expirationDelta))
+}
+
+func (t *Token) setServerTime(serverTime time.Time) {
+	t.serverTime = serverTime
+	t.serverTimeReceivedAt = time.Now()
+}
+
+func (t *Token) now() time.Time {
+	if t.serverTime.IsZero() {
+		return time.Now()
+	}
+	return t.serverTime.Add(time.Since(t.serverTimeReceivedAt))
 }
 
 // SetAuthHeader sets an 'Authorization' header of the request to [Token.AuthorizationHeader].
