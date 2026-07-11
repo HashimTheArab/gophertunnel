@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -120,8 +121,8 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
-
-	resp, err := http.DefaultClient.Do(req)
+	
+	resp, err := auth.ContextClient(ctx).Do(req)
 	if err != nil {
 		return nil, err
 	}
