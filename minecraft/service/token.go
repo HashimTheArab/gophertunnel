@@ -475,6 +475,11 @@ func (t *Token) Valid() bool {
 	return t.AuthorizationHeader != "" && time.Now().Before(t.ValidUntil.Add(-expirationDelta))
 }
 
+// Renewable reports whether the Token can still authenticate a renewal request.
+func (t *Token) Renewable() bool {
+	return t != nil && t.AuthorizationHeader != "" && time.Now().Before(t.ValidUntil)
+}
+
 // SetAuthHeader sets an 'Authorization' header of the request to [Token.AuthorizationHeader].
 func (t *Token) SetAuthHeader(req *http.Request) {
 	req.Header.Set("Authorization", t.AuthorizationHeader)
