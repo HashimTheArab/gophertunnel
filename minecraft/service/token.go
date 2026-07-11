@@ -349,6 +349,8 @@ func (t *multiplayerToken) Valid() bool {
 	return t.SignedToken != "" && time.Now().Before(t.ValidUntil)
 }
 
+// responseValidationTime returns the service response time and whether it was
+// obtained from the Date header. It falls back to the local time otherwise.
 func responseValidationTime(resp *http.Response) (time.Time, bool) {
 	if resp != nil {
 		if t, err := http.ParseTime(resp.Header.Get("Date")); err == nil {
