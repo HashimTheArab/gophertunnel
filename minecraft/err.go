@@ -2,12 +2,29 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"net"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 var errBufferTooSmall = errors.New("a message sent was larger than the buffer used to receive the message into")
+
+// TransferError is returned when a server transfers the connection before the
+// login sequence completes.
+type TransferError struct {
+	Address     string
+	Port        uint16
+	ReloadWorld bool
+}
+
+// Error describes the pre-login transfer target.
+func (e *TransferError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("server transferred connection to %s:%d before login completed", e.Address, e.Port)
+}
 
 // wrap wraps the error passed into a net.OpError with the op as operation and returns it, or nil if the error
 // passed is nil.

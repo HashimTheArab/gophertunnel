@@ -968,6 +968,22 @@ func (conn *Conn) receive(data []byte) error {
 
 // handle tries to handle the incoming packetData.
 func (conn *Conn) handle(pkData *packetData) error {
+	if !conn.loggedIn && pkData.h.PacketID == packet.IDTransfer {
+		pks, err := pkData.decode(conn)
+		if err != nil {
+			return err
+		}
+		for _, pk := range pks {
+			if transfer, ok := pk.(*packet.Transfer); ok {
+				return &TransferError{
+					Address:     transfer.Address,
+					Port:        transfer.Port,
+					ReloadWorld: transfer.ReloadWorld,
+				}
+			}
+		}
+		return errors.New("decode pre-login transfer: protocol conversion omitted Transfer")
+	}
 	for _, id := range conn.expectedIDs.Load().([]uint32) {
 		if id == pkData.h.PacketID {
 			// If the packet was expected, so we handle it right now.
