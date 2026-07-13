@@ -136,7 +136,9 @@ type ClientData struct {
 	GUIScale int `json:"GuiScale"`
 	// FilterProfanity indicates if the client has profanity filtering enabled.
 	FilterProfanity bool
-	// ClientIsEditorCapable is a value to dictate if the player is capable of entering editor mode.
+	// ClientEditorConnectionIntent indicates how the client intends to connect to an editor world.
+	ClientEditorConnectionIntent int
+	// ClientIsEditorCapable specifies if the client supports editor features.
 	ClientIsEditorCapable bool
 	// LanguageCode is the language code of the player. It looks like 'en_UK'. It follows the ISO language
 	// codes, but hyphens ('-') are replaced with underscores. ('_')
@@ -249,8 +251,6 @@ type ClientData struct {
 	// This prevents unauthorized clients from connecting using only the host's connection details,
 	// such as its Player Messaging ID.
 	Nonce string `json:",omitempty"`
-	// ClientEditorConnectionIntent is the editor mode connection intent requested by the client.
-	ClientEditorConnectionIntent int
 }
 
 // PersonaPiece represents a piece of a persona skin. All pieces are sent separately.

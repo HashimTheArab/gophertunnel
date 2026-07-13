@@ -736,8 +736,8 @@ func (r *Reader) ShapeData(x *ShapeData) {
 	(*x).Marshal(r)
 }
 
-// CheckSliceLength validates a length prefix before a slice is allocated.
-func (r *Reader) CheckSliceLength(value uint32, max uint32) {
+// SliceLength validates a length prefix before a slice is allocated.
+func (r *Reader) SliceLength(value uint32, max uint32) {
 	if value > max && r.limitsEnabled {
 		r.panicf("slice length was too long: length of %v (max %v)", value, max)
 	}
@@ -746,6 +746,7 @@ func (r *Reader) CheckSliceLength(value uint32, max uint32) {
 	}
 }
 
+// checkRemaining checks that a field's declared length fits within the remaining packet payload.
 func (r *Reader) checkRemaining(length int, field string) {
 	if length < 0 {
 		r.panicf("%s length was negative: %v", field, length)
