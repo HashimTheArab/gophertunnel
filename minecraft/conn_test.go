@@ -59,6 +59,43 @@ func TestStartGameWritesPropertyData(t *testing.T) {
 	}
 }
 
+func TestGameDataRoundTripsDayCycleLockTime(t *testing.T) {
+	t.Parallel()
+
+	const want int32 = 12_345
+	data := GameDataFromStartGame(&packet.StartGame{DayCycleLockTime: want})
+	if data.DayCycleLockTime != want {
+		t.Fatalf("GameData.DayCycleLockTime = %d, want %d", data.DayCycleLockTime, want)
+	}
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var got int32
+	conn.packetFunc = func(header packet.Header, payload []byte, _, _ net.Addr) {
+		if header.PacketID != packet.IDStartGame {
+			return
+		}
+		var start packet.StartGame
+		start.Marshal(protocol.NewReader(bytes.NewBuffer(payload), 0, false))
+		got = start.DayCycleLockTime
+	}
+
+	if err := conn.SendStartGame(data); err != nil {
+		t.Fatalf("SendStartGame: %v", err)
+	}
+	if got != want {
+		t.Fatalf("StartGame.DayCycleLockTime = %d, want %d", got, want)
+	}
+}
+
 func TestResourcePacksInfoUsesConfiguredWorldTemplateFields(t *testing.T) {
 	t.Parallel()
 
