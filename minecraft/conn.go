@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -946,7 +947,11 @@ func (conn *Conn) Disconnect(message string) error {
 // DisconnectPacket disconnects the connection by first sending pk, and closing
 // the connection after.
 func (conn *Conn) DisconnectPacket(pk packet.Disconnect) error {
-	_ = conn.WritePacketImmediate(&pk)
+	// Best-effort: the write blocks on the underlying transport (and on encMu held
+	// by other blocked writers), so bound it like the close steps that follow.
+	deadline, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	_ = closeBounded(deadline, func() error { return conn.WritePacketImmediate(&pk) })
 	return conn.close(conn.closeErr(conn.disconnectPacketMessage(&pk)))
 }
 
@@ -2100,12 +2105,39 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
+// closeTimeout bounds each best-effort step of connection teardown (final flush,
+// disconnect packet write, underlying close). Close and Disconnect run on teardown
+// paths that must return, but the underlying transport may be wedged on network
+// I/O without supporting write deadlines (e.g. a NetherNet connection whose WebRTC
+// peer died), so each step is abandoned if it does not complete in time.
+const closeTimeout = 3 * time.Second
+
+// closeBounded runs fn and waits for it to return or for deadline to expire,
+// returning fn's error or os.ErrDeadlineExceeded on expiry. Steps of one teardown
+// share a deadline context so a wedged early step does not stack per-step waits.
+// A timed-out fn is left running: teardown proceeds, and closing the underlying
+// connection typically unblocks it.
+func closeBounded(deadline context.Context, fn func() error) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- fn()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-deadline.Done():
+		return os.ErrDeadlineExceeded
+	}
+}
+
 func (conn *Conn) close(cause error) error {
 	var err error
 	conn.once.Do(func() {
-		err = conn.Flush()
+		deadline, cancel := context.WithTimeout(context.Background(), closeTimeout)
+		defer cancel()
+		err = closeBounded(deadline, conn.Flush)
 		conn.cancelFunc(cause)
-		_ = conn.conn.Close()
+		_ = closeBounded(deadline, conn.conn.Close)
 	})
 	return err
 }

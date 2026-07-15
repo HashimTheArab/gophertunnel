@@ -797,3 +797,65 @@ func testResourcePackArchive(t *testing.T, id uuid.UUID) []byte {
 	}
 	return buf.Bytes()
 }
+
+// wedgedConn is a net.Conn whose writes and close block until the test releases
+// them, simulating a transport wedged on network I/O that does not support
+// write deadlines (e.g. a NetherNet connection whose WebRTC peer died).
+type wedgedConn struct {
+	net.Conn
+	release chan struct{}
+}
+
+func (c *wedgedConn) Write([]byte) (int, error) {
+	<-c.release
+	return 0, net.ErrClosed
+}
+
+func (c *wedgedConn) Close() error {
+	<-c.release
+	return nil
+}
+
+// newWedgedConn returns a Conn over a wedged transport with one packet buffered,
+// so teardown has something to flush into the blocked Write.
+func newWedgedConn(t *testing.T) (*Conn, chan struct{}) {
+	t.Helper()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	conn := newConn(&wedgedConn{Conn: client, release: release}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if err := conn.WritePacket(&packet.Text{Message: "buffered"}); err != nil {
+		t.Fatalf("WritePacket: %v", err)
+	}
+	return conn, release
+}
+
+// Close and Disconnect are called from teardown paths (proxy stop, relay close)
+// that must return even when the underlying transport is wedged.
+func TestConnCloseBoundedOnWedgedTransport(t *testing.T) {
+	t.Parallel()
+
+	for name, teardown := range map[string]func(*Conn) error{
+		"Close":      func(c *Conn) error { return c.Close() },
+		"Disconnect": func(c *Conn) error { return c.Disconnect("Proxy stopped") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			conn, _ := newWedgedConn(t)
+
+			done := make(chan struct{})
+			go func() {
+				_ = teardown(conn)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(3 * closeTimeout):
+				t.Fatalf("%s did not return with a wedged transport, want return within the close bound", name)
+			}
+		})
+	}
+}
