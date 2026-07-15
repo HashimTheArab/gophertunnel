@@ -28,8 +28,10 @@ type Dialer struct {
 	HTTPClient *http.Client
 	// Log is the logger used to log messages at various levels.
 	Log *slog.Logger
-	// NetworkID specifies the local NetherNet network ID. If zero, a random value will
-	// be automatically set from [rand.Uint64].
+	// NetworkID specifies a unique ID for the NetherNet network. If zero, a random value will
+	// be automatically set from [rand.Uint64]. When listening on peer-to-peer worlds, this value
+	// must match the NetworkID advertised in [p2p.Connection.NetherNetID] in order to successfully
+	// negotiate with vanilla clients.
 	NetworkID string
 	// IgnoreDeliveryNotification disables waiting for the DeliveryNotification
 	// acknowledgement after sending a signal to a remote peer.

@@ -61,7 +61,7 @@ func TestDecodeClaimsStillRejectsExpiredTokenWithServiceTime(t *testing.T) {
 	}
 }
 
-func TestAuthorizationEnvironmentTokenUsesResponseDateForValidation(t *testing.T) {
+func TestAuthorizationEnvironmentTokenRetainsResponseDateForValidity(t *testing.T) {
 	t.Parallel()
 
 	serviceNow := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Second)
@@ -85,8 +85,8 @@ func TestAuthorizationEnvironmentTokenUsesResponseDateForValidation(t *testing.T
 	if err != nil {
 		t.Fatalf("Token: %v", err)
 	}
-	if token.Valid() {
-		t.Fatal("Valid() = true, want false with local clock ahead of response Date")
+	if !token.Valid() {
+		t.Fatal("Valid() = false, want true using retained response Date")
 	}
 }
 

@@ -388,6 +388,7 @@ func EncodeOffline(identityData IdentityData, data ClientData, key *ecdsa.Privat
 	})
 
 	req := &request{AuthenticationType: 2}
+	claims.Audience = jwt.Audience{"api://auth-minecraft-services/multiplayer"}
 	req.Token, _ = signJSONWebToken(signer, tokenClaims{
 		Claims:          claims,
 		ClientPublicKey: keyData,
