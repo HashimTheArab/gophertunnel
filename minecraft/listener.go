@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -127,9 +128,8 @@ type ListenConfig struct {
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
 
-	// IPv4Port and IPv6Port specify the ports to advertise in the pong data for LAN discovery.
-	// If 0, the listener's actual port is used. This is useful when running separate IPv4 and IPv6
-	// listeners on different ports (e.g., 19132 for IPv4, 19133 for IPv6).
+	// IPv4Port and IPv6Port specify the connection ports advertised in the pong data. If 0, the listener's actual
+	// port is used. These fields do not control which addresses the listener binds or receives LAN discovery on.
 	IPv4Port uint16
 	IPv6Port uint16
 
@@ -379,11 +379,12 @@ func (listener *Listener) PlayerCount() int {
 // method, it will directly call the method after updating its pong data.
 func (listener *Listener) updatePongData() {
 	var port uint16
-	if addr, ok := listener.Addr().(*net.UDPAddr); ok {
-		port = uint16(addr.Port)
+	if addr, ok := listener.Addr().(interface {
+		AddrPort() netip.AddrPort
+	}); ok {
+		port = addr.AddrPort().Port()
 	}
 
-	// Use configured ports for LAN discovery, or fall back to actual port
 	ipv4Port := listener.cfg.IPv4Port
 	if ipv4Port == 0 {
 		ipv4Port = port
