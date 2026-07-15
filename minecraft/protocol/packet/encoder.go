@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
@@ -15,15 +16,17 @@ const maxPooledEncoderBufferCap = 1 << 20
 
 // BatchEncodeStats describes one encoded packet batch.
 type BatchEncodeStats struct {
-	PacketCount      int
-	UncompressedLen  int
-	OutputLen        int
-	MaxCompressedLen int
-	BufferCap        int
-	CompressionID    uint16
-	Compressed       bool
-	BelowThreshold   bool
-	PooledBuffer     bool
+	PacketCount         int
+	UncompressedLen     int
+	OutputLen           int
+	MaxCompressedLen    int
+	BufferCap           int
+	CompressionID       uint16
+	Compressed          bool
+	BelowThreshold      bool
+	PooledBuffer        bool
+	EncodeDuration      time.Duration
+	CompressionDuration time.Duration
 }
 
 // BatchEncodeObserver is called after a packet batch has been encoded.
@@ -108,7 +111,9 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	compression := encoder.compression
 	observer := encoder.observer
 	var stats BatchEncodeStats
+	var encodeStart time.Time
 	if observer != nil {
+		encodeStart = time.Now()
 		stats.PacketCount = len(packets)
 		stats.CompressionID = CompressionAlgorithmNone
 	}
@@ -141,6 +146,10 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 				stats.BelowThreshold = true
 			}
 		} else {
+			var compressionStart time.Time
+			if observer != nil {
+				compressionStart = time.Now()
+			}
 			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
 			_, _ = compressedBuf.Write(encoder.header)
 			compressionID := compression.EncodeCompression()
@@ -168,6 +177,7 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 				return fmt.Errorf("compress batch: %w", err)
 			}
 			if observer != nil {
+				stats.CompressionDuration = time.Since(compressionStart)
 				stats.Compressed = true
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
@@ -184,6 +194,7 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	}
 	if observer != nil {
 		stats.OutputLen = len(data) - len(encoder.header)
+		stats.EncodeDuration = time.Since(encodeStart)
 		observer(stats)
 	}
 	if _, err := encoder.w.Write(data); err != nil {
