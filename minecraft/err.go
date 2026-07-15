@@ -8,6 +8,8 @@ import (
 )
 
 var errBufferTooSmall = errors.New("a message sent was larger than the buffer used to receive the message into")
+var errBatchReadingDisabled = errors.New("batch reading is not enabled for this connection")
+var errSinglePacketReadInBatchMode = errors.New("single-packet reads are unavailable while batch reading is enabled")
 
 // wrap wraps the error passed into a net.OpError with the op as operation and returns it, or nil if the error
 // passed is nil.
