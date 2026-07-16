@@ -248,6 +248,25 @@ func TestReadBatchStopsAfterConnClosingDecodeError(t *testing.T) {
 	}
 }
 
+func TestDecodePacketDoesNotApplyDisconnectPolicy(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.disconnectOnInvalidPacket = true
+
+	data := &packetData{h: &packet.Header{PacketID: packet.IDText}, payload: bytes.NewBuffer([]byte{0xff})}
+	if _, err := data.decodePacket(conn); err == nil {
+		t.Fatal("decodePacket accepted malformed packet")
+	}
+	if conn.ctx.Err() != nil {
+		t.Fatal("decodePacket applied the connection disconnect policy")
+	}
+}
+
 func TestReadBatchDeliversPacketsBeforeDisconnect(t *testing.T) {
 	packetFrame, err := encodePacket(&packet.Unknown{PacketID: 777})
 	if err != nil {

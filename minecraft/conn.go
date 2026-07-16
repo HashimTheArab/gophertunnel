@@ -1176,7 +1176,7 @@ func (conn *Conn) handle(pkData *packetData) error {
 				full:    pkData.full,
 				payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
 			}
-			pks, err := probe.decodeWithInvalidPacketPolicy(conn, false)
+			pks, err := probe.decodePacket(conn)
 			if err == nil {
 				if err := preLoginTransferError(pks); err != nil {
 					return err
