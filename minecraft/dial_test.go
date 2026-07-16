@@ -58,14 +58,68 @@ func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 }
 
 func TestDialContextReturnsRemappedPreLoginTransferError(t *testing.T) {
-	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+	for _, test := range []struct {
+		name       string
+		transferID uint32
+	}{
+		{name: "unexpected ID", transferID: remappedTransferID},
+		{name: "currently expected ID", transferID: packet.IDItemRegistry},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+			network := newScriptedDialNetwork(func(conn net.Conn) error {
+				decoder, encoder, err := startScriptedLogin(conn)
+				if err != nil {
+					return err
+				}
+				if err := encodeScriptedPacketWithID(encoder, test.transferID, want); err != nil {
+					return fmt.Errorf("write remapped Transfer: %w", err)
+				}
+				return expectScriptedClose(conn, decoder)
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			conn, err := (Dialer{
+				FlushRate: -1,
+				Protocol: remappedTransferProtocol{
+					Protocol:   DefaultProtocol,
+					transferID: test.transferID,
+				},
+			}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+			if conn != nil {
+				_ = conn.Close()
+				t.Fatal("DialContextNetwork returned a connection after remapped pre-login Transfer")
+			}
+			var transferErr *TransferError
+			if !errors.As(err, &transferErr) {
+				t.Fatalf("DialContextNetwork error = %v, want *TransferError", err)
+			}
+			if scriptErr := <-network.done; scriptErr != nil {
+				t.Fatalf("scripted server: %v (dial error: %v)", scriptErr, err)
+			}
+		})
+	}
+}
+
+func TestDialContextDoesNotTreatReusedLatestTransferIDAsTransfer(t *testing.T) {
 	network := newScriptedDialNetwork(func(conn net.Conn) error {
 		decoder, encoder, err := startScriptedLogin(conn)
 		if err != nil {
 			return err
 		}
-		if err := encodeScriptedPacketWithID(encoder, remappedTransferID, want); err != nil {
-			return fmt.Errorf("write remapped Transfer: %w", err)
+		if err := encodeScriptedPacketWithID(encoder, packet.IDTransfer, &packet.ItemRegistry{}); err != nil {
+			return fmt.Errorf("write packet using latest Transfer ID: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
 		}
 		return expectScriptedClose(conn, decoder)
 	})
@@ -74,18 +128,20 @@ func TestDialContextReturnsRemappedPreLoginTransferError(t *testing.T) {
 	defer cancel()
 	conn, err := (Dialer{
 		FlushRate: -1,
-		Protocol:  remappedTransferProtocol{Protocol: DefaultProtocol},
-	}).DialContextNetwork(ctx, network, "zeqa.net:19132")
-	if conn != nil {
-		_ = conn.Close()
-		t.Fatal("DialContextNetwork returned a connection after remapped pre-login Transfer")
+		Protocol: remappedTransferProtocol{
+			Protocol:              DefaultProtocol,
+			transferID:            remappedTransferID,
+			reuseLatestTransferID: true,
+		},
+	}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork reused latest Transfer ID: %v", err)
 	}
-	var transferErr *TransferError
-	if !errors.As(err, &transferErr) {
-		t.Fatalf("DialContextNetwork error = %v, want *TransferError", err)
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 	if scriptErr := <-network.done; scriptErr != nil {
-		t.Fatalf("scripted server: %v (dial error: %v)", scriptErr, err)
+		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
 
@@ -292,13 +348,18 @@ const remappedTransferID = 0x3ff
 
 type remappedTransferProtocol struct {
 	Protocol
+	transferID            uint32
+	reuseLatestTransferID bool
 }
 
 func (p remappedTransferProtocol) Packets(listener bool) packet.Pool {
 	pool := p.Protocol.Packets(listener)
 	if !listener {
 		delete(pool, packet.IDTransfer)
-		pool[remappedTransferID] = func() packet.Packet { return &packet.Transfer{} }
+		if p.reuseLatestTransferID {
+			pool[packet.IDTransfer] = func() packet.Packet { return &packet.ItemRegistry{} }
+		}
+		pool[p.transferID] = func() packet.Packet { return &packet.Transfer{} }
 	}
 	return pool
 }
