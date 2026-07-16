@@ -1155,20 +1155,7 @@ func (conn *Conn) flushBatch() {
 // handle tries to handle the incoming packetData.
 func (conn *Conn) handle(pkData *packetData) error {
 	if !conn.loggedIn && pkData.h.PacketID == packet.IDTransfer {
-		pks, err := pkData.decode(conn)
-		if err != nil {
-			return err
-		}
-		for _, pk := range pks {
-			if transfer, ok := pk.(*packet.Transfer); ok {
-				return &TransferError{
-					Address:     transfer.Address,
-					Port:        transfer.Port,
-					ReloadWorld: transfer.ReloadWorld,
-				}
-			}
-		}
-		return errors.New("decode pre-login transfer: protocol conversion omitted Transfer")
+		return conn.preLoginTransferError(pkData, true)
 	}
 	for _, id := range conn.expectedIDs.Load().([]uint32) {
 		if id == pkData.h.PacketID {
@@ -1180,9 +1167,46 @@ func (conn *Conn) handle(pkData *packetData) error {
 			return conn.handleMultiple(pks)
 		}
 	}
+	if !conn.loggedIn {
+		if _, registered := conn.pool[pkData.h.PacketID]; registered {
+			probe := &packetData{
+				h:       pkData.h,
+				full:    pkData.full,
+				payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+			}
+			if err := conn.preLoginTransferError(probe, false); err != nil {
+				return err
+			}
+		}
+	}
 	// This is not the packet we expected next in the login sequence. We push it back so that it may
 	// be handled by the user.
 	conn.deferPacket(pkData)
+	return nil
+}
+
+// preLoginTransferError decodes packet data through the active protocol and returns a TransferError if conversion
+// produces a Transfer packet. If strict is true, a decode or conversion that omits Transfer is also an error.
+func (conn *Conn) preLoginTransferError(pkData *packetData, strict bool) error {
+	pks, err := pkData.decodeWithInvalidPacketPolicy(conn, strict && conn.disconnectOnInvalidPacket)
+	if err != nil {
+		if strict {
+			return err
+		}
+		return nil
+	}
+	for _, pk := range pks {
+		if transfer, ok := pk.(*packet.Transfer); ok {
+			return &TransferError{
+				Address:     transfer.Address,
+				Port:        transfer.Port,
+				ReloadWorld: transfer.ReloadWorld,
+			}
+		}
+	}
+	if strict {
+		return errors.New("decode pre-login transfer: protocol conversion omitted Transfer")
+	}
 	return nil
 }
 

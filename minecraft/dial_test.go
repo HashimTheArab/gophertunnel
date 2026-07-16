@@ -57,6 +57,38 @@ func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	}
 }
 
+func TestDialContextReturnsRemappedPreLoginTransferError(t *testing.T) {
+	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPacketWithID(encoder, remappedTransferID, want); err != nil {
+			return fmt.Errorf("write remapped Transfer: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{
+		FlushRate: -1,
+		Protocol:  remappedTransferProtocol{Protocol: DefaultProtocol},
+	}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("DialContextNetwork returned a connection after remapped pre-login Transfer")
+	}
+	var transferErr *TransferError
+	if !errors.As(err, &transferErr) {
+		t.Fatalf("DialContextNetwork error = %v, want *TransferError", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v (dial error: %v)", scriptErr, err)
+	}
+}
+
 func TestListenConnPreservesPreLoginTransferCloseCause(t *testing.T) {
 	client, server := net.Pipe()
 	t.Cleanup(func() {
@@ -222,6 +254,15 @@ func encodeScriptedPackets(encoder *packet.Encoder, packets ...packet.Packet) er
 	return encoder.Encode(encoded)
 }
 
+func encodeScriptedPacketWithID(encoder *packet.Encoder, id uint32, pk packet.Packet) error {
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: id}).Write(buf); err != nil {
+		return err
+	}
+	pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	return encoder.Encode([][]byte{buf.Bytes()})
+}
+
 func expectScriptedClose(conn net.Conn, decoder *packet.Decoder) error {
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed) {
@@ -245,6 +286,21 @@ func expectScriptedClose(conn net.Conn, decoder *packet.Decoder) error {
 type scriptedDialNetwork struct {
 	script func(net.Conn) error
 	done   chan error
+}
+
+const remappedTransferID = 0x3ff
+
+type remappedTransferProtocol struct {
+	Protocol
+}
+
+func (p remappedTransferProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		delete(pool, packet.IDTransfer)
+		pool[remappedTransferID] = func() packet.Packet { return &packet.Transfer{} }
+	}
+	return pool
 }
 
 func newScriptedDialNetwork(script func(net.Conn) error) *scriptedDialNetwork {

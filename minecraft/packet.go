@@ -40,6 +40,12 @@ func (err unknownPacketError) Error() string {
 
 // decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
 func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
+	return p.decodeWithInvalidPacketPolicy(conn, conn.disconnectOnInvalidPacket)
+}
+
+// decodeWithInvalidPacketPolicy decodes p while allowing callers that only probe a cloned packet to avoid closing
+// the connection for malformed data that would otherwise remain deferred.
+func (p *packetData) decodeWithInvalidPacketPolicy(conn *Conn, disconnectOnInvalidPacket bool) (pks []packet.Packet, err error) {
 	// Attempt to fetch the packet with the right packet ID from the pool.
 	pkFunc, ok := conn.pool[p.h.PacketID]
 	var pk packet.Packet
@@ -58,7 +64,7 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 		if recoveredErr := recover(); recoveredErr != nil {
 			err = fmt.Errorf("decode packet %T: %w", pk, recoveredErr.(error))
 		}
-		if err != nil && !errors.Is(err, unknownPacketError{}) && conn.disconnectOnInvalidPacket {
+		if err != nil && !errors.Is(err, unknownPacketError{}) && disconnectOnInvalidPacket {
 			_ = conn.Close()
 		}
 	}()
@@ -68,7 +74,7 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 	if p.payload.Len() != 0 {
 		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, p.payload.Len(), p.payload.Bytes())
 	}
-	if conn.disconnectOnInvalidPacket && err != nil {
+	if disconnectOnInvalidPacket && err != nil {
 		return nil, err
 	}
 	return conn.proto.ConvertToLatest(pk, conn), err
