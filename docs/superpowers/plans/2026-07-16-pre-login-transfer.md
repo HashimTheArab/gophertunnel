@@ -54,7 +54,29 @@ Run: `gofmt -w minecraft/conn.go minecraft/dial_test.go minecraft/err.go`, `go t
 
 Expected: all commands exit 0.
 
-### Task 2: Live Zeqa validation and publication
+### Task 2: Duplicate login-success handling
+
+**Files:**
+- Modify: `minecraft/dial_test.go`
+- Modify: `minecraft/conn.go`
+
+**Interfaces:**
+- Consumes: `packet.PlayStatusLoginSuccess` during the client login state machine.
+- Produces: idempotent handling after the first successful login status.
+
+- [ ] **Step 1: Write and prove the failing regression**
+
+Complete normal login and resource-pack negotiation in the scripted server, then send another `PlayStatusLoginSuccess` between `ItemRegistry` and `ChunkRadiusUpdated`. Run `go test ./minecraft -run TestDialContextIgnoresDuplicateLoginSuccess -count=1` and expect dial not to complete.
+
+- [ ] **Step 2: Make successful login status idempotent**
+
+Record the first successful login status on `Conn`; ignore subsequent successes without changing expected packet IDs or sending another `ClientCacheStatus`.
+
+- [ ] **Step 3: Verify GREEN**
+
+Run `go test ./minecraft -run TestDialContextIgnoresDuplicateLoginSuccess -count=1` and expect PASS.
+
+### Task 3: Live Zeqa validation and publication
 
 **Files:**
 - No repository files unless live evidence identifies an additional gophertunnel defect.

@@ -90,6 +90,43 @@ func TestDialContextOrdinaryLoginStillCompletes(t *testing.T) {
 	}
 }
 
+func TestDialContextIgnoresDuplicateLoginSuccess(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login after duplicate success: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "pvp.inpvp.net:19132")
+	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("DialContextNetwork duplicate LoginSuccess: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
 func startScriptedLogin(conn net.Conn) (*packet.Decoder, *packet.Encoder, error) {
 	decoder := packet.NewDecoder(conn)
 	encoder := packet.NewEncoder(conn)
@@ -107,8 +144,23 @@ func startScriptedLogin(conn net.Conn) (*packet.Decoder, *packet.Encoder, error)
 	if _, err := decoder.Decode(); err != nil {
 		return nil, nil, fmt.Errorf("read Login: %w", err)
 	}
-	if err := encodeScriptedPackets(encoder, &packet.StartGame{}); err != nil {
+	if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+		return nil, nil, fmt.Errorf("write login success: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ClientCacheStatus: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.ResourcePacksInfo{}); err != nil {
+		return nil, nil, fmt.Errorf("write ResourcePacksInfo: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ResourcePackClientResponse: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{}); err != nil {
 		return nil, nil, fmt.Errorf("write StartGame: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ResourcePackStack response: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
 		return nil, nil, fmt.Errorf("read StartGame responses: %w", err)

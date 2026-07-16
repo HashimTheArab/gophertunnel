@@ -288,6 +288,9 @@ type Conn struct {
 	readyToLogin bool
 	// handshakeComplete is true if the login handshake has been completed.
 	handshakeComplete bool
+	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
+	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
+	loginSuccessReceived bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -2002,6 +2005,10 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
+		if conn.loginSuccessReceived {
+			return nil
+		}
+		conn.loginSuccessReceived = true
 		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}

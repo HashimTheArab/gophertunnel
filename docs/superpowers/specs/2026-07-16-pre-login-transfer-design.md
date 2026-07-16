@@ -13,9 +13,10 @@ The behavior belongs in `minecraft.Conn` because that layer decodes packets and 
 - When `Transfer` arrives before `Conn.loggedIn`, decode it immediately.
 - End the dial with a `*minecraft.TransferError` containing `Address`, `Port`, and `ReloadWorld`.
 - Preserve the existing `*net.OpError` dial wrapper so normal network error inspection continues to work.
+- Treat repeated `PlayStatusLoginSuccess` packets as idempotent so they cannot rewind a connection from world initialization back to resource-pack negotiation.
 - Leave ordinary login behavior unchanged.
 - Do not make gophertunnel automatically reconnect: callers own redirect policy, hop limits, authentication reuse, and cancellation.
 
 ## Verification
 
-An in-memory scripted Bedrock server will send a pre-login `Transfer` and assert that dial returns the typed details and closes the abandoned connection. A second test will complete an ordinary login to guard the existing path. Live validation will use Zeqa and a bounded caller-side transfer loop.
+An in-memory scripted Bedrock server will send a pre-login `Transfer` and assert that dial returns the typed details and closes the abandoned connection. Additional tests complete an ordinary login and a login containing a duplicate success status. Live validation uses Zeqa and a bounded caller-side transfer loop.
