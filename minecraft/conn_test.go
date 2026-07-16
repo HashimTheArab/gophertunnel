@@ -253,18 +253,36 @@ func TestDecodePacketDoesNotApplyDisconnectPolicy(t *testing.T) {
 	defer client.Close()
 	defer serverConn.Close()
 
-	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	converted := false
+	proto := conversionTrackingProtocol{Protocol: DefaultProtocol, called: &converted}
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), proto, -1, false)
 	defer conn.Close()
 	conn.pool = conn.proto.Packets(false)
 	conn.disconnectOnInvalidPacket = true
 
-	data := &packetData{h: &packet.Header{PacketID: packet.IDText}, payload: bytes.NewBuffer([]byte{0xff})}
+	payload := new(bytes.Buffer)
+	(&packet.Transfer{Address: "example.com", Port: 19132}).Marshal(DefaultProtocol.NewWriter(payload, 0))
+	_ = payload.WriteByte(0xff)
+	data := &packetData{h: &packet.Header{PacketID: packet.IDTransfer}, payload: payload}
 	if _, err := data.decodePacket(conn); err == nil {
 		t.Fatal("decodePacket accepted malformed packet")
 	}
 	if conn.ctx.Err() != nil {
 		t.Fatal("decodePacket applied the connection disconnect policy")
 	}
+	if converted {
+		t.Fatal("decodePacket converted a malformed packet")
+	}
+}
+
+type conversionTrackingProtocol struct {
+	Protocol
+	called *bool
+}
+
+func (p conversionTrackingProtocol) ConvertToLatest(pk packet.Packet, conn *Conn) []packet.Packet {
+	*p.called = true
+	return p.Protocol.ConvertToLatest(pk, conn)
 }
 
 func TestReadBatchDeliversPacketsBeforeDisconnect(t *testing.T) {

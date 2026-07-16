@@ -74,5 +74,8 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 	if p.payload.Len() != 0 {
 		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, p.payload.Len(), p.payload.Bytes())
 	}
+	if err != nil {
+		return nil, err
+	}
 	return conn.proto.ConvertToLatest(pk, conn), err
 }
