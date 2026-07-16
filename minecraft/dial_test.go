@@ -57,6 +57,47 @@ func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	}
 }
 
+func TestListenConnPreservesPreLoginTransferCloseCause(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
+
+	conn := newConn(client, nil, slog.Default(), DefaultProtocol, -1, false)
+	conn.pool = conn.proto.Packets(false)
+	conn.expect(packet.IDPlayStatus)
+
+	dialCtx, cancel := context.WithCancelCause(context.Background())
+	go listenConn(conn, make(chan struct{}), make(chan struct{}), cancel)
+
+	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+	if err := encodeScriptedPackets(packet.NewEncoder(server), want); err != nil {
+		t.Fatalf("write Transfer: %v", err)
+	}
+
+	select {
+	case <-dialCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("listenConn did not cancel the dial context")
+	}
+	select {
+	case <-conn.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("listenConn did not close the connection")
+	}
+
+	var dialTransferErr, closeTransferErr *TransferError
+	if !errors.As(context.Cause(dialCtx), &dialTransferErr) {
+		t.Fatalf("dial context cause = %v, want *TransferError", context.Cause(dialCtx))
+	}
+	if !errors.As(context.Cause(conn.ctx), &closeTransferErr) {
+		t.Fatalf("connection close cause = %v, want *TransferError", context.Cause(conn.ctx))
+	}
+	if *closeTransferErr != *dialTransferErr {
+		t.Fatalf("connection close cause = %#v, want %#v", closeTransferErr, dialTransferErr)
+	}
+}
+
 func TestDialContextOrdinaryLoginStillCompletes(t *testing.T) {
 	network := newScriptedDialNetwork(func(conn net.Conn) error {
 		decoder, encoder, err := startScriptedLogin(conn)
