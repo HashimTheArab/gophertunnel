@@ -158,7 +158,10 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 			}
 			_ = compressedBuf.WriteByte(byte(compressionID))
 			var err error
-			if appender, ok := compression.(appendCompression); ok {
+			if writer, ok := compression.(writeCompression); ok {
+				err = writer.compressTo(compressedBuf, batch)
+				data = compressedBuf.Bytes()
+			} else if appender, ok := compression.(appendCompression); ok {
 				if n := appender.MaxCompressedLen(len(batch)); n > 0 {
 					if observer != nil {
 						stats.MaxCompressedLen = n
