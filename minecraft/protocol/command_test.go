@@ -9,7 +9,8 @@ func TestCommandArgTypeWireValues(t *testing.T) {
 		want uint32
 	}{
 		{"int", CommandArgTypeInt, 1},
-		{"float", CommandArgTypeFloat, 3},
+		{"float", CommandArgTypeFloat, 2},
+		{"value", CommandArgTypeValue, 3},
 		{"rvalue", CommandArgTypeRValue, 4},
 		{"wildcard_int", CommandArgTypeWildcardInt, 5},
 		{"target", CommandArgTypeTarget, 8},
@@ -28,6 +29,7 @@ func TestCommandArgTypeWireValues(t *testing.T) {
 		{"command", CommandArgTypeCommand, 87},
 		{"slash_command", CommandArgTypeSlashCommand, 88},
 		{"code_builder_args", CommandArgTypeCodeBuilderArgs, 90},
+		{"code_builder_selector", CommandArgTypeCodeBuilderSelector, 92},
 		{"chained_command", CommandArgTypeChainedCommand, 0x8000000},
 	}
 

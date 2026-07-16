@@ -2,8 +2,11 @@ package packet
 
 import (
 	"bytes"
+	"io"
 	"testing"
 )
+
+var benchmarkBatchStats BatchEncodeStats
 
 func TestEncoderBatchEncodeObserverBelowThreshold(t *testing.T) {
 	var out bytes.Buffer
@@ -34,6 +37,12 @@ func TestEncoderBatchEncodeObserverBelowThreshold(t *testing.T) {
 	}
 	if stats.UncompressedLen == 0 || stats.OutputLen == 0 {
 		t.Fatalf("stats lengths were not populated: %+v", stats)
+	}
+	if stats.EncodeDuration <= 0 {
+		t.Fatalf("EncodeDuration = %v, want positive", stats.EncodeDuration)
+	}
+	if stats.CompressionDuration != 0 {
+		t.Fatalf("CompressionDuration = %v below threshold, want zero", stats.CompressionDuration)
 	}
 }
 
@@ -67,6 +76,12 @@ func TestEncoderBatchEncodeObserverCompressed(t *testing.T) {
 	if stats.UncompressedLen == 0 || stats.OutputLen == 0 {
 		t.Fatalf("stats lengths were not populated: %+v", stats)
 	}
+	if stats.CompressionDuration <= 0 {
+		t.Fatalf("CompressionDuration = %v, want positive", stats.CompressionDuration)
+	}
+	if stats.EncodeDuration < stats.CompressionDuration {
+		t.Fatalf("EncodeDuration = %v, want >= CompressionDuration %v", stats.EncodeDuration, stats.CompressionDuration)
+	}
 }
 
 func TestEncoderBatchEncodeObserverOutputLenIncludesEncryptionChecksum(t *testing.T) {
@@ -86,5 +101,30 @@ func TestEncoderBatchEncodeObserverOutputLenIncludesEncryptionChecksum(t *testin
 
 	if got, want := stats.OutputLen, stats.UncompressedLen+8; got != want {
 		t.Fatalf("OutputLen = %d, want %d", got, want)
+	}
+}
+
+func BenchmarkEncoderBatchEncodeObserver(b *testing.B) {
+	payload := bytes.Repeat([]byte{7}, 2048)
+	packets := [][]byte{payload}
+	for _, tt := range []struct {
+		name     string
+		observer BatchEncodeObserver
+	}{
+		{name: "disabled"},
+		{name: "enabled", observer: func(stats BatchEncodeStats) { benchmarkBatchStats = stats }},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			enc := NewEncoder(io.Discard)
+			enc.EnableCompression(SnappyCompression, 1)
+			enc.SetBatchEncodeObserver(tt.observer)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := enc.Encode(packets); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
