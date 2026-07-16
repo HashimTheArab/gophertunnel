@@ -288,6 +288,9 @@ type Conn struct {
 	readyToLogin bool
 	// handshakeComplete is true if the login handshake has been completed.
 	handshakeComplete bool
+	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
+	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
+	loginSuccessReceived bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -1158,12 +1161,46 @@ func (conn *Conn) handle(pkData *packetData) error {
 			if err != nil {
 				return err
 			}
+			if !conn.loggedIn {
+				if err := preLoginTransferError(pks); err != nil {
+					return err
+				}
+			}
 			return conn.handleMultiple(pks)
+		}
+	}
+	if !conn.loggedIn {
+		if _, registered := conn.pool[pkData.h.PacketID]; registered {
+			probe := &packetData{
+				h:       pkData.h,
+				full:    pkData.full,
+				payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+			}
+			pks, err := probe.decodePacket(conn)
+			if err == nil {
+				if err := preLoginTransferError(pks); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	// This is not the packet we expected next in the login sequence. We push it back so that it may
 	// be handled by the user.
 	conn.deferPacket(pkData)
+	return nil
+}
+
+// preLoginTransferError returns a TransferError if active-protocol conversion produced a Transfer packet.
+func preLoginTransferError(pks []packet.Packet) error {
+	for _, pk := range pks {
+		if transfer, ok := pk.(*packet.Transfer); ok {
+			return &TransferError{
+				Address:     transfer.Address,
+				Port:        transfer.Port,
+				ReloadWorld: transfer.ReloadWorld,
+			}
+		}
+	}
 	return nil
 }
 
@@ -1986,6 +2023,10 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
+		if conn.loginSuccessReceived {
+			return nil
+		}
+		conn.loginSuccessReceived = true
 		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}

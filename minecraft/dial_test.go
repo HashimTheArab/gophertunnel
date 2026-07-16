@@ -1,10 +1,14 @@
 package minecraft
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"testing"
@@ -12,8 +16,374 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
 )
+
+func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
+	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder, want); err != nil {
+			return fmt.Errorf("write Transfer: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+	scriptErr := <-network.done
+	if scriptErr != nil {
+		t.Fatalf("scripted server: %v (dial error: %v)", scriptErr, err)
+	}
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("DialContextNetwork returned a connection after pre-login Transfer")
+	}
+	var transferErr *TransferError
+	if !errors.As(err, &transferErr) {
+		t.Fatalf("DialContextNetwork error = %v, want *TransferError", err)
+	}
+	if transferErr.Address != want.Address || transferErr.Port != want.Port || transferErr.ReloadWorld != want.ReloadWorld {
+		t.Fatalf("TransferError = %#v, want address=%q port=%d reload=%v", transferErr, want.Address, want.Port, want.ReloadWorld)
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "dial" {
+		t.Fatalf("DialContextNetwork error = %v, want dial net.OpError wrapper", err)
+	}
+}
+
+func TestDialContextReturnsRemappedPreLoginTransferError(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		transferID uint32
+	}{
+		{name: "unexpected ID", transferID: remappedTransferID},
+		{name: "currently expected ID", transferID: packet.IDItemRegistry},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+			network := newScriptedDialNetwork(func(conn net.Conn) error {
+				decoder, encoder, err := startScriptedLogin(conn)
+				if err != nil {
+					return err
+				}
+				if err := encodeScriptedPacketWithID(encoder, test.transferID, want); err != nil {
+					return fmt.Errorf("write remapped Transfer: %w", err)
+				}
+				return expectScriptedClose(conn, decoder)
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			conn, err := (Dialer{
+				FlushRate: -1,
+				Protocol: remappedTransferProtocol{
+					Protocol:   DefaultProtocol,
+					transferID: test.transferID,
+				},
+			}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+			if conn != nil {
+				_ = conn.Close()
+				t.Fatal("DialContextNetwork returned a connection after remapped pre-login Transfer")
+			}
+			var transferErr *TransferError
+			if !errors.As(err, &transferErr) {
+				t.Fatalf("DialContextNetwork error = %v, want *TransferError", err)
+			}
+			if scriptErr := <-network.done; scriptErr != nil {
+				t.Fatalf("scripted server: %v (dial error: %v)", scriptErr, err)
+			}
+		})
+	}
+}
+
+func TestDialContextDoesNotTreatReusedLatestTransferIDAsTransfer(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPacketWithID(encoder, packet.IDTransfer, &packet.ItemRegistry{}); err != nil {
+			return fmt.Errorf("write packet using latest Transfer ID: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{
+		FlushRate: -1,
+		Protocol: remappedTransferProtocol{
+			Protocol:              DefaultProtocol,
+			transferID:            remappedTransferID,
+			reuseLatestTransferID: true,
+		},
+	}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork reused latest Transfer ID: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+func TestListenConnPreservesPreLoginTransferCloseCause(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
+
+	conn := newConn(client, nil, slog.Default(), DefaultProtocol, -1, false)
+	conn.pool = conn.proto.Packets(false)
+	conn.expect(packet.IDPlayStatus)
+
+	dialCtx, cancel := context.WithCancelCause(context.Background())
+	go listenConn(conn, make(chan struct{}), make(chan struct{}), cancel)
+
+	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
+	if err := encodeScriptedPackets(packet.NewEncoder(server), want); err != nil {
+		t.Fatalf("write Transfer: %v", err)
+	}
+
+	select {
+	case <-dialCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("listenConn did not cancel the dial context")
+	}
+	select {
+	case <-conn.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("listenConn did not close the connection")
+	}
+
+	var dialTransferErr, closeTransferErr *TransferError
+	if !errors.As(context.Cause(dialCtx), &dialTransferErr) {
+		t.Fatalf("dial context cause = %v, want *TransferError", context.Cause(dialCtx))
+	}
+	if !errors.As(context.Cause(conn.ctx), &closeTransferErr) {
+		t.Fatalf("connection close cause = %v, want *TransferError", context.Cause(conn.ctx))
+	}
+	if *closeTransferErr != *dialTransferErr {
+		t.Fatalf("connection close cause = %#v, want %#v", closeTransferErr, dialTransferErr)
+	}
+}
+
+func TestDialContextOrdinaryLoginStillCompletes(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork ordinary login: %v (scripted server: %v)", err, <-network.done)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+func TestDialContextIgnoresDuplicateLoginSuccess(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login after duplicate success: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "pvp.inpvp.net:19132")
+	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("DialContextNetwork duplicate LoginSuccess: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+func startScriptedLogin(conn net.Conn) (*packet.Decoder, *packet.Encoder, error) {
+	decoder := packet.NewDecoder(conn)
+	encoder := packet.NewEncoder(conn)
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read RequestNetworkSettings: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+		CompressionThreshold: math.MaxUint16,
+		CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+	}); err != nil {
+		return nil, nil, fmt.Errorf("write NetworkSettings: %w", err)
+	}
+	decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+	encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read Login: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+		return nil, nil, fmt.Errorf("write login success: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ClientCacheStatus: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.ResourcePacksInfo{}); err != nil {
+		return nil, nil, fmt.Errorf("write ResourcePacksInfo: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ResourcePackClientResponse: %w", err)
+	}
+	if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{}); err != nil {
+		return nil, nil, fmt.Errorf("write StartGame: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read ResourcePackStack response: %w", err)
+	}
+	if _, err := decoder.Decode(); err != nil {
+		return nil, nil, fmt.Errorf("read StartGame responses: %w", err)
+	}
+	return decoder, encoder, nil
+}
+
+func encodeScriptedPackets(encoder *packet.Encoder, packets ...packet.Packet) error {
+	encoded := make([][]byte, 0, len(packets))
+	for _, pk := range packets {
+		buf := new(bytes.Buffer)
+		if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+			return err
+		}
+		pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+		encoded = append(encoded, buf.Bytes())
+	}
+	return encoder.Encode(encoded)
+}
+
+func encodeScriptedPacketWithID(encoder *packet.Encoder, id uint32, pk packet.Packet) error {
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: id}).Write(buf); err != nil {
+		return err
+	}
+	pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	return encoder.Encode([][]byte{buf.Bytes()})
+}
+
+func expectScriptedClose(conn net.Conn, decoder *packet.Decoder) error {
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	}
+	_, err := decoder.Decode()
+	if err == nil {
+		return errors.New("client connection remained open")
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return errors.New("timed out waiting for client connection close")
+	}
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("wait for client connection close: %w", err)
+	}
+	return nil
+}
+
+type scriptedDialNetwork struct {
+	script func(net.Conn) error
+	done   chan error
+}
+
+const remappedTransferID = 0x3ff
+
+type remappedTransferProtocol struct {
+	Protocol
+	transferID            uint32
+	reuseLatestTransferID bool
+}
+
+func (p remappedTransferProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		delete(pool, packet.IDTransfer)
+		if p.reuseLatestTransferID {
+			pool[packet.IDTransfer] = func() packet.Packet { return &packet.ItemRegistry{} }
+		}
+		pool[p.transferID] = func() packet.Packet { return &packet.Transfer{} }
+	}
+	return pool
+}
+
+func newScriptedDialNetwork(script func(net.Conn) error) *scriptedDialNetwork {
+	return &scriptedDialNetwork{script: script, done: make(chan error, 1)}
+}
+
+func (n *scriptedDialNetwork) DialContext(context.Context, string) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer server.Close()
+		n.done <- n.script(server)
+	}()
+	return client, nil
+}
+
+func (*scriptedDialNetwork) PingContext(context.Context, string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (*scriptedDialNetwork) Listen(string) (NetworkListener, error) {
+	return nil, errors.New("not implemented")
+}
 
 func TestDialAuthContextPropagatesHTTPClient(t *testing.T) {
 	t.Parallel()

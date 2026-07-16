@@ -355,8 +355,9 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 // listenConn listens on the connection until it is closed on another goroutine. The channel passed will
 // receive a value once the connection is logged in.
 func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
+	closeCause := error(net.ErrClosed)
 	defer func() {
-		_ = conn.Close()
+		_ = conn.close(closeCause)
 	}()
 	cancelContext := true
 	for {
@@ -366,6 +367,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 		if err != nil {
 			if !errors.Is(err, net.ErrClosed) {
 				if cancelContext {
+					closeCause = err
 					cancel(err)
 				} else {
 					conn.log.Error(err.Error())
@@ -379,6 +381,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			if err := conn.receive(data); err != nil {
 				conn.flushBatch()
 				if cancelContext {
+					closeCause = err
 					cancel(err)
 				} else {
 					conn.log.Error(err.Error())
