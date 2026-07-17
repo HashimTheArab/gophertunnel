@@ -46,4 +46,12 @@ func TestEncoderSortMaps(t *testing.T) {
 	if !reflect.DeepEqual(decoded, value) {
 		t.Fatalf("sorted encoding did not round-trip: got %#v, want %#v", decoded, value)
 	}
+
+	// Named string key types must stay encodable with SortMaps, like on the unsorted path.
+	type namedKey string
+	named := encode(map[namedKey]any{"b": int32(2), "a": int32(1)})
+	plain := encode(map[string]any{"a": int32(1), "b": int32(2)})
+	if !bytes.Equal(named, plain) {
+		t.Fatalf("named string key encoding differs from plain string keys:\n%x\n%x", named, plain)
+	}
 }

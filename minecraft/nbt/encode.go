@@ -246,13 +246,10 @@ func (e *Encoder) encode(val reflect.Value, tagName string) error {
 			return IncompatibleTypeError{Type: val.Type(), ValueName: tagName}
 		}
 		if e.SortMaps {
-			keys := make([]string, 0, val.Len())
-			for _, key := range val.MapKeys() {
-				keys = append(keys, key.String())
-			}
-			sort.Strings(keys)
+			keys := val.MapKeys()
+			sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 			for _, key := range keys {
-				if err := e.marshal(val.MapIndex(reflect.ValueOf(key)), key); err != nil {
+				if err := e.marshal(val.MapIndex(key), key.String()); err != nil {
 					return err
 				}
 			}
