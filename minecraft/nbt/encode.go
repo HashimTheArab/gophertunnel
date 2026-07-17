@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -14,6 +15,9 @@ type Encoder struct {
 	// Encoding is the variant to use for encoding the objects passed. By default, the variant is set to
 	// NetworkLittleEndian, which is the variant used for network NBT.
 	Encoding Encoding
+	// SortMaps makes the encoder write map-backed compounds with keys in lexicographic order, so equal maps
+	// always produce identical bytes. Useful for hashing/caching; off by default to keep wire output unchanged.
+	SortMaps bool
 
 	w     *offsetWriter
 	depth int
@@ -241,10 +245,23 @@ func (e *Encoder) encode(val reflect.Value, tagName string) error {
 		if val.Type().Key().Kind() != reflect.String {
 			return IncompatibleTypeError{Type: val.Type(), ValueName: tagName}
 		}
-		iter := val.MapRange()
-		for iter.Next() {
-			if err := e.marshal(iter.Value(), iter.Key().String()); err != nil {
-				return err
+		if e.SortMaps {
+			keys := make([]string, 0, val.Len())
+			for _, key := range val.MapKeys() {
+				keys = append(keys, key.String())
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if err := e.marshal(val.MapIndex(reflect.ValueOf(key)), key); err != nil {
+					return err
+				}
+			}
+		} else {
+			iter := val.MapRange()
+			for iter.Next() {
+				if err := e.marshal(iter.Value(), iter.Key().String()); err != nil {
+					return err
+				}
 			}
 		}
 		e.depth--
