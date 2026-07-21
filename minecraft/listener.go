@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -26,6 +25,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
+
+var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
@@ -131,7 +132,7 @@ type ListenConfig struct {
 	// PacketBatchFunc is called after each outbound packet batch has been encoded.
 	PacketBatchFunc packet.BatchEncodeObserver
 
-	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
+	// MaxDecompressedLen is the maximum length of a decompressed packet batch to prevent potential exploits. If 0,
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
 
@@ -216,11 +217,6 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		cfg.CompressionThreshold = 256
 	} else if cfg.CompressionThreshold < 0 {
 		cfg.CompressionThreshold = 0
-	}
-	if cfg.MaxDecompressedLen == 0 {
-		cfg.MaxDecompressedLen = 16 * 1024 * 1024 // 16MB
-	} else if cfg.MaxDecompressedLen < 0 {
-		cfg.MaxDecompressedLen = math.MaxInt
 	}
 
 	var verifier *oidc.IDTokenVerifier
@@ -512,31 +508,20 @@ func (listener *Listener) handleConn(conn *Conn) {
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
-		packets, err := conn.dec.Decode()
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				conn.log.Error(err.Error())
-			}
-			return
-		}
-		conn.reserveBatch(len(packets))
 		publishBatch := false
-		for _, data := range packets {
+		callbackErr := false
+		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			passthroughReadyBefore := conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
-				conn.log.Error(err.Error())
-				conn.flushBatch()
-				if publishBatch {
-					listener.deliverConn(conn)
-				}
-				return
+				callbackErr = true
+				return err
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
-					// A non-nil AfterHandshake error aborts the connection, so it is not delivered.
-					conn.log.Error(err.Error())
-					return
+					// Login has not completed yet, so publishBatch cannot be set and the connection will not be delivered.
+					callbackErr = true
+					return err
 				}
 			}
 			publish := !loggedInBefore && conn.loggedIn
@@ -547,9 +532,19 @@ func (listener *Listener) handleConn(conn *Conn) {
 				if conn.batchReading {
 					publishBatch = true
 				} else if !listener.deliverConn(conn) {
-					return
+					return errListenerDeliveryClosed
 				}
 			}
+			return nil
+		}); err != nil {
+			conn.flushBatch()
+			if publishBatch {
+				listener.deliverConn(conn)
+			}
+			if callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed)) {
+				conn.log.Error(err.Error())
+			}
+			return
 		}
 		// In batch-reading mode, the connection is published only after its batch has been flushed, so
 		// the owner can immediately read the batch that completed the login.

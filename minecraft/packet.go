@@ -3,6 +3,7 @@ package minecraft
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -11,6 +12,7 @@ type packetData struct {
 	h       *packet.Header
 	full    []byte
 	payload *bytes.Buffer
+	owned   bool
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
@@ -24,9 +26,29 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	}
 	if conn.packetFunc != nil {
 		// The packet func was set, so we call it.
-		conn.packetFunc(*header, buf.Bytes(), conn.RemoteAddr(), conn.LocalAddr())
+		conn.packetFunc(*header, bytes.Clone(buf.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return &packetData{h: header, full: data, payload: buf}, nil
+}
+
+func (p *packetData) ensureOwned() *packetData {
+	if p.owned {
+		return p
+	}
+	full := bytes.Clone(p.full)
+	payloadOffset := len(p.full) - p.payload.Len()
+	var payload []byte
+	if payloadOffset < 0 {
+		payload = bytes.Clone(p.payload.Bytes())
+	} else {
+		payload = full[payloadOffset:]
+	}
+	return &packetData{
+		h:       p.h,
+		full:    full,
+		payload: bytes.NewBuffer(payload),
+		owned:   true,
+	}
 }
 
 type unknownPacketError struct {

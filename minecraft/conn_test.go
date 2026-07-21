@@ -36,6 +36,69 @@ func TestReadBatchRequiresBatchReading(t *testing.T) {
 	}
 }
 
+func TestBatchReadingOwnsBorrowedPackets(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		store func(*Conn, *packetData)
+		load  func(*Conn) *packetData
+	}{
+		{
+			name: "collected",
+			store: func(conn *Conn, data *packetData) {
+				conn.collectPacket(data)
+			},
+			load: func(conn *Conn) *packetData { return conn.pendingBatch[0] },
+		},
+		{
+			name:  "deferred",
+			store: func(conn *Conn, data *packetData) { conn.deferPacket(data) },
+			load:  func(conn *Conn) *packetData { return conn.batchDeferred[0] },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &Conn{batchReading: true}
+			borrowed := []byte{1, 2, 3}
+			data := &packetData{
+				h:       &packet.Header{PacketID: 1},
+				full:    borrowed,
+				payload: bytes.NewBuffer(borrowed[1:]),
+			}
+
+			test.store(conn, data)
+			borrowed[1] = 9
+			stored := test.load(conn)
+			if stored.full[1] != 2 || stored.payload.Bytes()[0] != 2 {
+				t.Fatalf("stored packet aliases decoder buffer: full=%v payload=%v", stored.full, stored.payload.Bytes())
+			}
+		})
+	}
+}
+
+func TestPacketFuncPayloadDoesNotAliasDecoderBuffer(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	var captured []byte
+	conn.packetFunc = func(_ packet.Header, payload []byte, _, _ net.Addr) {
+		captured = payload
+	}
+	frame, err := encodePacket(&packet.Unknown{PacketID: 700, Payload: []byte{1, 2, 3}})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
+
+	if _, err := parseData(frame, conn); err != nil {
+		t.Fatalf("parse packet: %v", err)
+	}
+	clear(frame)
+	if !bytes.Equal(captured, []byte{1, 2, 3}) {
+		t.Fatalf("PacketFunc payload changed with decoder buffer: %v", captured)
+	}
+}
+
 func TestBatchReadingRejectsSinglePacketReads(t *testing.T) {
 	client, serverConn := net.Pipe()
 	defer client.Close()
