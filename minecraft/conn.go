@@ -357,7 +357,7 @@ type Conn struct {
 // key is generated.
 func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool) *Conn {
 	disableEncryption := false
-	if d, ok := netConn.(interface{ DisableEncryption() bool }); ok {
+	if d, ok := netConn.(packet.EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 
@@ -1363,7 +1363,6 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 			return conn.Close()
 		}
 	}
-
 	if conn.disableEncryption {
 		return conn.handleClientToServerHandshake()
 	}
