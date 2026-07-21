@@ -202,8 +202,8 @@ var disconnectReasons = map[int32]string{
 }
 
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
-// methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket
-// must not be called on multiple goroutines simultaneously.
+// methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
+// ReadBatch must not be called on multiple goroutines simultaneously.
 type Conn struct {
 	// once is used to ensure the Conn is closed only a single time. It protects the channel below from being
 	// closed multiple times.
@@ -250,12 +250,26 @@ type Conn struct {
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.
 	packets chan *packetData
+	// packetBatches holds the packets from one decoder batch when batch reading is enabled.
+	packetBatches chan []*packetData
+	// batchReading, if true, preserves incoming network batch boundaries: packets must be read through
+	// ReadBatch and the single-packet read methods are unavailable.
+	batchReading bool
+	// pendingBatch collects the packets of the network batch currently being processed when batch
+	// reading is enabled. It is only accessed by the goroutine processing incoming packets.
+	pendingBatch []*packetData
+	// batchDeferred collects the packets deferred while the current network batch is processed when
+	// batch reading is enabled. Like pendingBatch, it is owned by the processing goroutine.
+	batchDeferred []*packetData
 
 	deferredPacketMu sync.Mutex
 	// deferredPackets is a list of packets that were pushed back during the login sequence because they
 	// were not used by the connection yet. These packets are read the first when calling to Read or
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
+	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadBatch
+	// returns before the batches queued in packetBatches.
+	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
 
 	// sendMu protects bufferedSend/bufferedSendSpare.
@@ -274,6 +288,9 @@ type Conn struct {
 	readyToLogin bool
 	// handshakeComplete is true if the login handshake has been completed.
 	handshakeComplete bool
+	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
+	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
+	loginSuccessReceived bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -295,11 +312,14 @@ type Conn struct {
 	texturePacksRequired bool
 	// forceDisableVibrantVisuals specifies whether the connection is forced to have vibrant visuals disabled.
 	forceDisableVibrantVisuals bool
-	packQueue                  *resourcePackQueue
+	// resourcePackWorldTemplateUUID and resourcePackWorldTemplateVersion are written into ResourcePacksInfo.
+	resourcePackWorldTemplateUUID    uuid.UUID
+	resourcePackWorldTemplateVersion string
+	packQueue                        *resourcePackQueue
 	// downloadResourcePack is an optional function passed to a Dial() call. If set, each resource pack received
 	// from the server will call this function to see if it should be downloaded or not.
 	downloadResourcePack func(id uuid.UUID, version string, currentPack, totalPacks int) bool
-	// fetchResourcePacks is an optional function passed to a Listener. If set, the returned resource packs from the function
+	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
@@ -307,6 +327,14 @@ type Conn struct {
 	ignoredResourcePacks []exemptedResourcePack
 
 	cacheEnabled bool
+
+	// allow filters what connections are allowed to connect to the Server. The
+	// address, identity data, and client data of the connection are passed. If
+	// allow returns false, the connection is closed with the string returned as
+	// the disconnect message. WARNING: Use the client data at your own risk, it
+	// cannot be trusted because it can be freely changed by the player
+	// connecting.
+	allow func(addr net.Addr, identityData login.IdentityData, clientData login.ClientData) (string, bool)
 
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
@@ -329,7 +357,7 @@ type Conn struct {
 // key is generated.
 func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool) *Conn {
 	disableEncryption := false
-	if d, ok := netConn.(interface{ DisableEncryption() bool }); ok {
+	if d, ok := netConn.(packet.EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 
@@ -337,6 +365,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		salt:                 make([]byte, 16),
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
+		packetBatches:        make(chan []*packetData, 8),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
 		conn:                 netConn,
@@ -444,8 +473,27 @@ func (conn *Conn) StartGameTimeout(data GameData, timeout time.Duration) error {
 // be used to spawn the player in the world of the server. To spawn a Conn obtained from a call to
 // minecraft.Dial(), use Conn.DoSpawn().
 func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
+	if err := conn.SendStartGame(data); err != nil {
+		return err
+	}
+
+	select {
+	case <-conn.ctx.Done():
+		return conn.closeErr("start game")
+	case <-ctx.Done():
+		return conn.wrap(ctx.Err(), "start game")
+	case <-conn.spawn:
+		// Conn was spawned successfully.
+		return nil
+	}
+}
+
+// SendStartGame sends the packets that start a game for a client connected to a Listener without waiting for
+// the client to finish spawning. Most callers should use StartGame instead, which waits until the client sends
+// its spawn acknowledgement.
+func (conn *Conn) SendStartGame(data GameData) error {
 	if conn.gameDataReceived.Load() {
-		panic("(*Conn).StartGame must only be called on Listener connections")
+		panic("(*Conn).SendStartGame must only be called on Listener connections")
 	}
 	if data.WorldName == "" {
 		data.WorldName = conn.gameData.WorldName
@@ -458,17 +506,7 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 		}
 	}
 	conn.waitingForSpawn.Store(true)
-	conn.startGame()
-
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("start game")
-	case <-ctx.Done():
-		return conn.wrap(ctx.Err(), "start game")
-	case <-conn.spawn:
-		// Conn was spawned successfully.
-		return nil
-	}
+	return conn.startGame()
 }
 
 // DoSpawn starts the game for the client in the server. DoSpawn should be called for a Conn obtained using
@@ -606,6 +644,9 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 // If the packet read was not implemented, a *packet.Unknown is returned, containing the raw payload of the
 // packet read.
 func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
+	if conn.batchReading {
+		return nil, conn.wrap(errSinglePacketReadInBatchMode, "read packet")
+	}
 	if len(conn.additional) > 0 {
 		return <-conn.additional, nil
 	}
@@ -645,6 +686,67 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 	}
 }
 
+// ReadBatch reads all packets from one network batch. If a read deadline is set, an error is returned if
+// the deadline is reached before a batch is received. ReadBatch must not be called on multiple goroutines
+// simultaneously.
+//
+// If a packet read was not implemented, a *packet.Unknown is returned for it, containing its raw payload.
+// Packets that fail to decode are skipped and logged; when such an error closes the connection, the packets
+// after the offending one in the batch are not delivered. Batch reading must be enabled through
+// Dialer.EnableBatchReading or ListenConfig.EnableBatchReading. Do not mix ReadBatch with ReadPacket,
+// ReadBytes or Read on the same connection.
+func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
+	if !conn.batchReading {
+		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
+	}
+	for {
+		batch, ok := conn.takeDeferredBatch()
+		if !ok {
+			// Prefer batches already queued over reporting a closed connection or an expired deadline,
+			// so that packets received before a disconnect are still delivered. A batch is flushed
+			// before the context is cancelled, so once either fires a queued batch is already visible
+			// and a final non-blocking receive drains it ahead of the error.
+			select {
+			case batch = <-conn.packetBatches:
+			default:
+				select {
+				case batch = <-conn.packetBatches:
+				case <-conn.ctx.Done():
+					select {
+					case batch = <-conn.packetBatches:
+					default:
+						return nil, conn.closeErr("read packets")
+					}
+				case <-conn.readDeadline:
+					select {
+					case batch = <-conn.packetBatches:
+					default:
+						return nil, conn.wrap(context.DeadlineExceeded, "read packets")
+					}
+				}
+			}
+		}
+
+		packets := make([]packet.Packet, 0, len(batch))
+		for _, data := range batch {
+			pks, err := data.decode(conn)
+			if err != nil {
+				conn.log.Error("read packets: " + err.Error())
+				if conn.ctx.Err() != nil {
+					// The error closed the connection: packets sequenced after the offending one must
+					// not be delivered.
+					break
+				}
+				continue
+			}
+			packets = append(packets, pks...)
+		}
+		if len(packets) != 0 {
+			return packets, nil
+		}
+	}
+}
+
 // ResourcePacks returns a slice of all resource packs the connection holds. For a Conn obtained using a
 // Listener, this holds all resource packs set to the Listener. For a Conn obtained using Dial, the resource
 // packs include all packs sent by the server connected to.
@@ -665,6 +767,9 @@ func (conn *Conn) Write(b []byte) (n int, err error) {
 // ReadBytes reads a packet from the connection without decoding it directly.
 // For direct reading, consider using ReadPacket() which decodes the packet.
 func (conn *Conn) ReadBytes() ([]byte, error) {
+	if conn.batchReading {
+		return nil, conn.wrap(errSinglePacketReadInBatchMode, "read")
+	}
 	if data, ok := conn.takeDeferredPacket(); ok {
 		return data.full, nil
 	}
@@ -682,6 +787,9 @@ func (conn *Conn) ReadBytes() ([]byte, error) {
 // to carry the full packet.
 // It is recommended to use ReadPacket() and ReadBytes() rather than Read() in cases where reading is done directly.
 func (conn *Conn) Read(b []byte) (n int, err error) {
+	if conn.batchReading {
+		return 0, conn.wrap(errSinglePacketReadInBatchMode, "read")
+	}
 	if data, ok := conn.takeDeferredPacket(); ok {
 		if len(b) < len(data.full) {
 			return 0, conn.wrap(errBufferTooSmall, "read")
@@ -832,11 +940,28 @@ func (conn *Conn) Context() context.Context {
 // closing the connection after. If the message passed is empty, the client will be immediately sent to the
 // server list instead of a disconnect screen.
 func (conn *Conn) Disconnect(message string) error {
-	_ = conn.WritePacket(&packet.Disconnect{
+	return conn.DisconnectPacket(packet.Disconnect{
 		HideDisconnectionScreen: message == "",
 		Message:                 message,
 	})
-	return conn.close(conn.closeErr(message))
+}
+
+// DisconnectPacket disconnects the connection by first sending pk, and closing
+// the connection after.
+func (conn *Conn) DisconnectPacket(pk packet.Disconnect) error {
+	_ = conn.WritePacketImmediate(&pk)
+	return conn.close(conn.closeErr(conn.disconnectPacketMessage(&pk)))
+}
+
+func (conn *Conn) disconnectPacketMessage(pk *packet.Disconnect) string {
+	if pk.Message != "" {
+		return pk.Message
+	}
+	if reason, ok := disconnectReasons[pk.Reason]; ok {
+		return reason
+	}
+	conn.log.Debug("unknown disconnect reason", "reason", pk.Reason)
+	return fmt.Sprintf("Unknown disconnect reason: %d", pk.Reason)
 }
 
 // takeDeferredPacket locks the deferred packets lock and takes the next packet from the list of deferred
@@ -857,10 +982,40 @@ func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
 	return data, true
 }
 
-// deferPacket defers a packet so that it is obtained in the next ReadPacket call
-func (conn *Conn) deferPacket(pk *packetData) {
+// takeDeferredBatch takes the next batch from the list of deferred batches, reporting whether one was
+// found.
+func (conn *Conn) takeDeferredBatch() ([]*packetData, bool) {
 	conn.deferredPacketMu.Lock()
-	conn.deferredPackets = append(conn.deferredPackets, pk.ensureOwned())
+	defer conn.deferredPacketMu.Unlock()
+
+	if len(conn.deferredBatches) == 0 {
+		return nil, false
+	}
+	batch := conn.deferredBatches[0]
+	// Explicitly clear out the batch at offset 0 so that it may be garbage collected, like
+	// takeDeferredPacket does.
+	conn.deferredBatches[0] = nil
+	conn.deferredBatches = conn.deferredBatches[1:]
+	return batch, true
+}
+
+// deferBatch defers a batch so that it is returned by ReadBatch before any batch queued after it.
+func (conn *Conn) deferBatch(batch []*packetData) {
+	conn.deferredPacketMu.Lock()
+	conn.deferredBatches = append(conn.deferredBatches, batch)
+	conn.deferredPacketMu.Unlock()
+}
+
+// deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
+// mode, the packet becomes part of the deferred batch flushed by the next flushBatch call.
+func (conn *Conn) deferPacket(pk *packetData) {
+	pk = pk.ensureOwned()
+	if conn.batchReading {
+		conn.batchDeferred = append(conn.batchDeferred, pk)
+		return
+	}
+	conn.deferredPacketMu.Lock()
+	conn.deferredPackets = append(conn.deferredPackets, pk)
 	conn.deferredPacketMu.Unlock()
 }
 
@@ -872,23 +1027,30 @@ func (conn *Conn) receive(data []byte) error {
 		return err
 	}
 	if pkData.h.PacketID == packet.IDDisconnect {
-		// We always handle disconnect packets and close the connection if one comes in.
+		// We always handle disconnect packets and close the connection if one comes in. The payload is
+		// snapshotted first because decoding drains it and the packet may turn out not to be a
+		// Disconnect at all.
+		payload := bytes.Clone(pkData.payload.Bytes())
 		pks, err := pkData.decode(conn)
 		if err != nil {
 			return err
 		}
-		disconnectPacket := pks[0].(*packet.Disconnect)
-		disconnectMessage := disconnectPacket.Message
-		if disconnectPacket.Message == "" {
-			if reason, ok := disconnectReasons[disconnectPacket.Reason]; ok {
-				disconnectMessage = reason
-			} else {
-				conn.log.Debug("unknown disconnect reason", "reason", disconnectPacket.Reason)
-				disconnectMessage = fmt.Sprintf("Unknown disconnect reason: %d", disconnectPacket.Reason)
-			}
+		if disconnectPacket, ok := pks[0].(*packet.Disconnect); ok {
+			// Make the packets received earlier in this batch readable before the connection closes.
+			conn.flushBatch()
+			disconnectMessage := conn.disconnectPacketMessage(disconnectPacket)
+			_ = conn.close(conn.wrap(&DisconnectPacketError{
+				Reason:                  disconnectPacket.Reason,
+				HideDisconnectionScreen: disconnectPacket.HideDisconnectionScreen,
+				Message:                 disconnectPacket.Message,
+				FilteredMessage:         disconnectPacket.FilteredMessage,
+				DisplayMessage:          disconnectMessage,
+			}, "receive"))
+			return nil
 		}
-		_ = conn.close(conn.wrap(DisconnectError(disconnectMessage), "receive"))
-		return nil
+		// The Disconnect packet is not in this connection's pool (clients do not normally send one), so
+		// it decoded to something else. Restore the payload and deliver it like any other packet.
+		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
 		if conn.handshakeComplete || conn.loggedIn {
@@ -905,29 +1067,84 @@ func (conn *Conn) receive(data []byte) error {
 			if pkData.h.PacketID == packet.IDClientToServerHandshake {
 				return nil // don't forward it
 			}
-			select {
-			case <-conn.ctx.Done():
-			case conn.packets <- pkData.ensureOwned():
+			if !conn.collectPacket(pkData) {
+				select {
+				case <-conn.ctx.Done():
+				case conn.packets <- pkData.ensureOwned():
+				}
 			}
 			return nil
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
-		select {
-		case <-conn.ctx.Done():
-		case previous := <-conn.packets:
-			// There was already a packet in this channel, so take it out and defer it so that it is read
-			// next.
-			conn.deferPacket(previous)
-		default:
-		}
-		select {
-		case <-conn.ctx.Done():
-		case conn.packets <- pkData.ensureOwned():
+		if !conn.collectPacket(pkData) {
+			conn.queuePacket(pkData)
 		}
 		return nil
 	}
 	return conn.handle(pkData)
+}
+
+// queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
+// read first. It never blocks the goroutine processing incoming packets.
+func (conn *Conn) queuePacket(data *packetData) {
+	data = data.ensureOwned()
+	select {
+	case <-conn.ctx.Done():
+	case previous := <-conn.packets:
+		// There was already a packet in this channel, so take it out and defer it so that it is read next.
+		conn.deferPacket(previous)
+	default:
+	}
+	select {
+	case <-conn.ctx.Done():
+	case conn.packets <- data:
+	}
+}
+
+// collectPacket adds a packet to the network batch currently being collected and reports whether it did
+// so. It returns false when batch reading is disabled and the packet must be delivered directly.
+func (conn *Conn) collectPacket(data *packetData) bool {
+	if !conn.batchReading {
+		return false
+	}
+	conn.pendingBatch = append(conn.pendingBatch, data.ensureOwned())
+	return true
+}
+
+// flushBatch queues the network batch currently being collected, along with any packets deferred while
+// it was processed, so that ReadBatch returns them. The goroutine processing incoming packets must
+// call it after each decoded batch, including when processing ends in an error. It is a no-op when
+// batch reading is disabled.
+func (conn *Conn) flushBatch() {
+	deferred, batch := conn.batchDeferred, conn.pendingBatch
+	conn.batchDeferred, conn.pendingBatch = nil, nil
+	if len(deferred) == 0 && len(batch) == 0 {
+		return
+	}
+	// Move a batch still queued to the deferred list first, so that the entries below cannot overtake
+	// it. This goroutine is the only sender, meaning the channel never holds more than one batch and
+	// the send below cannot block.
+	select {
+	case previous := <-conn.packetBatches:
+		conn.deferBatch(previous)
+	default:
+	}
+	if len(deferred) != 0 {
+		// Packets deferred during a wire batch precede the ones collected from it, so combining them
+		// keeps one network batch mapped to one ReadBatch result. The combined batch goes through the
+		// unbounded deferred list because deferral happens during login, before the connection is
+		// delivered and read, where a send to the bounded channel could block. Deferred packets stay
+		// readable after a close, matching deferredPackets in single-packet mode.
+		conn.deferBatch(append(deferred, batch...))
+		return
+	}
+	if conn.ctx.Err() != nil {
+		// The connection closed: drop collected packets, matching queuePacket dropping post-close
+		// traffic in single-packet mode.
+		return
+	}
+	conn.packetBatches <- batch
 }
 
 // handle tries to handle the incoming packetData.
@@ -939,12 +1156,46 @@ func (conn *Conn) handle(pkData *packetData) error {
 			if err != nil {
 				return err
 			}
+			if !conn.loggedIn {
+				if err := preLoginTransferError(pks); err != nil {
+					return err
+				}
+			}
 			return conn.handleMultiple(pks)
+		}
+	}
+	if !conn.loggedIn {
+		if _, registered := conn.pool[pkData.h.PacketID]; registered {
+			probe := &packetData{
+				h:       pkData.h,
+				full:    pkData.full,
+				payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+			}
+			pks, err := probe.decodePacket(conn)
+			if err == nil {
+				if err := preLoginTransferError(pks); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	// This is not the packet we expected next in the login sequence. We push it back so that it may
 	// be handled by the user.
 	conn.deferPacket(pkData)
+	return nil
+}
+
+// preLoginTransferError returns a TransferError if active-protocol conversion produced a Transfer packet.
+func preLoginTransferError(pks []packet.Packet) error {
+	for _, pk := range pks {
+		if transfer, ok := pk.(*packet.Transfer); ok {
+			return &TransferError{
+				Address:     transfer.Address,
+				Port:        transfer.Port,
+				ReloadWorld: transfer.ReloadWorld,
+			}
+		}
+	}
 	return nil
 }
 
@@ -1081,8 +1332,6 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
 // and returns an error if it couldn't be done successfully.
 func (conn *Conn) handleLogin(pk *packet.Login) error {
-	// The next expected packet is a response from the client to the handshake.
-	conn.expect(packet.IDClientToServerHandshake)
 	var (
 		err        error
 		authResult login.AuthResult
@@ -1097,15 +1346,47 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
+	if pkc, ok := conn.conn.(publicKeyConn); ok {
+		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+		}
+	}
+	if conn.allow != nil {
+		if reason, ok := conn.allow(conn.RemoteAddr(), conn.identityData, conn.clientData); !ok {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonKicked, Message: reason})
+			return conn.Close()
+		}
+	}
+	if conn.disableEncryption {
+		return conn.handleClientToServerHandshake()
+	}
+	// The next expected packet is a response from the client to the handshake.
+	conn.expect(packet.IDClientToServerHandshake)
 	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
 		return fmt.Errorf("enable encryption: %w", err)
 	}
-	conn.handshakeComplete = true
 	return nil
+}
+
+// publicKeyConn is implemented by underlying [net.Conn] of the Conn to provide access
+// to the public key that the connection has proven possession of.
+type publicKeyConn interface {
+	// PublicKey returns a public key that the connection has proven possession of.
+	// It may be nil if the connection did not provide an authenticated identity
+	// and the underlying transport layer was configured to allow such connections.
+	// When non-nil, it must be compared against [login.AuthResult.PublicKey]
+	// to prevent login packet replay attacks.
+	PublicKey() *ecdsa.PublicKey
 }
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	conn.handshakeComplete = true
+	if conn.disablePacketHandling {
+		conn.disablePacketHandlingReady = true
+		return nil
+	}
 	// The next expected packet is a resource pack client response.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
@@ -1115,7 +1396,12 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	if conn.fetchResourcePacks != nil {
 		conn.resourcePacks = conn.fetchResourcePacks(conn.identityData, conn.clientData, slices.Clone(conn.resourcePacks))
 	}
-	pk := &packet.ResourcePacksInfo{TexturePackRequired: conn.texturePacksRequired, ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals}
+	pk := &packet.ResourcePacksInfo{
+		TexturePackRequired:        conn.texturePacksRequired,
+		ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
+		WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
+		WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
+	}
 	for _, pack := range conn.resourcePacks {
 		texturePack := protocol.TexturePackInfo{
 			UUID:        pack.UUID(),
@@ -1169,11 +1455,10 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	}
 
 	if !conn.disableEncryption {
-		x, _ := pub.Curve.ScalarMult(pub.X, pub.Y, conn.privateKey.D.Bytes())
-		// Make sure to pad the shared secret up to 96 bytes.
-		sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
-
-		keyBytes := sha256.Sum256(append(salt, sharedSecret...))
+		keyBytes, err := conn.encryptionKey(salt, pub)
+		if err != nil {
+			return fmt.Errorf("derive encryption key: %w", err)
+		}
 
 		// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
 		conn.encMu.Lock()
@@ -1192,6 +1477,9 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 // has support for the client blob cache.
 func (conn *Conn) handleClientCacheStatus(pk *packet.ClientCacheStatus) error {
 	conn.cacheEnabled = pk.Enabled
+	if conn.handshakeComplete && !conn.loggedIn && len(conn.resourcePacks) == 0 {
+		return conn.handleResourcePackClientResponse(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
+	}
 	return nil
 }
 
@@ -1226,11 +1514,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURL(pack.DownloadURL)
+			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
+			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
+				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
 				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				conn.packQueue.packAmount--
 				continue
 			}
 		}
@@ -1300,8 +1591,14 @@ func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool 
 	return false
 }
 
-// packChunkSize is the size of a single chunk of data from a resource pack: 128 KiB.
-const packChunkSize = 1024 * 128
+const (
+	// packChunkSize is the size of a single chunk of data from a resource pack: 128 KiB.
+	packChunkSize = 1024 * 128
+	// resourcePackChunkSendDelay spaces ResourcePackChunkData packets so slow clients are not flooded while
+	// downloading packs. Clients after 1.26.30 may fail resource pack downloads when pack chunks are sent
+	// too aggressively.
+	resourcePackChunkSendDelay = 200 * time.Millisecond
+)
 
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
 // handled differently depending on the response.
@@ -1323,7 +1620,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			return err
 		}
 	case packet.PackResponseAllPacksDownloaded:
-		pk := &packet.ResourcePackStack{BaseGameVersion: protocol.CurrentVersion, Experiments: []protocol.ExperimentData{{Name: "cameras", Enabled: true}}}
+		pk := &packet.ResourcePackStack{BaseGameVersion: "*"}
 		for _, pack := range conn.resourcePacks {
 			resourcePack := protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()}
 			pk.TexturePacks = append(pk.TexturePacks, resourcePack)
@@ -1346,21 +1643,27 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 }
 
 // startGame sends a StartGame packet using the game data of the connection.
-func (conn *Conn) startGame() {
+func (conn *Conn) startGame() error {
 	data := conn.gameData
 	if len(data.Dimensions) > 0 {
-		_ = conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions})
+		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
+			return err
+		}
 	}
-	_ = conn.WritePacket(&packet.JigsawStructureData{
+	if err := conn.WritePacket(&packet.JigsawStructureData{
 		StructureData: map[string]any{
 			"processors":     make([]map[string]any, 0),
 			"template_pools": make([]map[string]any, 0),
 			"jigsaws":        make([]map[string]any, 0),
 			"structure_sets": make([]map[string]any, 0),
 		},
-	})
-	_ = conn.WritePacket(&packet.VoxelShapes{})
-	_ = conn.WritePacket(&packet.StartGame{
+	}); err != nil {
+		return err
+	}
+	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
+		return err
+	}
+	if err := conn.WritePacket(&packet.StartGame{
 		Difficulty:                   data.Difficulty,
 		EntityUniqueID:               data.EntityUniqueID,
 		EntityRuntimeID:              data.EntityRuntimeID,
@@ -1401,10 +1704,18 @@ func (conn *Conn) startGame() {
 		BaseGameVersion:              data.BaseGameVersion,
 		GameVersion:                  protocol.CurrentVersion,
 		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
-	})
-	_ = conn.WritePacket(&packet.ItemRegistry{Items: data.Items})
-	_ = conn.Flush()
+		PropertyData:                 data.PropertyData,
+	}); err != nil {
+		return err
+	}
+	if err := conn.WritePacket(&packet.ItemRegistry{Items: data.Items}); err != nil {
+		return err
+	}
+	if err := conn.Flush(); err != nil {
+		return err
+	}
 	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
+	return nil
 }
 
 // nextResourcePackDownload moves to the next resource pack to download and sends a resource pack data info
@@ -1520,7 +1831,8 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 // pack to be downloaded.
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
-	if current.UUID().String() != pk.UUID {
+	uuid, _, _ := strings.Cut(pk.UUID, "_")
+	if current.UUID().String() != uuid {
 		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
 	}
 	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*packChunkSize {
@@ -1541,20 +1853,37 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 			return fmt.Errorf("read resource pack chunk: %w", err)
 		}
 		response.Data = response.Data[:n]
-
-		defer func() {
-			if !conn.packQueue.AllDownloaded() {
-				_ = conn.nextResourcePackDownload()
-			} else {
-				conn.expect(packet.IDResourcePackClientResponse)
-			}
-		}()
 	}
 	if err := conn.WritePacket(response); err != nil {
 		return fmt.Errorf("send ResourcePackChunkData: %w", err)
 	}
 
+	lastChunk := response.DataOffset+uint64(len(response.Data)) >= uint64(current.Size())
+	if lastChunk {
+		if !conn.packQueue.AllDownloaded() {
+			_ = conn.nextResourcePackDownload()
+		} else {
+			conn.expect(packet.IDResourcePackClientResponse)
+		}
+	}
+	if err := waitResourcePackChunkSendDelay(conn.ctx); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// waitResourcePackChunkSendDelay waits before processing the next resource pack chunk request.
+func waitResourcePackChunkSendDelay(ctx context.Context) error {
+	timer := time.NewTimer(resourcePackChunkSendDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
@@ -1650,10 +1979,6 @@ func (conn *Conn) handleRequestChunkRadius(pk *packet.RequestChunkRadius) error 
 	}
 	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	conn.gameData.ChunkRadius = pk.ChunkRadius
-	// Clients pre-1.21.80 crash when not sending all biomes, due to achievements assuming all biomes are present.
-	// To maintain backwards compatibility, we send empty biomes so the protocol can handle legacy biome data
-	// for older clients (see: https://github.com/Sandertv/gophertunnel/blob/a61732e9cb7bc04e5e7dd961ad4fea597f1229dc/minecraft/conn.go#L1274-L1278).
-	_ = conn.WritePacket(&packet.BiomeDefinitionList{})
 	_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
 	_ = conn.WritePacket(&packet.CreativeContent{})
 	return nil
@@ -1692,6 +2017,10 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
+		if conn.loginSuccessReceived {
+			return nil
+		}
+		conn.loginSuccessReceived = true
 		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
@@ -1766,12 +2095,10 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 	_ = conn.Flush()
 
 	if !conn.disableEncryption {
-		// We first compute the shared secret.
-		x, _ := clientPublicKey.Curve.ScalarMult(clientPublicKey.X, clientPublicKey.Y, conn.privateKey.D.Bytes())
-
-		sharedSecret := append(bytes.Repeat([]byte{0}, 48-len(x.Bytes())), x.Bytes()...)
-
-		keyBytes := sha256.Sum256(append(conn.salt, sharedSecret...))
+		keyBytes, err := conn.encryptionKey(conn.salt, clientPublicKey)
+		if err != nil {
+			return fmt.Errorf("derive encryption key: %w", err)
+		}
 
 		// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
 		conn.encMu.Lock()
@@ -1781,6 +2108,26 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 	}
 
 	return nil
+}
+
+// encryptionKey computes the encryption key for the connection using the salt
+// and the remote connection's public key. It derives the shared secret through
+// ECDH key exchange, then produces a 32-byte key by hashing the salt with the
+// shared secret.
+func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, error) {
+	privateKey, err := conn.privateKey.ECDH()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("convert private key to ECDH: %w", err)
+	}
+	publicKey, err := pub.ECDH()
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("convert public key to ECDH: %w", err)
+	}
+	sharedSecret, err := privateKey.ECDH(publicKey)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("compute shared secret: %w", err)
+	}
+	return sha256.Sum256(append(salt, sharedSecret...)), nil
 }
 
 // expect sets the packet IDs that are next expected to arrive.

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -25,6 +25,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
+
+var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
@@ -41,6 +43,10 @@ type ListenConfig struct {
 	// verification will be done to ensure that the player connecting is authenticated using their XBOX Live
 	// account.
 	AuthenticationDisabled bool
+
+	// DisablePacketEncryption disables packet encryption for accepted connections.
+	// Authentication is unaffected. Only use this on trusted networks.
+	DisablePacketEncryption bool
 
 	// MaximumPlayers is the maximum amount of players accepted in the server. If non-zero, players that
 	// attempt to join while the server is full will be kicked during login. If zero, the maximum player count
@@ -94,6 +100,10 @@ type ListenConfig struct {
 	TexturePacksRequired bool
 	// ForceDisableVibrantVisuals specifies if the server should force disable vibrant visuals for all clients.
 	ForceDisableVibrantVisuals bool
+	// ResourcePackWorldTemplateUUID is written into ResourcePacksInfo. Leave zero for default server behaviour.
+	ResourcePackWorldTemplateUUID uuid.UUID
+	// ResourcePackWorldTemplateVersion is written into ResourcePacksInfo. Leave empty for default server behaviour.
+	ResourcePackWorldTemplateVersion string
 	// FetchResourcePacks determines which resource packs to send to a client based on its identity and client data.
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
@@ -103,13 +113,21 @@ type ListenConfig struct {
 	// If AfterHandshake returns a non-nil error, the connection is aborted.
 	AfterHandshake func(c *Conn) error
 
+	// ConnHandler is called when a connection is ready for caller-owned packet handling. If set, ready connections
+	// are delivered to ConnHandler instead of Listener.Accept. The handler runs on its own goroutine and may block
+	// reading the connection; returning a non-nil error closes the connection.
+	ConnHandler func(c *Conn) error
+
 	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
 	DisablePacketHandling bool
+	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
+	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
+	EnableBatchReading bool
 
-	// PacketFunc is called whenever a packet is read from or written to a connection returned when using
-	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the
-	// Login packet. The function is called with the header of the packet and its raw payload, the address
-	// from which the packet originated, and the destination address.
+	// PacketFunc is called whenever a packet is read from or written to a connection delivered through ConnHandler or
+	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the Login
+	// packet. The function is called with the header of the packet and its raw payload, the address from which the
+	// packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
 	// PacketBatchFunc is called after each outbound packet batch has been encoded.
 	PacketBatchFunc packet.BatchEncodeObserver
@@ -123,6 +141,14 @@ type ListenConfig struct {
 	// listeners on different ports (e.g., 19132 for IPv4, 19133 for IPv6).
 	IPv4Port uint16
 	IPv6Port uint16
+
+	// Allow filters what connections are allowed to connect to the Server. The
+	// address, identity data, and client data of the connection are passed. If
+	// Allow returns false, the connection is closed with the string returned as
+	// the disconnect message. WARNING: Use the client data at your own risk, it
+	// cannot be trusted because it can be freely changed by the player
+	// connecting.
+	Allow func(addr net.Addr, identityData login.IdentityData, clientData login.ClientData) (string, bool)
 }
 
 // Listener implements a Minecraft listener on top of an unspecific net.Listener. It abstracts away the
@@ -157,6 +183,22 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 		cfg.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
 	cfg.ErrorLog = cfg.ErrorLog.With("src", "listener")
+	n, ok := networkByID(network, cfg.ErrorLog)
+	if !ok {
+		return nil, fmt.Errorf("listen: no network under id %v", network)
+	}
+	return cfg.ListenNetwork(n, address)
+}
+
+// ListenNetwork announces on the local network address using the Network implementation passed.
+// The network is typically [RakNet]. If the host in the address parameter is empty or a literal
+// unspecified IP address, ListenNetwork listens on all available unicast and anycast IP addresses of
+// the local system.
+func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listener, error) {
+	if cfg.ErrorLog == nil {
+		cfg.ErrorLog = slog.New(internal.DiscardHandler{})
+	}
+	cfg.ErrorLog = cfg.ErrorLog.With("src", "listener")
 	if cfg.StatusProvider == nil {
 		cfg.StatusProvider = NewStatusProvider("Minecraft Server", "Gophertunnel")
 	}
@@ -176,11 +218,6 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 	} else if cfg.CompressionThreshold < 0 {
 		cfg.CompressionThreshold = 0
 	}
-	if cfg.MaxDecompressedLen == 0 {
-		cfg.MaxDecompressedLen = packet.DefaultMaxDecompressedLen
-	} else if cfg.MaxDecompressedLen < 0 {
-		cfg.MaxDecompressedLen = math.MaxInt
-	}
 
 	var verifier *oidc.IDTokenVerifier
 	if !cfg.AuthenticationDisabled {
@@ -195,12 +232,7 @@ func (cfg ListenConfig) Listen(network string, address string) (*Listener, error
 		}
 	}
 
-	n, ok := networkByID(network, cfg.ErrorLog)
-	if !ok {
-		return nil, fmt.Errorf("listen: no network under id %v", network)
-	}
-
-	netListener, err := n.Listen(address)
+	netListener, err := network.Listen(address)
 	if err != nil {
 		return nil, err
 	}
@@ -252,13 +284,10 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		return authEnvCache, nil
 	}
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	discovery, err := service.Discover(ctx, service.ApplicationTypeMinecraftPE, protocol.CurrentVersion)
+	discovery, err := service.Default(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
 	}
@@ -277,10 +306,6 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 // authenticating new multiplayer tokens issued by the authorization service
 // of Minecraft.
 func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -302,7 +327,7 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
-// use the Conn.ReadPacket() and Conn.WritePacket() methods.
+// use Conn.ReadPacket (or Conn.ReadBatch when batch reading is enabled) and Conn.WritePacket.
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-listener.incoming
@@ -373,7 +398,6 @@ func (listener *Listener) updatePongData() {
 	}
 
 	s := listener.status()
-	s.ServerSubName = "§bLunar Proxy"
 	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
 		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port,
@@ -427,17 +451,21 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	listener.packsMu.RUnlock()
 
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
+	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold
 	conn.maxDecompressedLen = listener.cfg.MaxDecompressedLen
 	conn.pool = conn.proto.Packets(true)
+	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
+	conn.resourcePackWorldTemplateUUID = listener.cfg.ResourcePackWorldTemplateUUID
+	conn.resourcePackWorldTemplateVersion = listener.cfg.ResourcePackWorldTemplateVersion
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
 	conn.gameData.WorldName = listener.status().ServerName
@@ -446,6 +474,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
+	conn.batchReading = listener.cfg.EnableBatchReading
 
 	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
 		// The server was full. We kick the player immediately and close the connection.
@@ -479,34 +508,75 @@ func (listener *Listener) handleConn(conn *Conn) {
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
+		publishBatch := false
+		callbackErr := false
 		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
+			passthroughReadyBefore := conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
+				callbackErr = true
 				return err
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
+					// Login has not completed yet, so publishBatch cannot be set and the connection will not be delivered.
+					callbackErr = true
 					return err
 				}
 			}
-			if !loggedInBefore && conn.loggedIn {
-				select {
-				case <-listener.close:
-					// The listener was closed while this one was logged in, so the incoming channel will be
-					// closed. Just return so the connection is closed and cleaned up.
-					return net.ErrClosed
-				case listener.incoming <- conn:
-					// The connection was previously not logged in, but was after receiving this packet,
-					// meaning the connection is fully completely now. We add it to the channel so that
-					// a call to Accept() can receive it.
+			publish := !loggedInBefore && conn.loggedIn
+			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
+				publish = true
+			}
+			if publish {
+				if conn.batchReading {
+					publishBatch = true
+				} else if !listener.deliverConn(conn) {
+					return errListenerDeliveryClosed
 				}
 			}
 			return nil
 		}); err != nil {
-			if !errors.Is(err, net.ErrClosed) {
+			conn.flushBatch()
+			if publishBatch {
+				listener.deliverConn(conn)
+			}
+			if callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed)) {
 				conn.log.Error(err.Error())
 			}
 			return
 		}
+		// In batch-reading mode, the connection is published only after its batch has been flushed, so
+		// the owner can immediately read the batch that completed the login.
+		conn.flushBatch()
+		if publishBatch && !listener.deliverConn(conn) {
+			return
+		}
+	}
+}
+
+// deliverConn delivers conn to the configured owner. ConnHandler, when set, replaces the Accept path entirely:
+// connections delivered through it are not published to listener.incoming.
+func (listener *Listener) deliverConn(conn *Conn) bool {
+	if listener.cfg.ConnHandler != nil {
+		// The handler runs on its own goroutine so that it may block reading the connection without
+		// stalling the goroutine that queues its incoming packets.
+		go func() {
+			if err := listener.cfg.ConnHandler(conn); err != nil {
+				conn.log.Error(err.Error())
+				_ = conn.Close()
+			}
+		}()
+		return true
+	}
+	select {
+	case <-listener.close:
+		// The listener was closed while this one was logged in, so the incoming channel will be closed. Just return
+		// so the connection is closed and cleaned up.
+		return false
+	case listener.incoming <- conn:
+		// The connection was previously not logged in, but was after receiving this packet, meaning the connection is
+		// complete now. We add it to the channel so that a call to Accept() can receive it.
+		return true
 	}
 }

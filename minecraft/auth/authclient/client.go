@@ -62,7 +62,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		}
 
 		// Clone the request for each attempt to avoid issues with consumed request bodies
-		req := request.Clone(request.Context())
+		req := request.Clone(ctx)
 		if request.Body != nil && request.GetBody != nil {
 			req.Body, err = request.GetBody()
 			if err != nil {
@@ -80,8 +80,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			if errors.Is(err, io.EOF) {
 				continue
 			}
-			var netErr net.Error
-			if errors.As(err, &netErr) {
+			if _, ok := errors.AsType[net.Error](err); ok {
 				continue
 			}
 			// Not a network error, so don't retry
@@ -104,9 +103,11 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 					}
 				}
 			}
-			// Always close the response body immediately
-			resp.Body.Close()
-			continue
+			if i+1 < opts.Attempts {
+				resp.Body.Close()
+				continue
+			}
+			return resp, nil
 		}
 
 		// Success or a non-5xx error code.

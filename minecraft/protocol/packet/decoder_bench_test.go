@@ -20,7 +20,7 @@ func (r *benchmarkPacketReader) ReadPacket() ([]byte, error) {
 	return r.packet, nil
 }
 
-func BenchmarkDecodeReadPathFlateBatch(b *testing.B) {
+func BenchmarkDecodeFuncFlateBatch(b *testing.B) {
 	batch, decompressedLen := benchmarkFlateBatch(b)
 	reader := &benchmarkPacketReader{packet: batch}
 	decoder := NewDecoder(reader)

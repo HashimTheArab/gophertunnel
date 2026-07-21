@@ -8,9 +8,10 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
-	"golang.org/x/oauth2"
 )
 
 // Environment represents the configuration for a network service in Minecraft: Bedrock Edition.
@@ -87,6 +88,14 @@ func (d *Discovery) Environment(env Environment) error {
 	return json.Unmarshal(m2, env)
 }
 
+// Default obtains a Discovery using [ApplicationTypeMinecraftPE] and
+// [protocol.CurrentVersion] as the application type and version. It is
+// a convenience wrapper around [Discover] for callers that do not need
+// to specify these parameters explicitly.
+func Default(ctx context.Context) (*Discovery, error) {
+	return Discover(ctx, ApplicationTypeMinecraftPE, protocol.CurrentVersion)
+}
+
 // Discover obtains a Discover for the specific version for the specific
 // application type. The returned Discovery contains environments for
 // various services in Minecraft: Bedrock Edition and will be used as
@@ -95,8 +104,6 @@ func (d *Discovery) Environment(env Environment) error {
 // The version typically doesn't matter in any way, but it is still recommended
 // to specify [protocol.CurrentVersion] to keep up the compatibility with the
 // `protocol` package.
-//
-// The mutex is intentionally held during the request to avoid race conditions with the cache.
 //
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
@@ -116,11 +123,9 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	httpClient := http.DefaultClient
-	if ctx != nil {
-		if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil {
-			httpClient = c
-		}
+	httpClient := auth.ContextClient(ctx)
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
 	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {

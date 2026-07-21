@@ -18,14 +18,13 @@ type Decoder struct {
 	r   io.Reader
 	buf []byte
 
-	// pr holds a packetReader (and io.Reader) that packets are read from if the io.Reader passed to
-	// NewDecoder implements the packetReader interface.
-	pr packetReader
+	// pr holds a PacketReader (and io.Reader) that packets are read from if the io.Reader passed to
+	// NewDecoder implements the PacketReader interface.
+	pr PacketReader
 
 	// header holds the batch header that is expected on the beginning of input packet data.
 	header             []byte
 	decompress         bool
-	compression        Compression
 	maxDecompressedLen int
 	encrypt            *encrypt
 	// disableEncryption indicates whether to prevent encryption from being enabled
@@ -35,39 +34,35 @@ type Decoder struct {
 	checkPacketLimit bool
 }
 
-// packetReader is used to read packets immediately instead of copying them in a buffer first. This is a
-// specific case made to reduce RAM usage.
-type packetReader interface {
-	ReadPacket() ([]byte, error)
-}
-
 // NewDecoder returns a new decoder decoding data from the io.Reader passed. One read call from the reader is
 // assumed to consume an entire packet.
 func NewDecoder(reader io.Reader) *Decoder {
 	var batch []byte
-	if b, ok := reader.(batchHeader); ok {
+	if b, ok := reader.(BatchHeaderer); ok {
 		batch = b.BatchHeader()
 	} else {
 		batch = []byte{header}
 	}
 	var disableEncryption bool
-	if d, ok := reader.(encryptionDisabler); ok {
+	if d, ok := reader.(EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
-	if pr, ok := reader.(packetReader); ok {
+	if pr, ok := reader.(PacketReader); ok {
 		return &Decoder{
-			checkPacketLimit:  true,
-			pr:                pr,
-			header:            batch,
-			disableEncryption: disableEncryption,
+			checkPacketLimit:   true,
+			pr:                 pr,
+			header:             batch,
+			maxDecompressedLen: DefaultMaxDecompressedLen,
+			disableEncryption:  disableEncryption,
 		}
 	}
 	return &Decoder{
-		r:                 reader,
-		buf:               make([]byte, 1024*1024*3),
-		header:            batch,
-		checkPacketLimit:  true,
-		disableEncryption: disableEncryption,
+		r:                  reader,
+		buf:                make([]byte, 1024*1024*3),
+		header:             batch,
+		maxDecompressedLen: DefaultMaxDecompressedLen,
+		checkPacketLimit:   true,
+		disableEncryption:  disableEncryption,
 	}
 }
 
@@ -83,10 +78,10 @@ func (decoder *Decoder) EnableEncryption(keyBytes [32]byte) {
 	decoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Decoder.
-func (decoder *Decoder) EnableCompression(compression Compression, maxDecompressedLen int) {
+// EnableCompression enables compression for the Decoder. The compression argument is retained for API
+// compatibility; each batch identifies its own registered algorithm.
+func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int) {
 	decoder.decompress = true
-	decoder.compression = compression
 	if maxDecompressedLen == 0 {
 		maxDecompressedLen = DefaultMaxDecompressedLen
 	} else if maxDecompressedLen < 0 {
@@ -109,7 +104,7 @@ const (
 	maximumInBatch = 1600
 	// DefaultMaxDecompressedLen is the default maximum decompressed batch size.
 	DefaultMaxDecompressedLen = 16 * 1024 * 1024
-	maxPooledDecoderBufferCap = DefaultMaxDecompressedLen
+	maxPooledDecoderBufferCap = 1 << 20
 )
 
 var decompressBufferPool = sync.Pool{
@@ -122,8 +117,19 @@ var decompressBufferPool = sync.Pool{
 // Decode decodes one packet batch from the io.Reader passed in NewDecoder(), producing a slice of packets that it
 // held and an error if not successful. The returned packet slices are owned by the caller.
 func (decoder *Decoder) Decode() (packets [][]byte, err error) {
-	err = decoder.DecodeFunc(func(packet []byte) error {
-		packets = append(packets, append([]byte(nil), packet...))
+	data, pooled, err := decoder.readBatch()
+	if pooled != nil {
+		defer putDecompressBuffer(pooled)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := decoder.walkBatch(data, nil); err != nil {
+		return nil, err
+	}
+	data = bytes.Clone(data)
+	err = decoder.walkBatch(data, func(packet []byte) error {
+		packets = append(packets, packet)
 		return nil
 	})
 	if err != nil {
@@ -135,17 +141,20 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 // DecodeFunc decodes one packet batch and calls f for each packet in the batch. The packet slice passed to f is
 // valid only until f returns.
 func (decoder *Decoder) DecodeFunc(f func([]byte) error) error {
-	data, release, err := decoder.readBatch()
-	if release != nil {
-		defer release()
+	data, pooled, err := decoder.readBatch()
+	if pooled != nil {
+		defer putDecompressBuffer(pooled)
 	}
 	if err != nil {
 		return err
 	}
-	return decoder.decodeBatch(data, f)
+	if err := decoder.walkBatch(data, nil); err != nil {
+		return err
+	}
+	return decoder.walkBatch(data, f)
 }
 
-func (decoder *Decoder) readBatch() (data []byte, release func(), err error) {
+func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
 	if decoder.pr == nil {
 		var n int
 		n, err = decoder.r.Read(decoder.buf)
@@ -188,29 +197,23 @@ func (decoder *Decoder) readBatch() (data []byte, release func(), err error) {
 			if !ok {
 				return nil, nil, fmt.Errorf("decompress batch: unknown compression algorithm %v", data[0])
 			}
-			if compression != decoder.compression {
-				return nil, nil, fmt.Errorf("decompress batch: unexpected compression algorithm: got %v, expected %v", compression, decoder.compression)
-			}
-			data, release, err = decoder.decompressBatch(compression, data[1:])
+			data, pooled, err = decoder.decompressBatch(compression, data[1:])
 			if err != nil {
-				if release != nil {
-					release()
-				}
 				return nil, nil, fmt.Errorf("decompress batch: %w", err)
 			}
 		}
 	}
 
-	if err := decoder.checkBatchLength(data); err != nil {
-		if release != nil {
-			release()
+	if uint64(len(data)) > uint64(decoder.maxDecompressedLen) {
+		if pooled != nil {
+			putDecompressBuffer(pooled)
 		}
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("decode batch: decompressed size %v exceeds limit %v", len(data), decoder.maxDecompressedLen)
 	}
-	return data, release, nil
+	return data, pooled, nil
 }
 
-func (decoder *Decoder) decompressBatch(compression Compression, compressed []byte) ([]byte, func(), error) {
+func (decoder *Decoder) decompressBatch(compression Compression, compressed []byte) ([]byte, *[]byte, error) {
 	if decompressor, ok := compression.(appendDecompression); ok {
 		pooled := getDecompressBuffer()
 		data, err := decompressor.DecompressAppend(*pooled, compressed, decoder.maxDecompressedLen)
@@ -219,9 +222,7 @@ func (decoder *Decoder) decompressBatch(compression Compression, compressed []by
 			return nil, nil, err
 		}
 		*pooled = data
-		return data, func() {
-			putDecompressBuffer(pooled)
-		}, nil
+		return data, pooled, nil
 	}
 
 	data, err := compression.Decompress(compressed, decoder.maxDecompressedLen)
@@ -231,8 +232,7 @@ func (decoder *Decoder) decompressBatch(compression Compression, compressed []by
 	return data, nil, nil
 }
 
-func (decoder *Decoder) decodeBatch(data []byte, f func([]byte) error) error {
-	limit := decoder.maxPacketLength()
+func (decoder *Decoder) walkBatch(data []byte, f func([]byte) error) error {
 	var packetCount int
 	for len(data) != 0 {
 		length, n, err := readPacketLength(data)
@@ -241,10 +241,10 @@ func (decoder *Decoder) decodeBatch(data []byte, f func([]byte) error) error {
 		}
 		data = data[n:]
 		if length == 0 {
-			return fmt.Errorf("decode batch: empty packet")
-		}
-		if uint64(length) > uint64(limit) {
-			return fmt.Errorf("decode batch: packet length %v exceeds limit %v", length, limit)
+			if decoder.checkPacketLimit {
+				return fmt.Errorf("decode batch: empty packet")
+			}
+			continue
 		}
 		if length > uint32(len(data)) {
 			return fmt.Errorf("decode batch: packet length %v exceeds remaining %v", length, len(data))
@@ -252,27 +252,15 @@ func (decoder *Decoder) decodeBatch(data []byte, f func([]byte) error) error {
 		if packetCount >= maximumInBatch && decoder.checkPacketLimit {
 			return fmt.Errorf("decode batch: number of packets exceeds max=%v", maximumInBatch)
 		}
-		if err := f(data[:length]); err != nil {
-			return err
+		if f != nil {
+			if err := f(data[:length:length]); err != nil {
+				return err
+			}
 		}
 		packetCount++
 		data = data[length:]
 	}
 	return nil
-}
-
-func (decoder *Decoder) checkBatchLength(data []byte) error {
-	if limit := decoder.maxPacketLength(); uint64(len(data)) > uint64(limit) {
-		return fmt.Errorf("decode batch: decompressed size %v exceeds limit %v", len(data), limit)
-	}
-	return nil
-}
-
-func (decoder *Decoder) maxPacketLength() int {
-	if decoder.maxDecompressedLen > 0 {
-		return decoder.maxDecompressedLen
-	}
-	return DefaultMaxDecompressedLen
 }
 
 func getDecompressBuffer() *[]byte {

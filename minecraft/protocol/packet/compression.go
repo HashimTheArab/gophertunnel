@@ -129,6 +129,18 @@ func (c flateCompression) Decompress(compressed []byte, limit int) ([]byte, erro
 
 func (flateCompression) DecompressAppend(dst, compressed []byte, limit int) ([]byte, error) {
 	limit = normalizeDecompressionLimit(limit)
+	hint := len(compressed)
+	if hint > math.MaxInt/2 {
+		hint = math.MaxInt
+	} else {
+		hint *= 2
+	}
+	hint = max(hint, 32*1024)
+	if limit != math.MaxInt {
+		hint = min(hint, limit+1)
+	}
+	dst = slices.Grow(dst, hint)
+
 	r := flateDecompressPool.Get().(io.ReadCloser)
 	defer func() {
 		_ = r.Close()
@@ -198,7 +210,7 @@ func (snappyCompression) DecompressAppend(dst, compressed []byte, limit int) ([]
 	if err != nil {
 		return nil, fmt.Errorf("decompress snappy: %w", err)
 	}
-	return dst[:offset+len(decompressed)], nil
+	return append(dst[:offset], decompressed...), nil
 }
 
 func normalizeDecompressionLimit(limit int) int {
@@ -218,9 +230,6 @@ func appendReader(dst []byte, r io.Reader, limit int) ([]byte, error) {
 			grow := chunkSize
 			if limit != math.MaxInt {
 				remaining := limit + 1 - (len(dst) - start)
-				if remaining <= 0 {
-					return nil, fmt.Errorf("size exceeds limit %d", limit)
-				}
 				grow = min(grow, remaining)
 			}
 			dst = slices.Grow(dst, grow)
@@ -229,9 +238,6 @@ func appendReader(dst []byte, r io.Reader, limit int) ([]byte, error) {
 		readLen = min(readLen, chunkSize)
 		if limit != math.MaxInt {
 			remaining := limit + 1 - (len(dst) - start)
-			if remaining <= 0 {
-				return nil, fmt.Errorf("size exceeds limit %d", limit)
-			}
 			readLen = min(readLen, remaining)
 		}
 

@@ -6,6 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/nbt"
+	"golang.org/x/exp/constraints"
 )
 
 // IO represents a packet IO direction. Implementations of this interface are Reader and Writer. Reader reads
@@ -150,9 +151,9 @@ const maxSliceLength = 4096
 
 // SliceOfLen reads/writes the elements of a slice of type T with length l.
 func SliceOfLen[T any, S ~*[]T, A PtrMarshaler[T]](r IO, l uint32, x S) {
-	checker, ok := r.(sliceLengthChecker)
+	limit, ok := r.(sliceReader)
 	if ok {
-		checker.CheckSliceLength(l, maxSliceLength)
+		limit.SliceLength(l, maxSliceLength)
 		*x = make([]T, l)
 	}
 
@@ -163,9 +164,9 @@ func SliceOfLen[T any, S ~*[]T, A PtrMarshaler[T]](r IO, l uint32, x S) {
 
 // FuncSliceOfLen reads/writes the elements of a slice of type T with length l using func f.
 func FuncSliceOfLen[T any, S ~*[]T](r IO, l uint32, x S, f func(*T)) {
-	checker, ok := r.(sliceLengthChecker)
+	limit, ok := r.(sliceReader)
 	if ok {
-		checker.CheckSliceLength(l, maxSliceLength)
+		limit.SliceLength(l, maxSliceLength)
 		*x = make([]T, l)
 	}
 
@@ -174,8 +175,8 @@ func FuncSliceOfLen[T any, S ~*[]T](r IO, l uint32, x S, f func(*T)) {
 	}
 }
 
-type sliceLengthChecker interface {
-	CheckSliceLength(value uint32, max uint32)
+type sliceReader interface {
+	SliceLength(value uint32, max uint32)
 }
 
 // FuncIOSliceOfLen reads/writes the elements of a slice of type T with length l using func f.
@@ -197,7 +198,7 @@ func Single[T any, S PtrMarshaler[T]](r IO, x S) {
 }
 
 // IntegerFunc reads/writes a value of type S using f, converting between S and the wire type W.
-func IntegerFunc[S, W ~int8 | ~uint8 | ~int16 | ~uint16 | ~int32 | ~uint32 | ~int64 | ~uint64](x *S, f func(*W)) {
+func IntegerFunc[S, W constraints.Integer](x *S, f func(*W)) {
 	w := W(*x)
 	f(&w)
 	*x = S(w)

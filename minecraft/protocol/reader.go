@@ -107,8 +107,7 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
-	r.CheckSliceLength(length, maxByteSliceLength)
-	r.checkRemaining(l, "byte slice")
+	r.SliceLength(length, maxByteSliceLength)
 	data := make([]byte, l)
 	if _, err := r.r.Read(data); err != nil {
 		r.panic(err)
@@ -274,18 +273,33 @@ func (r *Reader) PlayerInventoryAction(x *UseItemTransactionData) {
 	if x.LegacyRequestID < -1 && (x.LegacyRequestID&1) == 0 {
 		Slice(r, &x.LegacySetItemSlots)
 	}
-	Slice(r, &x.Actions)
+	FuncSlice(r, &x.Actions, r.inventoryActionOld)
 	r.Varuint32(&x.ActionType)
 	r.Varuint32(&x.TriggerType)
 	r.BlockPos(&x.BlockPosition)
 	r.Varint32(&x.BlockFace)
 	r.Varint32(&x.HotBarSlot)
-	r.ItemInstanceNew(&x.HeldItem)
+	r.ItemInstance(&x.HeldItem)
 	r.Vec3(&x.Position)
 	r.Vec3(&x.ClickedPosition)
 	r.Varuint32(&x.BlockRuntimeID)
 	r.Uint8(&x.ClientPrediction)
 	r.Uint8(&x.ClientCooldownState)
+}
+
+func (r *Reader) inventoryActionOld(x *InventoryAction) {
+	r.Varuint32(&x.SourceType)
+	switch x.SourceType {
+	case InventoryActionSourceContainer, InventoryActionSourceTODO:
+		var windowID int32
+		r.Varint32(&windowID)
+		x.WindowID = int8(windowID)
+	case InventoryActionSourceWorld:
+		r.Varuint32(&x.SourceFlags)
+	}
+	r.Varuint32(&x.InventorySlot)
+	r.ItemInstance(&x.OldItem)
+	r.ItemInstance(&x.NewItem)
 }
 
 // GameRule reads a GameRule x from the Reader.
@@ -724,8 +738,8 @@ func (r *Reader) ShapeData(x *ShapeData) {
 	(*x).Marshal(r)
 }
 
-// CheckSliceLength validates a length prefix before a slice is allocated.
-func (r *Reader) CheckSliceLength(value uint32, max uint32) {
+// SliceLength validates a length prefix before a slice is allocated.
+func (r *Reader) SliceLength(value uint32, max uint32) {
 	if value > max && r.limitsEnabled {
 		r.panicf("slice length was too long: length of %v (max %v)", value, max)
 	}
@@ -734,6 +748,7 @@ func (r *Reader) CheckSliceLength(value uint32, max uint32) {
 	}
 }
 
+// checkRemaining checks that a field's declared length fits within the remaining packet payload.
 func (r *Reader) checkRemaining(length int, field string) {
 	if length < 0 {
 		r.panicf("%s length was negative: %v", field, length)
