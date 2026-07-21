@@ -38,6 +38,53 @@ func TestListenConfigListenNetworkUsesExplicitNetwork(t *testing.T) {
 	}
 }
 
+func TestListenerDisablePacketEncryption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                   string
+		disableInConfig        bool
+		disableInTransport     bool
+		authenticationDisabled bool
+		wantDisabled           bool
+	}{
+		{name: "enabled by default"},
+		{name: "disabled by listener config", disableInConfig: true, wantDisabled: true},
+		{name: "disabled by transport", disableInTransport: true, authenticationDisabled: true, wantDisabled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+
+			listener := &Listener{
+				cfg: ListenConfig{
+					ErrorLog:                slog.New(internal.DiscardHandler{}),
+					StatusProvider:          NewStatusProvider("Minecraft Server", "Gophertunnel"),
+					AuthenticationDisabled:  tt.authenticationDisabled,
+					DisablePacketEncryption: tt.disableInConfig,
+					DisablePacketHandling:   true,
+				},
+				listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+				incoming: make(chan *Conn, 1),
+				close:    make(chan struct{}),
+			}
+			listener.createConn(encryptionDisablingConn{Conn: server, disabled: tt.disableInTransport})
+
+			if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
+				t.Fatalf("write packet: %v", err)
+			}
+			conn := acceptConn(t, listener)
+			if conn.disableEncryption != tt.wantDisabled {
+				t.Fatalf("disableEncryption = %t, want %t", conn.disableEncryption, tt.wantDisabled)
+			}
+			if conn.authEnabled == tt.authenticationDisabled {
+				t.Fatalf("authEnabled = %t, AuthenticationDisabled = %t", conn.authEnabled, tt.authenticationDisabled)
+			}
+		})
+	}
+}
+
 func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	t.Parallel()
 
@@ -561,6 +608,13 @@ type fakeNetworkListener struct {
 	addr     net.Addr
 	pongData *[]byte
 }
+
+type encryptionDisablingConn struct {
+	net.Conn
+	disabled bool
+}
+
+func (conn encryptionDisablingConn) DisableEncryption() bool { return conn.disabled }
 
 func (f fakeNetworkListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
 func (f fakeNetworkListener) Close() error              { return nil }
