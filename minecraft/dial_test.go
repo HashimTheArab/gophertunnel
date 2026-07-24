@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +17,23 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
 )
+
+func TestDefaultClientDataUsesVanillaSkinGeometryEngineVersion(t *testing.T) {
+	data := login.ClientData{}
+	defaultClientData("example.com:19132", "Player", &data)
+
+	version, err := base64.StdEncoding.DecodeString(data.SkinGeometryVersion)
+	if err != nil {
+		t.Fatalf("decode skin geometry engine version: %v", err)
+	}
+	if got, want := string(version), "1.14.0"; got != want {
+		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
+	}
+}
 
 func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
