@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/md5"
+	cryptorand "crypto/rand"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
@@ -348,14 +350,11 @@ func parseAsKey(k any, pub *ecdsa.PublicKey) error {
 // private key passed, which must match the public key in the token's cpk claim.
 func EncodeToken(data ClientData, key *ecdsa.PrivateKey, token string) []byte {
 	keyData := MarshalPublicKey(&key.PublicKey)
-	signer, _ := jose.NewSigner(jose.SigningKey{Key: key, Algorithm: jose.ES384}, &jose.SignerOptions{
-		ExtraHeaders: map[jose.HeaderKey]any{"x5u": keyData},
-	})
 
 	req := &request{
 		Token: token,
 	}
-	req.RawToken, _ = signJSONWebToken(signer, data)
+	req.RawToken, _ = signClientData(key, keyData, data)
 	return encodeRequest(req)
 }
 
@@ -400,7 +399,7 @@ func EncodeOffline(identityData IdentityData, data ClientData, key *ecdsa.Privat
 	})
 	// We create another token this time, which is signed the same as the claim we just inserted in the chain,
 	// just now it contains client data.
-	req.RawToken, _ = signJSONWebToken(signer, data)
+	req.RawToken, _ = signClientData(key, keyData, data)
 
 	return encodeRequest(req)
 }
@@ -416,6 +415,37 @@ func signJSONWebToken(signer jose.Signer, claims any) (string, error) {
 		return "", err
 	}
 	return jws.CompactSerialize()
+}
+
+// signClientData signs a client-data JWT with the JSON newlines emitted by the vanilla Bedrock client.
+func signClientData(key *ecdsa.PrivateKey, keyData string, data ClientData) (string, error) {
+	header := bytes.NewBuffer(nil)
+	if err := json.NewEncoder(header).Encode(struct {
+		Algorithm string `json:"alg"`
+		PublicKey string `json:"x5u"`
+	}{
+		Algorithm: string(jose.ES384),
+		PublicKey: keyData,
+	}); err != nil {
+		return "", err
+	}
+	payload := bytes.NewBuffer(nil)
+	if err := json.NewEncoder(payload).Encode(data); err != nil {
+		return "", err
+	}
+
+	signingInput := base64.RawURLEncoding.EncodeToString(header.Bytes()) + "." +
+		base64.RawURLEncoding.EncodeToString(payload.Bytes())
+	digest := sha512.Sum384([]byte(signingInput))
+	r, s, err := ecdsa.Sign(cryptorand.Reader, key, digest[:])
+	if err != nil {
+		return "", err
+	}
+	size := (key.Curve.Params().BitSize + 7) / 8
+	signature := make([]byte, size*2)
+	r.FillBytes(signature[:size])
+	s.FillBytes(signature[size:])
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
 // tokenClaims holds the claims for the multiplayer token from the first chain,

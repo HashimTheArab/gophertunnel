@@ -94,6 +94,34 @@ func TestSignJSONWebTokenTerminatesPayloadJSON(t *testing.T) {
 	}
 }
 
+func TestEncodeTokenTerminatesClientJWTHeaderJSON(t *testing.T) {
+	key := testKey(t)
+	encoded := EncodeToken(ClientData{}, key, "auth-token")
+	parsed, err := parseLoginRequest(encoded)
+	if err != nil {
+		t.Fatalf("parse encoded request: %v", err)
+	}
+	parts := strings.Split(parsed.RawToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected compact JWT with 3 parts, got %d", len(parts))
+	}
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	if !bytes.HasSuffix(header, []byte{'\n'}) {
+		t.Fatalf("expected signed header JSON to end with newline, got %q", header)
+	}
+	if !json.Valid(header) {
+		t.Fatalf("expected header JSON to remain valid, got %q", header)
+	}
+	var decoded ClientData
+	publicKey := key.PublicKey
+	if err := parseFullClaim(parsed.RawToken, &publicKey, &decoded); err != nil {
+		t.Fatalf("verify signed client data: %v", err)
+	}
+}
+
 func TestEncodeTokenUsesModernTokenOnlyAuthPayload(t *testing.T) {
 	key := testKey(t)
 	token := testMultiplayerToken(t, key, tokenClaims{

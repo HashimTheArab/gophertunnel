@@ -492,13 +492,13 @@ func defaultClientData(address, username string, d *login.ClientData) {
 		d.SkinGeometry = base64.StdEncoding.EncodeToString(skinGeometry)
 	}
 	if d.SkinGeometryVersion == "" {
-		d.SkinGeometryVersion = base64.StdEncoding.EncodeToString([]byte("1.14.0"))
+		d.SkinGeometryVersion = base64.StdEncoding.EncodeToString([]byte("0.0.0"))
 	}
 	if d.MaxViewDistance == 0 {
 		d.MaxViewDistance = 16
 	}
 	if d.MemoryTier == 0 {
-		d.MemoryTier = 5
+		d.MemoryTier = 4
 	}
 }
 

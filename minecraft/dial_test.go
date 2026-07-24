@@ -22,7 +22,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func TestDefaultClientDataUsesVanillaSkinGeometryEngineVersion(t *testing.T) {
+func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
 	data := login.ClientData{}
 	defaultClientData("example.com:19132", "Player", &data)
 
@@ -30,8 +30,23 @@ func TestDefaultClientDataUsesVanillaSkinGeometryEngineVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode skin geometry engine version: %v", err)
 	}
-	if got, want := string(version), "1.14.0"; got != want {
+	if got, want := string(version), "0.0.0"; got != want {
 		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
+	}
+	if got, want := data.GameVersion, "1.26.33"; got != want {
+		t.Fatalf("game version = %q, want %q", got, want)
+	}
+	if got, want := data.MemoryTier, 4; got != want {
+		t.Fatalf("memory tier = %d, want %d", got, want)
+	}
+}
+
+func TestDefaultClientDataPreservesSkinGeometryEngineVersion(t *testing.T) {
+	want := base64.StdEncoding.EncodeToString([]byte("0.0.0"))
+	data := login.ClientData{SkinGeometryVersion: want}
+	defaultClientData("example.com:19132", "Player", &data)
+	if data.SkinGeometryVersion != want {
+		t.Fatalf("skin geometry engine version = %q, want preserved %q", data.SkinGeometryVersion, want)
 	}
 }
 
