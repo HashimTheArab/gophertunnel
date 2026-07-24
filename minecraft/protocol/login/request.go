@@ -354,7 +354,7 @@ func EncodeToken(data ClientData, key *ecdsa.PrivateKey, token string) []byte {
 	req := &request{
 		Token: token,
 	}
-	req.RawToken, _ = signClientData(key, keyData, data)
+	req.RawToken, _ = signJSONWebToken(key, keyData, data)
 	return encodeRequest(req)
 }
 
@@ -382,13 +382,9 @@ func EncodeOffline(identityData IdentityData, data ClientData, key *ecdsa.Privat
 		NotBefore: jwt.NewNumericDate(time.Now().Add(-time.Hour * 6)),
 	}
 
-	signer, _ := jose.NewSigner(jose.SigningKey{Key: key, Algorithm: jose.ES384}, &jose.SignerOptions{
-		ExtraHeaders: map[jose.HeaderKey]any{"x5u": keyData},
-	})
-
 	req := &request{AuthenticationType: 2}
 	claims.Audience = jwt.Audience{"api://auth-minecraft-services/multiplayer"}
-	req.Token, _ = signJSONWebToken(signer, tokenClaims{
+	req.Token, _ = signJSONWebToken(key, keyData, tokenClaims{
 		Claims:          claims,
 		ClientPublicKey: keyData,
 		XUID:            identityData.XUID,
@@ -399,26 +395,13 @@ func EncodeOffline(identityData IdentityData, data ClientData, key *ecdsa.Privat
 	})
 	// We create another token this time, which is signed the same as the claim we just inserted in the chain,
 	// just now it contains client data.
-	req.RawToken, _ = signClientData(key, keyData, data)
+	req.RawToken, _ = signJSONWebToken(key, keyData, data)
 
 	return encodeRequest(req)
 }
 
-// bedrock client has a new line at the end of the JSON payload
-func signJSONWebToken(signer jose.Signer, claims any) (string, error) {
-	buf := bytes.NewBuffer(nil)
-	if err := json.NewEncoder(buf).Encode(claims); err != nil {
-		return "", err
-	}
-	jws, err := signer.Sign(buf.Bytes())
-	if err != nil {
-		return "", err
-	}
-	return jws.CompactSerialize()
-}
-
-// signClientData signs a client-data JWT with the JSON newlines emitted by the vanilla Bedrock client.
-func signClientData(key *ecdsa.PrivateKey, keyData string, data ClientData) (string, error) {
+// signJSONWebToken signs a JWT with the JSON newlines emitted by the vanilla Bedrock client.
+func signJSONWebToken(key *ecdsa.PrivateKey, keyData string, claims any) (string, error) {
 	header := bytes.NewBuffer(nil)
 	if err := json.NewEncoder(header).Encode(struct {
 		Algorithm string `json:"alg"`
@@ -430,7 +413,7 @@ func signClientData(key *ecdsa.PrivateKey, keyData string, data ClientData) (str
 		return "", err
 	}
 	payload := bytes.NewBuffer(nil)
-	if err := json.NewEncoder(payload).Encode(data); err != nil {
+	if err := json.NewEncoder(payload).Encode(claims); err != nil {
 		return "", err
 	}
 
