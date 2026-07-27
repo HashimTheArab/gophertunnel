@@ -266,6 +266,19 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	conn = newConn(netConn, key, d.ErrorLog, d.Protocol, d.FlushRate, false)
+	// A dial that fails must not leave the connection open. listenConn runs on its own goroutine
+	// and carries the login through to completion regardless of whether this function is still
+	// waiting on it, so an abandoned attempt stays a live, logged-in session on the server. The
+	// caller has no handle to close it either, because the error returns below yield a nil Conn.
+	//
+	// dialed holds the Conn for the cleanup because returning nil assigns the named conn result
+	// before deferred functions run.
+	dialed := conn
+	defer func() {
+		if err != nil {
+			_ = dialed.Close()
+		}
+	}()
 	conn.pool = conn.proto.Packets(false)
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
@@ -304,6 +317,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 
 	readyForLogin, connected := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	go listenConn(conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)

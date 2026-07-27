@@ -87,6 +87,63 @@ func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	}
 }
 
+// TestDialContextClosesConnectionOnDeadline covers a dial that gives up while the server is still
+// working through the login it already received. listenConn would otherwise carry that login to
+// completion on its own goroutine, leaving a logged-in session behind that the caller has no handle
+// to close, so servers rejecting duplicate logins kick the session the caller actually kept.
+func TestDialContextClosesConnectionOnDeadline(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// stallAfterLogin waits for the Login packet before stalling, so the server is left
+		// holding a login it never answers.
+		stallAfterLogin bool
+	}{
+		{name: "before login"},
+		{name: "after login", stallAfterLogin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			network := newScriptedDialNetwork(func(conn net.Conn) error {
+				decoder := packet.NewDecoder(conn)
+				encoder := packet.NewEncoder(conn)
+				if _, err := decoder.Decode(); err != nil {
+					return fmt.Errorf("read RequestNetworkSettings: %w", err)
+				}
+				if !test.stallAfterLogin {
+					return expectScriptedClose(conn, decoder)
+				}
+				if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+					CompressionThreshold: math.MaxUint16,
+					CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+				}); err != nil {
+					return fmt.Errorf("write NetworkSettings: %w", err)
+				}
+				decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+				encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+				if _, err := decoder.Decode(); err != nil {
+					return fmt.Errorf("read Login: %w", err)
+				}
+				// Never answer the login: the dial deadline expires with the server still
+				// treating this connection as one that is logging in.
+				return expectScriptedClose(conn, decoder)
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+			if conn != nil {
+				_ = conn.Close()
+				t.Fatal("DialContextNetwork returned a connection after the deadline expired")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("DialContextNetwork error = %v, want context.DeadlineExceeded", err)
+			}
+			if scriptErr := <-network.done; scriptErr != nil {
+				t.Fatalf("scripted server: %v", scriptErr)
+			}
+		})
+	}
+}
+
 func TestDialContextReturnsRemappedPreLoginTransferError(t *testing.T) {
 	for _, test := range []struct {
 		name       string
