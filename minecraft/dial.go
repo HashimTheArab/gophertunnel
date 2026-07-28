@@ -272,11 +272,13 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	// caller has no handle to close it either, because the error returns below yield a nil Conn.
 	//
 	// dialed holds the Conn for the cleanup because returning nil assigns the named conn result
-	// before deferred functions run.
+	// before deferred functions run. The cleanup aborts rather than Closes: Close flushes first,
+	// which blocks on a peer that has stopped reading, and a dial that gave up on such a peer would
+	// then never return.
 	dialed := conn
 	defer func() {
 		if err != nil {
-			_ = dialed.Close()
+			dialed.abort(err)
 		}
 	}()
 	conn.pool = conn.proto.Packets(false)
