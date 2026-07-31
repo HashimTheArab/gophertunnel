@@ -11,15 +11,13 @@ import (
 )
 
 // idFieldPattern matches struct field names that suggest the field carries an entity
-// runtime or unique ID. It is a naming heuristic: fields named after their meaning rather
-// than their ID kind (ClientPredictedVehicle, AttachToEntity) are listed explicitly.
+// runtime or unique ID. Fields named after their meaning rather than their ID kind are
+// listed explicitly.
 var idFieldPattern = regexp.MustCompile(`RuntimeID|UniqueID|ActorID|EntityID|ClientPredictedVehicle|AttachToEntity`)
 
-// translatedIDFields lists every entity ID field, as a path from the packet struct,
-// that TranslateEntityIDs rewrites and that the naming heuristic can discover. IDs the
-// heuristic cannot see are handled in TranslateEntityIDs but not listed here: values
-// behind interface fields (InventoryTransaction.TransactionData, Event.Event) and entity
-// metadata map values.
+// translatedIDFields lists every entity ID field, as a path from the packet struct, that
+// TranslateEntityIDs rewrites and that idFieldPattern can discover. IDs behind interface
+// fields and entity metadata map values are translated but not discoverable.
 var translatedIDFields = []string{
 	"ActorEvent.EntityRuntimeID",
 	"ActorPickRequest.EntityUniqueID",
@@ -116,13 +114,11 @@ var ignoredIDFields = map[string]string{
 	"ItemRegistry.Items[].RuntimeID": "item type network ID, not an entity ID",
 }
 
-// TestTranslateEntityIDsCoverage walks every registered packet struct and fails when a
-// field that looks like an entity ID is neither translated nor deliberately ignored, so
-// that a protocol update adding such a field breaks this test until TranslateEntityIDs
-// and the lists above are brought back in sync. Block runtime IDs (palette entries) are
-// out of scope, and IDs behind interface-typed fields are invisible to this walk: when
-// adding an interface implementation that carries entity IDs, TranslateEntityIDs must be
-// updated by hand.
+// TestTranslateEntityIDsCoverage fails when a packet field that looks like an entity ID
+// is neither translated nor deliberately ignored, so that a protocol update adding one
+// breaks this test until TranslateEntityIDs is brought back in sync. Block runtime IDs
+// are out of scope; interface implementations carrying entity IDs must be covered by
+// hand.
 func TestTranslateEntityIDsCoverage(t *testing.T) {
 	discovered := map[string]bool{}
 	seen := map[reflect.Type]bool{}
@@ -166,9 +162,8 @@ func TestTranslateEntityIDsCoverage(t *testing.T) {
 	}
 }
 
-// walkIDFields recursively collects the paths of ID-like fields of a packet struct type
-// into found. Fields of protocol.Optional types are reported as the optional field
-// itself. The visiting set guards against recursive types.
+// walkIDFields recursively collects the paths of ID-like fields of a packet struct type,
+// reporting fields of protocol.Optional types as the optional field itself.
 func walkIDFields(typ reflect.Type, path string, found map[string]bool, visiting map[reflect.Type]bool) {
 	switch typ.Kind() {
 	case reflect.Pointer, reflect.Slice, reflect.Array:
@@ -196,8 +191,7 @@ func walkIDFields(typ reflect.Type, path string, found map[string]bool, visiting
 	}
 }
 
-// translateSwap builds the symmetric two-entity swap that proxies typically apply,
-// between the (10, 100) and (20, 200) (unique, runtime) identities.
+// translateSwap swaps between the (10, 100) and (20, 200) (unique, runtime) identities.
 func translateSwap(pk Packet) {
 	rid := func(id uint64) uint64 {
 		switch id {
@@ -246,10 +240,11 @@ func TestTranslateEntityIDsMetadataAndLinks(t *testing.T) {
 		EntityUniqueID:  10,
 		EntityRuntimeID: 100,
 		EntityMetadata: map[uint32]any{
-			protocol.EntityDataKeyOwner:       int64(10),
-			protocol.EntityDataKeyTarget:      uint64(20),
-			protocol.EntityDataKeyLeashHolder: int64(30),
-			protocol.EntityDataKeyName:        "unrelated",
+			protocol.EntityDataKeyOwner:                    int64(10),
+			protocol.EntityDataKeyTarget:                   uint64(20),
+			protocol.EntityDataKeyLeashHolder:              int64(30),
+			protocol.EntityDataKeyAimAssistPriorityActorID: int64(20),
+			protocol.EntityDataKeyName:                     "unrelated",
 		},
 		EntityLinks: []protocol.EntityLink{{RiddenEntityUniqueID: 20, RiderEntityUniqueID: 10}},
 	}
@@ -265,6 +260,9 @@ func TestTranslateEntityIDsMetadataAndLinks(t *testing.T) {
 	}
 	if holder := pk.EntityMetadata[protocol.EntityDataKeyLeashHolder]; holder != int64(30) {
 		t.Errorf("unexpected leash holder metadata after translation: %v", holder)
+	}
+	if aim := pk.EntityMetadata[protocol.EntityDataKeyAimAssistPriorityActorID]; aim != int64(10) {
+		t.Errorf("unexpected aim assist actor metadata after translation: %v", aim)
 	}
 	if link := pk.EntityLinks[0]; link.RiddenEntityUniqueID != 10 || link.RiderEntityUniqueID != 20 {
 		t.Errorf("unexpected entity link after translation: %+v", link)
@@ -322,6 +320,12 @@ func TestTranslateEntityIDsInterfaceFields(t *testing.T) {
 	killed := event.Event.(*protocol.MobKilledEvent)
 	if killed.KillerEntityUniqueID != 20 || killed.VictimEntityUniqueID != 10 {
 		t.Errorf("mob killed event not translated: %+v", killed)
+	}
+
+	interact := &Event{Event: &protocol.EntityInteractEvent{InteractedEntityID: 10}}
+	translateSwap(interact)
+	if id := interact.Event.(*protocol.EntityInteractEvent).InteractedEntityID; id != 20 {
+		t.Errorf("entity interact event not translated: %v", id)
 	}
 }
 

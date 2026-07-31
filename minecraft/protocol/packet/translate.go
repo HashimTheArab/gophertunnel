@@ -15,26 +15,17 @@ var entityMetadataIDKeys = []uint32{
 	protocol.EntityDataKeyTradeTarget,
 	protocol.EntityDataKeyBalloonAnchor,
 	protocol.EntityDataKeyAgent,
+	protocol.EntityDataKeyAimAssistPriorityActorID,
 	protocol.EntityDataKeyArrowShooterID,
 	protocol.EntityDataKeyFireworkShooterID,
 }
 
-// TranslateEntityIDs rewrites every entity runtime ID and entity unique ID carried by pk,
-// passing each through runtimeID or uniqueID respectively and storing the result. It
-// covers IDs nested in ability data, entity links, command origins, scoreboard entries,
-// camera targets, waypoints and the entity metadata keys that hold entity IDs, for both
-// clientbound and serverbound packets. Either function may be nil, in which case IDs of
-// that kind are left untouched.
-//
-// TranslateEntityIDs only enumerates the ID fields: the mapping policy is entirely up to
-// the callbacks, which must return their argument unchanged for IDs they do not want to
-// translate, including sentinel values such as math.MaxInt64 that some packets use to
-// mean 'no entity'. Runtime IDs returned for AddVolumeEntity and RemoveVolumeEntity are
-// truncated to the uint32 width of those packets' fields, matching their wire encoding:
-// IDs that do not fit cannot be represented by those packets at all.
-// Proxies that splice an existing client connection onto a new server
-// connection use this to swap between the entity identity the client retains from its
-// original StartGame and the identity assigned by the current server.
+// TranslateEntityIDs passes every entity runtime ID and entity unique ID carried by pk,
+// including IDs nested in structures such as entity links or metadata, through runtimeID
+// and uniqueID respectively, storing the results. Either function may be nil to leave IDs
+// of that kind untouched. The callbacks decide the mapping policy and must return their
+// argument unchanged for IDs they do not translate, such as sentinel values like
+// math.MaxInt64. Runtime IDs held in uint32 fields are truncated to their width.
 func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(int64) int64) {
 	rid := runtimeID
 	if rid == nil {
@@ -150,6 +141,8 @@ func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(
 			event.VictimEntityUniqueID = uid(event.VictimEntityUniqueID)
 		case *protocol.BossKilledEvent:
 			event.BossEntityUniqueID = uid(event.BossEntityUniqueID)
+		case *protocol.EntityInteractEvent:
+			event.InteractedEntityID = uid(event.InteractedEntityID)
 		}
 	case *Interact:
 		pk.TargetEntityRuntimeID = rid(pk.TargetEntityRuntimeID)
