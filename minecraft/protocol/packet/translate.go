@@ -29,7 +29,10 @@ var entityMetadataIDKeys = []uint32{
 // TranslateEntityIDs only enumerates the ID fields: the mapping policy is entirely up to
 // the callbacks, which must return their argument unchanged for IDs they do not want to
 // translate, including sentinel values such as math.MaxInt64 that some packets use to
-// mean 'no entity'. Proxies that splice an existing client connection onto a new server
+// mean 'no entity'. Runtime IDs returned for AddVolumeEntity and RemoveVolumeEntity are
+// truncated to the uint32 width of those packets' fields, matching their wire encoding:
+// IDs that do not fit cannot be represented by those packets at all.
+// Proxies that splice an existing client connection onto a new server
 // connection use this to swap between the entity identity the client retains from its
 // original StartGame and the identity assigned by the current server.
 func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(int64) int64) {
