@@ -1300,14 +1300,16 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 
 	if !found {
-		status, reason := packet.PlayStatusLoginFailedClient, packet.DisconnectReasonOutdatedClient
+		status := packet.PlayStatusLoginFailedClient
 		if pk.ClientProtocol > protocol.CurrentProtocol {
 			// The server is outdated in this case, so we have to change the status we send.
-			status, reason = packet.PlayStatusLoginFailedServer, packet.DisconnectReasonOutdatedServer
-		}
-		if conn.protocolMismatchMessage != nil {
-			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
-				_ = conn.WritePacket(&packet.Disconnect{Reason: reason, Message: msg})
+			status = packet.PlayStatusLoginFailedServer
+			// Only clients newer than the listener get the custom Disconnect: older clients may
+			// predate the current Disconnect wire layout and would mis-decode it, hiding the message.
+			if conn.protocolMismatchMessage != nil {
+				if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
+					_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
+				}
 			}
 		}
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})

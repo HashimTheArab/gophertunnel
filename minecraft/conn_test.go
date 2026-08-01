@@ -532,11 +532,11 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 			wantStatus:     packet.PlayStatusLoginFailedServer,
 		},
 		{
-			name:           "older client with message",
+			// Older clients may predate the current Disconnect wire layout, so they only get the
+			// vanilla PlayStatus flow even when a message callback is set.
+			name:           "older client never gets the custom disconnect",
 			clientProtocol: 1,
 			message:        func(clientProtocol int32) string { return "Please update Minecraft." },
-			wantMessage:    "Please update Minecraft.",
-			wantReason:     packet.DisconnectReasonOutdatedClient,
 			wantStatus:     packet.PlayStatusLoginFailedClient,
 		},
 		{
