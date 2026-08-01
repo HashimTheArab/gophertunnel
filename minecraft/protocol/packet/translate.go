@@ -3,20 +3,7 @@ package packet
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // entityMetadataIDKeys holds the entity metadata keys whose values are entity unique IDs.
-var entityMetadataIDKeys = map[uint32]struct{}{
-	protocol.EntityDataKeyOwner:                    {},
-	protocol.EntityDataKeyTarget:                   {},
-	protocol.EntityDataKeyLeashHolder:              {},
-	protocol.EntityDataKeyTargetA:                  {},
-	protocol.EntityDataKeyTargetB:                  {},
-	protocol.EntityDataKeyTargetC:                  {},
-	protocol.EntityDataKeyTradeTarget:              {},
-	protocol.EntityDataKeyBalloonAnchor:            {},
-	protocol.EntityDataKeyAgent:                    {},
-	protocol.EntityDataKeyAimAssistPriorityActorID: {},
-	protocol.EntityDataKeyArrowShooterID:           {},
-	protocol.EntityDataKeyFireworkShooterID:        {},
-}
+var entityMetadataIDKeys = protocol.EntityMetadataActorIDKeys
 
 // TranslateEntityIDs passes every entity runtime ID and entity unique ID carried by pk,
 // including IDs nested in structures such as entity links or metadata, through runtimeID
