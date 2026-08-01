@@ -72,7 +72,7 @@ type ListenConfig struct {
 	// be disconnected.
 	AcceptedProtocols []Protocol
 	// ProtocolMismatchMessage is called when a client connects with a protocol version not accepted by
-	// the Listener, as long as the client is recent enough (1.20.40+) to decode the current Disconnect
+	// the Listener, as long as the client is recent enough (1.21.20+) to decode the current Disconnect
 	// wire layout. If it returns a non-empty string, a Disconnect packet carrying that message is sent
 	// before the PlayStatus login failure, so the client shows it instead of the generic outdated
 	// client/server screen. The PlayStatus is still sent afterwards as a fallback for clients that

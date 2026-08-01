@@ -1300,8 +1300,14 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 
 	if !found {
+		// Classify the mismatch against the newest accepted protocol, so custom accepted protocols
+		// ahead of protocol.CurrentProtocol don't mislabel intermediate clients as ahead of the server.
+		var newest int32
+		for _, pro := range conn.acceptedProto {
+			newest = max(newest, pro.ID())
+		}
 		status, reason := packet.PlayStatusLoginFailedClient, packet.DisconnectReasonOutdatedClient
-		if pk.ClientProtocol > protocol.CurrentProtocol {
+		if pk.ClientProtocol > newest {
 			// The server is outdated in this case, so we have to change the status we send.
 			status, reason = packet.PlayStatusLoginFailedServer, packet.DisconnectReasonOutdatedServer
 		}
@@ -2152,10 +2158,11 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
 }
 
-// minDisconnectMessageProtocol is the oldest protocol version (1.20.40) using the current
-// Disconnect wire layout, which added the leading reason field. Older clients would decode the
-// reason as HideDisconnectionScreen and drop the message.
-const minDisconnectMessageProtocol = 622
+// minDisconnectMessageProtocol is the oldest protocol version (1.21.20) whose Disconnect wire
+// layout matches the current encoding: the leading reason field was added in 1.20.40 and
+// FilteredMessage in 1.21.20. Older clients would mis-decode or truncate the message, so they
+// only get the PlayStatus.
+const minDisconnectMessageProtocol = 712
 
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {

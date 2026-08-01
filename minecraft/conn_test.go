@@ -540,8 +540,8 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 			wantStatus:     packet.PlayStatusLoginFailedClient,
 		},
 		{
-			// Clients below 1.20.40 predate the current Disconnect wire layout and would mis-decode
-			// the message, so they only get the vanilla PlayStatus flow.
+			// Clients below the wire-layout floor predate the current Disconnect encoding and would
+			// mis-decode the message, so they only get the vanilla PlayStatus flow.
 			name:           "legacy client never gets the custom disconnect",
 			clientProtocol: minDisconnectMessageProtocol - 1,
 			message:        func(clientProtocol int32) string { return "Please update Minecraft." },
