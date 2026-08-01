@@ -2,9 +2,6 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// entityMetadataIDKeys holds the entity metadata keys whose values are entity unique IDs.
-var entityMetadataIDKeys = protocol.EntityMetadataActorIDKeys
-
 // TranslateEntityIDs passes every entity runtime ID and entity unique ID carried by pk,
 // including IDs nested in structures such as entity links or metadata, through runtimeID
 // and uniqueID respectively, storing the results. Either function may be nil to leave IDs
@@ -74,17 +71,7 @@ func (io *translatingIO) ActorUniqueIDVaruint64(x *uint64) {
 }
 
 func (io *translatingIO) EntityMetadata(x *protocol.EntityMetadata) {
-	for key, value := range *x {
-		if _, ok := entityMetadataIDKeys[key]; !ok {
-			continue
-		}
-		switch id := value.(type) {
-		case int64:
-			(*x)[key] = io.unique(id)
-		case uint64:
-			(*x)[key] = uint64(io.unique(int64(id)))
-		}
-	}
+	protocol.TranslateEntityMetadataIDs(*x, io.unique)
 }
 
 // discardWriter lets the normal Writer traverse packet structure without allocating or

@@ -1,7 +1,7 @@
 package protocol
 
-// EntityMetadataActorIDKeys holds the entity metadata keys whose values are actor unique IDs.
-var EntityMetadataActorIDKeys = map[uint32]struct{}{
+// entityMetadataActorIDKeys holds the entity metadata keys whose values are actor unique IDs.
+var entityMetadataActorIDKeys = map[uint32]struct{}{
 	EntityDataKeyOwner:                    {},
 	EntityDataKeyTarget:                   {},
 	EntityDataKeyLeashHolder:              {},
@@ -89,7 +89,7 @@ func (r *translationReader) ActorUniqueIDVaruint64(x *uint64) {
 
 func (r *translationReader) EntityMetadata(x *EntityMetadata) {
 	r.IO.EntityMetadata(x)
-	translateMetadata(*x, r.t)
+	TranslateEntityMetadataIDs(*x, r.t.UniqueID)
 }
 
 // SliceLength forwards slice length validation to the wrapped IO, keeping slice
@@ -146,18 +146,19 @@ func (w *translationWriter) EntityMetadata(x *EntityMetadata) {
 	for key, value := range *x {
 		translated[key] = value
 	}
-	translateMetadata(translated, w.t)
+	TranslateEntityMetadataIDs(translated, w.t.UniqueID)
 	w.IO.EntityMetadata(&translated)
 }
 
-// translateMetadata rewrites the actor unique IDs held as entity metadata values.
-func translateMetadata(m EntityMetadata, t ActorIDTranslation) {
-	for key := range EntityMetadataActorIDKeys {
+// TranslateEntityMetadataIDs passes every metadata value holding an actor unique ID
+// through unique, storing the results.
+func TranslateEntityMetadataIDs(m EntityMetadata, unique func(int64) int64) {
+	for key := range entityMetadataActorIDKeys {
 		switch id := m[key].(type) {
 		case int64:
-			m[key] = t.UniqueID(id)
+			m[key] = unique(id)
 		case uint64:
-			m[key] = uint64(t.UniqueID(int64(id)))
+			m[key] = uint64(unique(int64(id)))
 		}
 	}
 }
