@@ -26,5 +26,5 @@ func (*UpdatePlayerGameType) ID() uint32 {
 func (pk *UpdatePlayerGameType) Marshal(io protocol.IO) {
 	io.Varint32(&pk.GameType)
 	io.ActorUniqueID(&pk.PlayerUniqueID)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 }

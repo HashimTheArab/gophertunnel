@@ -169,3 +169,62 @@ func plantSentinel(v reflect.Value, segments []string) (func() int64, error) {
 		return nil, fmt.Errorf("field %v has unsupported kind %v", segment, field.Kind())
 	}
 }
+
+// tickFieldFixtures constructs packets for tick manifest paths the reflective setter
+// cannot reach without other fields set for Marshal to succeed.
+var tickFieldFixtures = map[string]func() (Packet, func() int64){
+	"PlayerAuthInput.Tick": func() (Packet, func() int64) {
+		pk := &PlayerAuthInput{InputData: protocol.NewBitset(PlayerAuthInputBitsetSize), Tick: idSentinel}
+		return pk, func() int64 { return int64(pk.Tick) }
+	},
+}
+
+// TestTranslateInputTicksManifestRewrites proves every field in translatedTickFields is
+// actually rewritten by TranslateInputTicks, mirroring the entity ID manifest test.
+func TestTranslateInputTicksManifestRewrites(t *testing.T) {
+	tick := func(tick uint64) uint64 {
+		if tick == idSentinel {
+			return idSentinel + 1
+		}
+		return tick
+	}
+
+	constructors := map[string]func() Packet{}
+	for _, pool := range []Pool{NewClientPool(), NewServerPool()} {
+		for _, newPk := range pool {
+			pk := newPk()
+			constructors[reflect.TypeOf(pk).Elem().Name()] = newPk
+		}
+	}
+
+	for _, path := range translatedTickFields {
+		t.Run(path, func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("panicked: %v (field likely needs a fixture)", recovered)
+				}
+			}()
+			var pk Packet
+			var read func() int64
+			if fixture, ok := tickFieldFixtures[path]; ok {
+				pk, read = fixture()
+			} else {
+				segments := strings.Split(path, ".")
+				newPk, ok := constructors[segments[0]]
+				if !ok {
+					t.Fatalf("no registered packet named %v", segments[0])
+				}
+				pk = newPk()
+				var err error
+				read, err = plantSentinel(reflect.ValueOf(pk).Elem(), segments[1:])
+				if err != nil {
+					t.Fatalf("plant sentinel: %v", err)
+				}
+			}
+			TranslateInputTicks(pk, tick)
+			if got := read(); got != idSentinel+1 {
+				t.Errorf("field was not translated: got %v, want %v", got, idSentinel+1)
+			}
+		})
+	}
+}

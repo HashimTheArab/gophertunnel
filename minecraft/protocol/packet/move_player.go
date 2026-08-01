@@ -73,5 +73,5 @@ func (pk *MovePlayer) Marshal(io protocol.IO) {
 		io.Int32(&pk.TeleportCause)
 		io.Int32(&pk.TeleportSourceEntityType)
 	}
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 }

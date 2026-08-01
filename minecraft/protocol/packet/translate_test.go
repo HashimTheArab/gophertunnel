@@ -15,6 +15,11 @@ import (
 // listed explicitly.
 var idFieldPattern = regexp.MustCompile(`RuntimeID|UniqueID|ActorID|EntityID|ClientPredictedVehicle|AttachToEntity`)
 
+// tickFieldPattern matches a bare Tick or an InputTick suffix; duration-style fields
+// (TickDelay, TransitionTicks, ...) do not match, and neither does the legacy shield
+// ItemStack.BlockingTick, a level tick serialized in the item's nested data buffer.
+var tickFieldPattern = regexp.MustCompile(`(^|Input)Tick$`)
+
 // translatedIDFields lists every entity ID field, as a path from the packet struct, that
 // TranslateEntityIDs rewrites and that idFieldPattern can discover. IDs behind interface
 // fields and entity metadata map values are translated but not discoverable.
@@ -108,6 +113,20 @@ var translatedIDFields = []string{
 	"UpdateTrade.VillagerUniqueID",
 }
 
+// translatedTickFields lists every player input tick field, as a path from the packet
+// struct, that TranslateInputTicks rewrites and that tickFieldPattern can discover.
+var translatedTickFields = []string{
+	"CorrectPlayerMovePrediction.Tick",
+	"MobEffect.Tick",
+	"MovePlayer.Tick",
+	"MovementEffect.Tick",
+	"PlayerAuthInput.Tick",
+	"SetActorData.Tick",
+	"SetActorMotion.Tick",
+	"UpdateAttributes.Tick",
+	"UpdatePlayerGameType.Tick",
+}
+
 // ignoredIDFields lists fields matched by the naming heuristic that TranslateEntityIDs
 // deliberately leaves untouched, with the reason.
 var ignoredIDFields = map[string]string{
@@ -129,7 +148,7 @@ func TestTranslateEntityIDsCoverage(t *testing.T) {
 				continue
 			}
 			seen[typ] = true
-			walkIDFields(typ, typ.Name(), discovered, map[reflect.Type]bool{})
+			walkMatchingFields(typ, typ.Name(), discovered, map[reflect.Type]bool{}, isIDField)
 		}
 	}
 
@@ -140,7 +159,36 @@ func TestTranslateEntityIDsCoverage(t *testing.T) {
 	for path := range ignoredIDFields {
 		expected[path] = true
 	}
+	reportCoverage(t, "entity ID", "TranslateEntityIDs", discovered, expected)
+}
 
+// TestTranslateInputTicksCoverage fails when a packet field that looks like a player
+// input tick is not translated, so a protocol update adding one breaks this test.
+func TestTranslateInputTicksCoverage(t *testing.T) {
+	discovered := map[string]bool{}
+	seen := map[reflect.Type]bool{}
+	for _, pool := range []Pool{NewClientPool(), NewServerPool()} {
+		for _, newPk := range pool {
+			typ := reflect.TypeOf(newPk()).Elem()
+			if seen[typ] {
+				continue
+			}
+			seen[typ] = true
+			walkMatchingFields(typ, typ.Name(), discovered, map[reflect.Type]bool{}, tickFieldPattern.MatchString)
+		}
+	}
+
+	expected := map[string]bool{}
+	for _, path := range translatedTickFields {
+		expected[path] = true
+	}
+	reportCoverage(t, "player input tick", "TranslateInputTicks", discovered, expected)
+}
+
+// reportCoverage diffs the field paths a discovery walk found against the paths a
+// translation function covers, reporting both directions of drift.
+func reportCoverage(t *testing.T, kind, translator string, discovered, expected map[string]bool) {
+	t.Helper()
 	var missing, stale []string
 	for path := range discovered {
 		if !expected[path] {
@@ -155,21 +203,28 @@ func TestTranslateEntityIDsCoverage(t *testing.T) {
 	sort.Strings(missing)
 	sort.Strings(stale)
 	for _, path := range missing {
-		t.Errorf("entity ID field %v is neither translated by TranslateEntityIDs nor listed as ignored", path)
+		t.Errorf("%v field %v is neither translated by %v nor listed as ignored", kind, path, translator)
 	}
 	for _, path := range stale {
-		t.Errorf("listed entity ID field %v no longer exists in the packet package", path)
+		t.Errorf("listed %v field %v no longer exists in the packet package", kind, path)
 	}
 }
 
-// walkIDFields recursively collects the paths of ID-like fields of a packet struct type,
-// reporting fields of protocol.Optional types as the optional field itself.
-func walkIDFields(typ reflect.Type, path string, found map[string]bool, visiting map[reflect.Type]bool) {
+// isIDField reports whether a struct field name suggests an entity ID, excluding block
+// runtime IDs, which are not entity IDs.
+func isIDField(name string) bool {
+	return idFieldPattern.MatchString(name) && !strings.Contains(name, "BlockRuntimeID")
+}
+
+// walkMatchingFields recursively collects the paths of fields of a packet struct type
+// whose names satisfy match, reporting fields of protocol.Optional types as the optional
+// field itself.
+func walkMatchingFields(typ reflect.Type, path string, found map[string]bool, visiting map[reflect.Type]bool, match func(string) bool) {
 	switch typ.Kind() {
 	case reflect.Pointer, reflect.Slice, reflect.Array:
-		walkIDFields(typ.Elem(), path+"[]", found, visiting)
+		walkMatchingFields(typ.Elem(), path+"[]", found, visiting, match)
 	case reflect.Map:
-		walkIDFields(typ.Elem(), path+"{}", found, visiting)
+		walkMatchingFields(typ.Elem(), path+"{}", found, visiting, match)
 	case reflect.Struct:
 		if visiting[typ] {
 			return
@@ -182,11 +237,11 @@ func walkIDFields(typ reflect.Type, path string, found map[string]bool, visiting
 			if optional {
 				fieldPath = path
 			}
-			if !optional && idFieldPattern.MatchString(field.Name) && !strings.Contains(field.Name, "BlockRuntimeID") {
+			if !optional && match(field.Name) {
 				found[fieldPath] = true
 				continue
 			}
-			walkIDFields(field.Type, fieldPath, found, visiting)
+			walkMatchingFields(field.Type, fieldPath, found, visiting, match)
 		}
 	}
 }
@@ -232,6 +287,21 @@ func TestTranslateEntityIDsNilCallbacks(t *testing.T) {
 	TranslateEntityIDs(pk, nil, nil)
 	if pk.EntityUniqueID != 10 || pk.EntityRuntimeID != 100 {
 		t.Errorf("nil callbacks changed IDs: unique %v, runtime %v", pk.EntityUniqueID, pk.EntityRuntimeID)
+	}
+}
+
+func TestTranslateInputTicks(t *testing.T) {
+	pk := &MovePlayer{EntityRuntimeID: 100, Tick: 5}
+	TranslateInputTicks(pk, func(tick uint64) uint64 { return tick + 1000 })
+	if pk.Tick != 1005 {
+		t.Errorf("tick not translated: %v", pk.Tick)
+	}
+	if pk.EntityRuntimeID != 100 {
+		t.Errorf("tick translation changed the runtime ID: %v", pk.EntityRuntimeID)
+	}
+	TranslateInputTicks(pk, nil)
+	if pk.Tick != 1005 {
+		t.Errorf("nil callback changed the tick: %v", pk.Tick)
 	}
 }
 
