@@ -23,9 +23,27 @@ func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(
 	}
 
 	visitor := translatingIO{
-		IO:      protocol.NewWriter(discardWriter{}, 0),
-		runtime: runtimeID,
-		unique:  uniqueID,
+		IO:        protocol.NewWriter(discardWriter{}, 0),
+		runtime:   runtimeID,
+		unique:    uniqueID,
+		inputTick: func(tick uint64) uint64 { return tick },
+	}
+	pk.Marshal(&visitor)
+}
+
+// TranslateInputTicks passes every player input tick carried by pk through tick, storing
+// the results. The callback must return its argument unchanged for ticks it does not
+// translate, such as the zero marking a field without an input tick reference. The
+// traversal has writer semantics, exactly as documented on TranslateEntityIDs.
+func TranslateInputTicks(pk Packet, tick func(uint64) uint64) {
+	if tick == nil {
+		return
+	}
+	visitor := translatingIO{
+		IO:        protocol.NewWriter(discardWriter{}, 0),
+		runtime:   func(id uint64) uint64 { return id },
+		unique:    func(id int64) int64 { return id },
+		inputTick: tick,
 	}
 	pk.Marshal(&visitor)
 }
@@ -35,12 +53,17 @@ func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(
 // field order, conditionals, slices and interface dispatch.
 type translatingIO struct {
 	protocol.IO
-	runtime func(uint64) uint64
-	unique  func(int64) int64
+	runtime   func(uint64) uint64
+	unique    func(int64) int64
+	inputTick func(uint64) uint64
 }
 
 func (io *translatingIO) ActorRuntimeID(x *uint64) {
 	*x = io.runtime(*x)
+}
+
+func (io *translatingIO) PlayerInputTick(x *uint64) {
+	*x = io.inputTick(*x)
 }
 
 func (io *translatingIO) ActorUniqueID(x *int64) {

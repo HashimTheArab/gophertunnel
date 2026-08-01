@@ -174,7 +174,7 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	io.Varuint32(&pk.InteractionModel)
 	io.Float32(&pk.InteractPitch)
 	io.Float32(&pk.InteractYaw)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 	io.Vec3(&pk.Delta)
 
 	if pk.InputData.Load(InputFlagPerformItemInteraction) {
