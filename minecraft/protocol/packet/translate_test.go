@@ -348,3 +348,97 @@ func TestTranslateEntityIDsOptionalFields(t *testing.T) {
 		t.Error("empty camera target became set")
 	}
 }
+
+type marshalIDPacket struct {
+	runtimeID uint64
+	uniqueID  int64
+}
+
+func (*marshalIDPacket) ID() uint32 { return 0 }
+
+func (pk *marshalIDPacket) Marshal(raw protocol.IO) {
+	io := any(raw).(interface {
+		ActorRuntimeID(*uint64)
+		ActorUniqueID(*int64)
+	})
+	io.ActorRuntimeID(&pk.runtimeID)
+	io.ActorUniqueID(&pk.uniqueID)
+}
+
+func TestTranslateEntityIDsUsesPacketMarshal(t *testing.T) {
+	pk := &marshalIDPacket{runtimeID: 100, uniqueID: 10}
+	translateSwap(pk)
+	if pk.runtimeID != 200 || pk.uniqueID != 20 {
+		t.Fatalf("packet Marshal IDs were not translated: runtime %v, unique %v", pk.runtimeID, pk.uniqueID)
+	}
+}
+
+func TestTranslateEntityIDsLegacyAndNestedFields(t *testing.T) {
+	shape := &PrimitiveShapes{Shapes: []protocol.PrimitiveShape{{
+		AttachedToEntityID: protocol.Option(int64(10)),
+		ExtraShapeData:     &protocol.LastShape{},
+	}}}
+	waypoint := &LocatorBar{Waypoints: []protocol.LocatorBarWaypoint{{
+		Waypoint: protocol.Waypoint{ActorUniqueID: protocol.Option(int64(10))},
+	}}}
+	camera := &CameraInstruction{AttachToEntity: protocol.Option(int64(10))}
+
+	// Keep the assertions close to each packet so a field's wire-specific helper cannot
+	// silently stop participating in the marshal traversal.
+	adventure := &AdventureSettings{PlayerUniqueID: 10}
+	translateSwap(adventure)
+	if adventure.PlayerUniqueID != 20 {
+		t.Fatalf("adventure settings unique ID = %v, want 20", adventure.PlayerUniqueID)
+	}
+
+	sound := &LevelSoundEvent{EntityUniqueID: 10}
+	translateSwap(sound)
+	if sound.EntityUniqueID != 20 {
+		t.Fatalf("level sound unique ID = %v, want 20", sound.EntityUniqueID)
+	}
+
+	npc := &NPCDialogue{EntityUniqueID: 10}
+	translateSwap(npc)
+	if npc.EntityUniqueID != 20 {
+		t.Fatalf("NPC dialogue unique ID = %v, want 20", npc.EntityUniqueID)
+	}
+
+	block := &UpdateBlockSynced{EntityUniqueID: 10}
+	translateSwap(block)
+	if block.EntityUniqueID != 20 {
+		t.Fatalf("update block synced unique ID = %v, want 20", block.EntityUniqueID)
+	}
+
+	volume := &AddVolumeEntity{EntityRuntimeID: 100}
+	translateSwap(volume)
+	if volume.EntityRuntimeID != 200 {
+		t.Fatalf("add volume runtime ID = %v, want 200", volume.EntityRuntimeID)
+	}
+
+	removeVolume := &RemoveVolumeEntity{EntityRuntimeID: 100}
+	translateSwap(removeVolume)
+	if removeVolume.EntityRuntimeID != 200 {
+		t.Fatalf("remove volume runtime ID = %v, want 200", removeVolume.EntityRuntimeID)
+	}
+
+	translateSwap(camera)
+	if attached, _ := camera.AttachToEntity.Value(); attached != 20 {
+		t.Fatalf("camera attached unique ID = %v, want 20", attached)
+	}
+
+	translateSwap(shape)
+	if attached, _ := shape.Shapes[0].AttachedToEntityID.Value(); attached != 20 {
+		t.Fatalf("shape attached unique ID = %v, want 20", attached)
+	}
+
+	translateSwap(waypoint)
+	if id, _ := waypoint.Waypoints[0].Waypoint.ActorUniqueID.Value(); id != 20 {
+		t.Fatalf("waypoint unique ID = %v, want 20", id)
+	}
+
+	event := &Event{EntityRuntimeID: 100, Event: &protocol.MobKilledEvent{}}
+	translateSwap(event)
+	if event.EntityRuntimeID != 200 {
+		t.Fatalf("legacy event runtime ID = %v, want 200", event.EntityRuntimeID)
+	}
+}
