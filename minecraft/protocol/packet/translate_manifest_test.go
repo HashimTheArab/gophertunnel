@@ -102,6 +102,11 @@ func TestTranslateEntityIDsManifestRewrites(t *testing.T) {
 
 	for _, path := range translatedIDFields {
 		t.Run(path, func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("panicked: %v (field likely needs a fixture)", recovered)
+				}
+			}()
 			var pk Packet
 			var read func() int64
 			if fixture, ok := idFieldFixtures[path]; ok {
@@ -119,11 +124,6 @@ func TestTranslateEntityIDsManifestRewrites(t *testing.T) {
 					t.Fatalf("plant sentinel: %v", err)
 				}
 			}
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					t.Fatalf("TranslateEntityIDs panicked: %v (field likely needs a fixture)", recovered)
-				}
-			}()
 			TranslateEntityIDs(pk, rid, uid)
 			if got := read(); got != idSentinel+1 {
 				t.Errorf("field was not translated: got %v, want %v", got, idSentinel+1)
