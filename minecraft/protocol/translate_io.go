@@ -92,6 +92,14 @@ func (r *translationReader) EntityMetadata(x *EntityMetadata) {
 	translateMetadata(*x, r.t)
 }
 
+// SliceLength forwards slice length validation to the wrapped IO, keeping slice
+// allocation and limit checks active behind the wrapper.
+func (r *translationReader) SliceLength(value uint32, max uint32) {
+	if limit, ok := r.IO.(sliceReader); ok {
+		limit.SliceLength(value, max)
+	}
+}
+
 // translationWriter encodes a translated copy of each actor ID through the wrapped IO.
 type translationWriter struct {
 	IO

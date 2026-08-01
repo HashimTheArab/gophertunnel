@@ -16,6 +16,7 @@ type actorIDFields struct {
 	UniqueUint64    uint64
 	UniqueVaruint64 uint64
 	Metadata        EntityMetadata
+	Links           []EntityLink
 	Other           uint64
 }
 
@@ -28,6 +29,7 @@ func (a *actorIDFields) Marshal(io IO) {
 	ActorUniqueIDUint64(io, &a.UniqueUint64)
 	ActorUniqueIDVaruint64(io, &a.UniqueVaruint64)
 	io.EntityMetadata(&a.Metadata)
+	Slice(io, &a.Links)
 	io.Varuint64(&a.Other)
 }
 
@@ -69,6 +71,7 @@ func untranslated() *actorIDFields {
 			EntityDataKeyTarget: int64(20),
 			EntityDataKeyName:   "unrelated",
 		},
+		Links: []EntityLink{{RiddenEntityUniqueID: 10, RiderEntityUniqueID: 20}},
 		Other: 100,
 	}
 }
@@ -89,6 +92,9 @@ func assertTranslated(t *testing.T, got *actorIDFields) {
 	}
 	if name := got.Metadata[EntityDataKeyName]; name != "unrelated" {
 		t.Errorf("unrelated metadata changed: %v", name)
+	}
+	if len(got.Links) != 1 || got.Links[0].RiddenEntityUniqueID != 20 || got.Links[0].RiderEntityUniqueID != 10 {
+		t.Errorf("entity links not decoded and translated: %+v", got.Links)
 	}
 	if got.Other != 100 {
 		t.Errorf("non-ID field translated: %v", got.Other)
