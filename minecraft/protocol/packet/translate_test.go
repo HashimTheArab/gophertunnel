@@ -16,7 +16,8 @@ import (
 var idFieldPattern = regexp.MustCompile(`RuntimeID|UniqueID|ActorID|EntityID|ClientPredictedVehicle|AttachToEntity`)
 
 // tickFieldPattern matches a bare Tick or an InputTick suffix; duration-style fields
-// (TickDelay, TransitionTicks, ...) do not match.
+// (TickDelay, TransitionTicks, ...) do not match, and neither does the legacy shield
+// ItemStack.BlockingTick, a level tick serialized in the item's nested data buffer.
 var tickFieldPattern = regexp.MustCompile(`(^|Input)Tick$`)
 
 // translatedIDFields lists every entity ID field, as a path from the packet struct, that
