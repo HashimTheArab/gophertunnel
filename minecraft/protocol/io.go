@@ -32,6 +32,8 @@ type IO interface {
 	// ActorRuntimeID and ActorUniqueID mark entity identifiers in packet marshaling.
 	ActorRuntimeID(x *uint64)
 	ActorUniqueID(x *int64)
+	// PlayerInputTick marks ticks on the player input timeline in packet marshaling.
+	PlayerInputTick(x *uint64)
 	String(x *string)
 	StringUTF(x *string)
 	ByteSlice(x *[]byte)

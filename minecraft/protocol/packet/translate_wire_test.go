@@ -25,6 +25,11 @@ var wireGolden = map[string]string{
 	"UpdateAbilities":                 "0807060504030201000000",
 	"UpdateBlockSynced":               "00000000000085888c901000",
 	"UpdateSubChunkBlocks":            "00000001000000000085888c90100000",
+
+	// Player input tick fields, pinned when their marshaling moved to PlayerInputTick.
+	"CorrectPlayerMovePrediction": "000000000000000000000000000000000000000000000000000000000000000000000085888c9010",
+	"MovementEffectTick":          "03000085888c9010",
+	"UpdatePlayerGameTypeTick":    "000485888c9010",
 }
 
 func wireGoldenFixtures() map[string]Packet {
@@ -45,7 +50,10 @@ func wireGoldenFixtures() map[string]Packet {
 			Target:         protocol.Option(protocol.CameraInstructionTarget{EntityUniqueID: 0x0102030405060708}),
 			AttachToEntity: protocol.Option(int64(0x0102030405060708)),
 		},
-		"MovePlayer": &MovePlayer{EntityRuntimeID: 0x0102030405, RiddenEntityRuntimeID: 0x0102030405},
+		"MovePlayer":                  &MovePlayer{EntityRuntimeID: 0x0102030405, RiddenEntityRuntimeID: 0x0102030405},
+		"CorrectPlayerMovePrediction": &CorrectPlayerMovePrediction{Tick: 0x0102030405},
+		"MovementEffectTick":          &MovementEffect{EntityRuntimeID: 3, Tick: 0x0102030405},
+		"UpdatePlayerGameTypeTick":    &UpdatePlayerGameType{PlayerUniqueID: 2, Tick: 0x0102030405},
 	}
 }
 

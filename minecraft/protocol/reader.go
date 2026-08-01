@@ -808,6 +808,11 @@ func (r *Reader) ActorUniqueID(x *int64) {
 	r.Varint64(x)
 }
 
+// PlayerInputTick reads a player input tick encoded as an unsigned varint.
+func (r *Reader) PlayerInputTick(x *uint64) {
+	r.Varuint64(x)
+}
+
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64

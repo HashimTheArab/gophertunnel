@@ -26,5 +26,5 @@ func (*SetActorMotion) ID() uint32 {
 func (pk *SetActorMotion) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.Vec3(&pk.Velocity)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 }
