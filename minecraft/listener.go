@@ -71,6 +71,13 @@ type ListenConfig struct {
 	// Protocol is always added to this slice. Clients with a protocol version that is not present in this slice will
 	// be disconnected.
 	AcceptedProtocols []Protocol
+	// ProtocolMismatchMessage is called when a client connects with a protocol version newer than any
+	// accepted by the Listener. If it returns a non-empty string, a Disconnect packet carrying that
+	// message is sent before the PlayStatus login failure, so the client shows it instead of the generic
+	// outdated server screen. The PlayStatus is still sent afterwards as a fallback for clients that
+	// ignore the Disconnect. Older mismatched clients only get the vanilla outdated-client flow, since
+	// they may predate the current Disconnect wire layout and would mis-decode a custom message.
+	ProtocolMismatchMessage func(clientProtocol int32) string
 	// Compression is the packet.Compression to use for packets sent over this Conn. If set to nil, the compression
 	// will default to packet.flateCompression.
 	Compression packet.Compression // TODO: Change this to snappy once Windows crashes are resolved.
@@ -457,6 +464,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
 	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
+	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold

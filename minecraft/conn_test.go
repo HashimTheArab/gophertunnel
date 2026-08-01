@@ -512,6 +512,132 @@ func TestClientCacheStatusSendsEmptyResourcePackStack(t *testing.T) {
 	}
 }
 
+func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		clientProtocol int32
+		acceptedExtra  []Protocol
+		message        func(clientProtocol int32) string
+		wantMessage    string
+		wantReason     int32
+		wantStatus     int32
+	}{
+		{
+			name:           "newer client with message",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			message:        func(clientProtocol int32) string { return "Lunar is updating, check back soon." },
+			wantMessage:    "Lunar is updating, check back soon.",
+			wantReason:     packet.DisconnectReasonOutdatedServer,
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			// Older clients may predate the current Disconnect wire layout, so they only get the
+			// vanilla PlayStatus flow even when a message callback is set.
+			name:           "older client never gets the custom disconnect",
+			clientProtocol: 1,
+			message:        func(clientProtocol int32) string { return "Please update Minecraft." },
+			wantStatus:     packet.PlayStatusLoginFailedClient,
+		},
+		{
+			name:           "no callback sends only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			name:           "empty message sends only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			message:        func(clientProtocol int32) string { return "" },
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			// A client older than one accepted protocol is not "newer than the listener", even
+			// when it is ahead of protocol.CurrentProtocol.
+			name:           "client below a newer accepted protocol gets only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			acceptedExtra:  []Protocol{overrideIDProtocol{Protocol: proto{}, id: protocol.CurrentProtocol + 2}},
+			message:        func(clientProtocol int32) string { return "Lunar is updating" },
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, serverConn := net.Pipe()
+			defer client.Close()
+
+			conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, true)
+			conn.acceptedProto = append([]Protocol{proto{}}, tt.acceptedExtra...)
+			conn.protocolMismatchMessage = tt.message
+
+			if err := conn.handleRequestNetworkSettings(&packet.RequestNetworkSettings{ClientProtocol: tt.clientProtocol}); err == nil {
+				t.Fatal("handleRequestNetworkSettings accepted a mismatched protocol version")
+			}
+			go func() {
+				_ = conn.Flush()
+			}()
+
+			if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatalf("set read deadline: %v", err)
+			}
+			packets, err := packet.NewDecoder(client).Decode()
+			if err != nil {
+				t.Fatalf("decode rejection packets: %v", err)
+			}
+			wantCount := 1
+			if tt.wantMessage != "" {
+				wantCount = 2
+			}
+			if len(packets) != wantCount {
+				t.Fatalf("decoded packet count = %d, want %d", len(packets), wantCount)
+			}
+
+			if tt.wantMessage != "" {
+				buf := bytes.NewBuffer(packets[0])
+				var header packet.Header
+				if err := header.Read(buf); err != nil {
+					t.Fatalf("read Disconnect header: %v", err)
+				}
+				if header.PacketID != packet.IDDisconnect {
+					t.Fatalf("first packet ID = %d, want Disconnect", header.PacketID)
+				}
+				var disconnect packet.Disconnect
+				disconnect.Marshal(protocol.NewReader(buf, 0, false))
+				if disconnect.Message != tt.wantMessage {
+					t.Fatalf("disconnect message = %q, want %q", disconnect.Message, tt.wantMessage)
+				}
+				if disconnect.Reason != tt.wantReason {
+					t.Fatalf("disconnect reason = %d, want %d", disconnect.Reason, tt.wantReason)
+				}
+			}
+
+			buf := bytes.NewBuffer(packets[wantCount-1])
+			var header packet.Header
+			if err := header.Read(buf); err != nil {
+				t.Fatalf("read PlayStatus header: %v", err)
+			}
+			if header.PacketID != packet.IDPlayStatus {
+				t.Fatalf("last packet ID = %d, want PlayStatus", header.PacketID)
+			}
+			var status packet.PlayStatus
+			status.Marshal(protocol.NewReader(buf, 0, false))
+			if status.Status != tt.wantStatus {
+				t.Fatalf("play status = %d, want %d", status.Status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// overrideIDProtocol wraps a Protocol, overriding only its reported ID.
+type overrideIDProtocol struct {
+	Protocol
+	id int32
+}
+
+func (p overrideIDProtocol) ID() int32 { return p.id }
+
 func TestDisconnectWritesDisconnectPacket(t *testing.T) {
 	t.Parallel()
 
