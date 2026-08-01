@@ -70,6 +70,9 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 	}()
 
 	r := conn.proto.NewReader(p.payload, conn.shieldID.Load(), conn.readerLimits)
+	if translation := conn.actorIDs.Load(); translation != nil {
+		r = translation.WrapReader(r)
+	}
 	pk.Marshal(r)
 	if p.payload.Len() != 0 {
 		err = fmt.Errorf("decode packet %T: %v unread bytes left: 0x%x", pk, p.payload.Len(), p.payload.Bytes())

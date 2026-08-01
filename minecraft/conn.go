@@ -342,6 +342,10 @@ type Conn struct {
 
 	shieldID atomic.Int32
 
+	// actorIDs holds the optional actor ID translation applied to every packet read from
+	// and written to the connection.
+	actorIDs atomic.Pointer[protocol.ActorIDTranslation]
+
 	additional chan packet.Packet
 
 	disablePacketHandling bool
@@ -549,6 +553,13 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	}
 }
 
+// SetActorIDTranslation sets the translation applied to every actor ID read from or
+// written to the connection, typically a symmetric swap so both directions share one
+// mapping. A nil translation removes it. Safe for concurrent use.
+func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation) {
+	conn.actorIDs.Store(translation)
+}
+
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
 // next 20th of a second, after which the data is flushed and sent over the connection.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
@@ -582,7 +593,11 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			_ = conn.hdr.Write(buf)
 			l := buf.Len()
 
-			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
+			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
+			if translation := conn.actorIDs.Load(); translation != nil {
+				w = translation.WrapWriter(w)
+			}
+			converted.Marshal(w)
 			if conn.packetFunc != nil {
 				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
