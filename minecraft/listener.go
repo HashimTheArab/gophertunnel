@@ -71,12 +71,13 @@ type ListenConfig struct {
 	// Protocol is always added to this slice. Clients with a protocol version that is not present in this slice will
 	// be disconnected.
 	AcceptedProtocols []Protocol
-	// ProtocolMismatchMessage is called when a client connects with a protocol version newer than any
-	// accepted by the Listener. If it returns a non-empty string, a Disconnect packet carrying that
-	// message is sent before the PlayStatus login failure, so the client shows it instead of the generic
-	// outdated server screen. The PlayStatus is still sent afterwards as a fallback for clients that
-	// ignore the Disconnect. Older mismatched clients only get the vanilla outdated-client flow, since
-	// they may predate the current Disconnect wire layout and would mis-decode a custom message.
+	// ProtocolMismatchMessage is called when a client connects with a protocol version not accepted by
+	// the Listener, as long as the client is recent enough (1.20.40+) to decode the current Disconnect
+	// wire layout. If it returns a non-empty string, a Disconnect packet carrying that message is sent
+	// before the PlayStatus login failure, so the client shows it instead of the generic outdated
+	// client/server screen. The PlayStatus is still sent afterwards as a fallback for clients that
+	// ignore the Disconnect. The client's protocol is passed so implementations can word the message
+	// by direction (client outdated vs server outdated).
 	ProtocolMismatchMessage func(clientProtocol int32) string
 	// Compression is the packet.Compression to use for packets sent over this Conn. If set to nil, the compression
 	// will default to packet.flateCompression.

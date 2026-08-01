@@ -1300,16 +1300,16 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 
 	if !found {
-		status := packet.PlayStatusLoginFailedClient
+		status, reason := packet.PlayStatusLoginFailedClient, packet.DisconnectReasonOutdatedClient
 		if pk.ClientProtocol > protocol.CurrentProtocol {
 			// The server is outdated in this case, so we have to change the status we send.
-			status = packet.PlayStatusLoginFailedServer
+			status, reason = packet.PlayStatusLoginFailedServer, packet.DisconnectReasonOutdatedServer
 		}
-		// Only clients newer than every accepted protocol get the custom Disconnect: older clients
-		// may predate the current Disconnect wire layout and would mis-decode it, hiding the message.
-		if conn.protocolMismatchMessage != nil && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+		// Clients older than minDisconnectMessageProtocol predate the current Disconnect wire
+		// layout and would mis-decode the message, so they only get the PlayStatus.
+		if conn.protocolMismatchMessage != nil && pk.ClientProtocol >= minDisconnectMessageProtocol {
 			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
-				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
+				_ = conn.WritePacket(&packet.Disconnect{Reason: reason, Message: msg})
 			}
 		}
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
@@ -2152,15 +2152,10 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
 }
 
-// newerThanAccepted reports whether clientProtocol is newer than every accepted protocol.
-func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
-	for _, pro := range accepted {
-		if clientProtocol <= pro.ID() {
-			return false
-		}
-	}
-	return true
-}
+// minDisconnectMessageProtocol is the oldest protocol version (1.20.40) using the current
+// Disconnect wire layout, which added the leading reason field. Older clients would decode the
+// reason as HideDisconnectionScreen and drop the message.
+const minDisconnectMessageProtocol = 622
 
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
