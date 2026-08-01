@@ -1304,12 +1304,12 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		if pk.ClientProtocol > protocol.CurrentProtocol {
 			// The server is outdated in this case, so we have to change the status we send.
 			status = packet.PlayStatusLoginFailedServer
-			// Only clients newer than the listener get the custom Disconnect: older clients may
-			// predate the current Disconnect wire layout and would mis-decode it, hiding the message.
-			if conn.protocolMismatchMessage != nil {
-				if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
-					_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
-				}
+		}
+		// Only clients newer than every accepted protocol get the custom Disconnect: older clients
+		// may predate the current Disconnect wire layout and would mis-decode it, hiding the message.
+		if conn.protocolMismatchMessage != nil && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
+				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
 			}
 		}
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
@@ -2150,6 +2150,16 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 		return [32]byte{}, fmt.Errorf("compute shared secret: %w", err)
 	}
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
+}
+
+// newerThanAccepted reports whether clientProtocol is newer than every accepted protocol.
+func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
+	for _, pro := range accepted {
+		if clientProtocol <= pro.ID() {
+			return false
+		}
+	}
+	return true
 }
 
 // expect sets the packet IDs that are next expected to arrive.

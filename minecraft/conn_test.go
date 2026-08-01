@@ -518,6 +518,7 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 	tests := []struct {
 		name           string
 		clientProtocol int32
+		acceptedExtra  []Protocol
 		message        func(clientProtocol int32) string
 		wantMessage    string
 		wantReason     int32
@@ -550,6 +551,15 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 			message:        func(clientProtocol int32) string { return "" },
 			wantStatus:     packet.PlayStatusLoginFailedServer,
 		},
+		{
+			// A client older than one accepted protocol is not "newer than the listener", even
+			// when it is ahead of protocol.CurrentProtocol.
+			name:           "client below a newer accepted protocol gets only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			acceptedExtra:  []Protocol{overrideIDProtocol{Protocol: proto{}, id: protocol.CurrentProtocol + 2}},
+			message:        func(clientProtocol int32) string { return "Lunar is updating" },
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -559,7 +569,7 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 			defer client.Close()
 
 			conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, true)
-			conn.acceptedProto = []Protocol{proto{}}
+			conn.acceptedProto = append([]Protocol{proto{}}, tt.acceptedExtra...)
 			conn.protocolMismatchMessage = tt.message
 
 			if err := conn.handleRequestNetworkSettings(&packet.RequestNetworkSettings{ClientProtocol: tt.clientProtocol}); err == nil {
@@ -619,6 +629,14 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 		})
 	}
 }
+
+// overrideIDProtocol wraps a Protocol, overriding only its reported ID.
+type overrideIDProtocol struct {
+	Protocol
+	id int32
+}
+
+func (p overrideIDProtocol) ID() int32 { return p.id }
 
 func TestDisconnectWritesDisconnectPacket(t *testing.T) {
 	t.Parallel()
