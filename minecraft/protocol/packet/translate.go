@@ -23,6 +23,8 @@ var entityMetadataIDKeys = map[uint32]struct{}{
 // and uniqueID respectively, storing the results. Either function may be nil to leave IDs
 // of that kind untouched. The callbacks decide the mapping policy and must return their
 // argument unchanged for IDs they do not translate, such as sentinel values like math.MaxInt64.
+// The traversal runs pk's own Marshal, so pk must be valid to write: a packet a Writer
+// would reject, such as one with a nil interface field, panics here the same way.
 func TranslateEntityIDs(pk Packet, runtimeID func(uint64) uint64, uniqueID func(int64) int64) {
 	if runtimeID == nil {
 		runtimeID = func(id uint64) uint64 { return id }

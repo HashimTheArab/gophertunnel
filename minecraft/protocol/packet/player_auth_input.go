@@ -191,7 +191,7 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 
 	if pk.InputData.Load(InputFlagClientPredictedVehicle) {
 		io.Vec2(&pk.VehicleRotation)
-		protocol.ActorUniqueIDFixed(io, &pk.ClientPredictedVehicle)
+		io.ActorUniqueID(&pk.ClientPredictedVehicle)
 	}
 
 	io.Vec2(&pk.AnalogueMoveVector)
