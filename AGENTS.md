@@ -20,8 +20,10 @@ the connection-level ID translation rewrite. A field marshalled with `io.Varuint
 instead is invisible to all of them and silently breaks proxies that swap upstream
 sessions — the exact bug class the semantic ops exist to prevent.
 
-Related: entity metadata keys whose values are actor unique IDs must be added to the
-metadata ID key set the translators consult, and new IO implementations must forward
+Related: entity metadata keys whose values are actor unique IDs must be added to
+`entityMetadataActorIDKeys` in `minecraft/protocol/translate_io.go` (applied through
+`protocol.TranslateEntityMetadataIDs`) — there is no naming pattern a discovery test can
+match, so this manual list is the only gate. New IO implementations must forward
 `SliceLength` (see `sliceReader`) or slice decoding breaks behind them.
 
 ## The coverage tests are the enforcement — keep them strict
