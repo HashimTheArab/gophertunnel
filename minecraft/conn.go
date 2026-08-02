@@ -223,8 +223,6 @@ type Conn struct {
 	// acceptNewerProtocols serves clients newer than every acceptedProto with the newest one. See
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
-	// clientProtocol is the protocol version the client reported in RequestNetworkSettings.
-	clientProtocol       atomic.Int32
 	pool                 packet.Pool
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
@@ -457,13 +455,6 @@ func (conn *Conn) GameData() GameData {
 // Proto returns the protocol of the connection.
 func (conn *Conn) Proto() Protocol {
 	return conn.proto
-}
-
-// ClientProtocol returns the protocol version the client reported in its RequestNetworkSettings. It
-// differs from Proto().ID() when the connection was accepted through AcceptNewerProtocols. Returns 0
-// for a Conn obtained from Dial.
-func (conn *Conn) ClientProtocol() int32 {
-	return conn.clientProtocol.Load()
 }
 
 // StartGame starts the game for a client that connected to the server. StartGame should be called for a Conn
@@ -1301,7 +1292,6 @@ func (conn *Conn) handlePacket(pk packet.Packet) error {
 // handleRequestNetworkSettings handles an incoming RequestNetworkSettings packet. It returns an error if the protocol
 // version is not supported, otherwise sending back a NetworkSettings packet.
 func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings) error {
-	conn.clientProtocol.Store(pk.ClientProtocol)
 	found := false
 	for _, pro := range conn.acceptedProto {
 		if pro.ID() == pk.ClientProtocol {
