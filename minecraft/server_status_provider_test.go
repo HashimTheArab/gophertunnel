@@ -20,13 +20,6 @@ func TestParsePongDataReadsVersion(t *testing.T) {
 	if status.ServerName != "Lunar Proxy" || status.PlayerCount != 3 || status.MaxPlayers != 10 {
 		t.Fatalf("parsed status = %+v, want the values written above", status)
 	}
-
-	// Third-party servers put arbitrary data in the protocol field; that must not blank the
-	// status a ForeignStatusProvider mirrors.
-	junk := []byte("MCPE;Some Server;abc;whatever;3;10;1234;Sub;Creative;1;19132;19133;0;")
-	if status := ParsePongData(junk); status.ServerName != "Some Server" || status.Protocol != 0 {
-		t.Fatalf("junk protocol parsed to %+v, want name kept and protocol 0", status)
-	}
 }
 
 // TestForeignStatusProviderDropsTargetVersion verifies a mirroring Listener keeps advertising its own

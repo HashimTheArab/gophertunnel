@@ -414,16 +414,15 @@ func (listener *Listener) updatePongData() {
 	}
 
 	s := listener.status()
-	// Resolved here rather than at each consumer, so the pong below and the forwarded status carry
-	// the same values.
-	if s.Protocol == 0 {
-		s.Protocol = protocol.CurrentProtocol
+	pro, version := s.Protocol, s.Version
+	if pro == 0 {
+		pro = protocol.CurrentProtocol
 	}
-	if s.Version == "" {
-		s.Version = protocol.CurrentVersion
+	if version == "" {
+		version = protocol.CurrentVersion
 	}
 	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
-		s.ServerName, s.Protocol, s.Version, s.PlayerCount, s.MaxPlayers,
+		s.ServerName, pro, version, s.PlayerCount, s.MaxPlayers,
 		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port,
 		0,
 	))
