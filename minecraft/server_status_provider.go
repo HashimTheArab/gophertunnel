@@ -145,10 +145,9 @@ func ParsePongData(pong []byte) ServerStatus {
 	if err != nil {
 		return ServerStatus{ServerName: "Invalid max player count"}
 	}
-	pro, err := strconv.ParseInt(frag[2], 10, 32)
-	if err != nil {
-		return ServerStatus{ServerName: "Invalid protocol version"}
-	}
+	// Unlike the counts, a malformed protocol is not fatal: third-party servers put arbitrary data
+	// in this field, and a mirrored status should keep its name and counts regardless.
+	pro, _ := strconv.ParseInt(frag[2], 10, 32)
 	return ServerStatus{
 		ServerName:    serverName,
 		ServerSubName: serverSubName,
