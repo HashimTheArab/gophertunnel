@@ -16,7 +16,7 @@ const (
 	IDAddActor
 	IDRemoveActor
 	IDAddItemActor
-	_
+	IDServerPlayerPostMovePosition
 	IDTakeItemActor
 	IDMoveActorAbsolute
 	IDMovePlayer
@@ -55,7 +55,7 @@ const (
 	IDCraftingData
 	_
 	IDGUIDataPickItem
-	IDAdventureSettings
+	_
 	IDBlockActorData
 	_
 	IDLevelChunk
@@ -117,7 +117,7 @@ const (
 	IDUpdateSoftEnum
 	IDNetworkStackLatency
 	_
-	IDScriptCustomEvent
+	_
 	IDSpawnParticleEffect
 	IDAvailableActorIdentifiers
 	_
@@ -163,7 +163,7 @@ const (
 	IDPlayerFog
 	IDCorrectPlayerMovePrediction
 	IDItemRegistry
-	IDFilterText
+	_
 	IDClientBoundDebugRenderer
 	IDSyncActorProperty
 	IDAddVolumeEntity
@@ -173,7 +173,7 @@ const (
 	IDEducationResourceURI
 	IDCreatePhoto
 	IDUpdateSubChunkBlocks
-	IDPhotoInfoRequest
+	_
 	IDSubChunk
 	IDSubChunkRequest
 	IDClientStartItemCooldown
@@ -197,7 +197,7 @@ const (
 	IDGameTestRequest
 	IDGameTestResults
 	IDUpdateClientInputLocks
-	IDClientCheatAbility
+	_
 	IDCameraPresets
 	IDUnlockedRecipes
 	IDCameraInstruction = iota + 101
