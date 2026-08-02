@@ -630,6 +630,62 @@ func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
 	}
 }
 
+func TestHandleRequestNetworkSettingsAcceptNewerProtocols(t *testing.T) {
+	t.Parallel()
+
+	newest := overrideIDProtocol{Protocol: proto{}, id: protocol.CurrentProtocol + 2}
+	tests := []struct {
+		name           string
+		clientProtocol int32
+		acceptedExtra  []Protocol
+		wantAccepted   bool
+		wantProtocol   int32
+	}{
+		{
+			name:           "newer client is served with the newest protocol",
+			clientProtocol: protocol.CurrentProtocol + 5,
+			acceptedExtra:  []Protocol{newest},
+			wantAccepted:   true,
+			wantProtocol:   newest.ID(),
+		},
+		{
+			// Leniency only covers clients ahead of the listener: an old version whose packets we
+			// genuinely cannot encode is still rejected.
+			name:           "older client is still rejected",
+			clientProtocol: 1,
+			wantAccepted:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, serverConn := net.Pipe()
+			defer client.Close()
+			go func() {
+				_, _ = io.Copy(io.Discard, client)
+			}()
+
+			conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, true)
+			conn.acceptedProto = append([]Protocol{proto{}}, tt.acceptedExtra...)
+			conn.acceptNewerProtocols = true
+			conn.compression = packet.DefaultCompression
+
+			err := conn.handleRequestNetworkSettings(&packet.RequestNetworkSettings{ClientProtocol: tt.clientProtocol})
+			if tt.wantAccepted {
+				if err != nil {
+					t.Fatalf("handleRequestNetworkSettings rejected a newer client: %v", err)
+				}
+				if conn.proto.ID() != tt.wantProtocol {
+					t.Fatalf("conn protocol = %d, want %d", conn.proto.ID(), tt.wantProtocol)
+				}
+			} else if err == nil {
+				t.Fatal("handleRequestNetworkSettings accepted an older client")
+			}
+		})
+	}
+}
+
 // overrideIDProtocol wraps a Protocol, overriding only its reported ID.
 type overrideIDProtocol struct {
 	Protocol

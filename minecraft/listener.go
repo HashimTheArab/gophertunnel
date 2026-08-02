@@ -78,6 +78,11 @@ type ListenConfig struct {
 	// ignore the Disconnect. Older mismatched clients only get the vanilla outdated-client flow, since
 	// they may predate the current Disconnect wire layout and would mis-decode a custom message.
 	ProtocolMismatchMessage func(clientProtocol int32) string
+	// AcceptNewerProtocols accepts clients newer than every accepted Protocol, serving them with the
+	// newest one. Packets whose layout changed in the client's version are then encoded wrongly, so
+	// only set this on a listener with a small, stable packet surface, such as one that logs the client
+	// in and hands it off with a Transfer. Older clients are still rejected.
+	AcceptNewerProtocols bool
 	// Compression is the packet.Compression to use for packets sent over this Conn. If set to nil, the compression
 	// will default to packet.flateCompression.
 	Compression packet.Compression // TODO: Change this to snappy once Windows crashes are resolved.
@@ -465,6 +470,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
 	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
+	conn.acceptNewerProtocols = listener.cfg.AcceptNewerProtocols
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold
