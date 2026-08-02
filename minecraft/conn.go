@@ -220,14 +220,17 @@ type Conn struct {
 	// protocolMismatchMessage, if non-nil, supplies a custom Disconnect message for clients that connect
 	// with a protocol version not in acceptedProto. See ListenConfig.ProtocolMismatchMessage.
 	protocolMismatchMessage func(clientProtocol int32) string
-	pool                    packet.Pool
-	enc                     *packet.Encoder
-	dec                     *packet.Decoder
-	compression             packet.Compression
-	compressionSelector     func(proto Protocol) packet.Compression
-	compressionThreshold    int
-	maxDecompressedLen      int
-	readerLimits            bool
+	// acceptNewerProtocols serves clients newer than every acceptedProto with the newest one. See
+	// ListenConfig.AcceptNewerProtocols.
+	acceptNewerProtocols bool
+	pool                 packet.Pool
+	enc                  *packet.Encoder
+	dec                  *packet.Decoder
+	compression          packet.Compression
+	compressionSelector  func(proto Protocol) packet.Compression
+	compressionThreshold int
+	maxDecompressedLen   int
+	readerLimits         bool
 
 	disconnectOnUnknownPacket bool
 	disconnectOnInvalidPacket bool
@@ -1299,6 +1302,14 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		}
 	}
 
+	if !found && conn.acceptNewerProtocols && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+		// The client runs a Minecraft version this build predates. Serve it with the newest protocol
+		// known: packets whose layout is unchanged in the client's version still decode correctly.
+		conn.proto = newestAccepted(conn.acceptedProto)
+		conn.pool = conn.proto.Packets(true)
+		found = true
+	}
+
 	if !found {
 		status := packet.PlayStatusLoginFailedClient
 		if pk.ClientProtocol > protocol.CurrentProtocol {
@@ -2150,6 +2161,17 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 		return [32]byte{}, fmt.Errorf("compute shared secret: %w", err)
 	}
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
+}
+
+// newestAccepted returns the Protocol with the highest ID out of the accepted protocols passed.
+func newestAccepted(accepted []Protocol) Protocol {
+	newest := accepted[0]
+	for _, pro := range accepted[1:] {
+		if pro.ID() > newest.ID() {
+			newest = pro
+		}
+	}
+	return newest
 }
 
 // newerThanAccepted reports whether clientProtocol is newer than every accepted protocol.
