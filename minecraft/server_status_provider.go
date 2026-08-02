@@ -34,6 +34,12 @@ type ServerStatus struct {
 	// MaxPlayers is the maximum amount of players in the server. If set to 0, MaxPlayers is set to
 	// PlayerCount + 1.
 	MaxPlayers int
+	// Protocol is the protocol version shown in the server list. If 0, the protocol this build
+	// implements is shown.
+	Protocol int32
+	// Version is the Minecraft version shown in the server list. If empty, the version this build
+	// implements is shown.
+	Version string
 }
 
 // ListenerStatusProvider is the default ServerStatusProvider of a Listener. It displays a static server name/

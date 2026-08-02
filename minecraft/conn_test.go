@@ -682,6 +682,10 @@ func TestHandleRequestNetworkSettingsAcceptNewerProtocols(t *testing.T) {
 			} else if err == nil {
 				t.Fatal("handleRequestNetworkSettings accepted an older client")
 			}
+			// The client's own version stays readable even when it is served with another protocol.
+			if conn.ClientProtocol() != tt.clientProtocol {
+				t.Fatalf("client protocol = %d, want %d", conn.ClientProtocol(), tt.clientProtocol)
+			}
 		})
 	}
 }
