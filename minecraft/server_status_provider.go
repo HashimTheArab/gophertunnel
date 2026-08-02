@@ -90,11 +90,15 @@ func NewForeignStatusProvider(addr string) (*ForeignStatusProvider, error) {
 	return f, nil
 }
 
-// ServerStatus returns the ServerStatus of the target server.
+// ServerStatus returns the ServerStatus of the target server. The target's protocol and version are
+// left out: only its presentation is copied, and a Listener speaks its own protocol regardless of
+// what the target runs.
 func (f *ForeignStatusProvider) ServerStatus(int, int) ServerStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.status
+	status := f.status
+	status.Protocol, status.Version = 0, ""
+	return status
 }
 
 // Close closes the ForeignStatusProvider and stops polling it. Close always returns nil.
@@ -141,10 +145,16 @@ func ParsePongData(pong []byte) ServerStatus {
 	if err != nil {
 		return ServerStatus{ServerName: "Invalid max player count"}
 	}
+	pro, err := strconv.ParseInt(frag[2], 10, 32)
+	if err != nil {
+		return ServerStatus{ServerName: "Invalid protocol version"}
+	}
 	return ServerStatus{
 		ServerName:    serverName,
 		ServerSubName: serverSubName,
 		PlayerCount:   online,
 		MaxPlayers:    max,
+		Protocol:      int32(pro),
+		Version:       frag[3],
 	}
 }
