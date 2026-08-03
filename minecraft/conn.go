@@ -2213,23 +2213,16 @@ func (conn *Conn) close(cause error) error {
 	return conn.gracefulCloseErr
 }
 
+// abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
+// connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
+// another goroutine holds that write in progress. Callers giving up on a connection precisely because
+// the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
 		conn.cancelFunc(cause)
 		conn.abortErr = conn.conn.Close()
 	})
 	return conn.abortErr
-}
-
-// abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
-// connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
-// another goroutine holds that write in progress. Callers giving up on a connection precisely because
-// the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
-func (conn *Conn) abort(cause error) {
-	conn.once.Do(func() {
-		conn.cancelFunc(cause)
-		_ = conn.conn.Close()
-	})
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed
