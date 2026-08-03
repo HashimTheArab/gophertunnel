@@ -205,11 +205,14 @@ var disconnectReasons = map[int32]string{
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
 // ReadBatch must not be called on multiple goroutines simultaneously.
 type Conn struct {
-	// once is used to ensure the Conn is closed only a single time. It protects the channel below from being
-	// closed multiple times.
-	once       sync.Once
-	ctx        context.Context
-	cancelFunc context.CancelCauseFunc
+	// closeOnce and abortOnce coordinate graceful and immediate shutdown independently. Abort must remain able to
+	// close the raw transport while Close is blocked flushing it.
+	closeOnce        sync.Once
+	abortOnce        sync.Once
+	gracefulCloseErr error
+	abortErr         error
+	ctx              context.Context
+	cancelFunc       context.CancelCauseFunc
 
 	conn        net.Conn
 	log         *slog.Logger
@@ -650,10 +653,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
 		defer conn.encMu.Unlock()
-		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
-			// Should never happen.
-			panic(fmt.Errorf("error encoding packet batch: %w", err))
-		}
+		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
 	}
 	return nil
 }
@@ -855,10 +855,7 @@ func (conn *Conn) Flush() error {
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	if err := conn.enc.Encode(toSend); err != nil && !errors.Is(err, net.ErrClosed) {
-		// Should never happen.
-		panic(fmt.Errorf("error encoding packet batch: %w", err))
-	}
+	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
@@ -869,13 +866,35 @@ func (conn *Conn) Flush() error {
 	conn.sendMu.Lock()
 	conn.bufferedSendSpare = toSend[:0]
 	conn.sendMu.Unlock()
-	return nil
+	return encodeErr
+}
+
+// handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
+// connection context before closing the transport, so transport-specific errors caused by that close are
+// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+func (conn *Conn) handleEncodeError(err error, op string) error {
+	if err == nil {
+		return nil
+	}
+	if conn.ctx.Err() != nil {
+		return conn.closeErr(op)
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	panic(fmt.Errorf("error encoding packet batch: %w", err))
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
 // packets currently pending are sent out.
 func (conn *Conn) Close() error {
 	return conn.close(net.ErrClosed)
+}
+
+// Abort immediately cancels the Conn context and closes its raw transport without flushing buffered packets.
+// It is safe to call concurrently with Close and may be used to unblock a Close waiting on a backpressured peer.
+func (conn *Conn) Abort() error {
+	return conn.abort(net.ErrClosed)
 }
 
 // LocalAddr returns the local address of the underlying connection.
@@ -1715,6 +1734,7 @@ func (conn *Conn) startGame() error {
 		EmoteChatMuted:               data.EmoteChatMuted,
 		GameRules:                    data.GameRules,
 		Time:                         data.Time,
+		DayCycleLockTime:             data.DayCycleLockTime,
 		Blocks:                       data.CustomBlocks,
 		AchievementsDisabled:         true,
 		Generator:                    1,
@@ -1967,6 +1987,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		EmoteChatMuted:               pk.EmoteChatMuted,
 		GameRules:                    pk.GameRules,
 		Time:                         pk.Time,
+		DayCycleLockTime:             pk.DayCycleLockTime,
 		ServerBlockStateChecksum:     pk.ServerBlockStateChecksum,
 		CustomBlocks:                 pk.Blocks,
 		PlayerMovementSettings:       pk.PlayerMovementSettings,
@@ -2190,24 +2211,28 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 }
 
 func (conn *Conn) close(cause error) error {
-	var err error
-	conn.once.Do(func() {
-		err = conn.Flush()
-		conn.cancelFunc(cause)
-		_ = conn.conn.Close()
+	conn.closeOnce.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
+			}
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
+		}()
+		conn.gracefulCloseErr = conn.Flush()
 	})
-	return err
+	return conn.gracefulCloseErr
 }
 
 // abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
 // connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
 // another goroutine holds that write in progress. Callers giving up on a connection precisely because
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
-func (conn *Conn) abort(cause error) {
-	conn.once.Do(func() {
+func (conn *Conn) abort(cause error) error {
+	conn.abortOnce.Do(func() {
 		conn.cancelFunc(cause)
-		_ = conn.conn.Close()
+		conn.abortErr = conn.conn.Close()
 	})
+	return conn.abortErr
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed

@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -385,6 +387,43 @@ func TestStartGameWritesPropertyData(t *testing.T) {
 
 	if got["gophertunnel:test"] != int32(1) {
 		t.Fatalf("StartGame.PropertyData = %#v, want gophertunnel:test=1", got)
+	}
+}
+
+func TestGameDataRoundTripsDayCycleLockTime(t *testing.T) {
+	t.Parallel()
+
+	const want int32 = 12_345
+	data := GameDataFromStartGame(&packet.StartGame{DayCycleLockTime: want})
+	if data.DayCycleLockTime != want {
+		t.Fatalf("GameData.DayCycleLockTime = %d, want %d", data.DayCycleLockTime, want)
+	}
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var got int32
+	conn.packetFunc = func(header packet.Header, payload []byte, _, _ net.Addr) {
+		if header.PacketID != packet.IDStartGame {
+			return
+		}
+		var start packet.StartGame
+		start.Marshal(protocol.NewReader(bytes.NewBuffer(payload), 0, false))
+		got = start.DayCycleLockTime
+	}
+
+	if err := conn.SendStartGame(data); err != nil {
+		t.Fatalf("SendStartGame: %v", err)
+	}
+	if got != want {
+		t.Fatalf("StartGame.DayCycleLockTime = %d, want %d", got, want)
 	}
 }
 
@@ -828,6 +867,198 @@ func TestReceiveDisconnectPreservesPacketReason(t *testing.T) {
 	if legacyErr.Error() != "Server Full" {
 		t.Fatalf("legacy error = %q, want Server Full", legacyErr.Error())
 	}
+}
+
+func TestAbortCancelsContextAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not cancel connection context")
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := peer.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("peer read error = %v, want terminal close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer read remained blocked after Abort")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("second Abort: %v", err)
+	}
+}
+
+func TestAbortUnblocksCloseStuckFlushing(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	observed := &writeObservedConn{Conn: client, started: make(chan struct{})}
+	conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case <-observed.started:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not begin its flush")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not unblock Close")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection context remained active")
+	}
+}
+
+func TestAbortUnblocksInFlightWritesWithoutPanic(t *testing.T) {
+	operations := []struct {
+		name    string
+		prepare func(*testing.T, *Conn) func() error
+	}{
+		{
+			name: "Flush",
+			prepare: func(t *testing.T, conn *Conn) func() error {
+				t.Helper()
+				if _, err := conn.Write([]byte{1}); err != nil {
+					t.Fatalf("queue write: %v", err)
+				}
+				return conn.Flush
+			},
+		},
+		{
+			name: "WritePacketDirect",
+			prepare: func(_ *testing.T, conn *Conn) func() error {
+				return func() error { return conn.WritePacketDirect(&packet.PlayStatus{}) }
+			},
+		},
+	}
+	transports := []struct {
+		name string
+		wrap func(net.Conn) net.Conn
+	}{
+		{name: "io.ErrClosedPipe", wrap: func(conn net.Conn) net.Conn { return conn }},
+		{name: "net.ErrClosed", wrap: func(conn net.Conn) net.Conn { return pipeConn{Conn: conn} }},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, transport := range transports {
+				t.Run(transport.name, func(t *testing.T) {
+					client, peer := net.Pipe()
+					defer peer.Close()
+					observed := &writeObservedConn{Conn: transport.wrap(client), started: make(chan struct{})}
+					conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+					run := operation.prepare(t, conn)
+
+					type result struct {
+						err       error
+						recovered any
+					}
+					done := make(chan result, 1)
+					go func() {
+						res := result{}
+						defer func() {
+							res.recovered = recover()
+							done <- res
+						}()
+						res.err = run()
+					}()
+
+					select {
+					case <-observed.started:
+					case <-time.After(time.Second):
+						t.Fatal("write did not start")
+					}
+					if err := conn.Abort(); err != nil {
+						t.Fatalf("Abort: %v", err)
+					}
+
+					select {
+					case res := <-done:
+						if res.recovered != nil {
+							t.Fatalf("write panicked: %v", res.recovered)
+						}
+						if !errors.Is(res.err, net.ErrClosed) {
+							t.Fatalf("write error = %v, want net.ErrClosed", res.err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("write remained blocked after Abort")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	panicking := &panicWriteConn{Conn: client, closed: make(chan struct{})}
+	conn := newConn(panicking, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	err := conn.Close()
+	if err == nil || !strings.Contains(err.Error(), "panic flushing connection") {
+		t.Fatalf("Close error = %v, want recovered flush panic", err)
+	}
+	select {
+	case <-panicking.closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left raw transport open")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left context active")
+	}
+}
+
+type writeObservedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeObservedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+type panicWriteConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *panicWriteConn) Write([]byte) (int, error) {
+	panic("write panic")
+}
+
+func (c *panicWriteConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 func TestClientToServerHandshakeMarksComplete(t *testing.T) {
