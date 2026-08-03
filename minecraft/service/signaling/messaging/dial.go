@@ -97,10 +97,14 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 	}
 	opts.HTTPHeader.Set("Authorization", token.AuthorizationHeader)
 	requestURL := cfg.ServiceURI.JoinPath("/ws/v1.0/messaging/connect")
-	c, _, err := websocket.Dial(ctx, requestURL.String(), opts)
+	c, resp, err := websocket.Dial(ctx, requestURL.String(), opts)
 	if err != nil {
 		return nil, err
 	}
+	d.Log.Info("connected to signaling service",
+		slog.String("transport", "jsonrpc"),
+		slog.String("service_version", resp.Header.Get("Service-Version")),
+	)
 
 	conn := &Conn{
 		conn: c,

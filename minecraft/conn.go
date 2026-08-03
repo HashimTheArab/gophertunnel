@@ -218,8 +218,14 @@ type Conn struct {
 	log         *slog.Logger
 	authEnabled bool
 
-	proto                Protocol
-	acceptedProto        []Protocol
+	proto         Protocol
+	acceptedProto []Protocol
+	// protocolMismatchMessage, if non-nil, supplies a custom Disconnect message for clients that connect
+	// with a protocol version not in acceptedProto. See ListenConfig.ProtocolMismatchMessage.
+	protocolMismatchMessage func(clientProtocol int32) string
+	// acceptNewerProtocols serves clients newer than every acceptedProto with the newest one. See
+	// ListenConfig.AcceptNewerProtocols.
+	acceptNewerProtocols bool
 	pool                 packet.Pool
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
@@ -345,6 +351,10 @@ type Conn struct {
 
 	shieldID atomic.Int32
 
+	// actorIDs holds the optional actor ID translation applied to every packet read from
+	// and written to the connection.
+	actorIDs atomic.Pointer[protocol.ActorIDTranslation]
+
 	additional chan packet.Packet
 
 	disablePacketHandling bool
@@ -360,7 +370,7 @@ type Conn struct {
 // key is generated.
 func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Protocol, flushRate time.Duration, limits bool) *Conn {
 	disableEncryption := false
-	if d, ok := netConn.(interface{ DisableEncryption() bool }); ok {
+	if d, ok := netConn.(packet.EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 
@@ -552,6 +562,13 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	}
 }
 
+// SetActorIDTranslation sets the translation applied to every actor ID read from or
+// written to the connection, typically a symmetric swap so both directions share one
+// mapping. A nil translation removes it. Safe for concurrent use.
+func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation) {
+	conn.actorIDs.Store(translation)
+}
+
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
 // next 20th of a second, after which the data is flushed and sent over the connection.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
@@ -585,7 +602,11 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			_ = conn.hdr.Write(buf)
 			l := buf.Len()
 
-			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
+			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
+			if translation := conn.actorIDs.Load(); translation != nil {
+				w = translation.WrapWriter(w)
+			}
+			converted.Marshal(w)
 			if conn.packetFunc != nil {
 				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
@@ -1290,19 +1311,26 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		}
 	}
 
-	// Allow newer clients to connect. Most protocol updates are still playable for the most part.
-	// if pk.ClientProtocol > protocol.CurrentProtocol {
-	// 	found = true
-	// } else {
-	// 	found = true // just allow all
-	// }
+	if !found && conn.acceptNewerProtocols && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+		// The client runs a Minecraft version this build predates. Serve it with the newest protocol
+		// known: packets whose layout is unchanged in the client's version still decode correctly.
+		conn.proto = newestAccepted(conn.acceptedProto)
+		conn.pool = conn.proto.Packets(true)
+		found = true
+	}
 
 	if !found {
 		status := packet.PlayStatusLoginFailedClient
-		// Dead code because of the newly added check above
 		if pk.ClientProtocol > protocol.CurrentProtocol {
 			// The server is outdated in this case, so we have to change the status we send.
 			status = packet.PlayStatusLoginFailedServer
+		}
+		// Only clients newer than every accepted protocol get the custom Disconnect: older clients
+		// may predate the current Disconnect wire layout and would mis-decode it, hiding the message.
+		if conn.protocolMismatchMessage != nil && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
+				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
+			}
 		}
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
 		return fmt.Errorf("incompatible protocol version: expected %v, got %v", protocol.CurrentProtocol, pk.ClientProtocol)
@@ -1372,7 +1400,6 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 			return conn.Close()
 		}
 	}
-
 	if conn.disableEncryption {
 		return conn.handleClientToServerHandshake()
 	}
@@ -2147,6 +2174,27 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
 }
 
+// newestAccepted returns the Protocol with the highest ID out of the accepted protocols passed.
+func newestAccepted(accepted []Protocol) Protocol {
+	newest := accepted[0]
+	for _, pro := range accepted[1:] {
+		if pro.ID() > newest.ID() {
+			newest = pro
+		}
+	}
+	return newest
+}
+
+// newerThanAccepted reports whether clientProtocol is newer than every accepted protocol.
+func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
+	for _, pro := range accepted {
+		if clientProtocol <= pro.ID() {
+			return false
+		}
+	}
+	return true
+}
+
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
@@ -2171,6 +2219,17 @@ func (conn *Conn) abort(cause error) error {
 		conn.abortErr = conn.conn.Close()
 	})
 	return conn.abortErr
+}
+
+// abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
+// connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
+// another goroutine holds that write in progress. Callers giving up on a connection precisely because
+// the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
+func (conn *Conn) abort(cause error) {
+	conn.once.Do(func() {
+		conn.cancelFunc(cause)
+		_ = conn.conn.Close()
+	})
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed

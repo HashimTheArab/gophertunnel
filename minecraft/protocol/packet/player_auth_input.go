@@ -76,22 +76,22 @@ const (
 )
 
 const (
-    InputModeMouse = iota + 1
-    InputModeTouch
-    InputModeGamePad
+	InputModeMouse = iota + 1
+	InputModeTouch
+	InputModeGamePad
 )
 
 const (
-    PlayModeNormal = iota
-    PlayModeTeaser
-    PlayModeScreen
-    _
-    _
-    _
-    _
-    PlayModeExitLevel
-    _
-    PlayModeNumModes
+	PlayModeNormal = iota
+	PlayModeTeaser
+	PlayModeScreen
+	_
+	_
+	_
+	_
+	PlayModeExitLevel
+	_
+	PlayModeNumModes
 )
 
 const (
@@ -174,7 +174,7 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	io.Varuint32(&pk.InteractionModel)
 	io.Float32(&pk.InteractPitch)
 	io.Float32(&pk.InteractYaw)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 	io.Vec3(&pk.Delta)
 
 	if pk.InputData.Load(InputFlagPerformItemInteraction) {
@@ -191,7 +191,7 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 
 	if pk.InputData.Load(InputFlagClientPredictedVehicle) {
 		io.Vec2(&pk.VehicleRotation)
-		io.Varint64(&pk.ClientPredictedVehicle)
+		io.ActorUniqueID(&pk.ClientPredictedVehicle)
 	}
 
 	io.Vec2(&pk.AnalogueMoveVector)

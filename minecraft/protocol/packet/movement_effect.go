@@ -31,8 +31,8 @@ func (*MovementEffect) ID() uint32 {
 }
 
 func (pk *MovementEffect) Marshal(io protocol.IO) {
-	io.Varuint64(&pk.EntityRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.Varint32(&pk.Type)
 	io.Varint32(&pk.Duration)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 }

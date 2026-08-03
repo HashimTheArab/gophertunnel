@@ -43,6 +43,10 @@ type ListenConfig struct {
 	// account.
 	AuthenticationDisabled bool
 
+	// DisablePacketEncryption disables packet encryption for accepted connections.
+	// Authentication is unaffected. Only use this on trusted networks.
+	DisablePacketEncryption bool
+
 	// MaximumPlayers is the maximum amount of players accepted in the server. If non-zero, players that
 	// attempt to join while the server is full will be kicked during login. If zero, the maximum player count
 	// will be dynamically updated each time a player joins, so that an unlimited amount of players is
@@ -67,6 +71,18 @@ type ListenConfig struct {
 	// Protocol is always added to this slice. Clients with a protocol version that is not present in this slice will
 	// be disconnected.
 	AcceptedProtocols []Protocol
+	// ProtocolMismatchMessage is called when a client connects with a protocol version newer than any
+	// accepted by the Listener. If it returns a non-empty string, a Disconnect packet carrying that
+	// message is sent before the PlayStatus login failure, so the client shows it instead of the generic
+	// outdated server screen. The PlayStatus is still sent afterwards as a fallback for clients that
+	// ignore the Disconnect. Older mismatched clients only get the vanilla outdated-client flow, since
+	// they may predate the current Disconnect wire layout and would mis-decode a custom message.
+	ProtocolMismatchMessage func(clientProtocol int32) string
+	// AcceptNewerProtocols accepts clients newer than every accepted Protocol, serving them with the
+	// newest one. Packets whose layout changed in the client's version are then encoded wrongly, so
+	// only set this on a listener with a small, stable packet surface, such as one that logs the client
+	// in and hands it off with a Transfer. Older clients are still rejected.
+	AcceptNewerProtocols bool
 	// Compression is the packet.Compression to use for packets sent over this Conn. If set to nil, the compression
 	// will default to packet.flateCompression.
 	Compression packet.Compression // TODO: Change this to snappy once Windows crashes are resolved.
@@ -451,7 +467,10 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	listener.packsMu.RUnlock()
 
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
+	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
+	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
+	conn.acceptNewerProtocols = listener.cfg.AcceptNewerProtocols
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold

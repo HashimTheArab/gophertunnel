@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestDecoderUsesDeclaredBatchCompressionAlgorithm(t *testing.T) {
+	payload := bytes.Repeat([]byte{42}, 2048)
+	var batch bytes.Buffer
+	encoder := NewEncoder(&batch)
+	encoder.EnableCompression(SnappyCompression, 1)
+	if err := encoder.Encode([][]byte{payload}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	decoder := NewDecoder(bytes.NewReader(batch.Bytes()))
+	decoder.EnableCompression(FlateCompression, 1<<20)
+	packets, err := decoder.Decode()
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(packets) != 1 {
+		t.Fatalf("len(packets) = %d, want 1", len(packets))
+	}
+	if !bytes.Equal(packets[0], payload) {
+		t.Fatal("decoded payload differs from encoded payload")
+	}
+}
+
 func TestDecoderSkipsEmptyPacketsWhenBatchPacketLimitDisabled(t *testing.T) {
 	payload := []byte{42}
 	batch := []byte{header, 0, byte(len(payload))}

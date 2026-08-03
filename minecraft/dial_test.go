@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,14 +12,44 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
 )
+
+func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
+	data := login.ClientData{}
+	defaultClientData("example.com:19132", "Player", &data)
+
+	version, err := base64.StdEncoding.DecodeString(data.SkinGeometryVersion)
+	if err != nil {
+		t.Fatalf("decode skin geometry engine version: %v", err)
+	}
+	if got, want := string(version), "0.0.0"; got != want {
+		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
+	}
+	if got, want := data.GameVersion, "1.26.33"; got != want {
+		t.Fatalf("game version = %q, want %q", got, want)
+	}
+	if got, want := data.MemoryTier, 4; got != want {
+		t.Fatalf("memory tier = %d, want %d", got, want)
+	}
+}
+
+func TestDefaultClientDataPreservesSkinGeometryEngineVersion(t *testing.T) {
+	want := base64.StdEncoding.EncodeToString([]byte("0.0.0"))
+	data := login.ClientData{SkinGeometryVersion: want}
+	defaultClientData("example.com:19132", "Player", &data)
+	if data.SkinGeometryVersion != want {
+		t.Fatalf("skin geometry engine version = %q, want preserved %q", data.SkinGeometryVersion, want)
+	}
+}
 
 func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	want := &packet.Transfer{Address: "hub.zeqa.net", Port: 19133, ReloadWorld: true}
@@ -54,6 +85,174 @@ func TestDialContextReturnsPreLoginTransferError(t *testing.T) {
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) || opErr.Op != "dial" {
 		t.Fatalf("DialContextNetwork error = %v, want dial net.OpError wrapper", err)
+	}
+}
+
+// TestDialContextClosesConnectionOnDeadline covers a dial that gives up while the server is still
+// working through the login it already received. listenConn would otherwise carry that login to
+// completion on its own goroutine, leaving a logged-in session behind that the caller has no handle
+// to close, so servers rejecting duplicate logins kick the session the caller actually kept.
+func TestDialContextClosesConnectionOnDeadline(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// stallAfterLogin waits for the Login packet before stalling, so the server is left
+		// holding a login it never answers.
+		stallAfterLogin bool
+	}{
+		{name: "before login"},
+		{name: "after login", stallAfterLogin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// stalling closes once the server has read the last packet it is going to read, so
+			// the dial is given up at a point the server has provably reached. Timing the deadline
+			// against wall clock instead would let a loaded runner expire it before the server got
+			// there, and the server would report an EOF for a packet it never saw.
+			stalling := make(chan struct{})
+			network := newScriptedDialNetwork(func(conn net.Conn) error {
+				decoder := packet.NewDecoder(conn)
+				encoder := packet.NewEncoder(conn)
+				if _, err := decoder.Decode(); err != nil {
+					return fmt.Errorf("read RequestNetworkSettings: %w", err)
+				}
+				if test.stallAfterLogin {
+					if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+						CompressionThreshold: math.MaxUint16,
+						CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+					}); err != nil {
+						return fmt.Errorf("write NetworkSettings: %w", err)
+					}
+					decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+					encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+					if _, err := decoder.Decode(); err != nil {
+						return fmt.Errorf("read Login: %w", err)
+					}
+				}
+				// Never answer: the dial gives up with the server still treating this
+				// connection as one that is logging in.
+				close(stalling)
+				return expectScriptedClose(conn, decoder)
+			})
+
+			// The timeout is a deadlock guard only. The dial is given up by cancelling with
+			// context.DeadlineExceeded, so DialContextNetwork takes the same path and reports the
+			// same error a real dial deadline produces.
+			guard, cancelGuard := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancelGuard()
+			ctx, cancel := context.WithCancelCause(guard)
+			defer cancel(context.Canceled)
+			go func() {
+				select {
+				case <-stalling:
+					cancel(context.DeadlineExceeded)
+				case <-guard.Done():
+				}
+			}()
+
+			conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "zeqa.net:19132")
+			if conn != nil {
+				_ = conn.Close()
+				t.Fatal("DialContextNetwork returned a connection after the deadline expired")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("DialContextNetwork error = %v, want context.DeadlineExceeded", err)
+			}
+			if scriptErr := <-network.done; scriptErr != nil {
+				t.Fatalf("scripted server: %v", scriptErr)
+			}
+		})
+	}
+}
+
+// TestDialContextGivesUpOnPeerThatStoppedReading covers a dial given up while the connection still
+// holds a reply the peer never read. Cleaning up through Conn.Close would flush that reply first,
+// blocking for as long as the peer stays silent, so the dial would hang in its cleanup instead of
+// returning the error it was given up for.
+func TestDialContextGivesUpOnPeerThatStoppedReading(t *testing.T) {
+	// queued closes once the client has encoded its resource pack response, so the dial is given
+	// up with that reply provably stuck: either it still sits in the send buffer for the cleanup
+	// to flush, or listenConn is already blocked writing it and holds the encoder lock.
+	queued := make(chan struct{})
+	release := make(chan struct{})
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder := packet.NewDecoder(conn)
+		encoder := packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read RequestNetworkSettings: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+			CompressionThreshold: math.MaxUint16,
+			CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+		}); err != nil {
+			return fmt.Errorf("write NetworkSettings: %w", err)
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read Login: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+			return fmt.Errorf("write login success: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read ClientCacheStatus: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.ResourcePacksInfo{}); err != nil {
+			return fmt.Errorf("write ResourcePacksInfo: %w", err)
+		}
+		// Stop reading from here on, leaving the client's response with nowhere to go. Once the
+		// dial has returned, the response must have been dropped along with the connection rather
+		// than still be waiting for a reader.
+		<-release
+		return expectScriptedClose(conn, decoder)
+	})
+
+	guard, cancelGuard := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelGuard()
+	ctx, cancel := context.WithCancelCause(guard)
+	defer cancel(context.Canceled)
+	go func() {
+		select {
+		case <-queued:
+			cancel(context.DeadlineExceeded)
+		case <-guard.Done():
+		}
+	}()
+
+	var once sync.Once
+	dialer := Dialer{
+		FlushRate: -1,
+		PacketFunc: func(header packet.Header, _ []byte, _, _ net.Addr) {
+			if header.PacketID == packet.IDResourcePackClientResponse {
+				once.Do(func() { close(queued) })
+			}
+		},
+	}
+	type dialResult struct {
+		conn *Conn
+		err  error
+	}
+	results := make(chan dialResult, 1)
+	go func() {
+		conn, err := dialer.DialContextNetwork(ctx, network, "zeqa.net:19132")
+		results <- dialResult{conn: conn, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		close(release)
+		if result.conn != nil {
+			_ = result.conn.Close()
+			t.Fatal("DialContextNetwork returned a connection after the dial was given up")
+		}
+		if !errors.Is(result.err, context.DeadlineExceeded) {
+			t.Fatalf("DialContextNetwork error = %v, want context.DeadlineExceeded", result.err)
+		}
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("DialContextNetwork did not return: cleanup blocked flushing to a peer that stopped reading")
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
 
@@ -374,7 +573,31 @@ func (n *scriptedDialNetwork) DialContext(context.Context, string) (net.Conn, er
 		defer server.Close()
 		n.done <- n.script(server)
 	}()
-	return client, nil
+	return pipeConn{Conn: client}, nil
+}
+
+// pipeConn gives a net.Pipe the error a real net.Conn reports once it is closed locally. A pipe
+// reports io.ErrClosedPipe instead, which Conn treats as an unexpected encoding failure rather than
+// an ordinary shutdown.
+type pipeConn struct {
+	net.Conn
+}
+
+func (c pipeConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	return n, closedPipeAsClosedConn(err)
+}
+
+func (c pipeConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	return n, closedPipeAsClosedConn(err)
+}
+
+func closedPipeAsClosedConn(err error) error {
+	if errors.Is(err, io.ErrClosedPipe) {
+		return net.ErrClosed
+	}
+	return err
 }
 
 func (*scriptedDialNetwork) PingContext(context.Context, string) ([]byte, error) {

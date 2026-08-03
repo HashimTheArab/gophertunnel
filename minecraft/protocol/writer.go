@@ -653,6 +653,21 @@ func (w *Writer) Varint64(x *int64) {
 	_ = w.w.WriteByte(byte(ux))
 }
 
+// ActorRuntimeID writes an entity runtime ID encoded as an unsigned varint.
+func (w *Writer) ActorRuntimeID(x *uint64) {
+	w.Varuint64(x)
+}
+
+// ActorUniqueID writes an entity unique ID encoded as a signed varint.
+func (w *Writer) ActorUniqueID(x *int64) {
+	w.Varint64(x)
+}
+
+// PlayerInputTick writes a player input tick encoded as an unsigned varint.
+func (w *Writer) PlayerInputTick(x *uint64) {
+	w.Varuint64(x)
+}
+
 // Varuint64 writes a uint64 as 1-10 bytes to the underlying buffer.
 func (w *Writer) Varuint64(x *uint64) {
 	u := *x

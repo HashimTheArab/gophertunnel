@@ -25,7 +25,6 @@ type Decoder struct {
 	// header holds the batch header that is expected on the beginning of input packet data.
 	header             []byte
 	decompress         bool
-	compression        Compression
 	maxDecompressedLen int
 	encrypt            *encrypt
 	// disableEncryption indicates whether to prevent encryption from being enabled
@@ -77,10 +76,10 @@ func (decoder *Decoder) EnableEncryption(keyBytes [32]byte) {
 	decoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Decoder.
-func (decoder *Decoder) EnableCompression(compression Compression, maxDecompressedLen int) {
+// EnableCompression enables compression for the Decoder. The compression argument is retained for API
+// compatibility; each batch identifies its own registered algorithm.
+func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int) {
 	decoder.decompress = true
-	decoder.compression = compression
 	decoder.maxDecompressedLen = maxDecompressedLen
 }
 
@@ -143,9 +142,6 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 			compression, ok := CompressionByID(uint16(data[0]))
 			if !ok {
 				return nil, fmt.Errorf("decompress batch: unknown compression algorithm %v", data[0])
-			}
-			if compression != decoder.compression {
-				return nil, fmt.Errorf("decompress batch: unexpected compression algorithm: got %v, expected %v", compression, decoder.compression)
 			}
 			data, err = compression.Decompress(data[1:], decoder.maxDecompressedLen)
 			if err != nil {
