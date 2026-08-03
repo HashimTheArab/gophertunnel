@@ -931,6 +931,85 @@ func TestAbortUnblocksCloseStuckFlushing(t *testing.T) {
 	}
 }
 
+func TestAbortUnblocksInFlightWritesWithoutPanic(t *testing.T) {
+	operations := []struct {
+		name    string
+		prepare func(*testing.T, *Conn) func() error
+	}{
+		{
+			name: "Flush",
+			prepare: func(t *testing.T, conn *Conn) func() error {
+				t.Helper()
+				if _, err := conn.Write([]byte{1}); err != nil {
+					t.Fatalf("queue write: %v", err)
+				}
+				return conn.Flush
+			},
+		},
+		{
+			name: "WritePacketDirect",
+			prepare: func(_ *testing.T, conn *Conn) func() error {
+				return func() error { return conn.WritePacketDirect(&packet.PlayStatus{}) }
+			},
+		},
+	}
+	transports := []struct {
+		name string
+		wrap func(net.Conn) net.Conn
+	}{
+		{name: "io.ErrClosedPipe", wrap: func(conn net.Conn) net.Conn { return conn }},
+		{name: "net.ErrClosed", wrap: func(conn net.Conn) net.Conn { return pipeConn{Conn: conn} }},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, transport := range transports {
+				t.Run(transport.name, func(t *testing.T) {
+					client, peer := net.Pipe()
+					defer peer.Close()
+					observed := &writeObservedConn{Conn: transport.wrap(client), started: make(chan struct{})}
+					conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+					run := operation.prepare(t, conn)
+
+					type result struct {
+						err       error
+						recovered any
+					}
+					done := make(chan result, 1)
+					go func() {
+						res := result{}
+						defer func() {
+							res.recovered = recover()
+							done <- res
+						}()
+						res.err = run()
+					}()
+
+					select {
+					case <-observed.started:
+					case <-time.After(time.Second):
+						t.Fatal("write did not start")
+					}
+					if err := conn.Abort(); err != nil {
+						t.Fatalf("Abort: %v", err)
+					}
+
+					select {
+					case res := <-done:
+						if res.recovered != nil {
+							t.Fatalf("write panicked: %v", res.recovered)
+						}
+						if !errors.Is(res.err, net.ErrClosed) {
+							t.Fatalf("write error = %v, want net.ErrClosed", res.err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("write remained blocked after Abort")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()

@@ -653,10 +653,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
 		defer conn.encMu.Unlock()
-		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
-			// Should never happen.
-			panic(fmt.Errorf("error encoding packet batch: %w", err))
-		}
+		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
 	}
 	return nil
 }
@@ -858,10 +855,7 @@ func (conn *Conn) Flush() error {
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	if err := conn.enc.Encode(toSend); err != nil && !errors.Is(err, net.ErrClosed) {
-		// Should never happen.
-		panic(fmt.Errorf("error encoding packet batch: %w", err))
-	}
+	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
@@ -872,7 +866,23 @@ func (conn *Conn) Flush() error {
 	conn.sendMu.Lock()
 	conn.bufferedSendSpare = toSend[:0]
 	conn.sendMu.Unlock()
-	return nil
+	return encodeErr
+}
+
+// handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
+// connection context before closing the transport, so transport-specific errors caused by that close are
+// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+func (conn *Conn) handleEncodeError(err error, op string) error {
+	if err == nil {
+		return nil
+	}
+	if conn.ctx.Err() != nil {
+		return conn.closeErr(op)
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	panic(fmt.Errorf("error encoding packet batch: %w", err))
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
