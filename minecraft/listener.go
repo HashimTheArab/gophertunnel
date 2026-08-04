@@ -115,6 +115,11 @@ type ListenConfig struct {
 	ResourcePackWorldTemplateUUID uuid.UUID
 	// ResourcePackWorldTemplateVersion is written into ResourcePacksInfo. Leave empty for default server behaviour.
 	ResourcePackWorldTemplateVersion string
+	// ResourcePackDelivery controls how resource pack data is sent to clients.
+	// If nil, the conservative default chunk size and pacing are used. A
+	// non-nil configuration may be used by a controlled local client that can
+	// handle larger chunks or does not need pacing.
+	ResourcePackDelivery *ResourcePackDeliveryConfig
 	// FetchResourcePacks determines which resource packs to send to a client based on its identity and client data.
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
@@ -484,6 +489,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
 	conn.resourcePackWorldTemplateUUID = listener.cfg.ResourcePackWorldTemplateUUID
 	conn.resourcePackWorldTemplateVersion = listener.cfg.ResourcePackWorldTemplateVersion
+	conn.resourcePackDelivery = resolveResourcePackDeliveryConfig(listener.cfg.ResourcePackDelivery)
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
 	conn.gameData.WorldName = listener.status().ServerName
