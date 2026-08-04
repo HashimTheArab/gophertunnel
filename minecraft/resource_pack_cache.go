@@ -17,6 +17,11 @@ type ResourcePackCacheKey struct {
 	Size uint64
 }
 
+// Matches reports whether a resource pack has the identity the key holds: its UUID, version and size.
+func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
+	return pack.UUID() == key.UUID && pack.Version() == key.Version && uint64(pack.Size()) == key.Size
+}
+
 // ResourcePackCache allows a Dialer to reuse resource packs previously downloaded from a server. Cache
 // failures are non-fatal: If Load returns a nil pack or an error, the pack is downloaded from the server as
 // usual, and an error returned by Store is only logged.

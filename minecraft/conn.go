@@ -1560,7 +1560,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			switch {
 			case err != nil:
 				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
-			case cachedPack != nil && (cachedPack.UUID() != pack.UUID || cachedPack.Version() != pack.Version || uint64(cachedPack.Size()) != pack.Size):
+			case cachedPack != nil && !cacheKey.Matches(cachedPack):
 				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
 			case cachedPack != nil:
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
@@ -1613,7 +1613,8 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 // storeResourcePack stores a resource pack downloaded from the server in the Conn's ResourcePackCache, if
 // one was set. Errors are non-fatal and only logged.
 func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
-	if conn.resourcePackCache == nil {
+	if conn.resourcePackCache == nil || !key.Matches(pack) {
+		// A pack that does not match its own key would never be returned as a hit on a later login.
 		return
 	}
 	if err := conn.resourcePackCache.Store(conn.ctx, key, pack); err != nil {
