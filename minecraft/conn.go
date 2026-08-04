@@ -1878,11 +1878,20 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			})
 		}
 
-		for nextRequest < pack.chunkCount && uint64(nextRequest) < window {
-			if requestChunk(nextRequest) != nil {
-				return
+		// fillWindow requests chunks up to the window, measured from the write cursor rather than the
+		// receive count so that fragments buffered for reordering also count against the window.
+		fillWindow := func() bool {
+			for nextRequest < pack.chunkCount && uint64(nextRequest-nextWrite) < window {
+				if requestChunk(nextRequest) != nil {
+					return false
+				}
+				nextRequest++
 			}
-			nextRequest++
+			return true
+		}
+
+		if !fillWindow() {
+			return
 		}
 		for nextWrite < pack.chunkCount {
 			select {
@@ -1897,11 +1906,8 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
-				if nextRequest < pack.chunkCount {
-					if requestChunk(nextRequest) != nil {
-						return
-					}
-					nextRequest++
+				if !fillWindow() {
+					return
 				}
 			}
 		}
