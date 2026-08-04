@@ -59,10 +59,6 @@ func (queue *resourcePackQueue) Request(packs []string) error {
 // NextPack assigns the next resource pack to the current pack and returns true if successful. If there were
 // no more packs to assign, false is returned. If ok is true, a packet with data info is returned.
 func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok bool) {
-	chunkSize := queue.chunkSize
-	if chunkSize == 0 {
-		chunkSize = DefaultResourcePackChunkSize
-	}
 	for index, pack := range queue.packsToDownload {
 		delete(queue.packsToDownload, index)
 
@@ -85,8 +81,8 @@ func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok 
 		}
 		return &packet.ResourcePackDataInfo{
 			UUID:          pack.UUID().String() + "_" + pack.Version(),
-			DataChunkSize: chunkSize,
-			ChunkCount:    uint32(pack.DataChunkCount(int(chunkSize))),
+			DataChunkSize: queue.chunkSize,
+			ChunkCount:    uint32(pack.DataChunkCount(int(queue.chunkSize))),
 			Size:          uint64(pack.Size()),
 			Hash:          checksum[:],
 			PackType:      packType,

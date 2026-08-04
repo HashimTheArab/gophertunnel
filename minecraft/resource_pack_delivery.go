@@ -3,46 +3,37 @@ package minecraft
 import "time"
 
 const (
-	// DefaultResourcePackChunkSize is the size of a resource pack chunk sent by a
-	// Listener when no delivery configuration is provided.
-	DefaultResourcePackChunkSize uint32 = 128 * 1024
-	// DefaultResourcePackChunkSendDelay spaces resource pack chunks sent by a
-	// Listener. It keeps the safe default for clients that cannot process a
-	// faster transfer reliably.
+	// DefaultResourcePackChunkSize is the size of a single chunk of data from a resource pack sent by a
+	// Listener: 128 KiB.
+	DefaultResourcePackChunkSize = 1024 * 128
+	// DefaultResourcePackChunkSendDelay is the delay a Listener leaves between ResourcePackChunkData
+	// packets, so slow clients are not flooded while downloading packs. Clients after 1.26.30 may fail
+	// resource pack downloads when pack chunks are sent too aggressively.
 	DefaultResourcePackChunkSendDelay = 200 * time.Millisecond
 )
 
-// ResourcePackDeliveryConfig controls how a Listener sends resource pack data
-// to connected clients.
-//
-// A nil configuration keeps the conservative defaults used by gophertunnel.
-// ChunkSize set to zero uses DefaultResourcePackChunkSize. ChunkSendDelay set
-// to zero explicitly disables pacing; a negative delay is also treated as
-// zero.
+// ResourcePackDeliveryConfig controls how a Listener sends resource pack data to connected clients. The
+// zero value keeps the conservative defaults used by gophertunnel. A controlled local client that can
+// handle a faster transfer reliably may opt into larger chunks or no pacing.
 type ResourcePackDeliveryConfig struct {
-	// ChunkSize is the size in bytes of each ResourcePackChunkData payload.
+	// ChunkSize is the size in bytes of each ResourcePackChunkData payload. If zero,
+	// DefaultResourcePackChunkSize is used.
 	ChunkSize uint32
-	// ChunkSendDelay is the delay after each ResourcePackChunkData packet.
+	// ChunkSendDelay is the delay left after sending each ResourcePackChunkData packet. If zero,
+	// DefaultResourcePackChunkSendDelay is used. A negative delay disables pacing entirely.
 	ChunkSendDelay time.Duration
 }
 
-func defaultResourcePackDeliveryConfig() ResourcePackDeliveryConfig {
-	return ResourcePackDeliveryConfig{
-		ChunkSize:      DefaultResourcePackChunkSize,
-		ChunkSendDelay: DefaultResourcePackChunkSendDelay,
+// normalized returns the configuration with zero values replaced by their defaults and a negative
+// ChunkSendDelay replaced by no delay.
+func (config ResourcePackDeliveryConfig) normalized() ResourcePackDeliveryConfig {
+	if config.ChunkSize == 0 {
+		config.ChunkSize = DefaultResourcePackChunkSize
 	}
-}
-
-func resolveResourcePackDeliveryConfig(config *ResourcePackDeliveryConfig) ResourcePackDeliveryConfig {
-	if config == nil {
-		return defaultResourcePackDeliveryConfig()
+	if config.ChunkSendDelay == 0 {
+		config.ChunkSendDelay = DefaultResourcePackChunkSendDelay
+	} else if config.ChunkSendDelay < 0 {
+		config.ChunkSendDelay = 0
 	}
-	delivery := *config
-	if delivery.ChunkSize == 0 {
-		delivery.ChunkSize = DefaultResourcePackChunkSize
-	}
-	if delivery.ChunkSendDelay < 0 {
-		delivery.ChunkSendDelay = 0
-	}
-	return delivery
+	return config
 }

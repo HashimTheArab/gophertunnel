@@ -7,22 +7,24 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
-// ResourcePackCacheKey identifies a resource pack advertised during login.
-// Implementations should include all fields when deciding whether a cached
-// pack matches an advertisement.
+// ResourcePackCacheKey identifies a resource pack advertised by a server during login. It holds the UUID,
+// version and size of the pack as found in the ResourcePacksInfo packet.
 type ResourcePackCacheKey struct {
-	UUID        uuid.UUID
-	Version     string
-	Size        uint64
-	ContentKey  string
-	DownloadURL string
+	// UUID and Version identify the resource pack advertised by the server.
+	UUID    uuid.UUID
+	Version string
+	// Size is the total size in bytes of the resource pack.
+	Size uint64
 }
 
-// ResourcePackCache allows a Dialer to reuse resource packs downloaded from a
-// server. A cache miss is represented by a nil pack with hit set to false.
-// Cache failures are non-fatal: gophertunnel falls back to the normal network
-// download path.
+// ResourcePackCache allows a Dialer to reuse resource packs previously downloaded from a server. Cache
+// failures are non-fatal: If Load returns a nil pack or an error, the pack is downloaded from the server as
+// usual, and an error returned by Store is only logged.
 type ResourcePackCache interface {
-	LoadResourcePack(context.Context, ResourcePackCacheKey) (*resource.Pack, bool, error)
-	StoreResourcePack(context.Context, ResourcePackCacheKey, *resource.Pack) error
+	// Load returns the resource pack stored under key. A nil pack with a nil error indicates a cache miss
+	// and makes the connection fall back to the normal download path.
+	Load(ctx context.Context, key ResourcePackCacheKey) (*resource.Pack, error)
+	// Store stores a resource pack downloaded from a server under key, so that it may be returned by a
+	// future call to Load.
+	Store(ctx context.Context, key ResourcePackCacheKey, pack *resource.Pack) error
 }

@@ -389,7 +389,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
-		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
+		resourcePackDelivery: ResourcePackDeliveryConfig{}.normalized(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
@@ -1551,22 +1551,18 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		}
 
 		cacheKey := ResourcePackCacheKey{
-			UUID:        pack.UUID,
-			Version:     pack.Version,
-			Size:        pack.Size,
-			ContentKey:  pack.ContentKey,
-			DownloadURL: pack.DownloadURL,
+			UUID:    pack.UUID,
+			Version: pack.Version,
+			Size:    pack.Size,
 		}
 		if conn.resourcePackCache != nil {
-			cachedPack, hit, err := conn.resourcePackCache.LoadResourcePack(conn.ctx, cacheKey)
+			cachedPack, err := conn.resourcePackCache.Load(conn.ctx, cacheKey)
 			switch {
 			case err != nil:
 				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
-			case hit && cachedPack == nil:
-				conn.log.Warn("handle ResourcePacksInfo: resource pack cache returned an empty hit", "UUID", pack.UUID, "version", pack.Version)
-			case hit && (cachedPack.UUID() != pack.UUID || cachedPack.Version() != pack.Version || uint64(cachedPack.Size()) != pack.Size):
+			case cachedPack != nil && (cachedPack.UUID() != pack.UUID || cachedPack.Version() != pack.Version || uint64(cachedPack.Size()) != pack.Size):
 				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
-			case hit:
+			case cachedPack != nil:
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
 				continue
@@ -1581,10 +1577,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
 				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
-				cachedPack := newPack.WithContentKey(pack.ContentKey)
-				conn.resourcePacks = append(conn.resourcePacks, cachedPack)
-				cacheKey.Size = uint64(cachedPack.Size())
-				conn.storeResourcePack(cacheKey, cachedPack)
+				newPack = newPack.WithContentKey(pack.ContentKey)
+				conn.resourcePacks = append(conn.resourcePacks, newPack)
+				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
 				continue
 			}
@@ -1615,12 +1610,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	return nil
 }
 
+// storeResourcePack stores a resource pack downloaded from the server in the Conn's ResourcePackCache, if
+// one was set. Errors are non-fatal and only logged.
 func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
 	if conn.resourcePackCache == nil {
 		return
 	}
-	if err := conn.resourcePackCache.StoreResourcePack(conn.ctx, key, pack); err != nil {
-		conn.log.Warn("resource-pack cache store failed", "UUID", pack.UUID(), "version", pack.Version(), "err", err)
+	if err := conn.resourcePackCache.Store(conn.ctx, key, pack); err != nil {
+		conn.log.Warn("failed to store resource pack in cache", "UUID", pack.UUID(), "version", pack.Version(), "err", err)
 	}
 }
 
@@ -1860,20 +1857,18 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			conn.packMu.Unlock()
 			return
 		}
-		cachedPack := newPack.WithContentKey(pack.contentKey)
+		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
-		conn.resourcePacks = append(conn.resourcePacks, cachedPack)
+		conn.resourcePacks = append(conn.resourcePacks, newPack)
 		packAmount := conn.packQueue.packAmount
 		conn.packMu.Unlock()
 
-		cacheKey := pack.cacheKey
-		cacheKey.Size = uint64(cachedPack.Size())
-		conn.storeResourcePack(cacheKey, cachedPack)
 		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack)
 			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 		}
+		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
 }
@@ -1906,16 +1901,13 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 // pack to be downloaded.
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
-	chunkSize := conn.packQueue.chunkSize
-	if chunkSize == 0 {
-		chunkSize = DefaultResourcePackChunkSize
-	}
+	chunkSize := uint64(conn.packQueue.chunkSize)
 	uuid, _, _ := strings.Cut(pk.UUID, "_")
 	if current.UUID().String() != uuid {
 		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
 	}
-	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*uint64(chunkSize) {
-		return fmt.Errorf("expected pack UUID %v, but got %v", conn.packQueue.currentOffset/uint64(chunkSize), pk.ChunkIndex)
+	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*chunkSize {
+		return fmt.Errorf("expected chunk index %v, but got %v", conn.packQueue.currentOffset/chunkSize, pk.ChunkIndex)
 	}
 	response := &packet.ResourcePackChunkData{
 		UUID:       pk.UUID,
@@ -1923,7 +1915,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 		DataOffset: conn.packQueue.currentOffset,
 		Data:       make([]byte, chunkSize),
 	}
-	conn.packQueue.currentOffset += uint64(chunkSize)
+	conn.packQueue.currentOffset += chunkSize
 	// We read the data directly into the response's data.
 	if n, err := current.ReadAt(response.Data, int64(response.DataOffset)); err != nil {
 		// If we hit an EOF, we don't need to return an error, as we've simply reached the end of the content
