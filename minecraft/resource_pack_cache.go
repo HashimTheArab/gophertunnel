@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
@@ -35,6 +36,35 @@ type ResourcePackCache interface {
 	Load(ctx context.Context, key ResourcePackCacheKey) (*resource.Pack, error)
 	// Store stores a pack under key for a later Load.
 	Store(ctx context.Context, key ResourcePackCacheKey, pack *resource.Pack) error
+}
+
+// defaultResourcePackCache is shared by all Dialers without an explicit ResourcePackCache, so packs
+// downloaded by one connection are reused by later ones in the same process.
+var defaultResourcePackCache = &MemoryResourcePackCache{}
+
+// MemoryResourcePackCache is a ResourcePackCache that keeps resource packs in memory. Entries are never
+// evicted. The zero value is ready for use.
+type MemoryResourcePackCache struct {
+	mu    sync.Mutex
+	packs map[ResourcePackCacheKey]*resource.Pack
+}
+
+// Load returns the pack stored under key, or nil if it is not cached.
+func (cache *MemoryResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.packs[key], nil
+}
+
+// Store stores a pack under key, replacing any previous entry.
+func (cache *MemoryResourcePackCache) Store(_ context.Context, key ResourcePackCacheKey, pack *resource.Pack) error {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.packs == nil {
+		cache.packs = make(map[ResourcePackCacheKey]*resource.Pack)
+	}
+	cache.packs[key] = pack
+	return nil
 }
 
 // DirResourcePackCache is a ResourcePackCache that stores resource packs as files in a directory. Entries
