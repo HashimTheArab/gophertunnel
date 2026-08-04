@@ -328,6 +328,9 @@ type Conn struct {
 	// downloadResourcePack is an optional function passed to a Dial() call. If set, each resource pack received
 	// from the server will call this function to see if it should be downloaded or not.
 	downloadResourcePack func(id uuid.UUID, version string, currentPack, totalPacks int) bool
+	// resourcePackDownload controls the number of chunk requests issued by a
+	// Dialer while downloading a resource pack.
+	resourcePackDownload ResourcePackDownloadConfig
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
@@ -392,6 +395,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
+		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 		resourcePackDelivery: ResourcePackDeliveryConfig{}.normalized(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
@@ -1548,7 +1552,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	totalPacks := len(pk.TexturePacks)
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       totalPacks,
-		downloadingPacks: make(map[string]downloadingPack),
+		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
@@ -1606,10 +1610,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = downloadingPack{
+		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
-			newFrag:    make(chan []byte),
 			contentKey: pack.ContentKey,
 			cacheKey:   cacheKey,
 		}
@@ -1838,30 +1841,74 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
 	delete(conn.packQueue.downloadingPacks, id)
-	conn.packQueue.awaitingPacks[id] = &pack
-
+	if pk.DataChunkSize == 0 {
+		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
+	}
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := int32(pk.Size / uint64(pk.DataChunkSize))
+	chunkCount := pk.Size / uint64(pk.DataChunkSize)
 	if pk.Size%uint64(pk.DataChunkSize) != 0 {
 		chunkCount++
 	}
+	if chunkCount > uint64(^uint32(0)) {
+		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
+	}
+	pack.chunkCount = uint32(chunkCount)
+	window := uint64(conn.resourcePackDownload.MaxInFlightChunks)
+	if window > chunkCount {
+		window = max(chunkCount, 1)
+	}
+	pack.newFrag = make(chan resourcePackChunk, window)
+	pack.requested = make(map[uint32]struct{})
+	conn.packQueue.awaitingPacks[id] = pack
 
 	idCopy := pk.UUID
 	go func() {
-		for i := int32(0); i < chunkCount; i++ {
-			_ = conn.WritePacket(&packet.ResourcePackChunkRequest{
+		fragments := make(map[uint32][]byte)
+		nextRequest, nextWrite := uint32(0), uint32(0)
+		requestChunk := func(index uint32) error {
+			pack.mu.Lock()
+			pack.requested[index] = struct{}{}
+			pack.mu.Unlock()
+			return conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
-				ChunkIndex: i,
+				ChunkIndex: int32(index),
 			})
+		}
+
+		// fillWindow requests chunks up to the window, measured from the write cursor rather than the
+		// receive count so that fragments buffered for reordering also count against the window.
+		fillWindow := func() bool {
+			for nextRequest < pack.chunkCount && uint64(nextRequest-nextWrite) < window {
+				if requestChunk(nextRequest) != nil {
+					return false
+				}
+				nextRequest++
+			}
+			return true
+		}
+
+		if !fillWindow() {
+			return
+		}
+		for nextWrite < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
-				// Write the fragment to the full buffer of the downloading resource pack.
-				_, _ = pack.buf.Write(frag)
+				fragments[frag.index] = frag.data
+				// Write fragments in index order so the final archive remains contiguous even when
+				// responses arrive out of order.
+				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
+					_, _ = pack.buf.Write(data)
+					delete(fragments, nextWrite)
+					nextWrite++
+				}
+				if !fillWindow() {
+					return
+				}
 			}
 		}
 		conn.packMu.Lock()
@@ -1903,18 +1950,32 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 		// download a resource pack.
 		return fmt.Errorf("chunk data for resource pack that was not being downloaded")
 	}
-	lastData := pack.buf.Len()+int(pack.chunkSize) >= int(pack.size)
-	if !lastData && uint32(len(pk.Data)) != pack.chunkSize {
-		// The chunk data didn't have the full size and wasn't the last data to be sent for the resource pack,
-		// meaning we got too little data.
-		return fmt.Errorf("expected chunk size %v, got %v", pack.chunkSize, len(pk.Data))
+	if pk.ChunkIndex >= pack.chunkCount {
+		return fmt.Errorf("chunk index %v exceeds resource pack chunk count %v", pk.ChunkIndex, pack.chunkCount)
 	}
-	if pk.ChunkIndex != pack.expectedIndex {
-		return fmt.Errorf("expected chunk index %v, got %v", pack.expectedIndex, pk.ChunkIndex)
+	chunkOffset := uint64(pk.ChunkIndex) * uint64(pack.chunkSize)
+	expectedSize := pack.size - chunkOffset
+	if expectedSize > uint64(pack.chunkSize) {
+		expectedSize = uint64(pack.chunkSize)
 	}
-	pack.expectedIndex++
-	pack.newFrag <- pk.Data
-	return nil
+	if uint64(len(pk.Data)) != expectedSize {
+		return fmt.Errorf("expected chunk size %v, got %v", expectedSize, len(pk.Data))
+	}
+	pack.mu.Lock()
+	if _, ok := pack.requested[pk.ChunkIndex]; !ok {
+		pack.mu.Unlock()
+		return fmt.Errorf("resource pack chunk %v was not requested or was already received", pk.ChunkIndex)
+	}
+	delete(pack.requested, pk.ChunkIndex)
+	pack.mu.Unlock()
+
+	// The data is cloned as the decoder may reuse the packet's backing array once this handler returns.
+	select {
+	case pack.newFrag <- resourcePackChunk{index: pk.ChunkIndex, data: bytes.Clone(pk.Data)}:
+		return nil
+	case <-conn.ctx.Done():
+		return conn.ctx.Err()
+	}
 }
 
 // handleResourcePackChunkRequest handles a resource pack chunk request, which requests a part of the resource
