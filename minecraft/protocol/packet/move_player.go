@@ -66,15 +66,18 @@ func (pk *MovePlayer) Marshal(io protocol.IO) {
 	io.Uint8(&pk.Mode)
 	io.Bool(&pk.OnGround)
 	io.ActorRuntimeID(&pk.RiddenEntityRuntimeID)
-	if _, writing := io.(*protocol.Writer); writing {
-		if pk.Mode == MoveModeTeleport {
-			if _, ok := pk.TeleportData.Value(); !ok {
-				pk.TeleportData = protocol.Option(protocol.TeleportData{})
-			}
-		} else {
-			pk.TeleportData = protocol.Optional[protocol.TeleportData]{}
-		}
+	teleportData, _ := pk.TeleportData.Value()
+	expectsTeleportData := pk.Mode == MoveModeTeleport
+	hasTeleportData := expectsTeleportData
+	io.Bool(&hasTeleportData)
+	if hasTeleportData != expectsTeleportData {
+		io.InvalidValue(hasTeleportData, "move player teleport data presence", "does not match movement mode")
 	}
-	protocol.OptionalMarshaler(io, &pk.TeleportData)
+	if hasTeleportData {
+		teleportData.Marshal(io)
+		pk.TeleportData = protocol.Option(teleportData)
+	} else {
+		pk.TeleportData = protocol.Optional[protocol.TeleportData]{}
+	}
 	io.PlayerInputTick(&pk.Tick)
 }

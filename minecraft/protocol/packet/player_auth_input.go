@@ -174,10 +174,8 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	io.Vec3(&pk.Position)
 	io.Vec2(&pk.MoveVector)
 	io.Float32(&pk.HeadYaw)
-	if _, writing := io.(*protocol.Writer); writing {
-		if _, ok := pk.InputData.Value(); !ok {
-			pk.InputData = protocol.Option([]int32{})
-		}
+	if _, ok := pk.InputData.Value(); !ok {
+		pk.InputData = protocol.Option([]int32{})
 	}
 	protocol.OptionalFunc(io, &pk.InputData, func(i *[]int32) {
 		protocol.FuncSlice(io, i, io.Varint32)
