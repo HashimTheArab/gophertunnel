@@ -89,6 +89,9 @@ type Dialer struct {
 	// ResourcePackDownload controls how many resource pack chunk requests may be in flight at once. The
 	// zero value keeps the sequential default.
 	ResourcePackDownload ResourcePackDownloadConfig
+	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
+	// fall back to a normal download.
+	ResourcePackCache ResourcePackCache
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -290,6 +293,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.packetFunc = d.PacketFunc
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
+	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
