@@ -18,9 +18,9 @@ var wireGolden = map[string]string{
 	"CommandRequest":                  "0006706c61796572000000000000000000000000000000000008070605040302010000",
 	"EventEntityInteract":             "8a9098a0200200018a9098a02000000000",
 	"LevelSoundEvent":                 "0000000000000000000000000000000000080706050403020100",
-	"MovePlayer":                      "85888c9010000000000000000000000000000000000000000000000000000085888c901000",
+	"MovePlayer":                      "85888c9010000000000000000000000000000000000000000000000000000085888c90100000",
 	"NPCDialogue":                     "08070605040302010000000000",
-	"PlayerAuthInputPredictedVehicle": "00000000000000000000000000000000000000000000000000000000000000008080808080800800000000000000000000000000000000000000000000000000000000000000008a9098a02000000000000000000000000000000000000000000000000000000000",
+	"PlayerAuthInputPredictedVehicle": "000000000000000000000000000000000000000000000000000000000000000001015a000000000000000000000000000000000000000000000000010001000100010001018a9098a02000000000000000000000000000000000000000000000000000000000",
 	"RemoveVolumeEntity":              "8486880800",
 	"UpdateAbilities":                 "0807060504030201000000",
 	"UpdateBlockSynced":               "00000000000085888c901000",
@@ -33,8 +33,10 @@ var wireGolden = map[string]string{
 }
 
 func wireGoldenFixtures() map[string]Packet {
-	input := &PlayerAuthInput{InputData: protocol.NewBitset(PlayerAuthInputBitsetSize), ClientPredictedVehicle: 0x0102030405}
-	input.InputData.Set(InputFlagClientPredictedVehicle)
+	input := &PlayerAuthInput{
+		InputData:              protocol.Option([]int32{InputFlagClientPredictedVehicle}),
+		ClientPredictedVehicle: protocol.Option[int64](0x0102030405),
+	}
 	return map[string]Packet{
 		"PlayerAuthInputPredictedVehicle": input,
 		"NPCDialogue":                     &NPCDialogue{EntityUniqueID: 0x0102030405060708},

@@ -45,7 +45,7 @@ func (pk *SetScoreboardIdentity) marshalEntry(io protocol.IO, entry *protocol.Sc
 		io.InvalidValue(hasEntityUniqueID, "scoreboard identity entity unique ID presence", "does not match action type")
 	}
 	if hasEntityUniqueID {
-		io.Varint64(&entry.EntityUniqueID)
+		io.ActorUniqueID(&entry.EntityUniqueID)
 	} else {
 		entry.EntityUniqueID = 0
 	}
