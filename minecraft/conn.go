@@ -1610,8 +1610,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	return nil
 }
 
-// storeResourcePack stores a resource pack downloaded from the server in the Conn's ResourcePackCache, if
-// one was set. Errors are non-fatal and only logged.
+// storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
 func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
 	if conn.resourcePackCache == nil || !key.Matches(pack) {
 		// A pack that does not match its own key would never be returned as a hit on a later login.

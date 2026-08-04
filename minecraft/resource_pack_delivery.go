@@ -12,20 +12,17 @@ const (
 	DefaultResourcePackChunkSendDelay = 200 * time.Millisecond
 )
 
-// ResourcePackDeliveryConfig controls how a Listener sends resource pack data to connected clients. The
-// zero value keeps the conservative defaults used by gophertunnel. A controlled local client that can
-// handle a faster transfer reliably may opt into larger chunks or no pacing.
+// ResourcePackDeliveryConfig controls how a Listener sends resource pack data to clients. The zero value
+// keeps the conservative defaults.
 type ResourcePackDeliveryConfig struct {
-	// ChunkSize is the size in bytes of each ResourcePackChunkData payload. If zero,
-	// DefaultResourcePackChunkSize is used.
+	// ChunkSize is the size of each ResourcePackChunkData payload. Zero uses DefaultResourcePackChunkSize.
 	ChunkSize uint32
-	// ChunkSendDelay is the delay left after sending each ResourcePackChunkData packet. If zero,
-	// DefaultResourcePackChunkSendDelay is used. A negative delay disables pacing entirely.
+	// ChunkSendDelay is the delay after each ResourcePackChunkData packet. Zero uses
+	// DefaultResourcePackChunkSendDelay; a negative delay disables pacing.
 	ChunkSendDelay time.Duration
 }
 
-// normalized returns the configuration with zero values replaced by their defaults and a negative
-// ChunkSendDelay replaced by no delay.
+// normalized returns the configuration with defaults filled in.
 func (config ResourcePackDeliveryConfig) normalized() ResourcePackDeliveryConfig {
 	if config.ChunkSize == 0 {
 		config.ChunkSize = DefaultResourcePackChunkSize
