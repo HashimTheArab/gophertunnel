@@ -33,8 +33,10 @@ var wireGolden = map[string]string{
 }
 
 func wireGoldenFixtures() map[string]Packet {
+	inputData := protocol.NewInputFlags(PlayerAuthInputBitsetSize)
+	inputData.Set(InputFlagClientPredictedVehicle)
 	input := &PlayerAuthInput{
-		InputData:              protocol.Option([]int32{InputFlagClientPredictedVehicle}),
+		InputData:              inputData,
 		ClientPredictedVehicle: protocol.Option[int64](0x0102030405),
 	}
 	return map[string]Packet{
