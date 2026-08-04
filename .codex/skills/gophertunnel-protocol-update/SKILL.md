@@ -60,7 +60,7 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - For enum sentinels like `UNDEFINED`, check whether they existed historically at changing numeric indexes before calling them a new semantic value.
 - For contiguous protocol constants, prefer the surrounding gophertunnel style. `iota` is fine for dense, ordered wire-value ranges when every value is consecutive and future additions can be inserted in order.
 - Keep non-contiguous or out-of-band protocol values explicit. Use hex for flag-like/high-bit values such as `0x8000000`, and separate them from the contiguous `iota` block with a blank line.
-- PMMP may keep compatibility branches that gophertunnel should not support. Prefer the target protocol's exact wire format unless the user explicitly asks for backwards compatibility.
+- Do not preserve backward-compatibility paths in a single-version protocol update. Remove old/new wire branches, fallback serializers, deprecated source aliases, parallel representations, and inert fields. Keep legacy-named fields only when the exact target still carries them on the wire. Add multi-version behavior only when the user explicitly requests it.
 
 ## Codebase Consistency
 
