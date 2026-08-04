@@ -8,7 +8,9 @@ import (
 )
 
 // ResourcePackCacheKey identifies a resource pack advertised by a server during login. It holds the UUID,
-// version and size of the pack as found in the ResourcePacksInfo packet.
+// version and size of the pack as found in the ResourcePacksInfo packet. Like the vanilla client's own
+// pack cache, pack content is assumed not to change without a version bump; the advertised size is
+// included as an extra guard.
 type ResourcePackCacheKey struct {
 	// UUID and Version identify the resource pack advertised by the server.
 	UUID    uuid.UUID
