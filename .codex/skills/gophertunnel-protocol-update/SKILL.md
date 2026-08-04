@@ -42,6 +42,11 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Treat PMMP as strong independent evidence when it matches Mojang docs or live bytes, even if Cloudburst differs.
 - For `map<K,V>` schemas, check the byte layout. A gophertunnel slice is fine if each entry serializes `key` then `value` in map order.
 - For optional fields, preserve exact ordinal order. Missing an optional marker shifts all later fields.
+- Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
+  Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
+  but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
+  `serverId` each carry an optional marker; only `experienceId`, `experienceName`, and `creatorId` are required.
+  The containing gathering configuration is independently optional in Transfer and server join information.
 - Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing; read and validate both when decoding unless the exact target codec documents a reserved constant that is intentionally ignored.
 - When an outer optional is absent, do not consume its inner marker. Clear the destination value. More generally, every absent branch must clear stale slices, hashes, optionals, and IDs because packet structs may be reused.
 - For `Compression` on enum/integer fields, the logical Go type may remain small (`byte`, enum) while the wire encoding uses varint/varuint.
