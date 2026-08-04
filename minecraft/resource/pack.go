@@ -158,7 +158,6 @@ func MustReadURL(url string) *Pack {
 
 // Read parses an archived resource pack written to a raw byte slice passed. The data must be a valid
 // zip archive and contain a pack manifest in order for the function to succeed.
-// Read saves the data to a temporary archive.
 func Read(r io.Reader) (*Pack, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {

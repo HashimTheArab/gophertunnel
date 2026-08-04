@@ -331,6 +331,10 @@ type Conn struct {
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// resourcePackCache optionally stores resource packs downloaded by a Dialer.
+	resourcePackCache ResourcePackCache
+	// resourcePackDelivery controls resource pack delivery for Listener connections.
+	resourcePackDelivery ResourcePackDeliveryConfig
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
 	// func returning false for the specific pack.
 	ignoredResourcePacks []exemptedResourcePack
@@ -388,6 +392,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
+		resourcePackDelivery: ResourcePackDeliveryConfig{}.normalized(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
@@ -1564,6 +1569,25 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			continue
 		}
 
+		cacheKey := ResourcePackCacheKey{
+			UUID:    pack.UUID,
+			Version: pack.Version,
+			Size:    pack.Size,
+		}
+		if conn.resourcePackCache != nil {
+			cachedPack, err := conn.resourcePackCache.Load(conn.ctx, cacheKey)
+			switch {
+			case err != nil:
+				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
+			case cachedPack != nil && !cacheKey.Matches(cachedPack):
+				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
+			case cachedPack != nil:
+				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
+				conn.packQueue.packAmount--
+				continue
+			}
+		}
+
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
 			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
@@ -1572,7 +1596,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
 				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
-				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				newPack = newPack.WithContentKey(pack.ContentKey)
+				conn.resourcePacks = append(conn.resourcePacks, newPack)
+				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
 				continue
 			}
@@ -1585,6 +1611,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
 			newFrag:    make(chan []byte),
 			contentKey: pack.ContentKey,
+			cacheKey:   cacheKey,
 		}
 	}
 
@@ -1600,6 +1627,17 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
+}
+
+// storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
+func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
+	if conn.resourcePackCache == nil || !key.Matches(pack) {
+		// A pack that does not match its own key would never be returned as a hit on a later login.
+		return
+	}
+	if err := conn.resourcePackCache.Store(conn.ctx, key, pack); err != nil {
+		conn.log.Warn("failed to store resource pack in cache", "UUID", pack.UUID(), "version", pack.Version(), "err", err)
+	}
 }
 
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
@@ -1643,15 +1681,6 @@ func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool 
 	return false
 }
 
-const (
-	// packChunkSize is the size of a single chunk of data from a resource pack: 128 KiB.
-	packChunkSize = 1024 * 128
-	// resourcePackChunkSendDelay spaces ResourcePackChunkData packets so slow clients are not flooded while
-	// downloading packs. Clients after 1.26.30 may fail resource pack downloads when pack chunks are sent
-	// too aggressively.
-	resourcePackChunkSendDelay = 200 * time.Millisecond
-)
-
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
 // handled differently depending on the response.
 func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClientResponse) error {
@@ -1662,7 +1691,10 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
-		conn.packQueue = &resourcePackQueue{packs: conn.resourcePacks}
+		conn.packQueue = &resourcePackQueue{
+			packs:     conn.resourcePacks,
+			chunkSize: conn.resourcePackDelivery.ChunkSize,
+		}
 		if err := conn.packQueue.Request(packs); err != nil {
 			return fmt.Errorf("lookup resource packs by UUID: %w", err)
 		}
@@ -1833,25 +1865,30 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			}
 		}
 		conn.packMu.Lock()
-		defer conn.packMu.Unlock()
-
 		if pack.buf.Len() != int(pack.size) {
 			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
+			conn.packMu.Unlock()
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
 			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
+			conn.packMu.Unlock()
 			return
 		}
+		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
-		conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.contentKey))
-		if conn.packQueue.packAmount == 0 {
+		conn.resourcePacks = append(conn.resourcePacks, newPack)
+		packAmount := conn.packQueue.packAmount
+		conn.packMu.Unlock()
+
+		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack)
 			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 		}
+		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
 }
@@ -1884,20 +1921,21 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 // pack to be downloaded.
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
+	chunkSize := uint64(conn.packQueue.chunkSize)
 	uuid, _, _ := strings.Cut(pk.UUID, "_")
 	if current.UUID().String() != uuid {
 		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
 	}
-	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*packChunkSize {
-		return fmt.Errorf("expected pack UUID %v, but got %v", conn.packQueue.currentOffset/packChunkSize, pk.ChunkIndex)
+	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*chunkSize {
+		return fmt.Errorf("expected chunk index %v, but got %v", conn.packQueue.currentOffset/chunkSize, pk.ChunkIndex)
 	}
 	response := &packet.ResourcePackChunkData{
 		UUID:       pk.UUID,
 		ChunkIndex: uint32(pk.ChunkIndex),
 		DataOffset: conn.packQueue.currentOffset,
-		Data:       make([]byte, packChunkSize),
+		Data:       make([]byte, chunkSize),
 	}
-	conn.packQueue.currentOffset += packChunkSize
+	conn.packQueue.currentOffset += chunkSize
 	// We read the data directly into the response's data.
 	if n, err := current.ReadAt(response.Data, int64(response.DataOffset)); err != nil {
 		// If we hit an EOF, we don't need to return an error, as we've simply reached the end of the content
@@ -1919,7 +1957,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 			conn.expect(packet.IDResourcePackClientResponse)
 		}
 	}
-	if err := waitResourcePackChunkSendDelay(conn.ctx); err != nil {
+	if err := waitResourcePackChunkSendDelay(conn.ctx, conn.resourcePackDelivery.ChunkSendDelay); err != nil {
 		return err
 	}
 
@@ -1927,8 +1965,11 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 }
 
 // waitResourcePackChunkSendDelay waits before processing the next resource pack chunk request.
-func waitResourcePackChunkSendDelay(ctx context.Context) error {
-	timer := time.NewTimer(resourcePackChunkSendDelay)
+func waitResourcePackChunkSendDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
 	select {
