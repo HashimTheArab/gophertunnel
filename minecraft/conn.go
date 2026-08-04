@@ -388,7 +388,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
-		resourcePackDownload: resolveResourcePackDownloadConfig(ResourcePackDownloadConfig{}),
+		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
@@ -1528,7 +1528,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	totalPacks := len(pk.TexturePacks)
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       totalPacks,
-		downloadingPacks: make(map[string]downloadingPack),
+		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
@@ -1565,11 +1565,10 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = downloadingPack{
+		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
 			contentKey: pack.ContentKey,
-			mu:         new(sync.Mutex),
 		}
 	}
 
@@ -1805,66 +1804,49 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
 	pack.chunkCount = uint32(chunkCount)
-	window := conn.resourcePackDownload.MaxInFlightChunks
-	if window < 1 {
-		window = DefaultResourcePackMaxInFlightChunks
-	}
-	if chunkCount == 0 {
-		window = 1
-	} else if uint64(window) > chunkCount {
-		window = int(chunkCount)
+	window := uint64(conn.resourcePackDownload.MaxInFlightChunks)
+	if window > chunkCount {
+		window = max(chunkCount, 1)
 	}
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
-	pack.received = make(map[uint32]struct{})
-	conn.packQueue.awaitingPacks[id] = &pack
+	conn.packQueue.awaitingPacks[id] = pack
 
 	idCopy := pk.UUID
 	go func() {
 		fragments := make(map[uint32][]byte)
-		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
+		nextRequest, nextWrite := uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
 			pack.mu.Unlock()
-			if err := conn.WritePacket(&packet.ResourcePackChunkRequest{
+			return conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
 				ChunkIndex: int32(index),
-			}); err != nil {
-				pack.mu.Lock()
-				delete(pack.requested, index)
-				pack.mu.Unlock()
-				return err
-			}
-			return nil
+			})
 		}
 
-		for nextRequest < pack.chunkCount && nextRequest < uint32(window) {
-			if err := requestChunk(nextRequest); err != nil {
+		for nextRequest < pack.chunkCount && uint64(nextRequest) < window {
+			if requestChunk(nextRequest) != nil {
 				return
 			}
 			nextRequest++
 		}
-		for received < pack.chunkCount {
+		for nextWrite < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
-				received++
 				fragments[frag.index] = frag.data
-				for {
-					data, ok := fragments[nextWrite]
-					if !ok {
-						break
-					}
-					// Write fragments in index order so the final archive remains
-					// contiguous even when responses arrive out of order.
+				// Write fragments in index order so the final archive remains contiguous even when
+				// responses arrive out of order.
+				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
 					_, _ = pack.buf.Write(data)
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
 				if nextRequest < pack.chunkCount {
-					if err := requestChunk(nextRequest); err != nil {
+					if requestChunk(nextRequest) != nil {
 						return
 					}
 					nextRequest++
@@ -1919,16 +1901,12 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 	pack.mu.Lock()
 	if _, ok := pack.requested[pk.ChunkIndex]; !ok {
 		pack.mu.Unlock()
-		return fmt.Errorf("received unrequested resource pack chunk %v", pk.ChunkIndex)
-	}
-	if _, ok := pack.received[pk.ChunkIndex]; ok {
-		pack.mu.Unlock()
-		return fmt.Errorf("received duplicate resource pack chunk %v", pk.ChunkIndex)
+		return fmt.Errorf("resource pack chunk %v was not requested or was already received", pk.ChunkIndex)
 	}
 	delete(pack.requested, pk.ChunkIndex)
-	pack.received[pk.ChunkIndex] = struct{}{}
 	pack.mu.Unlock()
 
+	// The data is cloned as the decoder may reuse the packet's backing array once this handler returns.
 	select {
 	case pack.newFrag <- resourcePackChunk{index: pk.ChunkIndex, data: bytes.Clone(pk.Data)}:
 		return nil

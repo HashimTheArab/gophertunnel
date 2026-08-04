@@ -19,7 +19,7 @@ type resourcePackQueue struct {
 	currentOffset   uint64
 
 	packAmount       int
-	downloadingPacks map[string]downloadingPack
+	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
 }
 
@@ -32,11 +32,12 @@ type downloadingPack struct {
 	newFrag    chan resourcePackChunk
 	contentKey string
 
-	mu        *sync.Mutex
+	// mu guards requested, which tracks the chunk indices requested but not yet received.
+	mu        sync.Mutex
 	requested map[uint32]struct{}
-	received  map[uint32]struct{}
 }
 
+// resourcePackChunk is a single received chunk of a resource pack, tagged with its index.
 type resourcePackChunk struct {
 	index uint32
 	data  []byte
