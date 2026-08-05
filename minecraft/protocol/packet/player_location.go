@@ -31,12 +31,16 @@ func (*PlayerLocation) ID() uint32 {
 
 func (pk *PlayerLocation) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.EntityUniqueID)
-	t := uint32(pk.Type)
-	io.Varuint32(&t)
-	pk.Type = int32(t)
-	var legacyType int32
-	io.Varint32(&legacyType)
-	if pk.Type == PlayerLocationTypeCoordinates {
+	protocol.IntegerFunc(&pk.Type, io.Varuint32)
+
+	var reserved int32
+	io.Varint32(&reserved)
+
+	switch pk.Type {
+	case PlayerLocationTypeCoordinates:
 		io.Vec3(&pk.Position)
+	case PlayerLocationTypeHide:
+	default:
+		io.UnknownEnumOption(pk.Type, "player location type")
 	}
 }
