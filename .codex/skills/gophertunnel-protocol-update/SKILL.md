@@ -72,7 +72,9 @@ the generated output's version metadata after building it.
 - When the exact read path accepts a presence marker independently, represent that state with `Optional[T]` even if a
   reference writer normally chooses presence from another field. Do not collapse it into a plain value plus a custom
   action check unless the marker is proven to be duplicated discriminator metadata. This applies equally to nested
-  structs such as map entries, scoreboard identity entries, and inventory transaction payloads.
+  structs such as map entries, scoreboard identity entries, recipe unlock requirements, movement teleport data,
+  and inventory transaction payloads. Describe the reference writer's normal choice in the field documentation; do
+  not turn that choice into a decoder invariant.
 - Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
   Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
   but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
@@ -87,10 +89,13 @@ the generated output's version metadata after building it.
   not invent equality validation when the exact-version reader intentionally discards them. Extra strictness is a wire
   compatibility change and can reject packets accepted by the target game.
 - The selector and the type byte it precedes are two different numberings. The selector indexes the variant list, which skips types that are no longer sent, while the type byte still counts them. Work out the mapping between the two and check it against the full enum before assuming they are equal; assuming so rejects every type above the first skipped one, and would read one as the type below it. Types no longer sent still occupy their numbers in the type byte, so keep them.
-- When an outer optional is absent, do not consume its inner marker. Clear the destination value. More generally, every absent branch must clear stale slices, hashes, optionals, and IDs because packet structs may be reused.
-- Apply the same reuse rule to variants and conditional payloads: after decoding a selector, clear every inactive value
-  field, and when an entry takes a short form (for example remove/hidden), reconstruct or zero the inactive portion of
-  the struct. A successful decode must not retain state from the previous packet instance.
+- When an outer optional is absent, do not consume its inner marker. Mark the destination optional absent; its hidden
+  value need not be erased because `Value` reports the presence bit.
+- Gophertunnel's unified `Marshal(IO)` runs for both reads and writes. Do not zero inactive fields, reconstruct a short
+  variant, or clear slices merely to clean decoder reuse: that also mutates caller-owned packets during encoding.
+  Prefer explicit `Optional[T]` state and fresh decoded elements (the slice helpers allocate them). If a reused decode
+  target truly must be cleared, use a direction-aware mechanism with a demonstrated call site rather than unconditional
+  mutation in the shared codec.
 - For `Compression` on enum/integer fields, the logical Go type may remain small (`byte`, enum) while the wire encoding uses varint/varuint.
 - Distinguish actor unique IDs from runtime IDs:
   - actor unique ID: signed `varint64` zigzag
@@ -108,7 +113,11 @@ the generated output's version metadata after building it.
 - For `oneOf`/variant selectors, encode the selector as documented, usually varuint, not as a bool unless the source explicitly says bool.
 - Do not infer a `oneOf` selector from a field label or a broken reference implementation. For sound-data updates, verify the full selector range and every payload ordinal against the exact schema: the server sound handle is a fixed `uint64`, the action selector is a compressed `uint32`, and Fade carries duration before target volume. A serializer that always writes Stop or reverses Fade fields is evidence of an implementation bug, not a compatibility requirement.
 - For enum sentinels like `UNDEFINED`, check whether they existed historically at changing numeric indexes before calling them a new semantic value.
-- Re-derive sentinel-style modes from the exact-version schema instead of trusting constants retained from older releases. In protocol 2168, `LevelChunk.SubChunkCount` is constrained to `0..64`; request mode is `SubChunkCount == 0` with `SubChunkLimit` present (`-1` means limitless). Remove the invalid old `MaxUint32` count sentinels rather than deprecating them, and audit downstream emitters and consumers as well as the codec when a representation changes.
+- Re-derive sentinel-style modes from the exact-version schema instead of trusting constants retained from older
+  releases. In protocol 2168, `LevelChunk.SubChunkCount` is constrained to `0..64`; BDS emits request mode as
+  `SubChunkCount == 0` with `SubChunkLimit` present (`-1` means limitless). Remove the invalid old `MaxUint32` count
+  sentinels and update downstream emitters, but do not reject a non-zero count plus a present limit unless exact read
+  evidence proves that combination invalid. A canonical writer form is not automatically a decoder invariant.
 - When a release appends values to an enum that gophertunnel does not already expose completely, do not add only the new suffix. Ask the operator whether to omit the constants or expose the complete exact-version enum before changing the public API.
 - For contiguous protocol constants, prefer the surrounding gophertunnel style. `iota` is fine for dense, ordered wire-value ranges when every value is consecutive and future additions can be inserted in order.
 - Keep non-contiguous or out-of-band protocol values explicit. Use hex for flag-like/high-bit values such as `0x8000000`, and separate them from the contiguous `iota` block with a blank line.
@@ -130,6 +139,9 @@ the generated output's version metadata after building it.
   wire field that has no corresponding struct state.
 - Represent an exact fixed wire cardinality with an array such as `[4]color.RGBA`, not a slice plus runtime length
   validation. Use a slice only when the wire carries a variable count.
+- Separate integer width/endianness from colour channel semantics. A little-endian `uint32` described as ARGB must use
+  the existing ARGB colour helper, not an RGBA helper merely because both ultimately read or write four bytes. Compare
+  sibling colour fields and the schema description; channel swaps do not desynchronise packets and are easy to miss.
 - Put stable, direction-agnostic wire primitives in `minecraft/protocol`, even when first discovered in one packet. For example, nested Cereal optionals belong beside `OptionalFunc` as `DoubleOptionalFunc`.
 - Put a reusable protocol data type's own codec on that type as an exported `Marshal(IO)` method, then use `Single`,
   `Slice`, or the matching generic helper from packets. Do not leave a packet-bound private callback for a wire shape
@@ -169,11 +181,11 @@ the generated output's version metadata after building it.
   duplicated discriminator metadata or has a different wire shape.
 - Audit every local numeric temporary. Replace ordinary logical-to-wire conversions with `IntegerFunc`; retain only
   documented reserved/discarded fields and label them accurately.
-- Audit every conditional/variant decode for stale-state clearing and every fixed-count field for an array-shaped Go
-  API.
+- Audit every conditional/variant decode for accidental write-time mutation, every independently guarded value for an
+  `Optional[T]` API, and every fixed-count field for an array-shaped Go API.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
-- When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule.
+- When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule. After applying validated findings, run a second Opus pass against the resulting final diff rather than treating the first review as final approval.
 - Treat bot findings as claims: validate them against the exact target. Fix real issues; reply with source-backed rebuttals for false positives and resolve the thread.
 - After posting review-thread replies, verify they are public and submitted. A GraphQL reply node with
   `pullRequestReview: null` that returns 404 from the REST pull-review-comment endpoint may be a viewer-only pending
