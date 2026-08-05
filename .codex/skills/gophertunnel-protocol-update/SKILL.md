@@ -80,7 +80,7 @@ the generated output's version metadata after building it.
   but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
   `serverId` each carry an optional marker; only `experienceId`, `experienceName`, and `creatorId` are required.
   The containing gathering configuration is independently optional in Transfer and server join information.
-- Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing; read and validate both when decoding unless the exact target codec documents a reserved constant that is intentionally ignored.
+- Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing. On read, use the primary selector and validate the compatibility copy only when the exact target reader does; if it consumes and discards the copy, gophertunnel must do the same.
 - Distinguish duplicated metadata from reserved padding. If the exact writer emits a constant (commonly signed-varint
   zero) and the exact reader merely consumes and discards it, keep a local `reserved` variable so both directions stay
   aligned; do not expose it as packet state, derive it from another field, or validate it. Name it `reserved`, not
@@ -89,8 +89,8 @@ the generated output's version metadata after building it.
   not invent equality validation when the exact-version reader intentionally discards them. Extra strictness is a wire
   compatibility change and can reject packets accepted by the target game.
 - The selector and the type byte it precedes are two different numberings. The selector indexes the variant list, which skips types that are no longer sent, while the type byte still counts them. Work out the mapping between the two and check it against the full enum before assuming they are equal; assuming so rejects every type above the first skipped one, and would read one as the type below it. Types no longer sent still occupy their numbers in the type byte, so keep them.
-- When an outer optional is absent, do not consume its inner marker. Mark the destination optional absent; its hidden
-  value need not be erased because `Value` reports the presence bit.
+- When an outer optional is absent, do not consume its inner marker. Reset the destination to `Optional[T]{}` so it is
+  absent and cannot retain hidden state from a reused value.
 - Gophertunnel's unified `Marshal(IO)` runs for both reads and writes. Do not zero inactive fields, reconstruct a short
   variant, or clear slices merely to clean decoder reuse: that also mutates caller-owned packets during encoding.
   Prefer explicit `Optional[T]` state and fresh decoded elements (the slice helpers allocate them). If a reused decode
@@ -137,8 +137,9 @@ the generated output's version metadata after building it.
 - When a Go integer type differs from its wire integer type, use the existing generic `IntegerFunc` conversion helper
   instead of a hand-written temporary/cast/copy-back sequence. Keep an explicit local only for a reserved/discarded
   wire field that has no corresponding struct state.
-- Represent an exact fixed wire cardinality with an array such as `[4]color.RGBA`, not a slice plus runtime length
-  validation. Use a slice only when the wire carries a variable count.
+- Prefer an array such as `[4]color.RGBA` when exact fixed cardinality is a useful part of the public API. A slice with
+  an exact-length codec remains appropriate when it is the established representation or when it must sit inside
+  `Optional[T]`; do not churn an otherwise correct API solely to replace that slice.
 - Separate integer width/endianness from colour channel semantics. A little-endian `uint32` described as ARGB must use
   the existing ARGB colour helper, not an RGBA helper merely because both ultimately read or write four bytes. Compare
   sibling colour fields and the schema description; channel swaps do not desynchronise packets and are easy to miss.
@@ -153,6 +154,8 @@ the generated output's version metadata after building it.
   data). Small conversion functions at the two public type boundaries are better than duplicating the binary codec, but
   do not export the internal carrier or preserve two independently mutable public representations.
 - Remove dead lookups, duplicated codecs, inert fields, transitional caches, and write-then-reconstruct heuristics introduced by a broad patch.
+- After removing the last call site of an `IO` method or generic slice/optional helper, delete the helper and its `IO`
+  interface entry in the same patch. Do not leave an exported compatibility surface that no target-version codec uses.
 
 ## Implementation Workflow
 
@@ -184,6 +187,8 @@ the generated output's version metadata after building it.
 - Audit every conditional/variant decode for accidental write-time mutation, every independently guarded value for an
   `Optional[T]` API, and every fixed-count field for an array-shaped Go API.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
+- A packet-level field that still appears on the target wire remains meaningful even when a newer per-entry selector
+  carries the effective choice. Keep the wire field, but do not make it drive entry presence unless the exact codec does.
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
 - When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule. After applying validated findings, run a second Opus pass against the resulting final diff rather than treating the first review as final approval.
 - Treat bot findings as claims: validate them against the exact target. Fix real issues; reply with source-backed rebuttals for false positives and resolve the thread.
