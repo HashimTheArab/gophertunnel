@@ -41,10 +41,10 @@ var idFieldFixtures = map[string]func() (Packet, func() int64){
 	},
 	"PrimitiveShapes.Shapes[].AttachedToEntityID": func() (Packet, func() int64) {
 		pk := &PrimitiveShapes{Shapes: []protocol.PrimitiveShape{{
-			AttachedToEntityID: protocol.Option(int64(idSentinel)),
+			AttachedToEntityID: protocol.Option(uint64(idSentinel)),
 			ExtraShapeData:     &protocol.LastShape{},
 		}}}
-		return pk, func() int64 { id, _ := pk.Shapes[0].AttachedToEntityID.Value(); return id }
+		return pk, func() int64 { id, _ := pk.Shapes[0].AttachedToEntityID.Value(); return int64(id) }
 	},
 	"SetScore.Entries[].EntityUniqueID": func() (Packet, func() int64) {
 		pk := &SetScore{Entries: []protocol.ScoreboardEntry{{IdentityType: protocol.ScoreboardIdentityPlayer, EntityUniqueID: idSentinel}}}
