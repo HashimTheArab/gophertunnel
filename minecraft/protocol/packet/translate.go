@@ -70,18 +70,18 @@ func (io *translatingIO) ActorUniqueID(x *int64) {
 	*x = io.unique(*x)
 }
 
-// The following methods are used by protocol helpers for fields whose wire encoding
-// predates the canonical actor-ID varints. They intentionally do not encode anything:
+// The following methods handle fields whose wire encoding differs from the canonical
+// actor-ID varints. They intentionally do not encode anything:
 // TranslateEntityIDs traverses with a discard writer, so they only apply the mapping.
-func (io *translatingIO) ActorRuntimeIDInt64(x *int64) {
+func (io *translatingIO) ActorRuntimeIDVarint64(x *int64) {
 	*x = int64(io.runtime(uint64(*x)))
 }
 
-func (io *translatingIO) ActorRuntimeIDUint32(x *uint32) {
+func (io *translatingIO) ActorRuntimeIDVaruint32(x *uint32) {
 	*x = uint32(io.runtime(uint64(*x)))
 }
 
-func (io *translatingIO) ActorUniqueIDFixed(x *int64) {
+func (io *translatingIO) ActorUniqueIDInt64(x *int64) {
 	*x = io.unique(*x)
 }
 

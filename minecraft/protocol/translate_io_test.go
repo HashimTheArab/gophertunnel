@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// actorIDFields exercises every semantic actor ID operation, the legacy encoding
-// helpers, entity metadata and one non-ID field that must pass through untranslated.
+// actorIDFields exercises every semantic actor ID operation, entity metadata and one
+// non-ID field that must pass through untranslated.
 type actorIDFields struct {
 	Runtime         uint64
 	Unique          int64
@@ -23,11 +23,11 @@ type actorIDFields struct {
 func (a *actorIDFields) Marshal(io IO) {
 	io.ActorRuntimeID(&a.Runtime)
 	io.ActorUniqueID(&a.Unique)
-	ActorRuntimeIDInt64(io, &a.RuntimeInt64)
-	ActorRuntimeIDUint32(io, &a.RuntimeUint32)
-	ActorUniqueIDFixed(io, &a.UniqueFixed)
-	ActorUniqueIDUint64(io, &a.UniqueUint64)
-	ActorUniqueIDVaruint64(io, &a.UniqueVaruint64)
+	io.ActorRuntimeIDVarint64(&a.RuntimeInt64)
+	io.ActorRuntimeIDVaruint32(&a.RuntimeUint32)
+	io.ActorUniqueIDInt64(&a.UniqueFixed)
+	io.ActorUniqueIDUint64(&a.UniqueUint64)
+	io.ActorUniqueIDVaruint64(&a.UniqueVaruint64)
 	io.EntityMetadata(&a.Metadata)
 	Slice(io, &a.Links)
 	io.Varuint64(&a.Other)

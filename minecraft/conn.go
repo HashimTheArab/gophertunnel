@@ -396,7 +396,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		readerLimits:         limits,
 		compressionThreshold: 256,
 		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
-		resourcePackDelivery: ResourcePackDeliveryConfig{}.normalized(),
+		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
