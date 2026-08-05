@@ -42,6 +42,16 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Treat PMMP as strong independent evidence when it matches Mojang docs or live bytes, even if Cloudburst differs.
 - For `map<K,V>` schemas, check the byte layout. A gophertunnel slice is fine if each entry serializes `key` then `value` in map order.
 - For optional fields, preserve exact ordinal order. Missing an optional marker shifts all later fields.
+- A wire presence bool that directly guards a value is an `Optional[T]` field. Marshal it with `OptionalFunc`,
+  `OptionalMarshaler`, or the matching existing helper. Do not hand-write `hasX`, `Bool`, value, and absent-value
+  clearing branches that merely reimplement `Optional`; the extra code hides the wire shape and easily loses states.
+- Preserve present zero and present empty values. Never infer an independent optional's presence from `value != 0`,
+  `slice != nil`, or another payload value. For protocol 2168, every optional in `SubChunkEntry`—raw payload, both
+  height-map arrays, and blob hash—must use `Optional`, including `Optional[uint64]` so a present zero hash remains
+  representable.
+- Derive presence from an action/type discriminator only when the exact-version writer defines the bool as duplicated
+  discriminator metadata rather than an independent optional. On read, validate that duplicated values agree. Do not
+  use this exception for ordinary schema optionals.
 - Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
   Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
   but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
@@ -76,7 +86,9 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 
 - Model the target wire shape once. Do not keep aggregate and typed representations that need synchronization, packet-level selectors when the selector moved per entry, or exported compatibility fields that are no longer encoded.
 - Specialized descriptor-backed items must expose only their string identity and other wire-backed fields. Do not embed a broader numeric-ID item type and permit contradictory identities.
-- Prefer existing `IO`, `Marshal`, `Slice`, `FuncSlice`, and `OptionalFunc` patterns over parallel reader/writer switch trees.
+- Use existing `IO`, `Marshal`, `Slice`, `FuncSlice`, and optional helpers instead of parallel reader/writer trees or
+  manual equivalents. If the wire shape is `bool + value-if-true`, the default representation is `Optional[T]` plus
+  `OptionalFunc`; require exact-version evidence before writing a custom presence branch.
 - Put stable, direction-agnostic wire primitives in `minecraft/protocol`, even when first discovered in one packet. For example, nested Cereal optionals belong beside `OptionalFunc` as `DoubleOptionalFunc`.
 - Keep packet semantics private: selector-to-name conversions, one-packet union validation, recipe-family implementation helpers, and format-specific adapters should not become public APIs merely to shorten a packet file.
 - Audit every new private helper before PR closeout. Export it only when the abstraction is protocol-generic and its name/contract remain meaningful outside the originating packet; otherwise keep it local.
@@ -103,6 +115,8 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 
 - Compare the exact-version read and write paths independently.
 - Check field order, signedness, widths, selectors, legacy copies, optional nesting, slice lengths, and absent-state clearing.
+- Audit every new `Bool`-guarded branch. Replace it with the existing optional helper unless the bool is proven to be
+  duplicated discriminator metadata or has a different wire shape.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
 - When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule.
