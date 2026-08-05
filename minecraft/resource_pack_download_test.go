@@ -37,7 +37,7 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, peer) }()
 
 	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
-	defer conn.abort(nil)
+	defer conn.Close()
 
 	const id = "550e8400-e29b-41d4-a716-446655440000"
 	pack := &downloadingPack{buf: new(bytes.Buffer), size: 200}
