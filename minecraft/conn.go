@@ -1867,7 +1867,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	idCopy := pk.UUID
 	go func() {
 		fragments := make(map[uint32][]byte)
-		nextRequest, nextWrite := uint32(0), uint32(0)
+		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
@@ -1878,10 +1878,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			})
 		}
 
-		// fillWindow requests chunks up to the window, measured from the write cursor rather than the
-		// receive count so that fragments buffered for reordering also count against the window.
+		// fillWindow replenishes one request for each response accepted by the client.
 		fillWindow := func() bool {
-			for nextRequest < pack.chunkCount && uint64(nextRequest-nextWrite) < window {
+			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
 				if requestChunk(nextRequest) != nil {
 					return false
 				}
@@ -1898,9 +1897,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
+				received++
 				fragments[frag.index] = frag.data
-				// Write fragments in index order so the final archive remains contiguous even when
-				// responses arrive out of order.
+				// Write the contiguous prefix in index order.
 				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
 					_, _ = pack.buf.Write(data)
 					delete(fragments, nextWrite)
