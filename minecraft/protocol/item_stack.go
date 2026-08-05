@@ -42,6 +42,15 @@ func (x *ItemStackRequest) Marshal(r IO) {
 	r.Int32(&x.FilterCause)
 }
 
+// stackRequestActionVariant maps an action type to its index in the variant list the action is sent under.
+// The list leaves out the two container actions that are never sent, so the two run out of step above them.
+func stackRequestActionVariant(id uint8) uint32 {
+	if id > StackRequestActionTakeOutContainer {
+		return uint32(id) - 2
+	}
+	return uint32(id)
+}
+
 // lookupStackRequestActionType looks up the ID of a StackRequestAction.
 func lookupStackRequestActionType(x StackRequestAction, id *uint8) bool {
 	switch x.(type) {
@@ -104,10 +113,6 @@ func lookupStackRequestAction(id uint8, x *StackRequestAction) bool {
 		*x = &ConsumeStackRequestAction{}
 	case StackRequestActionCreate:
 		*x = &CreateStackRequestAction{}
-	case StackRequestActionPlaceInContainer:
-		*x = &PlaceInContainerStackRequestAction{}
-	case StackRequestActionTakeOutContainer:
-		*x = &TakeOutContainerStackRequestAction{}
 	case StackRequestActionLabTableCombine:
 		*x = &LabTableCombineStackRequestAction{}
 	case StackRequestActionBeaconPayment:
@@ -226,8 +231,18 @@ type ItemStackResponse struct {
 func (x *ItemStackResponse) Marshal(r IO) {
 	r.Uint8(&x.Status)
 	r.Varint32(&x.RequestID)
-	if x.Status == ItemStackResponseStatusOK {
-		Slice(r, &x.ContainerInfo)
+	wrapper := true
+	r.Bool(&wrapper)
+	if wrapper {
+		present := len(x.ContainerInfo) != 0
+		r.Bool(&present)
+		if present {
+			Slice(r, &x.ContainerInfo)
+		} else {
+			x.ContainerInfo = nil
+		}
+	} else {
+		x.ContainerInfo = nil
 	}
 }
 
@@ -272,13 +287,25 @@ func (x *StackResponseSlotInfo) Marshal(r IO) {
 	r.Uint8(&x.Slot)
 	r.Uint8(&x.HotbarSlot)
 	r.Uint8(&x.Count)
-	r.Varint32(&x.StackNetworkID)
-	if x.Slot != x.HotbarSlot {
-		r.InvalidValue(x.HotbarSlot, "hotbar slot", "hot bar slot must be equal to normal slot")
+	wrapper := true
+	r.Bool(&wrapper)
+	if wrapper {
+		present := x.StackNetworkID > 0
+		r.Bool(&present)
+		if present {
+			r.Varint32(&x.StackNetworkID)
+		} else {
+			x.StackNetworkID = 0
+		}
+	} else {
+		x.StackNetworkID = 0
 	}
 	r.String(&x.CustomName)
 	r.String(&x.FilteredCustomName)
 	r.Varint32(&x.DurabilityCorrection)
+	if x.DurabilityCorrection < -32768 || x.DurabilityCorrection > 32767 {
+		r.InvalidValue(x.DurabilityCorrection, "durability correction", "must fit in an int16")
+	}
 }
 
 // StackRequestAction represents a single action related to the inventory present in an ItemStackRequest.
@@ -296,6 +323,8 @@ const (
 	StackRequestActionDestroy
 	StackRequestActionConsume
 	StackRequestActionCreate
+	// StackRequestActionPlaceInContainer and StackRequestActionTakeOutContainer are never sent, but still
+	// take up their IDs in the action type the client repeats inside each action.
 	StackRequestActionPlaceInContainer
 	StackRequestActionTakeOutContainer
 	StackRequestActionLabTableCombine
@@ -415,16 +444,6 @@ func (a *CreateStackRequestAction) Marshal(r IO) {
 	r.Uint8(&a.ResultsSlot)
 }
 
-// PlaceInContainerStackRequestAction currently has no known purpose.
-type PlaceInContainerStackRequestAction struct {
-	transferStackRequestAction
-}
-
-// TakeOutContainerStackRequestAction currently has no known purpose.
-type TakeOutContainerStackRequestAction struct {
-	transferStackRequestAction
-}
-
 // LabTableCombineStackRequestAction is sent by the client when it uses a lab table to combine item stacks.
 type LabTableCombineStackRequestAction struct{}
 
@@ -460,7 +479,7 @@ type MineBlockStackRequestAction struct {
 func (a *MineBlockStackRequestAction) Marshal(r IO) {
 	r.Varint32(&a.HotbarSlot)
 	r.Varint32(&a.PredictedDurability)
-	r.Varint32(&a.StackNetworkID)
+	r.Int32(&a.StackNetworkID)
 }
 
 // CraftRecipeStackRequestAction is sent by the client the moment it begins crafting an item. This is the
@@ -490,10 +509,8 @@ type AutoCraftRecipeStackRequestAction struct {
 	// one of the recipes sent in the CraftingData packet, where each of the recipes have a RecipeNetworkID as
 	// of 1.16.
 	RecipeNetworkID uint32
-	// NumberOfCrafts is how many times the recipe was crafted. This field is just a duplicate of TimesCrafted.
+	// NumberOfCrafts is how many times the recipe was crafted.
 	NumberOfCrafts byte
-	// TimesCrafted is how many times the recipe was crafted.
-	TimesCrafted byte
 	// Ingredients is a slice of ItemDescriptorCount that contains the ingredients that were used to craft the recipe.
 	// It is not exactly clear what this is used for, but it is sent by the vanilla client.
 	Ingredients []ItemDescriptorCount
@@ -503,8 +520,7 @@ type AutoCraftRecipeStackRequestAction struct {
 func (a *AutoCraftRecipeStackRequestAction) Marshal(r IO) {
 	r.Varuint32(&a.RecipeNetworkID)
 	r.Uint8(&a.NumberOfCrafts)
-	r.Uint8(&a.TimesCrafted)
-	FuncSlice(r, &a.Ingredients, r.ItemDescriptorCount)
+	FuncIOSlice(r, &a.Ingredients, StackRequestItemDescriptorCount)
 }
 
 // CraftCreativeStackRequestAction is sent by the client when it takes an item out fo the creative inventory.
@@ -558,7 +574,7 @@ type CraftGrindstoneRecipeStackRequestAction struct {
 
 // Marshal ...
 func (c *CraftGrindstoneRecipeStackRequestAction) Marshal(r IO) {
-	r.Varuint32(&c.RecipeNetworkID)
+	IntegerFunc(&c.RecipeNetworkID, r.Int32)
 	r.Uint8(&c.NumberOfCrafts)
 	r.Varint32(&c.Cost)
 }
@@ -590,13 +606,13 @@ func (*CraftNonImplementedStackRequestAction) Marshal(IO) {}
 // This action is also sent when an item is enchanted. Enchanting should be treated mostly the same way as
 // crafting, where the old item is consumed.
 type CraftResultsDeprecatedStackRequestAction struct {
-	ResultItems  []ItemStack
+	ResultItems  []StackRequestItem
 	TimesCrafted byte
 }
 
 // Marshal ...
 func (a *CraftResultsDeprecatedStackRequestAction) Marshal(r IO) {
-	FuncSlice(r, &a.ResultItems, r.Item)
+	FuncSlice(r, &a.ResultItems, r.StackRequestItem)
 	r.Uint8(&a.TimesCrafted)
 }
 
@@ -616,5 +632,5 @@ type StackRequestSlotInfo struct {
 func StackReqSlotInfo(r IO, x *StackRequestSlotInfo) {
 	Single(r, &x.Container)
 	r.Uint8(&x.Slot)
-	r.Varint32(&x.StackNetworkID)
+	r.Int32(&x.StackNetworkID)
 }

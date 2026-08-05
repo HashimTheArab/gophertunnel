@@ -351,15 +351,15 @@ func TestTranslateEntityIDsConditionalFields(t *testing.T) {
 		t.Errorf("minecart CommandBlockUpdate ID not translated: %v", minecart.MinecartEntityRuntimeID)
 	}
 
-	input := &PlayerAuthInput{ClientPredictedVehicle: 10, InputData: protocol.NewBitset(PlayerAuthInputBitsetSize)}
+	input := &PlayerAuthInput{}
 	translateSwap(input)
-	if input.ClientPredictedVehicle != 10 {
-		t.Errorf("predicted vehicle translated without its input flag: %v", input.ClientPredictedVehicle)
+	if _, ok := input.ClientPredictedVehicle.Value(); ok {
+		t.Error("absent predicted vehicle became present during translation")
 	}
-	input.InputData.Set(InputFlagClientPredictedVehicle)
+	input.ClientPredictedVehicle = protocol.Option[int64](10)
 	translateSwap(input)
-	if input.ClientPredictedVehicle != 20 {
-		t.Errorf("predicted vehicle not translated with its input flag: %v", input.ClientPredictedVehicle)
+	if predictedVehicle, _ := input.ClientPredictedVehicle.Value(); predictedVehicle != 20 {
+		t.Errorf("present predicted vehicle not translated: %v", predictedVehicle)
 	}
 
 	score := &SetScore{Entries: []protocol.ScoreboardEntry{

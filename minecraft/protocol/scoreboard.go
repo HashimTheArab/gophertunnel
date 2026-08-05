@@ -1,7 +1,8 @@
 package protocol
 
 const (
-	ScoreboardIdentityPlayer = iota + 1
+	ScoreboardIdentityRemove = iota
+	ScoreboardIdentityPlayer
 	ScoreboardIdentityEntity
 	ScoreboardIdentityFakePlayer
 )
@@ -36,23 +37,38 @@ type ScoreboardEntry struct {
 
 // Marshal encodes/decodes a ScoreboardEntry x as an entry for modification.
 func (x *ScoreboardEntry) Marshal(r IO) {
-	ScoreRemoveEntry(r, x)
-	r.Uint8(&x.IdentityType)
+	variant := uint32(x.IdentityType)
+	r.Varuint32(&variant)
+	x.IdentityType = byte(variant)
+
+	typeNames := [...]string{"remove", "changeplayer", "changeentity", "changefakeplayer"}
+	if variant >= uint32(len(typeNames)) {
+		r.UnknownEnumOption(variant, "scoreboard entry variant")
+		return
+	}
+	typeName := typeNames[variant]
+	r.String(&typeName)
+	if typeName != typeNames[variant] {
+		r.InvalidValue(typeName, "scoreboard entry type name", "does not match entry variant")
+	}
+	r.Varint64(&x.EntryID)
 	switch x.IdentityType {
+	case ScoreboardIdentityRemove:
+		objective := Optional[string]{}
+		if x.ObjectiveName != "" {
+			objective = Option(x.ObjectiveName)
+		}
+		OptionalFunc(r, &objective, r.String)
+		x.ObjectiveName, _ = objective.Value()
 	case ScoreboardIdentityEntity, ScoreboardIdentityPlayer:
+		r.String(&x.ObjectiveName)
+		r.Int32(&x.Score)
 		r.ActorUniqueID(&x.EntityUniqueID)
 	case ScoreboardIdentityFakePlayer:
+		r.String(&x.ObjectiveName)
+		r.Int32(&x.Score)
 		r.String(&x.DisplayName)
-	default:
-		r.UnknownEnumOption(x.IdentityType, "scoreboard entry identity type")
 	}
-}
-
-// ScoreRemoveEntry encodes/decodes a ScoreboardEntry x as an entry for removal.
-func ScoreRemoveEntry(r IO, x *ScoreboardEntry) {
-	r.Varint64(&x.EntryID)
-	r.String(&x.ObjectiveName)
-	r.Int32(&x.Score)
 }
 
 // ScoreboardIdentityEntry holds an entry to either associate an identity with one of the entries in a
@@ -64,15 +80,4 @@ type ScoreboardIdentityEntry struct {
 	// EntityUniqueID is the unique ID that the entry should be associated with. It is empty if the
 	// SetScoreboardIdentity packet is sent to remove associations with identities.
 	EntityUniqueID int64
-}
-
-// Marshal encodes/decodes a ScoreboardIdentityEntry.
-func (x *ScoreboardIdentityEntry) Marshal(r IO) {
-	r.Varint64(&x.EntryID)
-	r.ActorUniqueID(&x.EntityUniqueID)
-}
-
-// ScoreboardIdentityClearEntry encodes/decodes a ScoreboardIdentityEntry for clearing the entry.
-func ScoreboardIdentityClearEntry(r IO, x *ScoreboardIdentityEntry) {
-	r.Varint64(&x.EntryID)
 }

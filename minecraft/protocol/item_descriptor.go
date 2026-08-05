@@ -19,8 +19,6 @@ const (
 	ItemDescriptorDefault
 	ItemDescriptorMoLang
 	ItemDescriptorItemTag
-	ItemDescriptorDeferred
-	ItemDescriptorComplexAlias
 )
 
 // InvalidItemDescriptor represents an invalid item descriptor. This is usually sent by the vanilla server for empty
@@ -33,20 +31,17 @@ func (*InvalidItemDescriptor) Marshal(IO) {}
 // DefaultItemDescriptor represents an item descriptor for regular items. This is used for the significant majority of
 // items.
 type DefaultItemDescriptor struct {
-	// NetworkID is the numerical network ID of the item. This is sometimes a positive ID, and sometimes a
-	// negative ID, depending on what item it concerns.
-	NetworkID int16
+	// Name is the identifier of the item, such as minecraft:stone.
+	Name string
 	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
 	// other items it is simply an identifier of a variant of the item.
-	MetadataValue int16
+	MetadataValue int32
 }
 
 // Marshal ...
 func (x *DefaultItemDescriptor) Marshal(r IO) {
-	r.Int16(&x.NetworkID)
-	if x.NetworkID != 0 {
-		r.Int16(&x.MetadataValue)
-	}
+	r.String(&x.Name)
+	r.Varint32(&x.MetadataValue)
 }
 
 // MoLangItemDescriptor represents an item descriptor for items that use MoLang (e.g. behaviour packs).
@@ -54,13 +49,69 @@ type MoLangItemDescriptor struct {
 	// Expression represents the MoLang expression used to identify the item/it's associated tag.
 	Expression string
 	// Version represents the version of MoLang to use.
-	Version uint8
+	Version int16
 }
 
 // Marshal ...
 func (x *MoLangItemDescriptor) Marshal(r IO) {
 	r.String(&x.Expression)
-	r.Uint8(&x.Version)
+	r.Int16(&x.Version)
+}
+
+func itemDescriptorType(x ItemDescriptor) (uint8, string, bool) {
+	switch x.(type) {
+	case nil, *InvalidItemDescriptor:
+		return ItemDescriptorInvalid, "empty", true
+	case *DefaultItemDescriptor:
+		return ItemDescriptorDefault, "name", true
+	case *MoLangItemDescriptor:
+		return ItemDescriptorMoLang, "molang", true
+	case *ItemTagItemDescriptor:
+		return ItemDescriptorItemTag, "item_tag", true
+	default:
+		return 0, "", false
+	}
+}
+
+func itemDescriptorFromType(id uint8) (ItemDescriptor, bool) {
+	switch id {
+	case ItemDescriptorInvalid:
+		return &InvalidItemDescriptor{}, true
+	case ItemDescriptorDefault:
+		return &DefaultItemDescriptor{}, true
+	case ItemDescriptorMoLang:
+		return &MoLangItemDescriptor{}, true
+	case ItemDescriptorItemTag:
+		return &ItemTagItemDescriptor{}, true
+	default:
+		return nil, false
+	}
+}
+
+// StackRequestItemDescriptorCount reads/writes the Cereal item descriptor format used by auto-craft actions.
+func StackRequestItemDescriptorCount(r IO, x *ItemDescriptorCount) {
+	id, _, ok := itemDescriptorType(x.Descriptor)
+	if !ok {
+		r.UnknownEnumOption(x.Descriptor, "stack request item descriptor type")
+		return
+	}
+	variant := uint32(id)
+	r.Varuint32(&variant)
+	var legacyID = id
+	r.Uint8(&legacyID)
+	if variant != uint32(legacyID) {
+		r.InvalidValue(legacyID, "legacy item descriptor type", "does not match Cereal descriptor variant")
+	}
+	if x.Descriptor == nil || uint32(id) != variant {
+		var found bool
+		x.Descriptor, found = itemDescriptorFromType(legacyID)
+		if !found {
+			r.UnknownEnumOption(variant, "stack request item descriptor type")
+			return
+		}
+	}
+	x.Descriptor.Marshal(r)
+	IntegerFunc(&x.Count, r.Uint16)
 }
 
 // ItemTagItemDescriptor represents an item descriptor that uses item tagging. This should be used to reduce duplicative
@@ -73,32 +124,4 @@ type ItemTagItemDescriptor struct {
 // Marshal ...
 func (x *ItemTagItemDescriptor) Marshal(r IO) {
 	r.String(&x.Tag)
-}
-
-// DeferredItemDescriptor represents an item descriptor that uses a namespace and metadata value to identify the item.
-// There is no clear benefit of using this item descriptor.
-type DeferredItemDescriptor struct {
-	// Name is the name of the item, which is a name like 'minecraft:stick'.
-	Name string
-	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
-	// other items it is simply an identifier of a variant of the item.
-	MetadataValue int16
-}
-
-// Marshal ...
-func (x *DeferredItemDescriptor) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Int16(&x.MetadataValue)
-}
-
-// ComplexAliasItemDescriptor represents an item descriptor that uses a single name to identify the item. There is no
-// clear benefit of using this item descriptor and only seem to be used for specific recipes.
-type ComplexAliasItemDescriptor struct {
-	// Name is the name of the item, which is a name like 'minecraft:stick'.
-	Name string
-}
-
-// Marshal ...
-func (x *ComplexAliasItemDescriptor) Marshal(r IO) {
-	r.String(&x.Name)
 }

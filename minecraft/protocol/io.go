@@ -56,17 +56,15 @@ type IO interface {
 	EntityMetadata(x *EntityMetadata)
 	Item(x *ItemStack)
 	ItemInstance(i *ItemInstance)
-	ItemInstanceNew(i *ItemInstance)
+	StackRequestItem(x *StackRequestItem)
 	ItemDescriptorCount(i *ItemDescriptorCount)
 	StackRequestAction(x *StackRequestAction)
 	MaterialReducer(x *MaterialReducer)
-	Recipe(x *Recipe)
 	EventType(x *Event)
 	EventOrdinal(x *Event)
 	TransactionDataType(x *InventoryTransactionData)
 	PlayerInventoryAction(x *UseItemTransactionData)
 	GameRule(x *GameRule)
-	GameRuleLegacy(x *GameRule)
 	AbilityValue(x *any)
 	Bitset(x *Bitset, size int)
 	PackSetting(x *PackSetting)
@@ -280,6 +278,17 @@ func OptionalFunc[T any](r IO, x *Optional[T], f func(*T)) any {
 		f(&x.val)
 	}
 	return x
+}
+
+// DoubleOptionalFunc reads/writes an Optional[T] nested inside an always-present outer optional.
+func DoubleOptionalFunc[T any](r IO, x *Optional[T], f func(*T)) {
+	outer := true
+	r.Bool(&outer)
+	if outer {
+		OptionalFunc(r, x, f)
+	} else {
+		*x = Optional[T]{}
+	}
 }
 
 // OptionalFuncIO reads/writes an Optional[T].

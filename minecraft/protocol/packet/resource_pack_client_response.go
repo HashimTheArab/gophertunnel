@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	PackResponseRefused = iota + 1
+	PackResponseRefused = iota
 	PackResponseSendPacks
 	PackResponseAllPacksDownloaded
 	PackResponseCompleted
@@ -28,6 +28,34 @@ func (*ResourcePackClientResponse) ID() uint32 {
 }
 
 func (pk *ResourcePackClientResponse) Marshal(io protocol.IO) {
-	io.Uint8(&pk.Response)
-	protocol.FuncSliceUint16Length(io, &pk.PacksToDownload, io.String)
+	response := uint32(pk.Response)
+	io.Varuint32(&response)
+	if response > uint32(PackResponseCompleted) {
+		io.UnknownEnumOption(response, "resource pack response")
+	}
+	pk.Response = byte(response)
+
+	// A varuint32 length-prefixed string follows the response. Its contents are ignored by the client,
+	// so we write the readable name of the response for parity and discard whatever is read.
+	name := resourcePackResponseToString(pk.Response)
+	io.String(&name)
+
+	if pk.Response == PackResponseSendPacks {
+		protocol.FuncSlice(io, &pk.PacksToDownload, io.String)
+	}
+}
+
+func resourcePackResponseToString(x uint8) string {
+	switch x {
+	case PackResponseRefused:
+		return "cancel"
+	case PackResponseSendPacks:
+		return "downloading"
+	case PackResponseAllPacksDownloaded:
+		return "downloadingfinished"
+	case PackResponseCompleted:
+		return "resourcepackstackfinished"
+	default:
+		return "unknown"
+	}
 }

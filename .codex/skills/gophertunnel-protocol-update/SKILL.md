@@ -42,7 +42,13 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Treat PMMP as strong independent evidence when it matches Mojang docs or live bytes, even if Cloudburst differs.
 - For `map<K,V>` schemas, check the byte layout. A gophertunnel slice is fine if each entry serializes `key` then `value` in map order.
 - For optional fields, preserve exact ordinal order. Missing an optional marker shifts all later fields.
+- Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
+  Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
+  but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
+  `serverId` each carry an optional marker; only `experienceId`, `experienceName`, and `creatorId` are required.
+  The containing gathering configuration is independently optional in Transfer and server join information.
 - Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing; read and validate both when decoding unless the exact target codec documents a reserved constant that is intentionally ignored.
+- The selector and the type byte it precedes are two different numberings. The selector indexes the variant list, which skips types that are no longer sent, while the type byte still counts them. Work out the mapping between the two and check it against the full enum before assuming they are equal; assuming so rejects every type above the first skipped one, and would read one as the type below it. Types no longer sent still occupy their numbers in the type byte, so keep them.
 - When an outer optional is absent, do not consume its inner marker. Clear the destination value. More generally, every absent branch must clear stale slices, hashes, optionals, and IDs because packet structs may be reused.
 - For `Compression` on enum/integer fields, the logical Go type may remain small (`byte`, enum) while the wire encoding uses varint/varuint.
 - Distinguish actor unique IDs from runtime IDs:
@@ -57,10 +63,12 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
   unsigned runtime encoding. In gophertunnel, model it as `Optional[uint64]` and marshal with `Varuint64`, not
   signed `Varint64`.
 - For `oneOf`/variant selectors, encode the selector as documented, usually varuint, not as a bool unless the source explicitly says bool.
+- Do not infer a `oneOf` selector from a field label or a broken reference implementation. For sound-data updates, verify the full selector range and every payload ordinal against the exact schema: the server sound handle is a fixed `uint64`, the action selector is a compressed `uint32`, and Fade carries duration before target volume. A serializer that always writes Stop or reverses Fade fields is evidence of an implementation bug, not a compatibility requirement.
 - For enum sentinels like `UNDEFINED`, check whether they existed historically at changing numeric indexes before calling them a new semantic value.
 - For contiguous protocol constants, prefer the surrounding gophertunnel style. `iota` is fine for dense, ordered wire-value ranges when every value is consecutive and future additions can be inserted in order.
 - Keep non-contiguous or out-of-band protocol values explicit. Use hex for flag-like/high-bit values such as `0x8000000`, and separate them from the contiguous `iota` block with a blank line.
-- Do not preserve backward-compatibility paths in a single-version protocol update. Remove old/new wire branches, fallback serializers, deprecated source aliases, parallel representations, and inert fields. Keep legacy-named fields only when the exact target still carries them on the wire. Add multi-version behavior only when the user explicitly requests it.
+- Never preserve a legacy path or backward-compatibility path, for any reason. The fork targets exactly one protocol. Remove old/new wire branches, fallback serializers, deprecated source aliases, parallel representations, and inert fields outright. Do not add multi-version behavior, and do not keep a branch because an older version needed it or a reference implementation still has one — a branch on a flag whose presence the wire already states is a legacy path, not a codec. Keep a legacy-named field only when the exact target still carries it on the wire, and rename it to what it is.
+- Only change how a field is sent when there is positive evidence the target changed it. A field the previous version encoded one way is presumed unchanged; re-typing it on a hunch is a silent regression, because most re-typings are the same byte length for the values the field actually holds and so never desync. By the same token, a field that changes width keeps its component and field order unless the source says otherwise.
 
 ## Codebase Consistency
 
@@ -78,7 +86,7 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 2. Gather references before editing. Capture commit SHAs or stable links for Mojang, Cloudburst, PMMP, and any LeviLamina/BDS evidence used.
 3. Diff the current gophertunnel files against source evidence packet by packet.
 4. Make the smallest coherent code change that fixes the target protocol. Avoid unrelated refactors and generated churn, but remove patch-introduced duplication or compatibility scaffolding before review.
-5. Respect user-specific constraints. For Hashim's gophertunnel work, use normal follow-up commits, do not amend unless asked, do not add "committed by Codex", and do not add test files when the user says tests are unnecessary.
+5. Respect user-specific constraints. For Hashim's gophertunnel work, use normal follow-up commits, do not amend unless asked, do not add "committed by Codex", and do not add new test files when the user says tests are unnecessary. Mechanically migrate existing fixtures only when a required API change would otherwise leave the branch uncompilable.
 6. Run targeted verification first:
    - `go test ./minecraft/protocol`
    - `go test ./minecraft/protocol/packet`
@@ -87,7 +95,7 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
    If the user forbids test files in the PR, temporary local regression tests are still useful: watch them fail, make them pass, then delete them before staging.
 7. If Lunar or another downstream project consumes a pseudo-version branch, verify which branch/commit its `go.mod` points at before claiming live testing will include the new fix.
 8. Push the requested branch only after tests pass and status is understood.
-9. Before staging, verify `git diff --name-only -- '*_test.go' go.mod go.sum` is empty when tests and dependency changes are out of scope.
+9. Before staging, inspect `git diff --name-only -- '*_test.go' go.mod go.sum`. When tests and dependency changes are out of scope, require it to be empty except for unavoidable mechanical migrations of existing fixtures; never add new test files under a no-tests constraint.
 
 ## Review Checklist
 
@@ -95,6 +103,7 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Check field order, signedness, widths, selectors, legacy copies, optional nesting, slice lengths, and absent-state clearing.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
+- When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule.
 - Treat bot findings as claims: validate them against the exact target. Fix real issues; reply with source-backed rebuttals for false positives and resolve the thread.
 - After every push, wait for refreshed CI and review bots. Finish only when checks pass and no current unresolved actionable threads remain.
 

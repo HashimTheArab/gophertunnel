@@ -37,7 +37,13 @@ func (*PlayerUpdateEntityOverrides) ID() uint32 {
 func (pk *PlayerUpdateEntityOverrides) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.EntityUniqueID)
 	io.Varuint32(&pk.PropertyIndex)
+	variant := uint32(pk.Type)
+	io.Varuint32(&variant)
 	io.Uint8(&pk.Type)
+	if variant != uint32(pk.Type) {
+		io.InvalidValue(pk.Type, "entity override type", "does not match the variant it was sent under")
+		return
+	}
 	if pk.Type == PlayerUpdateEntityOverridesTypeInt {
 		io.Int32(&pk.IntValue)
 	} else if pk.Type == PlayerUpdateEntityOverridesTypeFloat {
