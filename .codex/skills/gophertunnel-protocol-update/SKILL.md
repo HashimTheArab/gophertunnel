@@ -79,8 +79,18 @@ the generated output's version metadata after building it.
   `serverId` each carry an optional marker; only `experienceId`, `experienceName`, and `creatorId` are required.
   The containing gathering configuration is independently optional in Transfer and server join information.
 - Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing; read and validate both when decoding unless the exact target codec documents a reserved constant that is intentionally ignored.
+- Distinguish duplicated metadata from reserved padding. If the exact writer emits a constant (commonly signed-varint
+  zero) and the exact reader merely consumes and discards it, keep a local `reserved` variable so both directions stay
+  aligned; do not expose it as packet state, derive it from another field, or validate it. Name it `reserved`, not
+  `legacyType`, unless evidence gives it real legacy semantics.
+- Apply the same rule to ignored compatibility names or selectors: consume them in the correct width and order, but do
+  not invent equality validation when the exact-version reader intentionally discards them. Extra strictness is a wire
+  compatibility change and can reject packets accepted by the target game.
 - The selector and the type byte it precedes are two different numberings. The selector indexes the variant list, which skips types that are no longer sent, while the type byte still counts them. Work out the mapping between the two and check it against the full enum before assuming they are equal; assuming so rejects every type above the first skipped one, and would read one as the type below it. Types no longer sent still occupy their numbers in the type byte, so keep them.
 - When an outer optional is absent, do not consume its inner marker. Clear the destination value. More generally, every absent branch must clear stale slices, hashes, optionals, and IDs because packet structs may be reused.
+- Apply the same reuse rule to variants and conditional payloads: after decoding a selector, clear every inactive value
+  field, and when an entry takes a short form (for example remove/hidden), reconstruct or zero the inactive portion of
+  the struct. A successful decode must not retain state from the previous packet instance.
 - For `Compression` on enum/integer fields, the logical Go type may remain small (`byte`, enum) while the wire encoding uses varint/varuint.
 - Distinguish actor unique IDs from runtime IDs:
   - actor unique ID: signed `varint64` zigzag
@@ -115,9 +125,21 @@ the generated output's version metadata after building it.
 - Use existing `IO`, `Marshal`, `Slice`, `FuncSlice`, and optional helpers instead of parallel reader/writer trees or
   manual equivalents. If the wire shape is `bool + value-if-true`, the default representation is `Optional[T]` plus
   `OptionalFunc`; require exact-version evidence before writing a custom presence branch.
+- When a Go integer type differs from its wire integer type, use the existing generic `IntegerFunc` conversion helper
+  instead of a hand-written temporary/cast/copy-back sequence. Keep an explicit local only for a reserved/discarded
+  wire field that has no corresponding struct state.
+- Represent an exact fixed wire cardinality with an array such as `[4]color.RGBA`, not a slice plus runtime length
+  validation. Use a slice only when the wire carries a variable count.
 - Put stable, direction-agnostic wire primitives in `minecraft/protocol`, even when first discovered in one packet. For example, nested Cereal optionals belong beside `OptionalFunc` as `DoubleOptionalFunc`.
+- Put a reusable protocol data type's own codec on that type as an exported `Marshal(IO)` method, then use `Single`,
+  `Slice`, or the matching generic helper from packets. Do not leave a packet-bound private callback for a wire shape
+  that belongs entirely to a public `minecraft/protocol` struct. Export the stable type method, not an arbitrary helper
+  function for callers to invoke manually.
 - Keep packet semantics private: selector-to-name conversions, one-packet union validation, recipe-family implementation helpers, and format-specific adapters should not become public APIs merely to shorten a packet file.
 - Audit every new private helper before PR closeout. Export it only when the abstraction is protocol-generic and its name/contract remain meaningful outside the originating packet; otherwise keep it local.
+- Prefer one shared internal representation when reader and writer logic repeat the same fields (for example item user
+  data). Small conversion functions at the two public type boundaries are better than duplicating the binary codec, but
+  do not export the internal carrier or preserve two independently mutable public representations.
 - Remove dead lookups, duplicated codecs, inert fields, transitional caches, and write-then-reconstruct heuristics introduced by a broad patch.
 
 ## Implementation Workflow
@@ -145,6 +167,10 @@ the generated output's version metadata after building it.
   the enum, or both. Never infer the wire representation from the presence of an enum/type map.
 - Audit every new `Bool`-guarded branch. Replace it with the existing optional helper unless the bool is proven to be
   duplicated discriminator metadata or has a different wire shape.
+- Audit every local numeric temporary. Replace ordinary logical-to-wire conversions with `IntegerFunc`; retain only
+  documented reserved/discarded fields and label them accurately.
+- Audit every conditional/variant decode for stale-state clearing and every fixed-count field for an array-shaped Go
+  API.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
 - When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule.
