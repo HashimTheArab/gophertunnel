@@ -1,21 +1,12 @@
 package minecraft
 
-const (
-	// DefaultResourcePackMaxInFlightChunks keeps resource pack downloads
-	// sequential for compatibility with clients and servers that expect one
-	// request at a time.
-	DefaultResourcePackMaxInFlightChunks = 1
-)
+// DefaultResourcePackMaxInFlightChunks matches the vanilla client request window.
+const DefaultResourcePackMaxInFlightChunks = 100
 
-// ResourcePackDownloadConfig controls resource pack downloads performed by a
-// Dialer.
-//
-// MaxInFlightChunks is the maximum number of chunk requests that may be
-// outstanding at once. A value less than one uses
-// DefaultResourcePackMaxInFlightChunks. The default is intentionally
-// sequential; callers that control both ends of the connection may opt into a
-// larger bounded window.
+// ResourcePackDownloadConfig controls resource pack downloads performed by a Dialer.
 type ResourcePackDownloadConfig struct {
+	// MaxInFlightChunks is the maximum number of outstanding chunk requests. Values below one use the
+	// vanilla default.
 	MaxInFlightChunks int
 }
 
