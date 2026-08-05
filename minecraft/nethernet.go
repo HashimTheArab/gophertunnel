@@ -177,7 +177,7 @@ type signalingOwnedConn struct {
 
 func (c *signalingOwnedConn) Close() error {
 	connErr := c.Conn.Close()
-	signalingErr := c.signalingOwner.close()
+	signalingErr := c.close()
 	if connErr != nil {
 		return connErr
 	}
@@ -191,7 +191,7 @@ type signalingOwnedNetherNetConn struct {
 
 func (c *signalingOwnedNetherNetConn) Close() error {
 	connErr := c.Conn.Close()
-	signalingErr := c.signalingOwner.close()
+	signalingErr := c.close()
 	if connErr != nil {
 		return connErr
 	}
