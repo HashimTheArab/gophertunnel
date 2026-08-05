@@ -19,7 +19,7 @@ type resourcePackQueue struct {
 	currentOffset   uint64
 
 	packAmount       int
-	downloadingPacks map[string]downloadingPack
+	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
 }
 
@@ -32,9 +32,8 @@ type downloadingPack struct {
 	newFrag    chan resourcePackChunk
 	contentKey string
 
-	mu        *sync.Mutex
+	mu        sync.Mutex
 	requested map[uint32]struct{}
-	received  map[uint32]struct{}
 }
 
 type resourcePackChunk struct {

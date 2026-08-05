@@ -388,7 +388,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
-		resourcePackDownload: resolveResourcePackDownloadConfig(ResourcePackDownloadConfig{}),
+		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
@@ -1528,7 +1528,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	totalPacks := len(pk.TexturePacks)
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       totalPacks,
-		downloadingPacks: make(map[string]downloadingPack),
+		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
@@ -1565,11 +1565,10 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = downloadingPack{
+		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
 			contentKey: pack.ContentKey,
-			mu:         new(sync.Mutex),
 		}
 	}
 
@@ -1816,8 +1815,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	}
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
-	pack.received = make(map[uint32]struct{})
-	conn.packQueue.awaitingPacks[id] = &pack
+	conn.packQueue.awaitingPacks[id] = pack
 
 	idCopy := pk.UUID
 	go func() {
@@ -1852,7 +1850,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		if !fillWindow() {
 			return
 		}
-		for received < pack.chunkCount {
+		for nextWrite < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
@@ -1920,12 +1918,7 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 		pack.mu.Unlock()
 		return fmt.Errorf("received unrequested resource pack chunk %v", pk.ChunkIndex)
 	}
-	if _, ok := pack.received[pk.ChunkIndex]; ok {
-		pack.mu.Unlock()
-		return fmt.Errorf("received duplicate resource pack chunk %v", pk.ChunkIndex)
-	}
 	delete(pack.requested, pk.ChunkIndex)
-	pack.received[pk.ChunkIndex] = struct{}{}
 	pack.mu.Unlock()
 
 	select {

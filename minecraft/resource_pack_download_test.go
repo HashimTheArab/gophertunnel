@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ func TestResourcePackDownloadConfigNormalized(t *testing.T) {
 		{name: "custom", config: ResourcePackDownloadConfig{MaxInFlightChunks: 7}, want: 7},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := resolveResourcePackDownloadConfig(test.config).MaxInFlightChunks; got != test.want {
+			if got := test.config.normalized().MaxInFlightChunks; got != test.want {
 				t.Fatalf("MaxInFlightChunks = %d, want %d", got, test.want)
 			}
 		})
@@ -41,9 +40,9 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	defer conn.abort(nil)
 
 	const id = "550e8400-e29b-41d4-a716-446655440000"
-	pack := downloadingPack{buf: new(bytes.Buffer), size: 200, mu: &sync.Mutex{}}
+	pack := &downloadingPack{buf: new(bytes.Buffer), size: 200}
 	conn.packQueue = &resourcePackQueue{
-		downloadingPacks: map[string]downloadingPack{id: pack},
+		downloadingPacks: map[string]*downloadingPack{id: pack},
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{
