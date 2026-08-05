@@ -22,6 +22,13 @@ Do not pull changes from earlier protocol updates by accident. Cloudburst often 
 
 Pin every reference to a commit. If Mojang's current generated schema names a different protocol or Minecraft version than the target, disclose the conflict and use the exact-version implementation for wire behavior; do not silently mix releases.
 
+Determine a documentation snapshot's version from its contents, not its filename, branch, pull-request title, or release
+label. Check the changelog header and the generated schemas' `x-minecraft-version` and `x-protocol-version`. If these
+disagree with the filename, classify the snapshot by its internal metadata. For example, a file named
+`changelog_2168_07_07_26.md` whose header says protocol 2169 and whose schemas say Minecraft 1.26.50/protocol 2169 is
+2169 evidence, not exact 2168 evidence. Shared changes in that snapshot do not prove that its additional fields shipped
+in the earlier protocol; verify each difference against an exact-version serializer or live build.
+
 ### bpd-fixer
 
 Use [TwistedAsylumMC/bpd-fixer](https://github.com/TwistedAsylumMC/bpd-fixer) as a corrected view of Mojang schemas, not as a replacement for exact-version codec evidence. After selecting the matching `bedrock-protocol-docs` ref:
@@ -34,6 +41,8 @@ npm run check
 ```
 
 Inspect `output/json`, especially `x-serialization-options`. The `+double-optional` marker means `bool + (bool + value-if-true)`. Stale overrides failing after a protocol bump are evidence to investigate, not errors to bypass.
+`bpd-fixer` corrects schema structure; it does not make a mismatched source snapshot match the target release. Recheck
+the generated output's version metadata after building it.
 
 ## Cross-Check Rules
 
@@ -140,7 +149,16 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
 - When an independent Opus audit is requested, run it non-interactively with `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they would make print mode hang, and give the audit the committed diff plus exact-version evidence. Treat its findings as claims under the same source-validation rule.
 - Treat bot findings as claims: validate them against the exact target. Fix real issues; reply with source-backed rebuttals for false positives and resolve the thread.
-- After every push, wait for refreshed CI and review bots. Finish only when checks pass and no current unresolved actionable threads remain.
+- After posting review-thread replies, verify they are public and submitted. A GraphQL reply node with
+  `pullRequestReview: null` that returns 404 from the REST pull-review-comment endpoint may be a viewer-only pending
+  draft even when the pending-review query is empty. Submit the containing review, or delete the draft and repost it
+  through the REST reply endpoint. Resolving its thread does not publish it.
+- Before declaring review closeout, compare every addressed original review-comment ID with the public REST comments'
+  `in_reply_to_id` values, check that no pending review remains, and then confirm there are no current unresolved
+  actionable threads. A formal `CHANGES_REQUESTED` decision may remain until the reviewer re-reviews even after every
+  thread and reply is complete.
+- After every push, wait for refreshed CI and review bots. Finish only when checks pass and the review closeout checks
+  above are clean.
 
 ## Debugging Decode Errors
 
