@@ -13,7 +13,7 @@ import (
 	"github.com/df-mc/go-nethernet"
 )
 
-func TestNetherNetDialContextOwnsDialedSignaling(t *testing.T) {
+func TestNetherNetDialContextTransfersDialedSignalingOwnership(t *testing.T) {
 	t.Parallel()
 
 	signaling := newTestNetherNetSignaling()
@@ -27,12 +27,15 @@ func TestNetherNetDialContextOwnsDialedSignaling(t *testing.T) {
 			}
 			return signaling, nil
 		},
-		dial: func(_ context.Context, address string, got nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
+		dial: func(_ context.Context, address string, got nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
 			if address != "remote-network-id" {
 				t.Fatalf("dial address = %q, want remote-network-id", address)
 			}
 			if got != signaling {
 				t.Fatal("dial did not receive the signaling connection")
+			}
+			if !dialer.OwnSignaling {
+				t.Fatal("dialer did not take ownership of the per-dial signaling connection")
 			}
 			return client, nil
 		},
@@ -42,14 +45,8 @@ func TestNetherNetDialContextOwnsDialedSignaling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContext: %v", err)
 	}
-	if signaling.closeCount() != 0 {
-		t.Fatal("signaling closed before the transport")
-	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
-	}
-	if signaling.closeCount() != 1 {
-		t.Fatalf("signaling close count = %d, want 1", signaling.closeCount())
 	}
 }
 
@@ -66,9 +63,12 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 		DialSignaling: func(context.Context, string) (SignalingConn, error) {
 			return dialed, nil
 		},
-		dial: func(_ context.Context, _ string, got nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
+		dial: func(_ context.Context, _ string, got nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
 			if got != dialed {
 				t.Fatal("dial did not prefer the per-dial signaling connection")
+			}
+			if !dialer.OwnSignaling {
+				t.Fatal("dialer did not take ownership of the per-dial signaling connection")
 			}
 			return client, nil
 		},
@@ -84,12 +84,9 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 	if shared.closeCount() != 0 {
 		t.Fatalf("shared signaling close count = %d, want 0", shared.closeCount())
 	}
-	if dialed.closeCount() != 1 {
-		t.Fatalf("dialed signaling close count = %d, want 1", dialed.closeCount())
-	}
 }
 
-func TestNetherNetDialContextClosesDialedSignalingOnFailure(t *testing.T) {
+func TestNetherNetDialContextPropagatesDialFailure(t *testing.T) {
 	t.Parallel()
 
 	signaling := newTestNetherNetSignaling()
@@ -106,9 +103,6 @@ func TestNetherNetDialContextClosesDialedSignalingOnFailure(t *testing.T) {
 	_, err := network.DialContext(context.Background(), "remote-network-id")
 	if !errors.Is(err, dialErr) {
 		t.Fatalf("DialContext error = %v, want %v", err, dialErr)
-	}
-	if signaling.closeCount() != 1 {
-		t.Fatalf("signaling close count = %d, want 1", signaling.closeCount())
 	}
 }
 
@@ -128,9 +122,6 @@ func TestNetherNetDialContextRejectsNilTransport(t *testing.T) {
 	_, err := network.DialContext(context.Background(), "remote-network-id")
 	if err == nil {
 		t.Fatal("DialContext accepted a nil transport connection")
-	}
-	if signaling.closeCount() != 1 {
-		t.Fatalf("signaling close count = %d, want 1", signaling.closeCount())
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -53,7 +52,6 @@ type NetherNet struct {
 // packet methods used by Encoder and Decoder, even though DialContext returns it
 // as a net.Conn.
 var _ packet.TransportCapabilities = (*nethernet.Conn)(nil)
-var _ packet.TransportCapabilities = (*signalingOwnedNetherNetConn)(nil)
 
 // DialContext ...
 func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, error) {
@@ -85,7 +83,6 @@ func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address stri
 
 func (n NetherNet) dialContext(ctx context.Context, address string, identity *nethernet.Identity) (net.Conn, error) {
 	signaling := n.Signaling
-	var signalingOwner io.Closer
 	if n.DialSignaling != nil {
 		conn, err := n.DialSignaling(ctx, address)
 		if err != nil {
@@ -95,7 +92,7 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 			return nil, errors.New("minecraft: NetherNet.DialContext: DialSignaling returned nil")
 		}
 		signaling = conn
-		signalingOwner = conn
+		n.Dialer.OwnSignaling = true
 	}
 	if signaling == nil {
 		return nil, errors.New("minecraft: NetherNet.DialContext: Signaling is nil")
@@ -114,19 +111,10 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 	}
 	conn, err := dial(ctx, address, signaling, n.Dialer)
 	if err != nil {
-		if signalingOwner != nil {
-			_ = signalingOwner.Close()
-		}
 		return nil, err
 	}
 	if conn == nil {
-		if signalingOwner != nil {
-			_ = signalingOwner.Close()
-		}
 		return nil, errors.New("minecraft: NetherNet.DialContext: dial returned nil connection")
-	}
-	if signalingOwner != nil {
-		return ownSignaling(conn, signalingOwner), nil
 	}
 	return conn, nil
 }
@@ -145,58 +133,4 @@ func (n NetherNet) Listen(string) (NetworkListener, error) {
 		n.ListenConfig.Log = n.Log
 	}
 	return n.ListenConfig.Listen(n.Signaling)
-}
-
-type signalingOwner struct {
-	closer io.Closer
-	once   sync.Once
-}
-
-func (o *signalingOwner) close() error {
-	var err error
-	o.once.Do(func() {
-		err = o.closer.Close()
-	})
-	return err
-}
-
-func ownSignaling(conn net.Conn, signaling io.Closer) net.Conn {
-	owner := &signalingOwner{closer: signaling}
-	if nethernetConn, ok := conn.(*nethernet.Conn); ok {
-		owned := &signalingOwnedNetherNetConn{Conn: nethernetConn, signalingOwner: owner}
-		go func() {
-			<-nethernetConn.Context().Done()
-			_ = owner.close()
-		}()
-		return owned
-	}
-	return &signalingOwnedConn{Conn: conn, signalingOwner: owner}
-}
-
-type signalingOwnedConn struct {
-	net.Conn
-	*signalingOwner
-}
-
-func (c *signalingOwnedConn) Close() error {
-	connErr := c.Conn.Close()
-	signalingErr := c.close()
-	if connErr != nil {
-		return connErr
-	}
-	return signalingErr
-}
-
-type signalingOwnedNetherNetConn struct {
-	*nethernet.Conn
-	*signalingOwner
-}
-
-func (c *signalingOwnedNetherNetConn) Close() error {
-	connErr := c.Conn.Close()
-	signalingErr := c.close()
-	if connErr != nil {
-		return connErr
-	}
-	return signalingErr
 }
