@@ -254,7 +254,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
 	conn.downloadResourcePack = d.DownloadResourcePack
-	conn.resourcePackDownload = resolveResourcePackDownloadConfig(d.ResourcePackDownload)
+	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.cacheEnabled = d.EnableClientCache
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets

@@ -10,7 +10,7 @@ type ResourcePackDownloadConfig struct {
 	MaxInFlightChunks int
 }
 
-func resolveResourcePackDownloadConfig(config ResourcePackDownloadConfig) ResourcePackDownloadConfig {
+func (config ResourcePackDownloadConfig) normalized() ResourcePackDownloadConfig {
 	if config.MaxInFlightChunks < 1 {
 		config.MaxInFlightChunks = DefaultResourcePackMaxInFlightChunks
 	}
