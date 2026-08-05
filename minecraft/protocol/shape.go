@@ -295,9 +295,6 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	OptionalFunc(io, &x.Colour, io.BEARGB)
 	OptionalFunc(io, &x.DimensionID, io.Varint32)
 	OptionalFunc(io, &x.AttachedToEntityID, func(id *int64) {
-		if *id < 0 {
-			io.InvalidValue(*id, "primitive shape attached entity unique ID", "must not be negative")
-		}
 		uniqueID := uint64(*id)
 		ActorUniqueIDVaruint64(io, &uniqueID)
 		*id = int64(uniqueID)
