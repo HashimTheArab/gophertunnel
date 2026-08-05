@@ -28,7 +28,7 @@ func TestPrimitiveShapeAttachedEntityIDProtocol2168Wire(t *testing.T) {
 
 	shape := &PrimitiveShape{
 		NetworkID:          1,
-		AttachedToEntityID: Option(uint64(300)),
+		AttachedToEntityID: Option(int64(300)),
 		ExtraShapeData:     &LastShape{},
 	}
 	buf := bytes.NewBuffer(nil)

@@ -262,10 +262,10 @@ type PrimitiveShape struct {
 	NetworkID uint64
 	// DimensionID is the optional dimension ID where the shape is rendered.
 	DimensionID Optional[int32]
-	// AttachedToEntityID is the optional runtime ID of the entity the shape is attached to. The field holds a runtime
-	// ID but keeps the actor unique ID wire type: PrimitiveShapeDataPayload types it as an ActorUniqueID, a signed
-	// varint, while documenting the value as "Runtime ID of the entity this shape is attached to".
-	AttachedToEntityID Optional[uint64]
+	// AttachedToEntityID is the optional runtime ID of the entity the shape is attached to. It is signed because
+	// PrimitiveShapeDataPayload types the field as an ActorUniqueID, a signed varint, while documenting the value it
+	// carries as "Runtime ID of the entity this shape is attached to".
+	AttachedToEntityID Optional[int64]
 	// Type is the type of the shape.
 	// If not set, the set shape will be cleared.
 	Type Optional[uint8]
@@ -296,10 +296,6 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	OptionalFunc(io, &x.MaxRenderDistance, io.Float32)
 	OptionalFunc(io, &x.Colour, io.BEARGB)
 	OptionalFunc(io, &x.DimensionID, io.Varint32)
-	OptionalFunc(io, &x.AttachedToEntityID, func(id *uint64) {
-		signed := int64(*id)
-		ActorRuntimeIDInt64(io, &signed)
-		*id = uint64(signed)
-	})
+	OptionalFunc(io, &x.AttachedToEntityID, func(id *int64) { ActorRuntimeIDInt64(io, id) })
 	io.ShapeData(&x.ExtraShapeData)
 }
