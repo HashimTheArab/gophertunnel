@@ -33,7 +33,7 @@ var wireGolden = map[string]string{
 }
 
 func wireGoldenFixtures() map[string]Packet {
-	inputData := protocol.NewInputFlags(inputFlagCount)
+	inputData := NewPlayerAuthInputFlags()
 	inputData.Set(InputFlagClientPredictedVehicle)
 	input := &PlayerAuthInput{
 		InputData:              inputData,
