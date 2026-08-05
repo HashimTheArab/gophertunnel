@@ -34,9 +34,9 @@ func TestPrimitiveShapeAttachedEntityIDProtocol2168Wire(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	shape.Marshal(NewWriter(buf, 0))
 
-	// Protocol 2168 writes the attached actor runtime ID as an unsigned varint.
-	// The eight zero bytes are the preceding absent optional shape fields.
-	want := []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xac, 0x02, 0}
+	// The attached entity ID carries a runtime ID but keeps the actor unique ID wire type, so 300 goes out as the
+	// zigzag varint 600. The eight zero bytes are the preceding absent optional shape fields.
+	want := []byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xd8, 0x04, 0}
 	if got := buf.Bytes(); !bytes.Equal(got, want) {
 		t.Fatalf("PrimitiveShape wire bytes = %x, want %x", got, want)
 	}
