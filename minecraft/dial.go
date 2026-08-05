@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -135,6 +136,13 @@ type Dialer struct {
 	KeepXBLIdentityData bool
 }
 
+func netherNetIdentityProvider(issuer *url.URL) string {
+	if issuer == nil {
+		return ""
+	}
+	return issuer.JoinPath().String()
+}
+
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
 // "raknet". A Conn is returned which may be used to receive packets from and send packets to.
 //
@@ -217,7 +225,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
 		}
-		identityProvider = e.Issuer.String()
+		identityProvider = netherNetIdentityProvider(e.Issuer)
 		verifier, err = e.VerifierContext(ctx)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
