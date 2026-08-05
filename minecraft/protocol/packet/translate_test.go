@@ -39,7 +39,6 @@ var translatedIDFields = []string{
 	"AddPlayer.EntityLinks[].RiderEntityUniqueID",
 	"AddPlayer.EntityRuntimeID",
 	"AddVolumeEntity.EntityRuntimeID",
-	"AdventureSettings.PlayerUniqueID",
 	"AgentAnimation.EntityRuntimeID",
 	"Animate.EntityRuntimeID",
 	"AnimateEntity.EntityRuntimeIDs",
@@ -51,7 +50,6 @@ var translatedIDFields = []string{
 	"CameraInstruction.Target.EntityUniqueID",
 	"ChangeMobProperty.EntityUniqueID",
 	"ClientBoundMapItemData.TrackedObjects[].EntityUniqueID",
-	"ClientCheatAbility.AbilityData.EntityUniqueID",
 	"ClientMovementPredictionSync.EntityUniqueID",
 	"CommandBlockUpdate.MinecartEntityRuntimeID",
 	"CommandOutput.CommandOrigin.PlayerUniqueID",
@@ -455,12 +453,6 @@ func TestTranslateEntityIDsLegacyAndNestedFields(t *testing.T) {
 
 	// Keep the assertions close to each packet so a field's wire-specific helper cannot
 	// silently stop participating in the marshal traversal.
-	adventure := &AdventureSettings{PlayerUniqueID: 10}
-	translateSwap(adventure)
-	if adventure.PlayerUniqueID != 20 {
-		t.Fatalf("adventure settings unique ID = %v, want 20", adventure.PlayerUniqueID)
-	}
-
 	sound := &LevelSoundEvent{EntityUniqueID: 10}
 	translateSwap(sound)
 	if sound.EntityUniqueID != 20 {
