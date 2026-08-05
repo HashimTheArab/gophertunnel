@@ -1250,11 +1250,18 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		for nextRequest < pack.chunkCount && nextRequest < uint32(window) {
-			if err := requestChunk(nextRequest); err != nil {
-				return
+		fillWindow := func() bool {
+			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < uint64(window) {
+				if err := requestChunk(nextRequest); err != nil {
+					return false
+				}
+				nextRequest++
 			}
-			nextRequest++
+			return true
+		}
+
+		if !fillWindow() {
+			return
 		}
 		for received < pack.chunkCount {
 			select {
@@ -1263,22 +1270,14 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			case frag := <-pack.newFrag:
 				received++
 				fragments[frag.index] = frag.data
-				for {
-					data, ok := fragments[nextWrite]
-					if !ok {
-						break
-					}
-					// Write fragments in index order so the final archive remains
-					// contiguous even when responses arrive out of order.
+				// Write the contiguous prefix in index order.
+				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
 					_, _ = pack.buf.Write(data)
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
-				if nextRequest < pack.chunkCount {
-					if err := requestChunk(nextRequest); err != nil {
-						return
-					}
-					nextRequest++
+				if !fillWindow() {
+					return
 				}
 			}
 		}
