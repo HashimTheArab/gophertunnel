@@ -39,7 +39,15 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 
 - Treat Cloudburst read and write paths as separate evidence. If they differ, do not blindly copy the write path; for gophertunnel decode correctness, the read path and live payloads are usually more important.
 - Treat Mojang docs as high-value for field order and logical types, but not infallible. Confirm with at least one implementation or live bytes for risky changes.
+- Read a schema field's name, prose description, `$ref`, serialization metadata, and changelog as separate evidence. If
+  the description or field name conflicts with `$ref`, do not automatically privilege the reference. Trace the field
+  back to its first appearance, then check an independent exact-version serializer or live bytes. A generated-schema
+  refactor that carries the same contradiction from DOT into JSON is not evidence that the wire type changed.
 - Treat PMMP as strong independent evidence when it matches Mojang docs or live bytes, even if Cloudburst differs.
+- Trace the exact serializer registered by the target codec, including inherited serializers and helpers. Do not infer
+  wire encoding from a nearby enum map, type registry, or newer serializer alone: a registry may only translate a value
+  to its serialized name. For protocol 2168, `LevelSoundEvent` still writes that name as a string even though Cloudburst
+  supplies an exact-version sound-event map.
 - For `map<K,V>` schemas, check the byte layout. A gophertunnel slice is fine if each entry serializes `key` then `value` in map order.
 - For optional fields, preserve exact ordinal order. Missing an optional marker shifts all later fields.
 - A wire presence bool that directly guards a value is an `Optional[T]` field. Marshal it with `OptionalFunc`,
@@ -52,6 +60,10 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Derive presence from an action/type discriminator only when the exact-version writer defines the bool as duplicated
   discriminator metadata rather than an independent optional. On read, validate that duplicated values agree. Do not
   use this exception for ordinary schema optionals.
+- When the exact read path accepts a presence marker independently, represent that state with `Optional[T]` even if a
+  reference writer normally chooses presence from another field. Do not collapse it into a plain value plus a custom
+  action check unless the marker is proven to be duplicated discriminator metadata. This applies equally to nested
+  structs such as map entries, scoreboard identity entries, and inventory transaction payloads.
 - Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
   Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
   but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
@@ -65,6 +77,8 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
   - actor unique ID: signed `varint64` zigzag
   - runtime entity ID: unsigned `varuint64`
   Use live bytes to resolve ambiguity.
+- Resolve the semantic identifier before choosing the Go signedness or codec. Names such as `Attached To Entity ID` are
+  insufficient by themselves; reconcile the field description, owning C++/implementation type, and actual serializer.
 - PrimitiveShapes `PrimitiveShapeDataPayload.Attached To Entity ID` is a runtime actor ID on the wire. Mojang
   `bedrock-protocol-docs` has historically described it as runtime ID while linking the schema node to
   `ActorUniqueID`; trust the runtime-ID wording plus independent implementation/BDS evidence here. PMMP encodes
@@ -81,6 +95,9 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 - Keep non-contiguous or out-of-band protocol values explicit. Use hex for flag-like/high-bit values such as `0x8000000`, and separate them from the contiguous `iota` block with a blank line.
 - Never preserve a legacy path or backward-compatibility path, for any reason. The fork targets exactly one protocol. Remove old/new wire branches, fallback serializers, deprecated source aliases, parallel representations, and inert fields outright. Do not add multi-version behavior, and do not keep a branch because an older version needed it or a reference implementation still has one — a branch on a flag whose presence the wire already states is a legacy path, not a codec. Keep a legacy-named field only when the exact target still carries it on the wire, and rename it to what it is.
 - Only change how a field is sent when there is positive evidence the target changed it. A field the previous version encoded one way is presumed unchanged; re-typing it on a hunch is a silent regression, because most re-typings are the same byte length for the values the field actually holds and so never desync. By the same token, a field that changes width keeps its component and field order unless the source says otherwise.
+- Treat exact-version writer calls as width evidence. For example, `writeUnsignedInt` and `writeByte` are not
+  interchangeable with signed varints merely because the current values are small; model and marshal the target width
+  directly instead of retaining an old Go type and adding conversion scaffolding.
 
 ## Codebase Consistency
 
@@ -115,6 +132,8 @@ Inspect `output/json`, especially `x-serialization-options`. The `+double-option
 
 - Compare the exact-version read and write paths independently.
 - Check field order, signedness, widths, selectors, legacy copies, optional nesting, slice lengths, and absent-state clearing.
+- For every apparent enum change, confirm whether the registered serializer writes an ordinal, a name looked up from
+  the enum, or both. Never infer the wire representation from the presence of an enum/type map.
 - Audit every new `Bool`-guarded branch. Replace it with the existing optional helper unless the bool is proven to be
   duplicated discriminator metadata or has a different wire shape.
 - Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
