@@ -53,6 +53,42 @@ func TestNetherNetDialContextOwnsDialedSignaling(t *testing.T) {
 	}
 }
 
+func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
+	t.Parallel()
+
+	shared := newTestNetherNetSignaling()
+	dialed := newTestNetherNetSignaling()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+
+	network := NetherNet{
+		Signaling: shared,
+		DialSignaling: func(context.Context, string) (SignalingConn, error) {
+			return dialed, nil
+		},
+		dial: func(_ context.Context, _ string, got nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
+			if got != dialed {
+				t.Fatal("dial did not prefer the per-dial signaling connection")
+			}
+			return client, nil
+		},
+	}
+
+	conn, err := network.DialContext(context.Background(), "remote-network-id")
+	if err != nil {
+		t.Fatalf("DialContext: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if shared.closeCount() != 0 {
+		t.Fatalf("shared signaling close count = %d, want 0", shared.closeCount())
+	}
+	if dialed.closeCount() != 1 {
+		t.Fatalf("dialed signaling close count = %d, want 1", dialed.closeCount())
+	}
+}
+
 func TestNetherNetDialContextClosesDialedSignalingOnFailure(t *testing.T) {
 	t.Parallel()
 
@@ -98,7 +134,7 @@ func TestNetherNetDialContextRejectsNilTransport(t *testing.T) {
 	}
 }
 
-func TestNetherNetDialContextIdentityPassesVerifiedIssuer(t *testing.T) {
+func TestNetherNetDialContextIdentityProviderPassesVerifiedIssuer(t *testing.T) {
 	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -109,12 +145,17 @@ func TestNetherNetDialContextIdentityPassesVerifiedIssuer(t *testing.T) {
 		token  = "multiplayer-token"
 		issuer = "https://authorization.example.test"
 	)
+	presetIdentity := &nethernet.Identity{Domain: "https://preset.example.test"}
 
 	network := NetherNet{
 		Signaling: newTestNetherNetSignaling(),
+		Dialer:    nethernet.Dialer{Identity: presetIdentity},
 		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
 			if dialer.Identity == nil {
 				t.Fatal("identity was not passed to the NetherNet dialer")
+			}
+			if dialer.Identity == presetIdentity {
+				t.Fatal("verified identity did not replace the preconfigured identity")
 			}
 			if dialer.Identity.PrivateKey != key {
 				t.Fatal("identity private key was not preserved")
@@ -133,14 +174,14 @@ func TestNetherNetDialContextIdentityPassesVerifiedIssuer(t *testing.T) {
 
 	conn, err := network.DialContextIdentityProvider(context.Background(), "remote-network-id", token, key, issuer)
 	if err != nil {
-		t.Fatalf("DialContextIdentity: %v", err)
+		t.Fatalf("DialContextIdentityProvider: %v", err)
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 }
 
-func TestNetherNetDialContextIdentityRejectsMissingIssuer(t *testing.T) {
+func TestNetherNetDialContextIdentityProviderRejectsMissingIssuer(t *testing.T) {
 	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -158,10 +199,10 @@ func TestNetherNetDialContextIdentityRejectsMissingIssuer(t *testing.T) {
 
 	_, err = network.DialContextIdentityProvider(context.Background(), "remote-network-id", "multiplayer-token", key, "")
 	if err == nil {
-		t.Fatal("DialContextIdentity accepted an empty identity provider")
+		t.Fatal("DialContextIdentityProvider accepted an empty identity provider")
 	}
 	if dialed {
-		t.Fatal("DialContextIdentity dialed before validating the identity provider")
+		t.Fatal("DialContextIdentityProvider dialed before validating the identity provider")
 	}
 }
 

@@ -36,6 +36,8 @@ type NetherNet struct {
 	DialSignaling DialSignalingFunc
 
 	// Dialer specifies options for establishing a connection with DialContext.
+	// Authenticated Minecraft dials replace Dialer.Identity with the identity built
+	// from the verified multiplayer token, its issuer and the connection key.
 	Dialer nethernet.Dialer
 	// ListenConfig specifies options for listening for connections with Listen.
 	ListenConfig nethernet.ListenConfig
@@ -69,6 +71,7 @@ func (n NetherNet) DialContextIdentity(ctx context.Context, address string, _ st
 
 // DialContextIdentityProvider establishes a connection with the remote NetherNet peer using the
 // JWT token issued by identityProvider and the private key bound to the Minecraft connection.
+// The resulting identity replaces any identity preconfigured on [NetherNet.Dialer].
 func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address string, token string, privateKey *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
 	if identityProvider == "" {
 		return nil, errors.New("minecraft: NetherNet.DialContextIdentityProvider: identity provider is empty")
