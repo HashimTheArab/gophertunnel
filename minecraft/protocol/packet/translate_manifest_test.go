@@ -41,20 +41,30 @@ var idFieldFixtures = map[string]func() (Packet, func() int64){
 	},
 	"PrimitiveShapes.Shapes[].AttachedToEntityID": func() (Packet, func() int64) {
 		pk := &PrimitiveShapes{Shapes: []protocol.PrimitiveShape{{
-			AttachedToEntityID: protocol.Option(int64(idSentinel)),
+			AttachedToEntityID: protocol.Option(uint64(idSentinel)),
 			ExtraShapeData:     &protocol.LastShape{},
 		}}}
-		return pk, func() int64 { id, _ := pk.Shapes[0].AttachedToEntityID.Value(); return id }
+		return pk, func() int64 { id, _ := pk.Shapes[0].AttachedToEntityID.Value(); return int64(id) }
 	},
 	"SetScore.Entries[].EntityUniqueID": func() (Packet, func() int64) {
 		pk := &SetScore{Entries: []protocol.ScoreboardEntry{{IdentityType: protocol.ScoreboardIdentityPlayer, EntityUniqueID: idSentinel}}}
 		return pk, func() int64 { return pk.Entries[0].EntityUniqueID }
 	},
+	"SetScoreboardIdentity.Entries[].EntityUniqueID": func() (Packet, func() int64) {
+		pk := &SetScoreboardIdentity{Entries: []protocol.ScoreboardIdentityEntry{{
+			EntityUniqueID: protocol.Option(int64(idSentinel)),
+		}}}
+		return pk, func() int64 { id, _ := pk.Entries[0].EntityUniqueID.Value(); return id }
+	},
 	"ClientBoundMapItemData.TrackedObjects[].EntityUniqueID": func() (Packet, func() int64) {
 		pk := &ClientBoundMapItemData{
-			TrackedObjects: protocol.Option([]protocol.MapTrackedObject{{Type: protocol.MapObjectTypeEntity, EntityUniqueID: idSentinel}}),
+			TrackedObjects: protocol.Option([]protocol.MapTrackedObject{{Type: protocol.MapObjectTypeEntity, EntityUniqueID: protocol.Option(int64(idSentinel))}}),
 		}
-		return pk, func() int64 { tracked, _ := pk.TrackedObjects.Value(); return tracked[0].EntityUniqueID }
+		return pk, func() int64 {
+			tracked, _ := pk.TrackedObjects.Value()
+			id, _ := tracked[0].EntityUniqueID.Value()
+			return id
+		}
 	},
 	"ClientMovementPredictionSync.EntityUniqueID": func() (Packet, func() int64) {
 		pk := &ClientMovementPredictionSync{ActorFlags: protocol.NewBitset(protocol.EntityDataFlagCount), EntityUniqueID: idSentinel}
