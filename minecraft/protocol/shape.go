@@ -262,7 +262,7 @@ type PrimitiveShape struct {
 	NetworkID uint64
 	// DimensionID is the optional dimension ID where the shape is rendered.
 	DimensionID Optional[int32]
-	// AttachedToEntityID is the optional runtime ID of the entity the shape is attached to.
+	// AttachedToEntityID is the optional unique ID of the entity the shape is attached to.
 	AttachedToEntityID Optional[int64]
 	// Type is the type of the shape.
 	// If not set, the set shape will be cleared.
@@ -296,11 +296,11 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	OptionalFunc(io, &x.DimensionID, io.Varint32)
 	OptionalFunc(io, &x.AttachedToEntityID, func(id *int64) {
 		if *id < 0 {
-			io.InvalidValue(*id, "primitive shape attached entity runtime ID", "must not be negative")
+			io.InvalidValue(*id, "primitive shape attached entity unique ID", "must not be negative")
 		}
-		runtimeID := uint64(*id)
-		io.ActorRuntimeID(&runtimeID)
-		*id = int64(runtimeID)
+		uniqueID := uint64(*id)
+		ActorUniqueIDVaruint64(io, &uniqueID)
+		*id = int64(uniqueID)
 	})
 	io.ShapeData(&x.ExtraShapeData)
 }
