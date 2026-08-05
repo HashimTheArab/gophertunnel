@@ -4,18 +4,36 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
+	"sync"
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
+// SignalingConn is a NetherNet signaling connection with a lifecycle that may be
+// tied to a transport connection returned by [NetherNet.DialContext].
+type SignalingConn interface {
+	nethernet.Signaling
+	io.Closer
+}
+
+// DialSignalingFunc opens signaling for one outbound NetherNet connection.
+// The address is the remote NetherNet network ID passed to [NetherNet.DialContext].
+type DialSignalingFunc func(ctx context.Context, address string) (SignalingConn, error)
+
 // NetherNet is an implementation of a NetherNet network, a WebRTC-based transport layer protocol.
-// A valid Signaling implementation must be provided before use.
+// Signaling or DialSignaling must be provided before dialing; listening requires Signaling.
 type NetherNet struct {
 	// Signaling is the interface used to exchange connection details with the remote peers.
+	// It is used for listening and for dialing when DialSignaling is nil.
 	Signaling nethernet.Signaling
+	// DialSignaling optionally opens a fresh signaling connection for each outbound dial.
+	// NetherNet owns the returned signaling connection: it closes it when dialing fails or
+	// when the resulting transport connection closes.
+	DialSignaling DialSignalingFunc
 
 	// Dialer specifies options for establishing a connection with DialContext.
 	Dialer nethernet.Dialer
@@ -24,35 +42,90 @@ type NetherNet struct {
 	// Log is the logger used by default for Dialer and ListenConfig.
 	// It is useful when registering this network from RegisterNetwork.
 	Log *slog.Logger
+
+	// dial replaces the low-level NetherNet dial in tests.
+	dial func(context.Context, string, nethernet.Signaling, nethernet.Dialer) (net.Conn, error)
 }
 
 // Ensure the connection returned by NetherNet.DialContext has the optional
 // packet methods used by Encoder and Decoder, even though DialContext returns it
 // as a net.Conn.
 var _ packet.TransportCapabilities = (*nethernet.Conn)(nil)
+var _ packet.TransportCapabilities = (*signalingOwnedNetherNetConn)(nil)
 
 // DialContext ...
 func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, error) {
-	if n.Signaling == nil {
+	return n.dialContext(ctx, address, nil)
+}
+
+// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity].
+// Call [NetherNet.DialContextIdentityProvider] when the identity has not already been configured.
+func (n NetherNet) DialContextIdentity(ctx context.Context, address string, _ string, _ *ecdsa.PrivateKey) (net.Conn, error) {
+	if n.Dialer.Identity == nil || n.Dialer.Identity.Domain == "" {
+		return nil, errors.New("minecraft: NetherNet.DialContextIdentity: identity provider is empty")
+	}
+	return n.dialContext(ctx, address, n.Dialer.Identity)
+}
+
+// DialContextIdentityProvider establishes a connection with the remote NetherNet peer using the
+// JWT token issued by identityProvider and the private key bound to the Minecraft connection.
+func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address string, token string, privateKey *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
+	if identityProvider == "" {
+		return nil, errors.New("minecraft: NetherNet.DialContextIdentityProvider: identity provider is empty")
+	}
+	return n.dialContext(ctx, address, &nethernet.Identity{
+		PrivateKey: privateKey,
+		Token:      token,
+		Domain:     identityProvider,
+	})
+}
+
+func (n NetherNet) dialContext(ctx context.Context, address string, identity *nethernet.Identity) (net.Conn, error) {
+	signaling := n.Signaling
+	var signalingOwner io.Closer
+	if n.DialSignaling != nil {
+		conn, err := n.DialSignaling(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+		if conn == nil {
+			return nil, errors.New("minecraft: NetherNet.DialContext: DialSignaling returned nil")
+		}
+		signaling = conn
+		signalingOwner = conn
+	}
+	if signaling == nil {
 		return nil, errors.New("minecraft: NetherNet.DialContext: Signaling is nil")
 	}
 	if n.Dialer.Log == nil && n.Log != nil {
 		n.Dialer.Log = n.Log
 	}
-	return n.Dialer.DialContext(ctx, address, n.Signaling)
-}
-
-// DialContextIdentity establishes a connection with the remote NetherNet peer using the
-// JWT token issued by the auth service and the private key bound to the Minecraft connection.
-// If [nethernet.Dialer.Identity] is already set, that identity is used instead.
-func (n NetherNet) DialContextIdentity(ctx context.Context, address string, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error) {
-	if n.Dialer.Identity == nil {
-		n.Dialer.Identity = &nethernet.Identity{
-			PrivateKey: privateKey,
-			Token:      token,
+	if identity != nil {
+		n.Dialer.Identity = identity
+	}
+	dial := n.dial
+	if dial == nil {
+		dial = func(ctx context.Context, address string, signaling nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			return dialer.DialContext(ctx, address, signaling)
 		}
 	}
-	return n.DialContext(ctx, address)
+	conn, err := dial(ctx, address, signaling, n.Dialer)
+	if err != nil {
+		if signalingOwner != nil {
+			_ = signalingOwner.Close()
+		}
+		return nil, err
+	}
+	if conn == nil {
+		if signalingOwner != nil {
+			_ = signalingOwner.Close()
+		}
+		return nil, errors.New("minecraft: NetherNet.DialContext: dial returned nil connection")
+	}
+	if signalingOwner != nil {
+		return ownSignaling(conn, signalingOwner), nil
+	}
+	return conn, nil
 }
 
 // PingContext ...
@@ -69,4 +142,58 @@ func (n NetherNet) Listen(string) (NetworkListener, error) {
 		n.ListenConfig.Log = n.Log
 	}
 	return n.ListenConfig.Listen(n.Signaling)
+}
+
+type signalingOwner struct {
+	closer io.Closer
+	once   sync.Once
+}
+
+func (o *signalingOwner) close() error {
+	var err error
+	o.once.Do(func() {
+		err = o.closer.Close()
+	})
+	return err
+}
+
+func ownSignaling(conn net.Conn, signaling io.Closer) net.Conn {
+	owner := &signalingOwner{closer: signaling}
+	if nethernetConn, ok := conn.(*nethernet.Conn); ok {
+		owned := &signalingOwnedNetherNetConn{Conn: nethernetConn, signalingOwner: owner}
+		go func() {
+			<-nethernetConn.Context().Done()
+			_ = owner.close()
+		}()
+		return owned
+	}
+	return &signalingOwnedConn{Conn: conn, signalingOwner: owner}
+}
+
+type signalingOwnedConn struct {
+	net.Conn
+	*signalingOwner
+}
+
+func (c *signalingOwnedConn) Close() error {
+	connErr := c.Conn.Close()
+	signalingErr := c.signalingOwner.close()
+	if connErr != nil {
+		return connErr
+	}
+	return signalingErr
+}
+
+type signalingOwnedNetherNetConn struct {
+	*nethernet.Conn
+	*signalingOwner
+}
+
+func (c *signalingOwnedNetherNetConn) Close() error {
+	connErr := c.Conn.Close()
+	signalingErr := c.signalingOwner.close()
+	if connErr != nil {
+		return connErr
+	}
+	return signalingErr
 }
