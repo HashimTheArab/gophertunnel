@@ -57,6 +57,16 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	if !waitForResourcePackRequest(t, awaiting, 99) {
 		t.Fatal("vanilla request window was not filled")
 	}
+	awaiting.mu.Lock()
+	_, requestedEarly := awaiting.requested[100]
+	requestCount := len(awaiting.requested)
+	awaiting.mu.Unlock()
+	if requestedEarly {
+		t.Fatal("request window exceeded before a chunk was received")
+	}
+	if requestCount != DefaultResourcePackMaxInFlightChunks {
+		t.Fatalf("initial request count = %d, want %d", requestCount, DefaultResourcePackMaxInFlightChunks)
+	}
 	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{
 		UUID:       id + "_1.0.0",
 		ChunkIndex: 50,

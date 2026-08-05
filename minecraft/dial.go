@@ -77,9 +77,8 @@ type Dialer struct {
 	// The boolean returned determines if the pack will be downloaded or not.
 	DownloadResourcePack func(id uuid.UUID, version string, current, total int) bool
 	// ResourcePackDownload controls the number of resource pack chunk requests
-	// that may be in flight during a Dialer download. The default is sequential
-	// for compatibility; use a larger bounded window only when the peer is known
-	// to support pipelined requests.
+	// that may be in flight during a Dialer download. Values below one use the
+	// default 100-chunk request window.
 	ResourcePackDownload ResourcePackDownloadConfig
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present

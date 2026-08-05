@@ -213,7 +213,6 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		hdr:                  &packet.Header{},
 		proto:                proto,
 		readerLimits:         limits,
-		compressionThreshold: 256,
 		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 	}
 	if d, ok := netConn.(packet.EncryptionDisabler); ok {
@@ -1198,12 +1197,12 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id)
 		pack.size = pk.Size
 	}
-
-	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
-	delete(conn.packQueue.downloadingPacks, id)
 	if pk.DataChunkSize == 0 {
 		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
 	}
+
+	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
+	delete(conn.packQueue.downloadingPacks, id)
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
