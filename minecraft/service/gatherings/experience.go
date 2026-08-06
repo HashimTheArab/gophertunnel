@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -131,6 +132,30 @@ type Address struct {
 	// DestinationInfo contains additional identifiers for the resolved
 	// destination.
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
+	unknownFields   []string
+}
+
+// UnmarshalJSON records unknown top-level assignment fields for a temporary,
+// redacted live diagnostic. It must not remain in the committed implementation.
+func (a *Address) UnmarshalJSON(data []byte) error {
+	type address Address
+	var decoded address
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range []string{"networkProtocol", "ipV4Address", "port", "destinationInfo"} {
+		delete(fields, name)
+	}
+	for name := range fields {
+		decoded.unknownFields = append(decoded.unknownFields, name)
+	}
+	sort.Strings(decoded.unknownFields)
+	*a = Address(decoded)
+	return nil
 }
 
 // DialAddress returns the address expected by the transport selected through
@@ -147,7 +172,7 @@ func (a Address) DialAddress() (string, error) {
 		if address := strings.TrimSpace(a.IPv4Address); address != "" {
 			return address, nil
 		}
-		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
+		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address (other fields: %v)", a.unknownFields)
 	default:
 		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
 	}
