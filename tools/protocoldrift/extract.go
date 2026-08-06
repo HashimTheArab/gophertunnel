@@ -184,8 +184,9 @@ func main() {
 			diag.WriterExpansionDifferences = append(diag.WriterExpansionDifferences, c)
 		}
 	}
-	must(writeJSON("gophertunnel-flat.json", manifest))
-	must(writeJSON("gtx2-diagnostics.json", diag))
+	outputDir := filepath.Join("tools", "protocoldrift")
+	must(writeJSON(filepath.Join(outputDir, "gophertunnel-flat.json"), manifest))
+	must(writeJSON(filepath.Join(outputDir, "gtx2-diagnostics.json"), diag))
 	fmt.Fprintf(os.Stderr, "gtx2: packets=%d marshal_types=%d unresolved=%d writer_differences=%d\n", len(packets), len(e.marshals), len(e.diagnostics), len(diag.WriterExpansionDifferences))
 }
 

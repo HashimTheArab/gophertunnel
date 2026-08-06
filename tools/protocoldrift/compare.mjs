@@ -7,7 +7,7 @@
 // which is a different and stronger claim than what documentation asserts.
 //
 // Usage:
-//   go run ./tools/protocoldrift .            # writes gophertunnel-flat.json
+//   go run ./tools/protocoldrift .            # writes tools/protocoldrift/gophertunnel-flat.json
 //   node tools/protocoldrift/compare.mjs <endstone-docs-dir> [flat.json]
 
 import fs from "node:fs";
