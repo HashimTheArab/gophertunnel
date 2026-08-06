@@ -172,7 +172,12 @@ func (a Address) DialAddress() (string, error) {
 		if address := strings.TrimSpace(a.IPv4Address); address != "" {
 			return address, nil
 		}
-		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address (other fields: %v)", a.unknownFields)
+		return "", fmt.Errorf(
+			"service/gatherings: invalid NetherNet experience address (other fields: %v, server ID set: %t, target ID set: %t, MPSAS scenario ID set: %t)",
+			a.unknownFields, strings.TrimSpace(a.DestinationInfo.ServerID) != "",
+			strings.TrimSpace(a.DestinationInfo.TargetID) != "",
+			strings.TrimSpace(a.DestinationInfo.MPSASScenarioID) != "",
+		)
 	default:
 		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
 	}
