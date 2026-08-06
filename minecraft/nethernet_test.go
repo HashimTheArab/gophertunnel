@@ -145,6 +145,7 @@ func TestNetherNetDialContextRejectsNilTransport(t *testing.T) {
 	if err == nil {
 		t.Fatal("DialContext accepted a nil transport connection")
 	}
+	signaling.awaitClose(t)
 }
 
 func TestNetherNetDialContextIdentityProviderPassesVerifiedIssuer(t *testing.T) {

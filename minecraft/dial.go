@@ -136,6 +136,8 @@ type Dialer struct {
 	KeepXBLIdentityData bool
 }
 
+// netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
+// verifier validates the token's 'iss' claim against.
 func netherNetIdentityProvider(issuer *url.URL) string {
 	if issuer == nil {
 		return ""

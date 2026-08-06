@@ -136,6 +136,9 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 		return nil, err
 	}
 	if conn == nil {
+		if owned != nil {
+			_ = owned.Close()
+		}
 		return nil, errors.New("minecraft: NetherNet.DialContext: dial returned nil connection")
 	}
 	if owned != nil {
