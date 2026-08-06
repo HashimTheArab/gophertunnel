@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -135,6 +136,15 @@ type Dialer struct {
 	KeepXBLIdentityData bool
 }
 
+// netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
+// verifier validates the token's 'iss' claim against.
+func netherNetIdentityProvider(issuer *url.URL) string {
+	if issuer == nil {
+		return ""
+	}
+	return issuer.JoinPath().String()
+}
+
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
 // "raknet". A Conn is returned which may be used to receive packets from and send packets to.
 //
@@ -204,8 +214,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("generating ECDSA key: %w", err)}
 	}
 	var (
-		token    string
-		verifier *oidc.IDTokenVerifier
+		token            string
+		identityProvider string
+		verifier         *oidc.IDTokenVerifier
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -216,6 +227,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
 		}
+		identityProvider = netherNetIdentityProvider(e.Issuer)
 		verifier, err = e.VerifierContext(ctx)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
@@ -262,7 +274,11 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	var netConn net.Conn
-	if i, ok := network.(identityDialer); ok && token != "" {
+	if token == "" {
+		netConn, err = network.DialContext(ctx, address)
+	} else if i, ok := network.(identityProviderDialer); ok {
+		netConn, err = i.DialContextIdentityProvider(ctx, address, token, key, identityProvider)
+	} else if i, ok := network.(identityDialer); ok {
 		netConn, err = i.DialContextIdentity(ctx, address, token, key)
 	} else {
 		netConn, err = network.DialContext(ctx, address)
