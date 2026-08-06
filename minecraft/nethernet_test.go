@@ -18,8 +18,7 @@ func TestNetherNetDialContextClosesDialedSignalingWithConn(t *testing.T) {
 	t.Parallel()
 
 	signaling := newTestNetherNetSignaling()
-	client, server := net.Pipe()
-	t.Cleanup(func() { _ = server.Close() })
+	transport := newTestTransportConn(t)
 
 	network := NetherNet{
 		DialSignaling: func(_ context.Context, address string) (SignalingConn, error) {
@@ -35,7 +34,7 @@ func TestNetherNetDialContextClosesDialedSignalingWithConn(t *testing.T) {
 			if got != signaling {
 				t.Fatal("dial did not receive the signaling connection")
 			}
-			return client, nil
+			return transport, nil
 		},
 	}
 
@@ -49,9 +48,29 @@ func TestNetherNetDialContextClosesDialedSignalingWithConn(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if signaling.closeCount() != 1 {
-		t.Fatalf("dialed signaling close count = %d, want 1", signaling.closeCount())
+	signaling.awaitClose(t)
+}
+
+func TestNetherNetDialContextRejectsContextlessTransport(t *testing.T) {
+	t.Parallel()
+
+	signaling := newTestNetherNetSignaling()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+
+	network := NetherNet{
+		DialSignaling: func(context.Context, string) (SignalingConn, error) {
+			return signaling, nil
+		},
+		dial: func(context.Context, string, nethernet.Signaling, nethernet.Dialer) (net.Conn, error) {
+			return client, nil
+		},
 	}
+
+	if _, err := network.DialContext(context.Background(), "remote-network-id"); err == nil {
+		t.Fatal("DialContext accepted a transport that cannot release signaling")
+	}
+	signaling.awaitClose(t)
 }
 
 func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
@@ -59,8 +78,7 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 
 	shared := newTestNetherNetSignaling()
 	dialed := newTestNetherNetSignaling()
-	client, server := net.Pipe()
-	t.Cleanup(func() { _ = server.Close() })
+	transport := newTestTransportConn(t)
 
 	network := NetherNet{
 		Signaling: shared,
@@ -71,7 +89,7 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 			if got != dialed {
 				t.Fatal("dial did not prefer the per-dial signaling connection")
 			}
-			return client, nil
+			return transport, nil
 		},
 	}
 
@@ -82,11 +100,9 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	dialed.awaitClose(t)
 	if shared.closeCount() != 0 {
 		t.Fatalf("shared signaling close count = %d, want 0", shared.closeCount())
-	}
-	if dialed.closeCount() != 1 {
-		t.Fatalf("dialed signaling close count = %d, want 1", dialed.closeCount())
 	}
 }
 
@@ -109,13 +125,7 @@ func TestNetherNetDialContextPropagatesDialFailure(t *testing.T) {
 	if !errors.Is(err, dialErr) {
 		t.Fatalf("DialContext error = %v, want %v", err, dialErr)
 	}
-	deadline := time.Now().Add(time.Second)
-	for signaling.closeCount() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("dialed signaling was not closed after the failed dial")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	signaling.awaitClose(t)
 }
 
 func TestNetherNetDialContextRejectsNilTransport(t *testing.T) {
@@ -257,6 +267,30 @@ func TestNetherNetDialContextIdentityProviderRejectsMissingIssuer(t *testing.T) 
 	}
 }
 
+// testTransportConn stands in for *nethernet.Conn: a transport whose Context ends when it closes.
+type testTransportConn struct {
+	net.Conn
+	cancel context.CancelFunc
+	ctx    context.Context
+}
+
+func newTestTransportConn(t *testing.T) *testTransportConn {
+	t.Helper()
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &testTransportConn{Conn: client, ctx: ctx, cancel: cancel}
+}
+
+func (c *testTransportConn) Context() context.Context { return c.ctx }
+
+func (c *testTransportConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
+}
+
 type testNetherNetSignaling struct {
 	ctx context.Context
 
@@ -288,4 +322,17 @@ func (s *testNetherNetSignaling) closeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+// awaitClose waits for the signaling to be closed, which NetherNet does asynchronously.
+func (s *testNetherNetSignaling) awaitClose(t *testing.T) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second * 5)
+	for s.closeCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("dialed signaling was not closed")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
@@ -96,7 +95,8 @@ func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address stri
 }
 
 func (n NetherNet) dialContext(ctx context.Context, address string, identity *nethernet.Identity) (net.Conn, error) {
-	signaling, owned := n.Signaling, SignalingConn(nil)
+	signaling := n.Signaling
+	var owned SignalingConn
 	if n.DialSignaling != nil {
 		conn, err := n.DialSignaling(ctx, address)
 		if err != nil {
@@ -139,32 +139,20 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 		return nil, errors.New("minecraft: NetherNet.DialContext: dial returned nil connection")
 	}
 	if owned != nil {
-		// Production dials return *nethernet.Conn, whose Context ends with the connection;
-		// everything the connection signals is parented on it, so closing then cannot race.
-		if c, ok := conn.(interface{ Context() context.Context }); ok {
-			go func() {
-				<-c.Context().Done()
-				_ = owned.Close()
-			}()
-			return conn, nil
+		// A NetherNet connection ends its context when it closes or fails, and parents
+		// everything it signals on that context, so closing signaling then cannot race.
+		c, ok := conn.(interface{ Context() context.Context })
+		if !ok {
+			_ = conn.Close()
+			_ = owned.Close()
+			return nil, errors.New("minecraft: NetherNet.DialContext: dialed connection has no context to release signaling with")
 		}
-		return &signalingBackedConn{Conn: conn, signaling: owned}, nil
+		go func() {
+			<-c.Context().Done()
+			_ = owned.Close()
+		}()
 	}
 	return conn, nil
-}
-
-// signalingBackedConn closes dial-scoped signaling with a transport connection
-// that does not expose a lifetime context.
-type signalingBackedConn struct {
-	net.Conn
-	signaling io.Closer
-	once      sync.Once
-}
-
-func (c *signalingBackedConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(func() { _ = c.signaling.Close() })
-	return err
 }
 
 // PingContext ...
