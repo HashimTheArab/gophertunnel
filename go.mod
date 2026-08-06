@@ -49,5 +49,3 @@ require (
 )
 
 replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.14.2-0.20260625072737-109968c5e6ff
-
-replace github.com/df-mc/go-nethernet => github.com/hashimthearab/go-nethernet v0.0.0-20260806034614-127d5c0afda5

@@ -25,6 +25,11 @@ type SignalingConn interface {
 // The address is the remote NetherNet network ID passed to [NetherNet.DialContext].
 type DialSignalingFunc func(ctx context.Context, address string) (SignalingConn, error)
 
+// signalErrorTimeout mirrors nethernet.SignalErrorTimeout, the bound on the terminal error
+// signal a failed dial sends asynchronously.
+// TODO: use the exported constant once df-mc/go-nethernet#41 is merged.
+const signalErrorTimeout = time.Second * 2
+
 // NetherNet is an implementation of a NetherNet network, a WebRTC-based transport layer protocol.
 // Signaling or DialSignaling must be provided before dialing; listening requires Signaling.
 type NetherNet struct {
@@ -124,7 +129,7 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 			// give it time to complete before closing the signaling under it.
 			delay := n.signalingCloseDelay
 			if delay == 0 {
-				delay = nethernet.SignalErrorTimeout + time.Second
+				delay = signalErrorTimeout + time.Second
 			}
 			time.AfterFunc(delay, func() { _ = owned.Close() })
 		}
