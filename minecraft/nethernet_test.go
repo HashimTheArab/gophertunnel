@@ -9,11 +9,12 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/df-mc/go-nethernet"
 )
 
-func TestNetherNetDialContextTransfersDialedSignalingOwnership(t *testing.T) {
+func TestNetherNetDialContextClosesDialedSignalingWithConn(t *testing.T) {
 	t.Parallel()
 
 	signaling := newTestNetherNetSignaling()
@@ -27,15 +28,12 @@ func TestNetherNetDialContextTransfersDialedSignalingOwnership(t *testing.T) {
 			}
 			return signaling, nil
 		},
-		dial: func(_ context.Context, address string, got nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+		dial: func(_ context.Context, address string, got nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
 			if address != "remote-network-id" {
 				t.Fatalf("dial address = %q, want remote-network-id", address)
 			}
 			if got != signaling {
 				t.Fatal("dial did not receive the signaling connection")
-			}
-			if !dialer.OwnSignaling {
-				t.Fatal("dialer did not take ownership of the per-dial signaling connection")
 			}
 			return client, nil
 		},
@@ -45,8 +43,14 @@ func TestNetherNetDialContextTransfersDialedSignalingOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContext: %v", err)
 	}
+	if signaling.closeCount() != 0 {
+		t.Fatal("dialed signaling closed before the connection")
+	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+	if signaling.closeCount() != 1 {
+		t.Fatalf("dialed signaling close count = %d, want 1", signaling.closeCount())
 	}
 }
 
@@ -63,12 +67,9 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 		DialSignaling: func(context.Context, string) (SignalingConn, error) {
 			return dialed, nil
 		},
-		dial: func(_ context.Context, _ string, got nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+		dial: func(_ context.Context, _ string, got nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
 			if got != dialed {
 				t.Fatal("dial did not prefer the per-dial signaling connection")
-			}
-			if !dialer.OwnSignaling {
-				t.Fatal("dialer did not take ownership of the per-dial signaling connection")
 			}
 			return client, nil
 		},
@@ -84,6 +85,9 @@ func TestNetherNetDialContextPrefersDialSignaling(t *testing.T) {
 	if shared.closeCount() != 0 {
 		t.Fatalf("shared signaling close count = %d, want 0", shared.closeCount())
 	}
+	if dialed.closeCount() != 1 {
+		t.Fatalf("dialed signaling close count = %d, want 1", dialed.closeCount())
+	}
 }
 
 func TestNetherNetDialContextPropagatesDialFailure(t *testing.T) {
@@ -98,11 +102,19 @@ func TestNetherNetDialContextPropagatesDialFailure(t *testing.T) {
 		dial: func(context.Context, string, nethernet.Signaling, nethernet.Dialer) (net.Conn, error) {
 			return nil, dialErr
 		},
+		signalingCloseDelay: time.Millisecond,
 	}
 
 	_, err := network.DialContext(context.Background(), "remote-network-id")
 	if !errors.Is(err, dialErr) {
 		t.Fatalf("DialContext error = %v, want %v", err, dialErr)
+	}
+	deadline := time.Now().Add(time.Second)
+	for signaling.closeCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("dialed signaling was not closed after the failed dial")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

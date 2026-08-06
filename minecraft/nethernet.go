@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
+	"time"
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -30,8 +32,9 @@ type NetherNet struct {
 	// It is used for listening and for dialing when DialSignaling is nil.
 	Signaling nethernet.Signaling
 	// DialSignaling optionally opens a fresh signaling connection for each outbound dial.
-	// NetherNet owns the returned signaling connection: it closes it when dialing fails or
-	// when the resulting transport connection closes.
+	// NetherNet owns the returned signaling connection: it closes it when the resulting
+	// transport connection closes, or after a failed dial once the dialer's terminal
+	// error signal has had time to complete.
 	DialSignaling DialSignalingFunc
 
 	// Dialer specifies options for establishing a connection with DialContext.
@@ -46,6 +49,8 @@ type NetherNet struct {
 
 	// dial replaces the low-level NetherNet dial in tests.
 	dial func(context.Context, string, nethernet.Signaling, nethernet.Dialer) (net.Conn, error)
+	// signalingCloseDelay shortens the failed-dial signaling close delay in tests.
+	signalingCloseDelay time.Duration
 }
 
 // Ensure the connection returned by NetherNet.DialContext has the optional
@@ -86,7 +91,7 @@ func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address stri
 }
 
 func (n NetherNet) dialContext(ctx context.Context, address string, identity *nethernet.Identity) (net.Conn, error) {
-	signaling := n.Signaling
+	signaling, owned := n.Signaling, SignalingConn(nil)
 	if n.DialSignaling != nil {
 		conn, err := n.DialSignaling(ctx, address)
 		if err != nil {
@@ -95,8 +100,7 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 		if conn == nil {
 			return nil, errors.New("minecraft: NetherNet.DialContext: DialSignaling returned nil")
 		}
-		signaling = conn
-		n.Dialer.OwnSignaling = true
+		signaling, owned = conn, conn
 	}
 	if signaling == nil {
 		return nil, errors.New("minecraft: NetherNet.DialContext: Signaling is nil")
@@ -115,12 +119,47 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 	}
 	conn, err := dial(ctx, address, signaling, n.Dialer)
 	if err != nil {
+		if owned != nil {
+			// The dialer may still be sending its terminal error signal asynchronously;
+			// give it time to complete before closing the signaling under it.
+			delay := n.signalingCloseDelay
+			if delay == 0 {
+				delay = nethernet.SignalErrorTimeout + time.Second
+			}
+			time.AfterFunc(delay, func() { _ = owned.Close() })
+		}
 		return nil, err
 	}
 	if conn == nil {
 		return nil, errors.New("minecraft: NetherNet.DialContext: dial returned nil connection")
 	}
+	if owned != nil {
+		// Production dials return *nethernet.Conn, whose Context ends with the connection;
+		// everything the connection signals is parented on it, so closing then cannot race.
+		if c, ok := conn.(interface{ Context() context.Context }); ok {
+			go func() {
+				<-c.Context().Done()
+				_ = owned.Close()
+			}()
+			return conn, nil
+		}
+		return &signalingBackedConn{Conn: conn, signaling: owned}, nil
+	}
 	return conn, nil
+}
+
+// signalingBackedConn closes dial-scoped signaling with a transport connection
+// that does not expose a lifetime context.
+type signalingBackedConn struct {
+	net.Conn
+	signaling io.Closer
+	once      sync.Once
+}
+
+func (c *signalingBackedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { _ = c.signaling.Close() })
+	return err
 }
 
 // PingContext ...
