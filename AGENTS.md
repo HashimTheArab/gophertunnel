@@ -3,6 +3,20 @@
 Maintained fork of `sandertv/gophertunnel` (working branch `lunar`). The module path stays
 upstream; consumers point at this fork with a `replace` directive.
 
+## Never check `lunar` or `master` out into a worktree
+
+A branch can be checked out in one place at a time, so a worktree sitting on `lunar` pins it
+for the whole repo and every later `git worktree add ... lunar` fails with "already used by
+worktree". Always create the branch with the worktree:
+
+```
+git worktree add ../../worktrees/gophertunnel/<branch> -b <branch> origin/lunar
+```
+
+To free a branch a worktree already holds, move that worktree onto its own branch
+(`git switch -c <branch>`) — never delete the worktree before checking it for commits that
+exist nowhere else.
+
 ## Semantic marshal operations are mandatory
 
 Actor IDs and player input ticks must never be marshalled through raw integer primitives.
