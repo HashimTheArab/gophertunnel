@@ -54,11 +54,18 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error joining experience: %s", err))
 	}
+	dialAddress, err := address.DialAddress()
+	if err != nil {
+		panic(fmt.Sprintf("error resolving experience transport: %s", err))
+	}
+	if address.NetworkProtocol.NetherNet() {
+		panic("example does not configure NetherNet signaling")
+	}
 
 	conn, err := minecraft.Dialer{
 		XBLClient:     xbl,
 		PlayFabClient: pf,
-	}.DialTimeout("raknet", address.String(), time.Minute*5)
+	}.DialTimeout("raknet", dialAddress, time.Minute*5)
 	if err != nil {
 		panic(fmt.Sprintf("error connecting to experience: %s", err))
 	}

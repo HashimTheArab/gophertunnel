@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
@@ -120,8 +121,10 @@ func (e *Experience) Join(ctx context.Context) (*Address, error) {
 type Address struct {
 	// NetworkProtocol names the transport expected by the experience server.
 	// Most experiences use [NetworkProtocolDefault] at the moment.
-	NetworkProtocol string `json:"networkProtocol"`
-	// IPv4Address is the IPv4 address of the resolved server.
+	NetworkProtocol NetworkProtocol `json:"networkProtocol"`
+	// IPv4Address is the IPv4 address of a RakNet server. For NetherNet
+	// assignments, the service overloads this field with the NetherNet network
+	// ID instead.
 	IPv4Address string `json:"ipV4Address"`
 	// Port is the UDP port of the resolved server.
 	Port uint16 `json:"port"`
@@ -130,17 +133,85 @@ type Address struct {
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
 }
 
-// String returns a combination of [Address.IPv4Address] and [Address.Port].
-func (a Address) String() string {
-	return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port)))
+// DialAddress returns the address expected by the transport selected through
+// [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
+// assignments use the network ID returned in [Address.IPv4Address].
+func (a Address) DialAddress() (string, error) {
+	switch ParseNetworkProtocol(string(a.NetworkProtocol)) {
+	case NetworkProtocolDefault:
+		if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
+			return "", fmt.Errorf("service/gatherings: invalid RakNet experience address")
+		}
+		return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
+	case NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
+		if address := strings.TrimSpace(a.IPv4Address); address != "" {
+			return address, nil
+		}
+		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
+	default:
+		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
+	}
 }
 
-// Constants for [Address.NetworkProtocol] so that other transport layers
-// such as NetherNet can be added in the future.
+// String returns the dial address, or an empty string if the assignment is
+// invalid or uses an unsupported network protocol. Call [Address.DialAddress]
+// when the error is relevant.
+func (a Address) String() string {
+	address, _ := a.DialAddress()
+	return address
+}
+
+// NetworkProtocol is the transport protocol returned by the Gatherings join
+// service.
+type NetworkProtocol string
+
+// ParseNetworkProtocol normalizes a Gatherings network protocol value.
+func ParseNetworkProtocol(protocol string) NetworkProtocol {
+	switch strings.ToUpper(strings.TrimSpace(protocol)) {
+	case "DEFAULT":
+		return NetworkProtocolDefault
+	case "NETHERNET":
+		return NetworkProtocolNetherNet
+	case "NETHERNET_JSONRPC":
+		return NetworkProtocolNetherNetJSONRPC
+	default:
+		return NetworkProtocol(strings.TrimSpace(protocol))
+	}
+}
+
+// Valid reports whether the protocol is supported by Gatherings address
+// resolution.
+func (p NetworkProtocol) Valid() bool {
+	switch ParseNetworkProtocol(string(p)) {
+	case NetworkProtocolDefault, NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
+		return true
+	default:
+		return false
+	}
+}
+
+// NetherNet reports whether the protocol uses a NetherNet network ID rather
+// than a RakNet host and port.
+func (p NetworkProtocol) NetherNet() bool {
+	switch ParseNetworkProtocol(string(p)) {
+	case NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
+		return true
+	default:
+		return false
+	}
+}
+
+// Constants for [Address.NetworkProtocol].
 const (
 	// NetworkProtocolDefault indicates that the experience should be
 	// contacted using the default transport of the Bedrock Edition, RakNet.
-	NetworkProtocolDefault = "Default"
+	NetworkProtocolDefault NetworkProtocol = "Default"
+	// NetworkProtocolNetherNet indicates that the experience should be
+	// contacted through NetherNet using WebSocket signaling.
+	NetworkProtocolNetherNet NetworkProtocol = "NetherNet"
+	// NetworkProtocolNetherNetJSONRPC indicates that the experience should be
+	// contacted through NetherNet using JSON-RPC messaging signaling.
+	NetworkProtocolNetherNetJSONRPC NetworkProtocol = "NetherNet_JsonRpc"
 )
 
 // DestinationInfo describes the destination selected by [Experience.Join].
