@@ -60,11 +60,15 @@ func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, e
 
 // DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity].
 // Call [NetherNet.DialContextIdentityProvider] when the identity has not already been configured.
-func (n NetherNet) DialContextIdentity(ctx context.Context, address string, _ string, _ *ecdsa.PrivateKey) (net.Conn, error) {
+func (n NetherNet) DialContextIdentity(ctx context.Context, address, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error) {
 	if n.Dialer.Identity == nil || n.Dialer.Identity.Domain == "" {
 		return nil, errors.New("minecraft: NetherNet.DialContextIdentity: identity provider is empty")
 	}
-	return n.dialContext(ctx, address, n.Dialer.Identity)
+	return n.dialContext(ctx, address, &nethernet.Identity{
+		PrivateKey: privateKey,
+		Token:      token,
+		Domain:     n.Dialer.Identity.Domain,
+	})
 }
 
 // DialContextIdentityProvider establishes a connection with the remote NetherNet peer using the

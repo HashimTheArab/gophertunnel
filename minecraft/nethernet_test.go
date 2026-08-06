@@ -172,6 +172,54 @@ func TestNetherNetDialContextIdentityProviderPassesVerifiedIssuer(t *testing.T) 
 	}
 }
 
+func TestNetherNetDialContextIdentityUsesCallerCredentials(t *testing.T) {
+	t.Parallel()
+
+	callerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate caller identity key: %v", err)
+	}
+	presetKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate preset identity key: %v", err)
+	}
+	const (
+		callerToken = "caller-token"
+		issuer      = "https://authorization.example.test"
+	)
+
+	network := NetherNet{
+		Signaling: newTestNetherNetSignaling(),
+		Dialer: nethernet.Dialer{Identity: &nethernet.Identity{
+			PrivateKey: presetKey,
+			Token:      "preset-token",
+			Domain:     issuer,
+		}},
+		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			if dialer.Identity.PrivateKey != callerKey {
+				t.Fatal("caller identity private key was not used")
+			}
+			if dialer.Identity.Token != callerToken {
+				t.Fatalf("identity token = %q, want %q", dialer.Identity.Token, callerToken)
+			}
+			if dialer.Identity.Domain != issuer {
+				t.Fatalf("identity domain = %q, want %q", dialer.Identity.Domain, issuer)
+			}
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			return client, nil
+		},
+	}
+
+	conn, err := network.DialContextIdentity(context.Background(), "remote-network-id", callerToken, callerKey)
+	if err != nil {
+		t.Fatalf("DialContextIdentity: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestNetherNetDialContextIdentityProviderRejectsMissingIssuer(t *testing.T) {
 	t.Parallel()
 
