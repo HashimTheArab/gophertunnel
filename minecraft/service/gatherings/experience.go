@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -123,44 +122,20 @@ type Address struct {
 	// NetworkProtocol names the transport expected by the experience server.
 	// Most experiences use [NetworkProtocolDefault] at the moment.
 	NetworkProtocol NetworkProtocol `json:"networkProtocol"`
-	// IPv4Address is the IPv4 address of a RakNet server. For NetherNet
-	// assignments, the service overloads this field with the NetherNet network
-	// ID instead.
+	// IPv4Address is the IPv4 address of a RakNet server.
 	IPv4Address string `json:"ipV4Address"`
+	// NetherNetID is the network ID of a NetherNet server.
+	NetherNetID string `json:"netherNetId"`
 	// Port is the UDP port of the resolved server.
 	Port uint16 `json:"port"`
 	// DestinationInfo contains additional identifiers for the resolved
 	// destination.
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
-	unknownFields   []string
-}
-
-// UnmarshalJSON records unknown top-level assignment fields for a temporary,
-// redacted live diagnostic. It must not remain in the committed implementation.
-func (a *Address) UnmarshalJSON(data []byte) error {
-	type address Address
-	var decoded address
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	for _, name := range []string{"networkProtocol", "ipV4Address", "port", "destinationInfo"} {
-		delete(fields, name)
-	}
-	for name := range fields {
-		decoded.unknownFields = append(decoded.unknownFields, name)
-	}
-	sort.Strings(decoded.unknownFields)
-	*a = Address(decoded)
-	return nil
 }
 
 // DialAddress returns the address expected by the transport selected through
 // [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
-// assignments use the network ID returned in [Address.IPv4Address].
+// assignments use [Address.NetherNetID].
 func (a Address) DialAddress() (string, error) {
 	switch ParseNetworkProtocol(string(a.NetworkProtocol)) {
 	case NetworkProtocolDefault:
@@ -169,15 +144,10 @@ func (a Address) DialAddress() (string, error) {
 		}
 		return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
 	case NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
-		if address := strings.TrimSpace(a.IPv4Address); address != "" {
+		if address := strings.TrimSpace(a.NetherNetID); address != "" {
 			return address, nil
 		}
-		return "", fmt.Errorf(
-			"service/gatherings: invalid NetherNet experience address (other fields: %v, server ID set: %t, target ID set: %t, MPSAS scenario ID set: %t)",
-			a.unknownFields, strings.TrimSpace(a.DestinationInfo.ServerID) != "",
-			strings.TrimSpace(a.DestinationInfo.TargetID) != "",
-			strings.TrimSpace(a.DestinationInfo.MPSASScenarioID) != "",
-		)
+		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
 	default:
 		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
 	}

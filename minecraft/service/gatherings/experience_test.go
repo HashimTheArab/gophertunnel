@@ -1,6 +1,9 @@
 package gatherings
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestAddressDialAddress(t *testing.T) {
 	tests := []struct {
@@ -22,7 +25,7 @@ func TestAddressDialAddress(t *testing.T) {
 			name: "NetherNet JSON-RPC",
 			address: Address{
 				NetworkProtocol: "NETHERNET_JSONRPC",
-				IPv4Address:     "550e8400-e29b-41d4-a716-446655440000",
+				NetherNetID:     "550e8400-e29b-41d4-a716-446655440000",
 			},
 			want: "550e8400-e29b-41d4-a716-446655440000",
 		},
@@ -30,7 +33,7 @@ func TestAddressDialAddress(t *testing.T) {
 			name: "NetherNet WebSocket",
 			address: Address{
 				NetworkProtocol: "nethernet",
-				IPv4Address:     "123456789",
+				NetherNetID:     "123456789",
 			},
 			want: "123456789",
 		},
@@ -58,6 +61,19 @@ func TestAddressDialAddress(t *testing.T) {
 				t.Fatalf("String() = %q, want %q", gotString, test.want)
 			}
 		})
+	}
+}
+
+func TestAddressUnmarshalJSONNetherNetID(t *testing.T) {
+	var address Address
+	if err := json.Unmarshal([]byte(`{
+		"networkProtocol":"NetherNet_JsonRpc",
+		"netherNetId":"550e8400-e29b-41d4-a716-446655440000"
+	}`), &address); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got, want := address.NetherNetID, "550e8400-e29b-41d4-a716-446655440000"; got != want {
+		t.Fatalf("NetherNetID = %q, want %q", got, want)
 	}
 }
 
