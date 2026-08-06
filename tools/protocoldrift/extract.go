@@ -123,6 +123,9 @@ var primitive = map[string]string{
 	"ActorRuntimeIDVaruint32": "VarInt", "ActorUniqueID": "ZigZag64",
 	"ActorUniqueIDInt64": "I64LE", "ActorUniqueIDUint64": "U64LE",
 	"ActorUniqueIDVaruint64": "VarLong",
+	// The lunar fork marks ticks on the player-input timeline so ID/tick
+	// translation can rewrite them; the wire encoding is a plain varuint64.
+	"PlayerInputTick": "VarLong",
 }
 
 var arrayPrefixes = map[string]string{
@@ -937,7 +940,7 @@ func shortType(k string) string {
 // These checks are intentionally explicit and tied to writer.go. The extractor uses the Actual column.
 func writerChecks(root string) []ExpansionCheck {
 	file := filepath.ToSlash(filepath.Join(root, "minecraft", "protocol", "writer.go"))
-	req := map[string]string{"Vec3": "3x F32LE", "Vec2": "2x F32LE", "BlockPos": "3x ZigZag32", "SubChunkPos": "3x I32LE", "ChunkPos": "2x ZigZag32", "SoundPos": "3x F32LE", "ByteFloat": "U8", "String": "string(prefix=VarInt,encoding=utf8)", "StringUTF": "string(prefix=I16LE,encoding=utf8)", "ByteSlice": "string(prefix=VarInt,encoding=bytes)", "NBT": "Nbt", "Bytes": "RawBytes", "UUID": "fixed_array(16x U8)", "ActorRuntimeID": "VarLong", "ActorRuntimeIDVarint64": "ZigZag64", "ActorRuntimeIDVaruint32": "VarInt", "ActorUniqueID": "ZigZag64", "ActorUniqueIDInt64": "I64LE", "ActorUniqueIDUint64": "U64LE", "ActorUniqueIDVaruint64": "VarLong"}
+	req := map[string]string{"Vec3": "3x F32LE", "Vec2": "2x F32LE", "BlockPos": "3x ZigZag32", "SubChunkPos": "3x I32LE", "ChunkPos": "2x ZigZag32", "SoundPos": "3x ZigZag32", "ByteFloat": "U8", "String": "string(prefix=VarInt,encoding=utf8)", "StringUTF": "string(prefix=I16LE,encoding=utf8)", "ByteSlice": "string(prefix=VarInt,encoding=bytes)", "NBT": "Nbt", "Bytes": "RawBytes", "UUID": "fixed_array(16x U8)", "ActorRuntimeID": "VarLong", "ActorRuntimeIDVarint64": "ZigZag64", "ActorRuntimeIDVaruint32": "VarInt", "ActorUniqueID": "ZigZag64", "ActorUniqueIDInt64": "I64LE", "ActorUniqueIDUint64": "U64LE", "ActorUniqueIDVaruint64": "VarLong"}
 	actual := map[string]string{"Vec3": "3x F32LE", "Vec2": "2x F32LE", "BlockPos": "3x ZigZag32", "SubChunkPos": "3x I32LE", "ChunkPos": "2x ZigZag32", "SoundPos": "3x ZigZag32", "ByteFloat": "U8", "String": "string(prefix=VarInt,encoding=utf8)", "StringUTF": "string(prefix=I16LE,encoding=utf8)", "ByteSlice": "string(prefix=VarInt,encoding=bytes)", "NBT": "Nbt", "Bytes": "RawBytes", "UUID": "fixed_array(16x U8)", "ActorRuntimeID": "VarLong", "ActorRuntimeIDVarint64": "ZigZag64", "ActorRuntimeIDVaruint32": "VarInt", "ActorUniqueID": "ZigZag64", "ActorUniqueIDInt64": "I64LE", "ActorUniqueIDUint64": "U64LE", "ActorUniqueIDVaruint64": "VarLong"}
 	lines := map[string]int{"StringUTF": 67, "String": 74, "ByteSlice": 95, "Bytes": 102, "ByteFloat": 107, "Vec3": 112, "Vec2": 119, "BlockPos": 125, "ChunkPos": 132, "SubChunkPos": 137, "SoundPos": 144, "UUID": 172, "ActorRuntimeID": 527, "ActorRuntimeIDVarint64": 532, "ActorRuntimeIDVaruint32": 537, "ActorUniqueID": 542, "ActorUniqueIDInt64": 547, "ActorUniqueIDUint64": 552, "ActorUniqueIDVaruint64": 557, "NBT": 596}
 	names := make([]string, 0, len(req))
