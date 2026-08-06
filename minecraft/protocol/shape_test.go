@@ -23,9 +23,8 @@ func TestTextShapeProtocol2168Wire(t *testing.T) {
 	}
 }
 
-// The attached entity ID carries a runtime ID on the actor unique ID wire type. Writing it
-// as an unsigned varint makes the client read the zigzag form, resolve no entity and drop
-// every attached shape.
+// The attached entity ID is an actor unique ID. Writing it as an unsigned varint makes the
+// client read the zigzag form, resolve no entity and drop every attached shape.
 func TestPrimitiveShapeAttachedEntityIDProtocol2168Wire(t *testing.T) {
 	t.Parallel()
 
