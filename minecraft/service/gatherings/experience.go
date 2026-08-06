@@ -10,6 +10,7 @@ import (
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/realms"
 )
 
 // Experience represents a playable experience returned by the gatherings
@@ -121,7 +122,7 @@ func (e *Experience) Join(ctx context.Context) (*Address, error) {
 type Address struct {
 	// NetworkProtocol names the transport expected by the experience server.
 	// Most experiences use [NetworkProtocolDefault] at the moment.
-	NetworkProtocol NetworkProtocol `json:"networkProtocol"`
+	NetworkProtocol realms.NetworkProtocol `json:"networkProtocol"`
 	// IPv4Address is the IPv4 address of a RakNet server.
 	IPv4Address string `json:"ipV4Address"`
 	// NetherNetID is the network ID of a NetherNet server.
@@ -137,13 +138,13 @@ type Address struct {
 // [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
 // assignments use [Address.NetherNetID].
 func (a Address) DialAddress() (string, error) {
-	switch ParseNetworkProtocol(string(a.NetworkProtocol)) {
-	case NetworkProtocolDefault:
+	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
+	case realms.NetworkProtocolDefault:
 		if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
 			return "", fmt.Errorf("service/gatherings: invalid RakNet experience address")
 		}
 		return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
-	case NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
+	case realms.NetworkProtocolNetherNet, realms.NetworkProtocolNetherNetJSONRPC:
 		if address := strings.TrimSpace(a.NetherNetID); address != "" {
 			return address, nil
 		}
@@ -161,58 +162,10 @@ func (a Address) String() string {
 	return address
 }
 
-// NetworkProtocol is the transport protocol returned by the Gatherings join
-// service.
-type NetworkProtocol string
-
-// ParseNetworkProtocol normalizes a Gatherings network protocol value.
-func ParseNetworkProtocol(protocol string) NetworkProtocol {
-	switch strings.ToUpper(strings.TrimSpace(protocol)) {
-	case "DEFAULT":
-		return NetworkProtocolDefault
-	case "NETHERNET":
-		return NetworkProtocolNetherNet
-	case "NETHERNET_JSONRPC":
-		return NetworkProtocolNetherNetJSONRPC
-	default:
-		return NetworkProtocol(strings.TrimSpace(protocol))
-	}
-}
-
-// Valid reports whether the protocol is supported by Gatherings address
-// resolution.
-func (p NetworkProtocol) Valid() bool {
-	switch ParseNetworkProtocol(string(p)) {
-	case NetworkProtocolDefault, NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
-		return true
-	default:
-		return false
-	}
-}
-
-// NetherNet reports whether the protocol uses a NetherNet network ID rather
-// than a RakNet host and port.
-func (p NetworkProtocol) NetherNet() bool {
-	switch ParseNetworkProtocol(string(p)) {
-	case NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
-		return true
-	default:
-		return false
-	}
-}
-
-// Constants for [Address.NetworkProtocol].
-const (
-	// NetworkProtocolDefault indicates that the experience should be
-	// contacted using the default transport of the Bedrock Edition, RakNet.
-	NetworkProtocolDefault NetworkProtocol = "Default"
-	// NetworkProtocolNetherNet indicates that the experience should be
-	// contacted through NetherNet using WebSocket signaling.
-	NetworkProtocolNetherNet NetworkProtocol = "NetherNet"
-	// NetworkProtocolNetherNetJSONRPC indicates that the experience should be
-	// contacted through NetherNet using JSON-RPC messaging signaling.
-	NetworkProtocolNetherNetJSONRPC NetworkProtocol = "NetherNet_JsonRpc"
-)
+// NetworkProtocolDefault indicates that the experience should be contacted
+// using the default transport of the Bedrock Edition, RakNet. Gatherings uses
+// different casing on the wire than [realms.NetworkProtocolDefault].
+const NetworkProtocolDefault realms.NetworkProtocol = "Default"
 
 // DestinationInfo describes the destination selected by [Experience.Join].
 //

@@ -3,6 +3,8 @@ package gatherings
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/sandertv/gophertunnel/minecraft/realms"
 )
 
 func TestAddressDialAddress(t *testing.T) {
@@ -77,21 +79,21 @@ func TestAddressUnmarshalJSONNetherNetID(t *testing.T) {
 	}
 }
 
-func TestParseNetworkProtocol(t *testing.T) {
+func TestAddressNetworkProtocol(t *testing.T) {
 	tests := []struct {
 		input string
-		want  NetworkProtocol
+		want  realms.NetworkProtocol
 	}{
-		{input: "Default", want: NetworkProtocolDefault},
-		{input: " default ", want: NetworkProtocolDefault},
-		{input: "NetherNet", want: NetworkProtocolNetherNet},
-		{input: "NETHERNET_JSONRPC", want: NetworkProtocolNetherNetJSONRPC},
-		{input: "NetherNet_JsonRpc", want: NetworkProtocolNetherNetJSONRPC},
+		{input: "Default", want: realms.NetworkProtocolDefault},
+		{input: " default ", want: realms.NetworkProtocolDefault},
+		{input: "NetherNet", want: realms.NetworkProtocolNetherNet},
+		{input: "NETHERNET_JSONRPC", want: realms.NetworkProtocolNetherNetJSONRPC},
+		{input: "NetherNet_JsonRpc", want: realms.NetworkProtocolNetherNetJSONRPC},
 	}
 
 	for _, test := range tests {
-		if got := ParseNetworkProtocol(test.input); got != test.want {
-			t.Errorf("ParseNetworkProtocol(%q) = %q, want %q", test.input, got, test.want)
+		if got := realms.ParseNetworkProtocol(test.input); got != test.want {
+			t.Errorf("realms.ParseNetworkProtocol(%q) = %q, want %q", test.input, got, test.want)
 		}
 	}
 }
