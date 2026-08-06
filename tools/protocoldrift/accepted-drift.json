@@ -29,11 +29,6 @@
       "reason": "Unsettled, one source each way. gophertunnel writes Layers with SliceUint8Length (U8 count); the BDS dump says a uvarint32 prefix. Mojang's schema states no prefix override, which merely implies the varint default rather than positively confirming it. Needs a packet capture."
     },
     {
-      "id": 347,
-      "name": "ServerPresenceInfo",
-      "reason": "Unsettled, and the one that could truncate a packet. gophertunnel's PresenceInfo carries ExperienceName and WorldName optionals plus an unconditional RichPresenceID; the BDS dump documents only an optional richPresenceId, and CloudburstMC uses the dump's type name. Needs a packet capture."
-    },
-    {
       "id": 90,
       "name": "StructureBlockUpdate",
       "reason": "Unsettled optionality. gophertunnel writes both structure names unconditionally; the BDS dump marks the redacted name optional. Needs a packet capture."
