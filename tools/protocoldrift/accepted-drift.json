@@ -1,0 +1,52 @@
+{
+  "comment": "Packets whose encoding differs from the BDS-derived schemas and which are reviewed and accepted. Anything NOT listed here fails the check. Every entry must say why the difference is acceptable and what would settle it; 'not investigated' is not a reason to add one.",
+  "minecraft_version": "1.26.40",
+  "protocol_version": 2168,
+  "packets": [
+    {
+      "id": 38,
+      "name": "HurtArmour",
+      "reason": "Being fixed. ArmourSlots is written with Varint64 (zigzag) but is a bitset, so zigzagging shifts every bit. CloudburstMC writes it unsigned, the BDS dump types it uvarint64, and Mojang's docs mark it unsigned. Remove this entry once the fix lands."
+    },
+    {
+      "id": 174,
+      "name": "SubChunk",
+      "reason": "Not a wire difference - the comparison is too coarse. The heightmap is a 2D 16x16 array of int8 and gophertunnel stores the same 256 bytes flat. Remove once the comparator flattens nested fixed arrays."
+    },
+    {
+      "id": 190,
+      "name": "EditorNetwork",
+      "reason": "gophertunnel is very likely correct. It writes a bool then one NetworkLittleEndian NBT payload, and CloudburstMC does the same; the BDS dump appears to describe the payload's interior (a variant name and data) rather than its framing."
+    },
+    {
+      "id": 315,
+      "name": "ServerBoundDiagnostics",
+      "reason": "gophertunnel is very likely correct. It writes SystemCategories and WhiskerScopes as plain slices and CloudburstMC also writes them unconditionally; the BDS dump marks System Categories optional."
+    },
+    {
+      "id": 187,
+      "name": "UpdateAbilities",
+      "reason": "Unsettled, one source each way. gophertunnel writes Layers with SliceUint8Length (U8 count); the BDS dump says a uvarint32 prefix. Mojang's schema states no prefix override, which merely implies the varint default rather than positively confirming it. Needs a packet capture."
+    },
+    {
+      "id": 347,
+      "name": "ServerPresenceInfo",
+      "reason": "Unsettled, and the one that could truncate a packet. gophertunnel's PresenceInfo carries ExperienceName and WorldName optionals plus an unconditional RichPresenceID; the BDS dump documents only an optional richPresenceId, and CloudburstMC uses the dump's type name. Needs a packet capture."
+    },
+    {
+      "id": 90,
+      "name": "StructureBlockUpdate",
+      "reason": "Unsettled optionality. gophertunnel writes both structure names unconditionally; the BDS dump marks the redacted name optional. Needs a packet capture."
+    },
+    {
+      "id": 137,
+      "name": "EducationSettings",
+      "reason": "Both sources agree the packet has optionals - gophertunnel uses OptionalFunc for CanModifyBlocks and OverrideURI and OptionalMarshaler for ExternalLinkSettings - but the presence boundaries land at different positions. Needs per-field adjudication."
+    },
+    {
+      "id": 198,
+      "name": "CameraPresets",
+      "reason": "Deeply nested preset payload; the difference is in optional presence inside nested definitions. Needs per-field adjudication."
+    }
+  ]
+}
