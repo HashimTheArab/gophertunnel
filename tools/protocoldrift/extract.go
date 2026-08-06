@@ -81,10 +81,6 @@ type typeRef struct {
 	Len  int
 }
 
-type fieldInfo struct {
-	Name string
-	Type typeRef
-}
 type typeInfo struct {
 	Key, Name, Pkg string
 	Fields         map[string]typeRef
