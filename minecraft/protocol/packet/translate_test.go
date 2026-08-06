@@ -445,7 +445,7 @@ func TestTranslateEntityIDsUsesPacketMarshal(t *testing.T) {
 
 func TestTranslateEntityIDsLegacyAndNestedFields(t *testing.T) {
 	shape := &PrimitiveShapes{Shapes: []protocol.PrimitiveShape{{
-		AttachedToEntityID: protocol.Option(uint64(100)),
+		AttachedToEntityID: protocol.Option(int64(100)),
 		ExtraShapeData:     &protocol.LastShape{},
 	}}}
 	waypoint := &LocatorBar{Waypoints: []protocol.LocatorBarWaypoint{{

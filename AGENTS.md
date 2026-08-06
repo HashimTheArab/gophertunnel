@@ -12,8 +12,16 @@ When adding or changing a packet or protocol struct field:
 |---|---|
 | Actor runtime ID (varuint64) | `io.ActorRuntimeID` |
 | Actor unique ID (varint64) | `io.ActorUniqueID` |
-| Actor ID in a legacy encoding | `protocol.ActorRuntimeIDInt64` / `ActorRuntimeIDUint32` / `ActorUniqueIDFixed` / `ActorUniqueIDUint64` / `ActorUniqueIDVaruint64` |
+| Actor ID in another encoding | `io.ActorRuntimeIDVarint64` / `ActorRuntimeIDVaruint32` / `ActorUniqueIDInt64` / `ActorUniqueIDUint64` / `ActorUniqueIDVaruint64` |
 | Tick on the player input timeline (the serverbound input tick and the clientbound echoes rewind is keyed on) | `io.PlayerInputTick` |
+
+Pick the operation by the value the field carries *and* the type BDS declares it with — the
+two disagree more often than they should. `Event.EntityRuntimeID` and
+`PrimitiveShape.AttachedToEntityID` both hold a runtime ID on a field declared
+`ActorUniqueID`, so both take `io.ActorRuntimeIDVarint64`: runtime-ID translation, signed
+varint on the wire. Encode one of those unsigned and the client reads the zigzag form,
+resolves no entity, and drops the effect with no error. Confirm the declared type against
+[EndstoneMC/protocol-docs](https://github.com/EndstoneMC/protocol-docs) first.
 
 These operations are what `packet.TranslateEntityIDs`, `packet.TranslateInputTicks` and
 the connection-level ID translation rewrite. A field marshalled with `io.Varuint64`
