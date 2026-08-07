@@ -177,7 +177,7 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 				return fmt.Errorf("compress batch: %w", err)
 			}
 			if observer != nil {
-				stats.CompressionDuration = time.Since(compressionStart)
+				stats.CompressionDuration = observedDuration(compressionStart)
 				stats.Compressed = true
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
@@ -194,13 +194,21 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	}
 	if observer != nil {
 		stats.OutputLen = len(data) - len(encoder.header)
-		stats.EncodeDuration = time.Since(encodeStart)
+		stats.EncodeDuration = observedDuration(encodeStart)
 		observer(stats)
 	}
 	if _, err := encoder.w.Write(data); err != nil {
 		return fmt.Errorf("write batch: %w", err)
 	}
 	return nil
+}
+
+func observedDuration(start time.Time) time.Duration {
+	duration := time.Since(start)
+	if duration <= 0 {
+		return time.Nanosecond
+	}
+	return duration
 }
 
 // putVaruint32 writes x to b with a size of 1-5 bytes and returns the number of
