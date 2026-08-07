@@ -416,11 +416,16 @@ func (listener *Listener) updatePongData() {
 		ipv6Port = port
 	}
 
+	authOnline, authOffline := "0", "1"
+	if !listener.cfg.AuthenticationDisabled {
+		authOnline, authOffline = "1", "0"
+	}
+
 	s := listener.status()
-	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
+	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port,
-		0,
+		listener.listener.ID(), s.ServerSubName, "Creative", 1, "1", ipv4Port, ipv6Port, "0",
+		authOnline, authOffline,
 	))
 
 	if status, ok := listener.listener.(interface {
