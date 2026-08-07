@@ -7,7 +7,17 @@ description: Use when updating, reviewing, or debugging gophertunnel for a new M
 
 ## Goal
 
-Update gophertunnel protocol code from scratch with source-backed evidence. Prefer correct wire compatibility over matching any single upstream implementation.
+Land the exact target protocol in one pass: correct wire bytes, idiomatic gophertunnel API, a focused reviewable diff,
+verified downstream consumers, and no compatibility scaffolding for older protocols. Prefer positive wire evidence and
+live behavior over matching any single reference implementation.
+
+**REQUIRED CLOSEOUT:** Read [references/one-shot-checklist.md](references/one-shot-checklist.md) before the first edit
+and run it again against the final merge-base diff before pushing. Do not call the update complete with an unchecked
+applicable item.
+
+For every changed packet or shared type, keep a compact evidence ledger while working: previous wire shape, proposed
+wire shape, exact source/commit, read evidence, write evidence, conflicts, and how the conflict was resolved. This may
+remain in scratch space; the PR body receives only the concise conclusions and source links.
 
 ## Source Order
 
@@ -16,22 +26,104 @@ Update gophertunnel protocol code from scratch with source-backed evidence. Pref
 3. Check Cloudburst for the exact target codec version and packet serializer.
 4. Check PMMP BedrockProtocol current implementation for independent codec evidence.
 5. Use LeviLamina/BDS symbols for C++ field names and layout hints, but verify that the commit matches the target protocol before treating it as current.
-6. Use live BDS/client packet bytes when sources disagree or decode still fails.
+6. Use the exact target BDS/client packet bytes whenever sources disagree, the change is same-width and therefore easy
+   to miss, or a client rejects a packet without a useful error.
 
 Do not pull changes from earlier protocol updates by accident. Cloudburst often updates previous codec classes too; verify that the class or registration is specifically used by the target protocol.
+
+Pin every reference to a commit. If Mojang's current generated schema names a different protocol or Minecraft version than the target, disclose the conflict and use the exact-version implementation for wire behavior; do not silently mix releases.
+
+Do not guess merely because a live capture takes longer. Record the exact BDS version/build and binary checksum, capture
+the decrypted/decompressed target packet, and inspect the disputed primitive without decoding it through the constants
+being tested. A successful login/spawn is not evidence for packet paths the bot never sends or validates.
+
+Determine a documentation snapshot's version from its contents, not its filename, branch, pull-request title, or release
+label. Check the changelog header and the generated schemas' `x-minecraft-version` and `x-protocol-version`. If these
+disagree with the filename, classify the snapshot by its internal metadata. For example, a file named
+`changelog_2168_07_07_26.md` whose header says protocol 2169 and whose schemas say Minecraft 1.26.50/protocol 2169 is
+2169 evidence, not exact 2168 evidence. Shared changes in that snapshot do not prove that its additional fields shipped
+in the earlier protocol; verify each difference against an exact-version serializer or live build.
+
+### bpd-fixer
+
+Use [TwistedAsylumMC/bpd-fixer](https://github.com/TwistedAsylumMC/bpd-fixer) as a corrected view of Mojang schemas, not as a replacement for exact-version codec evidence. After selecting the matching `bedrock-protocol-docs` ref:
+
+```bash
+git submodule update --init --recursive
+npm install
+npm run build:schemas  # corrected schemas in output/json
+npm run check
+```
+
+Inspect `output/json`, especially `x-serialization-options`. The `+double-optional` marker means `bool + (bool + value-if-true)`. Stale overrides failing after a protocol bump are evidence to investigate, not errors to bypass.
+`bpd-fixer` corrects schema structure; it does not make a mismatched source snapshot match the target release. Recheck
+the generated output's version metadata after building it.
 
 ## Cross-Check Rules
 
 - Treat Cloudburst read and write paths as separate evidence. If they differ, do not blindly copy the write path; for gophertunnel decode correctness, the read path and live payloads are usually more important.
 - Treat Mojang docs as high-value for field order and logical types, but not infallible. Confirm with at least one implementation or live bytes for risky changes.
+- Read a schema field's name, prose description, `$ref`, serialization metadata, and changelog as separate evidence. If
+  the description or field name conflicts with `$ref`, do not automatically privilege the reference. Trace the field
+  back to its first appearance, then check an independent exact-version serializer or live bytes. A generated-schema
+  refactor that carries the same contradiction from DOT into JSON is not evidence that the wire type changed.
 - Treat PMMP as strong independent evidence when it matches Mojang docs or live bytes, even if Cloudburst differs.
+- Trace the exact serializer registered by the target codec, including inherited serializers and helpers. Do not infer
+  wire encoding from a nearby enum map, type registry, or newer serializer alone: a registry may only translate a value
+  to its serialized name. For protocol 2168, `LevelSoundEvent` still writes that name as a string even though Cloudburst
+  supplies an exact-version sound-event map.
+- Treat engine enums, symbol dumps, and Cloudburst `TypeMap`s as implementation clues, not packet-facing numeric proof.
+  When they conflict with independent or live evidence, capture the exact target packet. `AvailableCommands` is a known
+  trap: its descriptor combines flags with either a basic type ID or an enum/postfix index, so a low value `2` under an
+  enum/postfix flag does not prove basic argument type ID `2` exists. BDS 1.26.40.8 emits basic IDs `1=INT`, `2` unused,
+  `3=FLOAT`, `4=VALUE`, `5=WILDCARD_INT`; its internal `HardNonTerminal` numbering and Cloudburst's inherited v975 map
+  disagree with the wire. Do not expose `R_VALUE` or shift these constants without target-wire evidence.
 - For `map<K,V>` schemas, check the byte layout. A gophertunnel slice is fine if each entry serializes `key` then `value` in map order.
 - For optional fields, preserve exact ordinal order. Missing an optional marker shifts all later fields.
+- A wire presence bool that directly guards a value is an `Optional[T]` field. Marshal it with `OptionalFunc`,
+  `OptionalMarshaler`, or the matching existing helper. Do not hand-write `hasX`, `Bool`, value, and absent-value
+  clearing branches that merely reimplement `Optional`; the extra code hides the wire shape and easily loses states.
+- Preserve present zero and present empty values. Never infer an independent optional's presence from `value != 0`,
+  `slice != nil`, or another payload value. For protocol 2168, every optional in `SubChunkEntry`—raw payload, both
+  height-map arrays, and blob hash—must use `Optional`, including `Optional[uint64]` so a present zero hash remains
+  representable.
+- Derive presence from an action/type discriminator only when the exact-version writer defines the bool as duplicated
+  discriminator metadata rather than an independent optional. On read, validate that duplicated values agree. Do not
+  use this exception for ordinary schema optionals.
+- When the exact read path accepts a presence marker independently, represent that state with `Optional[T]` even if a
+  reference writer normally chooses presence from another field. Do not collapse it into a plain value plus a custom
+  action check unless the marker is proven to be duplicated discriminator metadata. This applies equally to nested
+  structs such as map entries, scoreboard identity entries, recipe unlock requirements, movement teleport data,
+  and inventory transaction payloads. Describe the reference writer's normal choice in the field documentation; do
+  not turn that choice into a decoder invariant.
+- Do not derive wire optionality solely from a schema's `required` array. For protocol 2168,
+  Mojang's `gatheringsConfig.json` marks all eight fields required and bpd-fixer currently leaves that unchanged,
+  but Cloudburst's exact-version read/write codec shows that `worldId`, `worldName`, `targetId`, `scenarioId`, and
+  `serverId` each carry an optional marker; only `experienceId`, `experienceName`, and `creatorId` are required.
+  The containing gathering configuration is independently optional in Transfer and server join information.
+- Cereal commonly duplicates compatibility metadata: a varuint selector plus a legacy byte, or an outer presence bool around a normal optional. Derive both copies from one value when writing. On read, use the primary selector and validate the compatibility copy only when the exact target reader does; if it consumes and discards the copy, gophertunnel must do the same.
+- Distinguish duplicated metadata from reserved padding. If the exact writer emits a constant (commonly signed-varint
+  zero) and the exact reader merely consumes and discards it, keep a local `reserved` variable so both directions stay
+  aligned; do not expose it as packet state, derive it from another field, or validate it. Name it `reserved`, not
+  `legacyType`, unless evidence gives it real legacy semantics.
+- Apply the same rule to ignored compatibility names or selectors: consume them in the correct width and order, but do
+  not invent equality validation when the exact-version reader intentionally discards them. Extra strictness is a wire
+  compatibility change and can reject packets accepted by the target game.
+- The selector and the type byte it precedes are two different numberings. The selector indexes the variant list, which skips types that are no longer sent, while the type byte still counts them. Work out the mapping between the two and check it against the full enum before assuming they are equal; assuming so rejects every type above the first skipped one, and would read one as the type below it. Types no longer sent still occupy their numbers in the type byte, so keep them.
+- When an outer optional is absent, do not consume its inner marker. Reset the destination to `Optional[T]{}` so it is
+  absent and cannot retain hidden state from a reused value.
+- Gophertunnel's unified `Marshal(IO)` runs for both reads and writes. Do not zero inactive fields, reconstruct a short
+  variant, or clear slices merely to clean decoder reuse: that also mutates caller-owned packets during encoding.
+  Prefer explicit `Optional[T]` state and fresh decoded elements (the slice helpers allocate them). If a reused decode
+  target truly must be cleared, use a direction-aware mechanism with a demonstrated call site rather than unconditional
+  mutation in the shared codec.
 - For `Compression` on enum/integer fields, the logical Go type may remain small (`byte`, enum) while the wire encoding uses varint/varuint.
 - Distinguish actor unique IDs from runtime IDs:
   - actor unique ID: signed `varint64` zigzag
   - runtime entity ID: unsigned `varuint64`
   Use live bytes to resolve ambiguity.
+- Resolve the semantic identifier before choosing the Go signedness or codec. Names such as `Attached To Entity ID` are
+  insufficient by themselves; reconcile the field description, owning C++/implementation type, and actual serializer.
 - PrimitiveShapes `PrimitiveShapeDataPayload.Attached To Entity ID` is a runtime actor ID on the wire. Mojang
   `bedrock-protocol-docs` has historically described it as runtime ID while linking the schema node to
   `ActorUniqueID`; trust the runtime-ID wording plus independent implementation/BDS evidence here. PMMP encodes
@@ -40,25 +132,155 @@ Do not pull changes from earlier protocol updates by accident. Cloudburst often 
   unsigned runtime encoding. In gophertunnel, model it as `Optional[uint64]` and marshal with `Varuint64`, not
   signed `Varint64`.
 - For `oneOf`/variant selectors, encode the selector as documented, usually varuint, not as a bool unless the source explicitly says bool.
-- For enum sentinels like `UNDEFINED`, check whether they existed historically at changing numeric indexes before calling them a new semantic value.
+- Do not infer a `oneOf` selector from a field label or a broken reference implementation. For sound-data updates, verify the full selector range and every payload ordinal against the exact schema: the server sound handle is a fixed `uint64`, the action selector is a compressed `uint32`, and Fade carries duration before target volume. A serializer that always writes Stop or reverses Fade fields is evidence of an implementation bug, not a compatibility requirement.
+- For enum sentinels like `UNDEFINED`, check whether they existed historically at changing numeric indexes before calling them a new semantic value. A newly observed value one above the known range may be the expected result after a missing zero sentinel, not proof that an unrelated cache branch or preceding field is misaligned. `SubChunkResultSuccessAllAir == 6` in protocol 2168 is the concrete warning: inspect raw bytes and the complete target enum before inventing a shift or deleting a cache-dependent variant.
+- Re-derive sentinel-style modes from the exact-version schema instead of trusting constants retained from older
+  releases. In protocol 2168, `LevelChunk.SubChunkCount` is constrained to `0..64`; BDS emits request mode as
+  `SubChunkCount == 0` with `SubChunkLimit` present (`-1` means limitless). Remove the invalid old `MaxUint32` count
+  sentinels and update downstream emitters, but do not reject a non-zero count plus a present limit unless exact read
+  evidence proves that combination invalid. A canonical writer form is not automatically a decoder invariant.
+- When a release appends values to an enum that gophertunnel does not already expose completely, do not add only the new suffix. Ask the operator whether to omit the constants or expose the complete exact-version enum before changing the public API. If the complete enum is chosen, keep it in the existing owning file and constant block when that remains readable; create a dedicated file only when the repository's organization and the enum's size justify it.
 - For contiguous protocol constants, prefer the surrounding gophertunnel style. `iota` is fine for dense, ordered wire-value ranges when every value is consecutive and future additions can be inserted in order.
+- A reserved slot inside an otherwise ordered range is still compatible with `iota`: use a blank `_` entry at the exact
+  ordinal. Do not replace a clear local `iota` sequence with verbose explicit values merely because one ID is unused.
 - Keep non-contiguous or out-of-band protocol values explicit. Use hex for flag-like/high-bit values such as `0x8000000`, and separate them from the contiguous `iota` block with a blank line.
-- PMMP may keep compatibility branches that gophertunnel should not support. Prefer the target protocol's exact wire format unless the user explicitly asks for backwards compatibility.
+- Never preserve a legacy path or backward-compatibility path, for any reason. The fork targets exactly one protocol. Remove old/new wire branches, fallback serializers, deprecated source aliases, parallel representations, and inert fields outright. Do not add multi-version behavior, and do not keep a branch because an older version needed it or a reference implementation still has one — a branch on a flag whose presence the wire already states is a legacy path, not a codec. Keep a legacy-named field only when the exact target still carries it on the wire, and rename it to what it is.
+- Only change how a field is sent when there is positive evidence the target changed it. A field the previous version encoded one way is presumed unchanged; re-typing it on a hunch is a silent regression, because most re-typings are the same byte length for the values the field actually holds and so never desync. By the same token, a field that changes width keeps its component and field order unless the source says otherwise.
+- Treat exact-version writer calls as width evidence. For example, `writeUnsignedInt` and `writeByte` are not
+  interchangeable with signed varints merely because the current values are small; model and marshal the target width
+  directly instead of retaining an old Go type and adding conversion scaffolding.
+
+## Codebase Consistency
+
+- Model the target wire shape once. Do not keep aggregate and typed representations that need synchronization, packet-level selectors when the selector moved per entry, or exported compatibility fields that are no longer encoded.
+- Specialized descriptor-backed items must expose only their string identity and other wire-backed fields. Do not embed a broader numeric-ID item type and permit contradictory identities.
+- Use existing `IO`, `Marshal`, `Slice`, `FuncSlice`, and optional helpers instead of parallel reader/writer trees or
+  manual equivalents. If the wire shape is `bool + value-if-true`, the default representation is `Optional[T]` plus
+  `OptionalFunc`; require exact-version evidence before writing a custom presence branch.
+- Choose the public field type before choosing a conversion helper. This fork does not preserve obsolete APIs: when the
+  target's stable logical and wire type is `uint32`, change a stale `byte`/`int32` field to `uint32` and marshal it
+  directly. Use `IntegerFunc` only when the public semantic type intentionally differs from the wire integer type, such
+  as an established signed enum model encoded as varuint. Never use a hand-written temporary/cast/copy-back sequence.
+  Keep an explicit local only for a reserved/discarded wire field that has no corresponding struct state.
+- Prefer an array such as `[4]color.RGBA` when exact fixed cardinality is a useful part of the public API. A slice with
+  an exact-length codec remains appropriate when it is the established representation or when it must sit inside
+  `Optional[T]`; do not churn an otherwise correct API solely to replace that slice.
+- Separate integer width/endianness from colour channel semantics. A little-endian `uint32` described as ARGB must use
+  the existing ARGB colour helper, not an RGBA helper merely because both ultimately read or write four bytes. Compare
+  sibling colour fields and the schema description; channel swaps do not desynchronise packets and are easy to miss.
+- Put stable, direction-agnostic wire primitives in `minecraft/protocol`, even when first discovered in one packet. For example, nested Cereal optionals belong beside `OptionalFunc` as `DoubleOptionalFunc`.
+- Put semantic primitive encodings used across packets on `protocol.IO`/`Reader`/`Writer`, following existing IO method
+  style, rather than scattering raw integer calls or adding standalone wrapper functions. Actor IDs are the model:
+  `ActorRuntimeID`/`ActorUniqueID` name the semantic ID, while explicit suffixes such as `Int64`, `Varint64`,
+  `Varuint32`, or `Varuint64` preserve exceptional target wire encodings. Update the IO interface and both directions
+  atomically; remove the raw helper if its last caller disappears.
+- Put a reusable protocol data type's own codec on that type as an exported `Marshal(IO)` method, then use `Single`,
+  `Slice`, or the matching generic helper from packets. Do not leave a packet-bound private callback for a wire shape
+  that belongs entirely to a public `minecraft/protocol` struct. Export the stable type method, not an arbitrary helper
+  function for callers to invoke manually.
+- Keep packet semantics private: selector-to-name conversions, one-packet union validation, recipe-family implementation helpers, and format-specific adapters should not become public APIs merely to shorten a packet file.
+- Audit every new private helper before PR closeout. Export it only when the abstraction is protocol-generic and its name/contract remain meaningful outside the originating packet; otherwise keep it local.
+- Prefer one shared internal representation when reader and writer logic repeat the same fields (for example item user
+  data). Small conversion functions at the two public type boundaries are better than duplicating the binary codec, but
+  do not export the internal carrier or preserve two independently mutable public representations.
+- For a small set sent natively as a list of IDs, prefer a list-backed set abstraction that preserves absent versus
+  present-empty, rejects duplicates and out-of-range IDs, and avoids map ordering/overhead. Do not retain an old bitset
+  size constant once the wire is a list; if callers need the valid range, expose a documented trailing `...Count`
+  enumerator in the existing constant block, separated by a blank line. Use the generic constructor directly; do not
+  add a packet-specific constructor that only supplies that count.
+- Keep one-use lookup tables local to the conversion/codec that owns them. For a dense zero-based enum, a local fixed
+  array plus an unsigned upper-bound check and `(value, ok)` is simpler than an exhaustive switch and cannot panic on
+  untrusted values. Use a switch or explicit map only when values are sparse or the mapping is not positional. Do not
+  add mutable package-global `...Names` variables for one caller.
+- Comments must add semantics, invariants, or surprising wire behavior. Exported identifiers still receive idiomatic Go
+  documentation, but do not narrate obvious private adapters, field-copy helpers, type switches, or protocol-version
+  history. Do not add a per-version protocol document or comments that merely restate code unless the repository already
+  maintains that artifact. Keep source provenance and capture details in the evidence ledger and PR body.
+- Remove dead lookups, duplicated codecs, inert fields, transitional caches, and write-then-reconstruct heuristics introduced by a broad patch.
+- After removing the last call site of an `IO` method or generic slice/optional helper, delete the helper and its `IO`
+  interface entry in the same patch. Do not leave an exported compatibility surface that no target-version codec uses.
 
 ## Implementation Workflow
 
-1. Start with `git status --short --branch`; never revert unrelated user changes.
-2. Gather references before editing. Capture commit SHAs or stable links for Mojang, Cloudburst, PMMP, and any LeviLamina/BDS evidence used.
-3. Diff the current gophertunnel files against source evidence packet by packet.
-4. Make the smallest code change that fixes the target protocol. Avoid broad refactors and generated churn.
-5. Respect user-specific constraints. For Hashim's gophertunnel work, use normal follow-up commits, do not amend unless asked, do not add "committed by Codex", and do not add test files when the user says tests are unnecessary.
-6. Run targeted verification first:
+1. Start with `git status --short --branch`; never revert unrelated user changes. Fetch the requested base and create the
+   update branch from its current tip. Treat an old patch/PR as evidence, not as the branch base.
+2. Record the merge base and inventory the source patch by category: protocol packets/types, shared IO, NBT, generated
+   data, dependencies, tests, docs, and unrelated fixes. Resolve conflicts semantically against current code; never
+   accept wholesale ours/theirs for codecs, registries, or generated outputs.
+3. Gather references before editing. Capture commit SHAs or stable links for Mojang, Cloudburst, PMMP, and any
+   LeviLamina/BDS evidence used. Build the evidence ledger packet by packet.
+4. Diff the current gophertunnel files against the exact evidence. Audit registrations and every field, including fields
+   that appear unchanged around insertions/removals; one missing field can make later correct fields look broken.
+5. Make the smallest coherent target-version change. Remove unrelated NBT/reader/writer/generated/test changes from the
+   PR unless the target wire or the chosen shared abstraction requires them. Move independently valuable fixes to a
+   separate branch/PR instead of carrying them in the protocol diff.
+6. Treat generated data as generated: change the canonical source/generator, regenerate with the repository workflow,
+   and require a second generation run to produce no diff. Do not commit debug symbols, BDS binaries, captures, or
+   conversion scratch files. When data must come from BDS or Cloudburst conversion, identify that provenance in the PR.
+7. Respect user-specific constraints. For Hashim's gophertunnel work, use normal follow-up commits, do not amend unless
+   asked, do not add "committed by Codex", and do not add new test files to the PR unless explicitly requested.
+   Mechanically migrate existing fixtures only when a required API change would otherwise leave the branch uncompilable;
+   temporary uncommitted regression tests remain useful and must be removed before staging.
+8. Run targeted verification first:
    - `go test ./minecraft/protocol`
    - `go test ./minecraft/protocol/packet`
    - `git diff --check`
-   Add broader checks only when the change touches shared behavior.
-7. If Lunar or another downstream project consumes a pseudo-version branch, verify which branch/commit its `go.mod` points at before claiming live testing will include the new fix.
-8. Push the requested branch only after tests pass and status is understood.
+   Add `go test ./... -count=1`, `go vet ./...`, and repository CI-equivalent static checks when shared behavior changes.
+   If the user forbids test files in the PR, temporary local regression tests are still useful: watch them fail, make them pass, then delete them before staging.
+9. Live-test the behavior that changed, not merely login/spawn. Exercise chunks with real sub-chunk requests and palette
+   validation, command descriptors, debug shapes, inventory variants, resource packs, or other affected paths. A bot
+   that never sends the request or validates the result cannot prove that path. Capture both sides' errors and inspect
+   unknown packets, unread tails, disconnects, and silent semantic failures.
+10. If Dragonfly, Lunar, or another downstream project consumes a pseudo-version, verify the exact branch/commit in its
+    `go.mod` before claiming the test includes the fix. A temporary fork `replace` is allowed only while upstream is
+    unmerged; after merge, update to the upstream pseudo-version, remove the replace, tidy, and rerun automated and live
+    validation. Upstream PRs must never retain private-fork replaces.
+11. Before staging, inspect the complete `merge-base...HEAD` diff and classify every file. Also run
+    `git diff --name-only -- '*_test.go' go.mod go.sum`; when tests/dependencies are out of scope, require it to be empty
+    except for justified mechanical migrations. Verify no old protocol number, legacy branch, dead helper, temporary
+    instrumentation, capture, debug artifact, or unrelated fix remains.
+12. Push the requested branch only after the evidence, protocol, API-consistency, scope, verification, and downstream
+    gates are understood and clean.
+
+## Review Checklist
+
+- Compare the exact-version read and write paths independently.
+- Check field order, signedness, widths, selectors, legacy copies, optional nesting, slice lengths, and absent-state clearing.
+- For every apparent enum change, confirm whether the registered serializer writes an ordinal, a name looked up from
+  the enum, or both. Never infer the wire representation from the presence of an enum/type map.
+- Audit every new `Bool`-guarded branch. Replace it with the existing optional helper unless the bool is proven to be
+  duplicated discriminator metadata or has a different wire shape.
+- Audit every local numeric temporary. If the type mismatch has no semantic purpose, change the public field to the
+  target model; API breakage is not a reason to keep an inferior representation. Otherwise use `IntegerFunc`. Retain
+  explicit locals only for reserved/discarded wire fields and label them accurately.
+- Audit every conditional/variant decode for accidental write-time mutation, every independently guarded value for an
+  `Optional[T]` API, and every fixed-count field for an array-shaped Go API.
+- Check that public structs contain only meaningful target-version state and that selector granularity matches the wire (packet, entry, or element).
+- A packet-level field that still appears on the target wire remains meaningful even when a newer per-entry selector
+  carries the effective choice. Keep the wire field, but do not make it drive entry presence unless the exact codec does.
+- Run a protocol-correctness review against pinned references and a separate maintainability/API-consistency pass.
+- In the maintainability pass, compare every changed file with sibling code for names, type choices, constant blocks,
+  helper placement, table placement, comments, and error handling. Search every new exported/private helper and field for
+  all call sites. Delete wrappers, caches, aliases, and local helpers that exist only because the first implementation was
+  indirect.
+- Run exactly one independent Opus audit per explicit user request, non-interactively with
+  `claude -p --model opus`. Disable unrelated settings, plugins, and MCP servers when they make print mode hang, and give
+  it the committed diff plus exact-version evidence. Treat findings as claims under the same source-validation rule.
+  Do not automatically start a second pass; wait for another explicit request.
+- Treat bot findings as claims: validate them against the exact target. Fix real issues; reply with source-backed rebuttals for false positives and resolve the thread.
+- Do not post unsolicited top-level "Codex review", self-review, audit summaries, or comments on untouched code. If the
+  user asks only to inspect/fix and says not to reply, make the code changes without commenting. Reply and resolve only
+  when the user authorizes review-thread closeout.
+- After posting review-thread replies, verify they are public and submitted. A GraphQL reply node with
+  `pullRequestReview: null` that returns 404 from the REST pull-review-comment endpoint may be a viewer-only pending
+  draft even when the pending-review query is empty. Submit the containing review, or delete the draft and repost it
+  through the REST reply endpoint. Resolving its thread does not publish it.
+- Before declaring review closeout, compare every addressed original review-comment ID with the public REST comments'
+  `in_reply_to_id` values, check that no pending review remains, and then confirm there are no current unresolved
+  actionable threads. A formal `CHANGES_REQUESTED` decision may remain until the reviewer re-reviews even after every
+  thread and reply is complete.
+- After every push, wait for refreshed CI and review bots. Finish only when checks pass and the review closeout checks
+  above are clean.
 
 ## Debugging Decode Errors
 
@@ -74,6 +296,13 @@ When asked for a PR description, include:
 - concise summary of packet/codecs changed
 - exact source links per change
 - test commands run
+- exact BDS/client build and feature paths exercised when live validation was needed
 - known evidence conflicts, if any
+- the explicit absence of new test files when requested
 
 Use direct GitHub links with commit SHAs where possible.
+Use real Markdown newlines; after creation, fetch the body and verify it does not contain literal `\n` escapes. Open ready for review unless the user asks for a draft. For an upstream PR, use the fork branch as the head and the upstream default branch as the base; never force-push.
+Before opening an upstream PR from a branch already used for a fork PR, compare the upstream merge-base delta; do not
+assume same branch means same review scope. Remove fork-only merges and unrelated divergence. After each dependency or
+review push, fetch the rendered body, public replies, checks, and current unresolved threads again before declaring it
+ready.

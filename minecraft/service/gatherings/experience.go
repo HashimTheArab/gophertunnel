@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/realms"
 )
 
 // Experience represents a playable experience returned by the gatherings
@@ -120,9 +122,11 @@ func (e *Experience) Join(ctx context.Context) (*Address, error) {
 type Address struct {
 	// NetworkProtocol names the transport expected by the experience server.
 	// Most experiences use [NetworkProtocolDefault] at the moment.
-	NetworkProtocol string `json:"networkProtocol"`
-	// IPv4Address is the IPv4 address of the resolved server.
+	NetworkProtocol realms.NetworkProtocol `json:"networkProtocol"`
+	// IPv4Address is the IPv4 address of a RakNet server.
 	IPv4Address string `json:"ipV4Address"`
+	// NetherNetID is the network ID of a NetherNet server.
+	NetherNetID string `json:"netherNetId"`
 	// Port is the UDP port of the resolved server.
 	Port uint16 `json:"port"`
 	// DestinationInfo contains additional identifiers for the resolved
@@ -130,18 +134,38 @@ type Address struct {
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
 }
 
-// String returns a combination of [Address.IPv4Address] and [Address.Port].
-func (a Address) String() string {
-	return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port)))
+// DialAddress returns the address expected by the transport selected through
+// [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
+// assignments use [Address.NetherNetID].
+func (a Address) DialAddress() (string, error) {
+	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
+	case realms.NetworkProtocolDefault:
+		if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
+			return "", fmt.Errorf("service/gatherings: invalid RakNet experience address")
+		}
+		return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
+	case realms.NetworkProtocolNetherNet, realms.NetworkProtocolNetherNetJSONRPC:
+		if address := strings.TrimSpace(a.NetherNetID); address != "" {
+			return address, nil
+		}
+		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
+	default:
+		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
+	}
 }
 
-// Constants for [Address.NetworkProtocol] so that other transport layers
-// such as NetherNet can be added in the future.
-const (
-	// NetworkProtocolDefault indicates that the experience should be
-	// contacted using the default transport of the Bedrock Edition, RakNet.
-	NetworkProtocolDefault = "Default"
-)
+// String returns the dial address, or an empty string if the assignment is
+// invalid or uses an unsupported network protocol. Call [Address.DialAddress]
+// when the error is relevant.
+func (a Address) String() string {
+	address, _ := a.DialAddress()
+	return address
+}
+
+// NetworkProtocolDefault indicates that the experience should be contacted
+// using the default transport of the Bedrock Edition, RakNet. Gatherings uses
+// different casing on the wire than [realms.NetworkProtocolDefault].
+const NetworkProtocolDefault realms.NetworkProtocol = "Default"
 
 // DestinationInfo describes the destination selected by [Experience.Join].
 //

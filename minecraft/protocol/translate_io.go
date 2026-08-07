@@ -62,28 +62,28 @@ func (r *translationReader) ActorUniqueID(x *int64) {
 	*x = r.t.UniqueID(*x)
 }
 
-func (r *translationReader) ActorRuntimeIDInt64(x *int64) {
-	ActorRuntimeIDInt64(r.IO, x)
+func (r *translationReader) ActorRuntimeIDVarint64(x *int64) {
+	r.IO.ActorRuntimeIDVarint64(x)
 	*x = int64(r.t.RuntimeID(uint64(*x)))
 }
 
-func (r *translationReader) ActorRuntimeIDUint32(x *uint32) {
-	ActorRuntimeIDUint32(r.IO, x)
+func (r *translationReader) ActorRuntimeIDVaruint32(x *uint32) {
+	r.IO.ActorRuntimeIDVaruint32(x)
 	*x = uint32(r.t.RuntimeID(uint64(*x)))
 }
 
-func (r *translationReader) ActorUniqueIDFixed(x *int64) {
-	ActorUniqueIDFixed(r.IO, x)
+func (r *translationReader) ActorUniqueIDInt64(x *int64) {
+	r.IO.ActorUniqueIDInt64(x)
 	*x = r.t.UniqueID(*x)
 }
 
 func (r *translationReader) ActorUniqueIDUint64(x *uint64) {
-	ActorUniqueIDUint64(r.IO, x)
+	r.IO.ActorUniqueIDUint64(x)
 	*x = uint64(r.t.UniqueID(int64(*x)))
 }
 
 func (r *translationReader) ActorUniqueIDVaruint64(x *uint64) {
-	ActorUniqueIDVaruint64(r.IO, x)
+	r.IO.ActorUniqueIDVaruint64(x)
 	*x = uint64(r.t.UniqueID(int64(*x)))
 }
 
@@ -116,29 +116,29 @@ func (w *translationWriter) ActorUniqueID(x *int64) {
 	w.IO.ActorUniqueID(&v)
 }
 
-func (w *translationWriter) ActorRuntimeIDInt64(x *int64) {
+func (w *translationWriter) ActorRuntimeIDVarint64(x *int64) {
 	v := int64(w.t.RuntimeID(uint64(*x)))
-	ActorRuntimeIDInt64(w.IO, &v)
+	w.IO.ActorRuntimeIDVarint64(&v)
 }
 
-func (w *translationWriter) ActorRuntimeIDUint32(x *uint32) {
+func (w *translationWriter) ActorRuntimeIDVaruint32(x *uint32) {
 	v := uint32(w.t.RuntimeID(uint64(*x)))
-	ActorRuntimeIDUint32(w.IO, &v)
+	w.IO.ActorRuntimeIDVaruint32(&v)
 }
 
-func (w *translationWriter) ActorUniqueIDFixed(x *int64) {
+func (w *translationWriter) ActorUniqueIDInt64(x *int64) {
 	v := w.t.UniqueID(*x)
-	ActorUniqueIDFixed(w.IO, &v)
+	w.IO.ActorUniqueIDInt64(&v)
 }
 
 func (w *translationWriter) ActorUniqueIDUint64(x *uint64) {
 	v := uint64(w.t.UniqueID(int64(*x)))
-	ActorUniqueIDUint64(w.IO, &v)
+	w.IO.ActorUniqueIDUint64(&v)
 }
 
 func (w *translationWriter) ActorUniqueIDVaruint64(x *uint64) {
 	v := uint64(w.t.UniqueID(int64(*x)))
-	ActorUniqueIDVaruint64(w.IO, &v)
+	w.IO.ActorUniqueIDVaruint64(&v)
 }
 
 func (w *translationWriter) EntityMetadata(x *EntityMetadata) {

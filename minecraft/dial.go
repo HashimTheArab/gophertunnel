@@ -15,6 +15,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -86,6 +87,12 @@ type Dialer struct {
 	// and version of the resource pack, the number of the current pack being downloaded, and the total amount of packs.
 	// The boolean returned determines if the pack will be downloaded or not.
 	DownloadResourcePack func(id uuid.UUID, version string, current, total int) bool
+	// ResourcePackDownload controls how many resource pack chunk requests may be in flight at once. The
+	// zero value keeps the sequential default.
+	ResourcePackDownload ResourcePackDownloadConfig
+	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
+	// fall back to a normal download.
+	ResourcePackCache ResourcePackCache
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -127,6 +134,15 @@ type Dialer struct {
 	// the client when an XUID is present without logging in.
 	// For getting this to work with BDS, authentication should be disabled.
 	KeepXBLIdentityData bool
+}
+
+// netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
+// verifier validates the token's 'iss' claim against.
+func netherNetIdentityProvider(issuer *url.URL) string {
+	if issuer == nil {
+		return ""
+	}
+	return issuer.JoinPath().String()
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -198,8 +214,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("generating ECDSA key: %w", err)}
 	}
 	var (
-		token    string
-		verifier *oidc.IDTokenVerifier
+		token            string
+		identityProvider string
+		verifier         *oidc.IDTokenVerifier
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -210,6 +227,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
 		}
+		identityProvider = netherNetIdentityProvider(e.Issuer)
 		verifier, err = e.VerifierContext(ctx)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
@@ -256,7 +274,11 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	var netConn net.Conn
-	if i, ok := network.(identityDialer); ok && token != "" {
+	if token == "" {
+		netConn, err = network.DialContext(ctx, address)
+	} else if i, ok := network.(identityProviderDialer); ok {
+		netConn, err = i.DialContextIdentityProvider(ctx, address, token, key, identityProvider)
+	} else if i, ok := network.(identityDialer); ok {
 		netConn, err = i.DialContextIdentity(ctx, address, token, key)
 	} else {
 		netConn, err = network.DialContext(ctx, address)
@@ -286,6 +308,8 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
 	conn.downloadResourcePack = d.DownloadResourcePack
+	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
+	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets

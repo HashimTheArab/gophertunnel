@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,23 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
 )
+
+func TestNetherNetIdentityProviderNormalizesIssuer(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"https://authorization.example.test",
+		"https://authorization.example.test/",
+	} {
+		issuer, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse issuer %q: %v", raw, err)
+		}
+		if got, want := netherNetIdentityProvider(issuer), "https://authorization.example.test/"; got != want {
+			t.Errorf("netherNetIdentityProvider(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
 
 func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
 	data := login.ClientData{}
@@ -34,7 +52,7 @@ func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
 	if got, want := string(version), "0.0.0"; got != want {
 		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
 	}
-	if got, want := data.GameVersion, "1.26.33"; got != want {
+	if got, want := data.GameVersion, "1.26.40"; got != want {
 		t.Fatalf("game version = %q, want %q", got, want)
 	}
 	if got, want := data.MemoryTier, 4; got != want {

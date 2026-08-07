@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
-	github.com/df-mc/go-nethernet v1.0.19-0.20260713035212-0d451757ec09
+	github.com/df-mc/go-nethernet v1.0.19-0.20260806003522-be651398d023
 	github.com/df-mc/go-playfab/v2 v2.0.2-0.20260618232935-6d86fc87875f
 	github.com/df-mc/go-xsapi/v2 v2.0.2
 	github.com/df-mc/jsonc v1.0.5
@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.1
 	github.com/pelletier/go-toml v1.9.5
-	github.com/sandertv/go-raknet v1.15.0
+	github.com/sandertv/go-raknet v1.15.2-0.20260705184311-0d1fd09e2cf6
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
 	golang.org/x/net v0.50.0
 	golang.org/x/oauth2 v0.36.0

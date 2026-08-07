@@ -22,9 +22,8 @@ const idSentinel = 1_000_000
 // reads the field back after translation.
 var idFieldFixtures = map[string]func() (Packet, func() int64){
 	"PlayerAuthInput.ClientPredictedVehicle": func() (Packet, func() int64) {
-		pk := &PlayerAuthInput{InputData: protocol.NewBitset(PlayerAuthInputBitsetSize), ClientPredictedVehicle: idSentinel}
-		pk.InputData.Set(InputFlagClientPredictedVehicle)
-		return pk, func() int64 { return pk.ClientPredictedVehicle }
+		pk := &PlayerAuthInput{ClientPredictedVehicle: protocol.Option(int64(idSentinel))}
+		return pk, func() int64 { id, _ := pk.ClientPredictedVehicle.Value(); return id }
 	},
 	"CameraInstruction.Target.EntityUniqueID": func() (Packet, func() int64) {
 		pk := &CameraInstruction{Target: protocol.Option(protocol.CameraInstructionTarget{EntityUniqueID: idSentinel})}
@@ -51,12 +50,21 @@ var idFieldFixtures = map[string]func() (Packet, func() int64){
 		pk := &SetScore{Entries: []protocol.ScoreboardEntry{{IdentityType: protocol.ScoreboardIdentityPlayer, EntityUniqueID: idSentinel}}}
 		return pk, func() int64 { return pk.Entries[0].EntityUniqueID }
 	},
+	"SetScoreboardIdentity.Entries[].EntityUniqueID": func() (Packet, func() int64) {
+		pk := &SetScoreboardIdentity{Entries: []protocol.ScoreboardIdentityEntry{{
+			EntityUniqueID: protocol.Option(int64(idSentinel)),
+		}}}
+		return pk, func() int64 { id, _ := pk.Entries[0].EntityUniqueID.Value(); return id }
+	},
 	"ClientBoundMapItemData.TrackedObjects[].EntityUniqueID": func() (Packet, func() int64) {
 		pk := &ClientBoundMapItemData{
-			UpdateFlags:    MapUpdateFlagDecoration,
-			TrackedObjects: []protocol.MapTrackedObject{{Type: protocol.MapObjectTypeEntity, EntityUniqueID: idSentinel}},
+			TrackedObjects: protocol.Option([]protocol.MapTrackedObject{{Type: protocol.MapObjectTypeEntity, EntityUniqueID: protocol.Option(int64(idSentinel))}}),
 		}
-		return pk, func() int64 { return pk.TrackedObjects[0].EntityUniqueID }
+		return pk, func() int64 {
+			tracked, _ := pk.TrackedObjects.Value()
+			id, _ := tracked[0].EntityUniqueID.Value()
+			return id
+		}
 	},
 	"ClientMovementPredictionSync.EntityUniqueID": func() (Packet, func() int64) {
 		pk := &ClientMovementPredictionSync{ActorFlags: protocol.NewBitset(protocol.EntityDataFlagCount), EntityUniqueID: idSentinel}
@@ -174,7 +182,7 @@ func plantSentinel(v reflect.Value, segments []string) (func() int64, error) {
 // cannot reach without other fields set for Marshal to succeed.
 var tickFieldFixtures = map[string]func() (Packet, func() int64){
 	"PlayerAuthInput.Tick": func() (Packet, func() int64) {
-		pk := &PlayerAuthInput{InputData: protocol.NewBitset(PlayerAuthInputBitsetSize), Tick: idSentinel}
+		pk := &PlayerAuthInput{Tick: idSentinel}
 		return pk, func() int64 { return int64(pk.Tick) }
 	},
 }
