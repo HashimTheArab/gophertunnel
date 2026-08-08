@@ -23,13 +23,17 @@ var minecraftAuthURL = &url.URL{
 } // https://multiplayer.minecraft.net/authentication
 
 // RequestMinecraftChain requests a fully processed Minecraft JWT chain using
-// the XBL client and the ECDSA private key passed. The key will later be used to
+// signer and the ECDSA private key passed. The key will later be used to
 // initialise encryption, and must be saved for when packets need to be
 // decrypted/encrypted.
-func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa.PrivateKey) (string, error) {
+func RequestMinecraftChain(ctx context.Context, signer xsapi.TokenAndSignaturer, client *http.Client, key *ecdsa.PrivateKey) (string, error) {
 	data, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	if err != nil {
 		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+	token, _, err := signer.TokenAndSignature(ctx, minecraftAuthURL)
+	if err != nil {
+		return "", fmt.Errorf("request XSTS token: %w", err)
 	}
 
 	// The body of the requests holds a JSON object with one key in it, the 'identityPublicKey', which holds
@@ -43,9 +47,10 @@ func RequestMinecraftChain(ctx context.Context, client *xsapi.Client, key *ecdsa
 	request.Header.Set("User-Agent", "MCPE/Android")
 	request.Header.Set("Client-Version", protocol.CurrentVersion)
 	request.Header.Set("Content-Type", "application/json")
+	token.SetAuthHeader(request)
 
 	// The vanilla client does not populate Signature header for auth chain requests.
-	resp, err := client.HTTPClient().Do(xsapi.WithoutAuthHeaders(request, "Signature"))
+	resp, err := client.Do(xsapi.WithoutAuthHeaders(request, "Signature"))
 	if err != nil {
 		return "", fmt.Errorf("POST %v: %w", minecraftAuthURL, err)
 	}
