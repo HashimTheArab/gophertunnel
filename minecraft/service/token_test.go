@@ -67,6 +67,15 @@ func TestRenewRejectsNilTokenResult(t *testing.T) {
 	}
 }
 
+func TestTokenClockUsesWallTimeAcrossSuspend(t *testing.T) {
+	token := new(Token)
+	token.setServerTime(time.Now())
+
+	if token.serverTimeReceivedAt != token.serverTimeReceivedAt.Round(0) {
+		t.Fatal("serverTimeReceivedAt retains a monotonic reading, which may pause during system suspend")
+	}
+}
+
 func testAuthorizationEnvironment(t *testing.T, roundTrip serviceRoundTripperFunc) *AuthorizationEnvironment {
 	t.Helper()
 	serviceURI, err := url.Parse("https://example.invalid")

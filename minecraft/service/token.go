@@ -505,7 +505,9 @@ func (t *Token) Valid() bool {
 // setServerTime records the server time and when it was received.
 func (t *Token) setServerTime(serverTime time.Time) {
 	t.serverTime = serverTime
-	t.serverTimeReceivedAt = time.Now()
+	// Strip the monotonic reading so elapsed time includes system suspend on
+	// platforms whose monotonic clock pauses while the system sleeps.
+	t.serverTimeReceivedAt = time.Now().Round(0)
 }
 
 // now returns the current server time, falling back to local time.
