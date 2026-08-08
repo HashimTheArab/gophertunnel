@@ -1,5 +1,7 @@
 package protocol
 
+import "github.com/go-gl/mathgl/mgl32"
+
 const (
 	EntityDataKeyFlags = iota
 	EntityDataKeyStructuralIntegrity
@@ -301,6 +303,37 @@ const (
 	EntityDataTypeBlockPos
 	EntityDataTypeInt64
 	EntityDataTypeVec3
+)
+
+// EntityDataValue is a value supported by the entity metadata codec.
+type EntityDataValue interface {
+	byte | int16 | int32 | float32 | string | map[string]any | BlockPos | int64 | mgl32.Vec3
+}
+
+// EntityDataKey identifies entity metadata with a specific value type.
+type EntityDataKey[T EntityDataValue] uint32
+
+// ID returns the numeric metadata key.
+func (k EntityDataKey[T]) ID() uint32 {
+	return uint32(k)
+}
+
+// Set sets the metadata value associated with the key.
+func (k EntityDataKey[T]) Set(m EntityMetadata, value T) {
+	m[k.ID()] = value
+}
+
+// Get returns the metadata value associated with the key.
+func (k EntityDataKey[T]) Get(m EntityMetadata) (T, bool) {
+	value, ok := m[k.ID()].(T)
+	return value, ok
+}
+
+const (
+	EntityDataVariant     EntityDataKey[int32]   = EntityDataKeyVariant
+	EntityDataEffectColor EntityDataKey[int32]   = EntityDataKeyEffectColor
+	EntityDataScale       EntityDataKey[float32] = EntityDataKeyScale
+	EntityDataScore       EntityDataKey[string]  = EntityDataKeyScore
 )
 
 // EntityMetadata represents a map that holds metadata associated with an entity. The data held in the map depends on
