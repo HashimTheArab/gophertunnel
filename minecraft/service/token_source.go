@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/df-mc/go-playfab/v2"
 )
@@ -71,5 +72,5 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 // tokenRenewable reports whether tok can still authenticate a renewal request,
 // i.e. it has not passed its hard expiry (ValidUntil).
 func tokenRenewable(tok *Token) bool {
-	return tok != nil && tok.AuthorizationHeader != "" && tok.now().Before(tok.ValidUntil)
+	return tok != nil && tok.AuthorizationHeader != "" && time.Now().Before(tok.ValidUntil)
 }

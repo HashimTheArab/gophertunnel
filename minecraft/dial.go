@@ -24,7 +24,6 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
-	"github.com/df-mc/go-xsapi/v2/xal/nsal"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
@@ -210,23 +209,25 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	var (
 		chainData, token string
 		verifier         *oidc.IDTokenVerifier
-		xblSigner        xsapi.TokenAndSignaturer
-		httpClient       = d.HTTPClient
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
 	}
 	if d.TokenSource != nil || d.XBLClient != nil {
 		ctx = auth.WithContextClient(ctx, d.HTTPClient)
-		if d.XBLClient != nil {
-			xblSigner = d.XBLClient
-			httpClient = d.XBLClient.HTTPClient()
-		} else {
+		if d.XBLClient == nil {
 			x, ok := d.TokenSource.(xsapi.TokenSource)
 			if !ok {
 				x = auth.ContextSession(ctx, d.TokenSource)
 			}
-			xblSigner = nsal.NewResolver(x)
+			d.XBLClient, err = xsapi.ClientConfig{
+				HTTPClient: d.HTTPClient,
+				RTAMode:    xsapi.RTADisabled,
+			}.New(ctx, x)
+			if err != nil {
+				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to xbox live: %w", err)}
+			}
+			defer d.XBLClient.Close()
 		}
 		if !d.EnableLegacyAuth {
 			e, err := authEnv(ctx)
@@ -243,7 +244,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 				// If a MultiplayerTokenSource was not provided, log in to PlayFab
 				// account and use a default implementation instead.
 				if d.PlayFabClient == nil {
-					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, xblSigner, playfab.ClientConfig{
+					client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, d.XBLClient, playfab.ClientConfig{
 						HTTPClient:    d.HTTPClient,
 						CreateAccount: true,
 					})
@@ -261,7 +262,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 				return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 			}
 		}
-		chainData, err = auth.RequestMinecraftChain(ctx, xblSigner, httpClient, key)
+		chainData, err = auth.RequestMinecraftChain(ctx, d.XBLClient, key)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request Minecraft auth chain: %w", err)}
 		}
