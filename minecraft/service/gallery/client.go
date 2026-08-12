@@ -101,7 +101,7 @@ func (c *Client) Images(ctx context.Context, xuid string) ([]Image, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, service.NewResponseError(resp)
 	}
 	var response struct {
 		Result *struct {
@@ -143,7 +143,7 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
-		return Image{}, internal.Err(resp)
+		return Image{}, service.NewResponseError(resp)
 	}
 	var response internal.Result[*Image]
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
@@ -179,7 +179,7 @@ func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) 
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, internal.Err(resp)
+		return nil, service.NewResponseError(resp)
 	}
 	return resp.Body, nil
 }
@@ -200,7 +200,7 @@ func (c *Client) Delete(ctx context.Context, imageID string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return internal.Err(resp)
+		return service.NewResponseError(resp)
 	}
 	return nil
 }
