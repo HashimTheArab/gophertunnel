@@ -229,6 +229,15 @@ func (r *Realm) UpdateStorySettings(ctx context.Context, settings StorySettings)
 	return r.client.UpdateStorySettings(ctx, r.ID, settings)
 }
 
+// OptInToStoryTimeline opts the authenticated player into this realm's Stories timeline
+// without changing any other Stories settings.
+func (r *Realm) OptInToStoryTimeline(ctx context.Context) error {
+	if r.client == nil {
+		return fmt.Errorf("realm client is nil")
+	}
+	return r.client.OptInToStoryTimeline(ctx, r.ID)
+}
+
 // StorySettings gets the Realms Stories settings for a realm.
 func (r *Client) StorySettings(ctx context.Context, realmID int) (StorySettings, error) {
 	body, _, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/stories/settings", realmID))
@@ -250,6 +259,20 @@ func (r *Client) UpdateStorySettings(ctx context.Context, realmID int, settings 
 	}
 	_, _, err = r.requestPost(ctx, fmt.Sprintf("/worlds/%d/stories/settings", realmID), body)
 	return err
+}
+
+// OptInToStoryTimeline opts the authenticated player into a realm's Stories timeline
+// without changing any other Stories settings.
+func (r *Client) OptInToStoryTimeline(ctx context.Context, realmID int) error {
+	settings, err := r.StorySettings(ctx, realmID)
+	if err != nil {
+		return err
+	}
+	if settings.PlayerOptIn == StoryOptInOptIn {
+		return nil
+	}
+	settings.PlayerOptIn = StoryOptInOptIn
+	return r.UpdateStorySettings(ctx, realmID, settings)
 }
 
 // xboxToken returns the xbox token used for the api.

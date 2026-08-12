@@ -107,3 +107,46 @@ func TestClientUpdateStorySettings(t *testing.T) {
 		t.Fatalf("UpdateStorySettings: %v", err)
 	}
 }
+
+func TestClientOptInToStoryTimelinePreservesSettings(t *testing.T) {
+	want := StorySettings{
+		AutoStories:   true,
+		Coordinates:   true,
+		Notifications: false,
+		PlayerOptIn:   StoryOptInOptIn,
+		RealmOptIn:    StoryOptInOptOut,
+		Timeline:      false,
+	}
+	requests := 0
+	c := &Client{
+		requestFunc: func(_ context.Context, method, path string, body []byte) ([]byte, int, error) {
+			requests++
+			if path != "/worlds/42/stories/settings" {
+				t.Fatalf("path = %q", path)
+			}
+			switch method {
+			case http.MethodGet:
+				return []byte(`{"autostories":true,"coordinates":true,"notifications":false,"playerOptIn":"NONE","realmOptIn":"OPT_OUT","timeline":false}`), http.StatusOK, nil
+			case http.MethodPost:
+				var got StorySettings
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatalf("decode body: %v", err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("body = %+v, want %+v", got, want)
+				}
+				return nil, http.StatusNoContent, nil
+			default:
+				t.Fatalf("method = %q", method)
+				return nil, 0, nil
+			}
+		},
+	}
+
+	if err := c.OptInToStoryTimeline(context.Background(), 42); err != nil {
+		t.Fatalf("OptInToStoryTimeline: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
