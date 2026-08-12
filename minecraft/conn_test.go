@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -451,6 +453,43 @@ func TestStartGameWritesPropertyData(t *testing.T) {
 	}
 }
 
+func TestGameDataRoundTripsDayCycleLockTime(t *testing.T) {
+	t.Parallel()
+
+	const want int32 = 12_345
+	data := GameDataFromStartGame(&packet.StartGame{DayCycleLockTime: want})
+	if data.DayCycleLockTime != want {
+		t.Fatalf("GameData.DayCycleLockTime = %d, want %d", data.DayCycleLockTime, want)
+	}
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var got int32
+	conn.packetFunc = func(header packet.Header, payload []byte, _, _ net.Addr) {
+		if header.PacketID != packet.IDStartGame {
+			return
+		}
+		var start packet.StartGame
+		start.Marshal(protocol.NewReader(bytes.NewBuffer(payload), 0, false))
+		got = start.DayCycleLockTime
+	}
+
+	if err := conn.SendStartGame(data); err != nil {
+		t.Fatalf("SendStartGame: %v", err)
+	}
+	if got != want {
+		t.Fatalf("StartGame.DayCycleLockTime = %d, want %d", got, want)
+	}
+}
+
 func TestResourcePacksInfoUsesConfiguredWorldTemplateFields(t *testing.T) {
 	t.Parallel()
 
@@ -574,6 +613,188 @@ func TestClientCacheStatusSendsEmptyResourcePackStack(t *testing.T) {
 		t.Fatalf("ResourcePackStack experiments = %#v previouslyToggled=%v, want none/false", got.Experiments, got.ExperimentsPreviouslyToggled)
 	}
 }
+
+func TestHandleRequestNetworkSettingsProtocolMismatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		clientProtocol int32
+		acceptedExtra  []Protocol
+		message        func(clientProtocol int32) string
+		wantMessage    string
+		wantReason     int32
+		wantStatus     int32
+	}{
+		{
+			name:           "newer client with message",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			message:        func(clientProtocol int32) string { return "Lunar is updating, check back soon." },
+			wantMessage:    "Lunar is updating, check back soon.",
+			wantReason:     packet.DisconnectReasonOutdatedServer,
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			// Older clients may predate the current Disconnect wire layout, so they only get the
+			// vanilla PlayStatus flow even when a message callback is set.
+			name:           "older client never gets the custom disconnect",
+			clientProtocol: 1,
+			message:        func(clientProtocol int32) string { return "Please update Minecraft." },
+			wantStatus:     packet.PlayStatusLoginFailedClient,
+		},
+		{
+			name:           "no callback sends only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			name:           "empty message sends only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			message:        func(clientProtocol int32) string { return "" },
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+		{
+			// A client older than one accepted protocol is not "newer than the listener", even
+			// when it is ahead of protocol.CurrentProtocol.
+			name:           "client below a newer accepted protocol gets only the play status",
+			clientProtocol: protocol.CurrentProtocol + 1,
+			acceptedExtra:  []Protocol{overrideIDProtocol{Protocol: proto{}, id: protocol.CurrentProtocol + 2}},
+			message:        func(clientProtocol int32) string { return "Lunar is updating" },
+			wantStatus:     packet.PlayStatusLoginFailedServer,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, serverConn := net.Pipe()
+			defer client.Close()
+
+			conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, true)
+			conn.acceptedProto = append([]Protocol{proto{}}, tt.acceptedExtra...)
+			conn.protocolMismatchMessage = tt.message
+
+			if err := conn.handleRequestNetworkSettings(&packet.RequestNetworkSettings{ClientProtocol: tt.clientProtocol}); err == nil {
+				t.Fatal("handleRequestNetworkSettings accepted a mismatched protocol version")
+			}
+			go func() {
+				_ = conn.Flush()
+			}()
+
+			if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatalf("set read deadline: %v", err)
+			}
+			packets, err := packet.NewDecoder(client).Decode()
+			if err != nil {
+				t.Fatalf("decode rejection packets: %v", err)
+			}
+			wantCount := 1
+			if tt.wantMessage != "" {
+				wantCount = 2
+			}
+			if len(packets) != wantCount {
+				t.Fatalf("decoded packet count = %d, want %d", len(packets), wantCount)
+			}
+
+			if tt.wantMessage != "" {
+				buf := bytes.NewBuffer(packets[0])
+				var header packet.Header
+				if err := header.Read(buf); err != nil {
+					t.Fatalf("read Disconnect header: %v", err)
+				}
+				if header.PacketID != packet.IDDisconnect {
+					t.Fatalf("first packet ID = %d, want Disconnect", header.PacketID)
+				}
+				var disconnect packet.Disconnect
+				disconnect.Marshal(protocol.NewReader(buf, 0, false))
+				if disconnect.Message != tt.wantMessage {
+					t.Fatalf("disconnect message = %q, want %q", disconnect.Message, tt.wantMessage)
+				}
+				if disconnect.Reason != tt.wantReason {
+					t.Fatalf("disconnect reason = %d, want %d", disconnect.Reason, tt.wantReason)
+				}
+			}
+
+			buf := bytes.NewBuffer(packets[wantCount-1])
+			var header packet.Header
+			if err := header.Read(buf); err != nil {
+				t.Fatalf("read PlayStatus header: %v", err)
+			}
+			if header.PacketID != packet.IDPlayStatus {
+				t.Fatalf("last packet ID = %d, want PlayStatus", header.PacketID)
+			}
+			var status packet.PlayStatus
+			status.Marshal(protocol.NewReader(buf, 0, false))
+			if status.Status != tt.wantStatus {
+				t.Fatalf("play status = %d, want %d", status.Status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHandleRequestNetworkSettingsAcceptNewerProtocols(t *testing.T) {
+	t.Parallel()
+
+	newest := overrideIDProtocol{Protocol: proto{}, id: protocol.CurrentProtocol + 2}
+	tests := []struct {
+		name           string
+		clientProtocol int32
+		acceptedExtra  []Protocol
+		wantAccepted   bool
+		wantProtocol   int32
+	}{
+		{
+			name:           "newer client is served with the newest protocol",
+			clientProtocol: protocol.CurrentProtocol + 5,
+			acceptedExtra:  []Protocol{newest},
+			wantAccepted:   true,
+			wantProtocol:   newest.ID(),
+		},
+		{
+			// Leniency only covers clients ahead of the listener: an old version whose packets we
+			// genuinely cannot encode is still rejected.
+			name:           "older client is still rejected",
+			clientProtocol: 1,
+			wantAccepted:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, serverConn := net.Pipe()
+			defer client.Close()
+			go func() {
+				_, _ = io.Copy(io.Discard, client)
+			}()
+
+			conn := newConn(serverConn, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, true)
+			conn.acceptedProto = append([]Protocol{proto{}}, tt.acceptedExtra...)
+			conn.acceptNewerProtocols = true
+			conn.compression = packet.DefaultCompression
+
+			err := conn.handleRequestNetworkSettings(&packet.RequestNetworkSettings{ClientProtocol: tt.clientProtocol})
+			if tt.wantAccepted {
+				if err != nil {
+					t.Fatalf("handleRequestNetworkSettings rejected a newer client: %v", err)
+				}
+				if conn.proto.ID() != tt.wantProtocol {
+					t.Fatalf("conn protocol = %d, want %d", conn.proto.ID(), tt.wantProtocol)
+				}
+			} else if err == nil {
+				t.Fatal("handleRequestNetworkSettings accepted an older client")
+			}
+		})
+	}
+}
+
+// overrideIDProtocol wraps a Protocol, overriding only its reported ID.
+type overrideIDProtocol struct {
+	Protocol
+	id int32
+}
+
+func (p overrideIDProtocol) ID() int32 { return p.id }
 
 func TestDisconnectWritesDisconnectPacket(t *testing.T) {
 	t.Parallel()
@@ -709,6 +930,198 @@ func TestReceiveDisconnectPreservesPacketReason(t *testing.T) {
 	if legacyErr.Error() != "Server Full" {
 		t.Fatalf("legacy error = %q, want Server Full", legacyErr.Error())
 	}
+}
+
+func TestAbortCancelsContextAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not cancel connection context")
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := peer.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("peer read error = %v, want terminal close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer read remained blocked after Abort")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("second Abort: %v", err)
+	}
+}
+
+func TestAbortUnblocksCloseStuckFlushing(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	observed := &writeObservedConn{Conn: client, started: make(chan struct{})}
+	conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case <-observed.started:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not begin its flush")
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not unblock Close")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection context remained active")
+	}
+}
+
+func TestAbortUnblocksInFlightWritesWithoutPanic(t *testing.T) {
+	operations := []struct {
+		name    string
+		prepare func(*testing.T, *Conn) func() error
+	}{
+		{
+			name: "Flush",
+			prepare: func(t *testing.T, conn *Conn) func() error {
+				t.Helper()
+				if _, err := conn.Write([]byte{1}); err != nil {
+					t.Fatalf("queue write: %v", err)
+				}
+				return conn.Flush
+			},
+		},
+		{
+			name: "WritePacketDirect",
+			prepare: func(_ *testing.T, conn *Conn) func() error {
+				return func() error { return conn.WritePacketDirect(&packet.PlayStatus{}) }
+			},
+		},
+	}
+	transports := []struct {
+		name string
+		wrap func(net.Conn) net.Conn
+	}{
+		{name: "io.ErrClosedPipe", wrap: func(conn net.Conn) net.Conn { return conn }},
+		{name: "net.ErrClosed", wrap: func(conn net.Conn) net.Conn { return pipeConn{Conn: conn} }},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, transport := range transports {
+				t.Run(transport.name, func(t *testing.T) {
+					client, peer := net.Pipe()
+					defer peer.Close()
+					observed := &writeObservedConn{Conn: transport.wrap(client), started: make(chan struct{})}
+					conn := newConn(observed, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+					run := operation.prepare(t, conn)
+
+					type result struct {
+						err       error
+						recovered any
+					}
+					done := make(chan result, 1)
+					go func() {
+						res := result{}
+						defer func() {
+							res.recovered = recover()
+							done <- res
+						}()
+						res.err = run()
+					}()
+
+					select {
+					case <-observed.started:
+					case <-time.After(time.Second):
+						t.Fatal("write did not start")
+					}
+					if err := conn.Abort(); err != nil {
+						t.Fatalf("Abort: %v", err)
+					}
+
+					select {
+					case res := <-done:
+						if res.recovered != nil {
+							t.Fatalf("write panicked: %v", res.recovered)
+						}
+						if !errors.Is(res.err, net.ErrClosed) {
+							t.Fatalf("write error = %v, want net.ErrClosed", res.err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("write remained blocked after Abort")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	panicking := &panicWriteConn{Conn: client, closed: make(chan struct{})}
+	conn := newConn(panicking, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	if _, err := conn.Write([]byte{1}); err != nil {
+		t.Fatalf("queue write: %v", err)
+	}
+
+	err := conn.Close()
+	if err == nil || !strings.Contains(err.Error(), "panic flushing connection") {
+		t.Fatalf("Close error = %v, want recovered flush panic", err)
+	}
+	select {
+	case <-panicking.closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left raw transport open")
+	}
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close panic left context active")
+	}
+}
+
+type writeObservedConn struct {
+	net.Conn
+	started chan struct{}
+	once    sync.Once
+}
+
+func (c *writeObservedConn) Write(p []byte) (int, error) {
+	c.once.Do(func() { close(c.started) })
+	return c.Conn.Write(p)
+}
+
+type panicWriteConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *panicWriteConn) Write([]byte) (int, error) {
+	panic("write panic")
+}
+
+func (c *panicWriteConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 func TestClientToServerHandshakeMarksComplete(t *testing.T) {

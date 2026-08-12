@@ -1,0 +1,81 @@
+name: Protocol drift
+
+# Compares every packet's Marshal implementation against schemas extracted from
+# a running Bedrock Dedicated Server, and fails when one drifts in a way that
+# has not been reviewed.
+#
+# This catches encoding mistakes that round-trip tests cannot: a field written
+# and read with the same wrong encoding passes its own test forever. HurtArmour
+# zigzag-encoded a bitset for years with symmetric marshalling.
+
+on:
+  pull_request:
+    paths:
+      - "minecraft/protocol/**"
+      - "tools/protocoldrift/**"
+      - ".github/workflows/protocol-drift.yml"
+  push:
+    branches: [master]
+    paths:
+      - "minecraft/protocol/**"
+      - "tools/protocoldrift/**"
+  workflow_dispatch:
+
+concurrency:
+  group: protocol-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Read the pinned schema source
+        id: pin
+        run: |
+          set -euo pipefail
+          pin=tools/protocoldrift/accepted-drift.json
+          echo "protocol=$(jq -r .protocol_version "$pin")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the BDS-derived schemas
+        run: |
+          set -euo pipefail
+          # Pinned by branch: each release branch is a dump of one BDS build.
+          git clone --quiet --depth 1 --branch r26_u4 \
+            https://github.com/endstonemc/protocol-docs.git schema-oracle
+
+      - name: Verify the schemas match this protocol
+        run: |
+          set -euo pipefail
+          want='${{ steps.pin.outputs.protocol }}'
+          got="$(grep -oP 'Network Version:\*\*\s*\K[0-9]+' schema-oracle/README.md)"
+          if [[ "$got" != "$want" ]]; then
+            echo "::error::schema oracle is protocol $got but this checkout expects $want."
+            echo "::error::Comparing across protocol versions is meaningless. Update the schema branch and accepted-drift.json together."
+            exit 1
+          fi
+          echo "schema oracle protocol $got matches"
+
+      - name: Extract packet wire operations
+        run: go run ./tools/protocoldrift .
+
+      - name: Compare against the server schemas
+        run: node tools/protocoldrift/compare.mjs schema-oracle tools/protocoldrift/gophertunnel-flat.json
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-drift-report
+          path: tools/protocoldrift/drift-report.json
+          if-no-files-found: warn

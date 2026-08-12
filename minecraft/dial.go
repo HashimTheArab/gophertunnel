@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -59,9 +60,8 @@ type Dialer struct {
 	TokenSource oauth2.TokenSource
 
 	// XBLClient is the Xbox Live API Client used during authenticated login. When
-	// set, it is used to log in to PlayFab for modern authentication and to
-	// request Minecraft authentication chain data for legacy authentication. If
-	// nil, [Dialer.TokenSource] is used directly.
+	// set, it signs the Xbox request used to log in to PlayFab. If nil,
+	// [Dialer.TokenSource] is used to create a signer.
 	XBLClient *xsapi.Client
 
 	// PlayFabClient is the PlayFab client used to log in to Minecraft network services and request multiplayer
@@ -85,6 +85,12 @@ type Dialer struct {
 	// and version of the resource pack, the number of the current pack being downloaded, and the total amount of packs.
 	// The boolean returned determines if the pack will be downloaded or not.
 	DownloadResourcePack func(id uuid.UUID, version string, current, total int) bool
+	// ResourcePackDownload controls how many resource pack chunk requests may be in flight at once. The
+	// zero value keeps the sequential default.
+	ResourcePackDownload ResourcePackDownloadConfig
+	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
+	// fall back to a normal download.
+	ResourcePackCache ResourcePackCache
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -130,6 +136,15 @@ type Dialer struct {
 	// the client when an XUID is present without logging in.
 	// For getting this to work with BDS, authentication should be disabled.
 	KeepXBLIdentityData bool
+}
+
+// netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
+// verifier validates the token's 'iss' claim against.
+func netherNetIdentityProvider(issuer *url.URL) string {
+	if issuer == nil {
+		return ""
+	}
+	return issuer.JoinPath().String()
 }
 
 // Dial dials a Minecraft connection to the address passed over the network passed. The network is typically
@@ -201,8 +216,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("generating ECDSA key: %w", err)}
 	}
 	var (
-		token    string
-		verifier *oidc.IDTokenVerifier
+		token            string
+		identityProvider string
+		verifier         *oidc.IDTokenVerifier
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -213,6 +229,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
 		}
+		identityProvider = netherNetIdentityProvider(e.Issuer)
 		verifier, err = e.VerifierContext(ctx)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
@@ -259,7 +276,11 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	var netConn net.Conn
-	if i, ok := network.(identityDialer); ok && token != "" {
+	if token == "" {
+		netConn, err = network.DialContext(ctx, address)
+	} else if i, ok := network.(identityProviderDialer); ok {
+		netConn, err = i.DialContextIdentityProvider(ctx, address, token, key, identityProvider)
+	} else if i, ok := network.(identityDialer); ok {
 		netConn, err = i.DialContextIdentity(ctx, address, token, key)
 	} else {
 		netConn, err = network.DialContext(ctx, address)
@@ -269,11 +290,28 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	conn = newConn(netConn, key, d.ErrorLog, d.Protocol, d.FlushRate, false)
+	// A dial that fails must not leave the connection open. listenConn runs on its own goroutine
+	// and carries the login through to completion regardless of whether this function is still
+	// waiting on it, so an abandoned attempt stays a live, logged-in session on the server. The
+	// caller has no handle to close it either, because the error returns below yield a nil Conn.
+	//
+	// dialed holds the Conn for the cleanup because returning nil assigns the named conn result
+	// before deferred functions run. The cleanup aborts rather than Closes: Close flushes first,
+	// which blocks on a peer that has stopped reading, and a dial that gave up on such a peer would
+	// then never return.
+	dialed := conn
+	defer func() {
+		if err != nil {
+			dialed.abort(err)
+		}
+	}()
 	conn.pool = conn.proto.Packets(false)
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
 	conn.downloadResourcePack = d.DownloadResourcePack
+	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
+	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
@@ -307,6 +345,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 
 	readyForLogin, connected := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	go listenConn(conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)
@@ -495,7 +534,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 		d.MaxViewDistance = 16
 	}
 	if d.MemoryTier == 0 {
-		d.MemoryTier = 5
+		d.MemoryTier = 4
 	}
 }
 

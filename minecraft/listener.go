@@ -72,6 +72,18 @@ type ListenConfig struct {
 	// Protocol is always added to this slice. Clients with a protocol version that is not present in this slice will
 	// be disconnected.
 	AcceptedProtocols []Protocol
+	// ProtocolMismatchMessage is called when a client connects with a protocol version newer than any
+	// accepted by the Listener. If it returns a non-empty string, a Disconnect packet carrying that
+	// message is sent before the PlayStatus login failure, so the client shows it instead of the generic
+	// outdated server screen. The PlayStatus is still sent afterwards as a fallback for clients that
+	// ignore the Disconnect. Older mismatched clients only get the vanilla outdated-client flow, since
+	// they may predate the current Disconnect wire layout and would mis-decode a custom message.
+	ProtocolMismatchMessage func(clientProtocol int32) string
+	// AcceptNewerProtocols accepts clients newer than every accepted Protocol, serving them with the
+	// newest one. Packets whose layout changed in the client's version are then encoded wrongly, so
+	// only set this on a listener with a small, stable packet surface, such as one that logs the client
+	// in and hands it off with a Transfer. Older clients are still rejected.
+	AcceptNewerProtocols bool
 	// Compression is the packet.Compression to use for packets sent over this Conn. If set to nil, the compression
 	// will default to packet.flateCompression.
 	Compression packet.Compression // TODO: Change this to snappy once Windows crashes are resolved.
@@ -104,6 +116,9 @@ type ListenConfig struct {
 	ResourcePackWorldTemplateUUID uuid.UUID
 	// ResourcePackWorldTemplateVersion is written into ResourcePacksInfo. Leave empty for default server behaviour.
 	ResourcePackWorldTemplateVersion string
+	// ResourcePackDelivery controls how resource pack data is sent to clients. The zero value keeps the
+	// conservative default chunk size and pacing.
+	ResourcePackDelivery ResourcePackDeliveryConfig
 	// FetchResourcePacks determines which resource packs to send to a client based on its identity and client data.
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
@@ -453,6 +468,8 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
 	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
 	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
+	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
+	conn.acceptNewerProtocols = listener.cfg.AcceptNewerProtocols
 	conn.compression = listener.cfg.Compression
 	conn.compressionSelector = listener.cfg.CompressionSelector
 	conn.compressionThreshold = listener.cfg.CompressionThreshold
@@ -466,6 +483,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
 	conn.resourcePackWorldTemplateUUID = listener.cfg.ResourcePackWorldTemplateUUID
 	conn.resourcePackWorldTemplateVersion = listener.cfg.ResourcePackWorldTemplateVersion
+	conn.resourcePackDelivery = listener.cfg.ResourcePackDelivery.normalized()
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
 	conn.gameData.WorldName = listener.status().ServerName

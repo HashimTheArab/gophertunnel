@@ -42,8 +42,8 @@ type exemptedResourcePack struct {
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
 	{
-		uuid:    "0fba4063-dba1-4281-9b89-ff9390653530",
-		version: "1.0.0",
+		uuid:    "d34cfa4b-2ad1-453d-a0db-668b429a3ea0",
+		version: "1.26.40",
 	},
 	{
 		uuid:    "b41c2785-c512-4a49-af56-3a87afd47c57",
@@ -68,6 +68,10 @@ var exemptedPacks = []exemptedResourcePack{
 	{
 		uuid:    "0674721c-a0aa-41a1-9ba8-1ed33ea3e7ed",
 		version: "1.20.50",
+	},
+	{
+		uuid:    "0fba4063-dba1-4281-9b89-ff9390653530",
+		version: "1.0.0",
 	},
 }
 
@@ -205,18 +209,27 @@ var disconnectReasons = map[int32]string{
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
 // ReadBatch must not be called on multiple goroutines simultaneously.
 type Conn struct {
-	// once is used to ensure the Conn is closed only a single time. It protects the channel below from being
-	// closed multiple times.
-	once       sync.Once
-	ctx        context.Context
-	cancelFunc context.CancelCauseFunc
+	// closeOnce and abortOnce coordinate graceful and immediate shutdown independently. Abort must remain able to
+	// close the raw transport while Close is blocked flushing it.
+	closeOnce        sync.Once
+	abortOnce        sync.Once
+	gracefulCloseErr error
+	abortErr         error
+	ctx              context.Context
+	cancelFunc       context.CancelCauseFunc
 
 	conn        net.Conn
 	log         *slog.Logger
 	authEnabled bool
 
-	proto                Protocol
-	acceptedProto        []Protocol
+	proto         Protocol
+	acceptedProto []Protocol
+	// protocolMismatchMessage, if non-nil, supplies a custom Disconnect message for clients that connect
+	// with a protocol version not in acceptedProto. See ListenConfig.ProtocolMismatchMessage.
+	protocolMismatchMessage func(clientProtocol int32) string
+	// acceptNewerProtocols serves clients newer than every acceptedProto with the newest one. See
+	// ListenConfig.AcceptNewerProtocols.
+	acceptNewerProtocols bool
 	pool                 packet.Pool
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
@@ -319,9 +332,16 @@ type Conn struct {
 	// downloadResourcePack is an optional function passed to a Dial() call. If set, each resource pack received
 	// from the server will call this function to see if it should be downloaded or not.
 	downloadResourcePack func(id uuid.UUID, version string, currentPack, totalPacks int) bool
+	// resourcePackDownload controls the number of chunk requests issued by a
+	// Dialer while downloading a resource pack.
+	resourcePackDownload ResourcePackDownloadConfig
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// resourcePackCache optionally stores resource packs downloaded by a Dialer.
+	resourcePackCache ResourcePackCache
+	// resourcePackDelivery controls resource pack delivery for Listener connections.
+	resourcePackDelivery ResourcePackDeliveryConfig
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
 	// func returning false for the specific pack.
 	ignoredResourcePacks []exemptedResourcePack
@@ -341,6 +361,10 @@ type Conn struct {
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
 
 	shieldID atomic.Int32
+
+	// actorIDs holds the optional actor ID translation applied to every packet read from
+	// and written to the connection.
+	actorIDs atomic.Pointer[protocol.ActorIDTranslation]
 
 	additional chan packet.Packet
 
@@ -375,6 +399,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		proto:                proto,
 		readerLimits:         limits,
 		compressionThreshold: 256,
+		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
+		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
 	conn.enc = packet.NewEncoder(netConn)
 	conn.dec = packet.NewDecoder(netConn)
@@ -549,6 +575,13 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	}
 }
 
+// SetActorIDTranslation sets the translation applied to every actor ID read from or
+// written to the connection, typically a symmetric swap so both directions share one
+// mapping. A nil translation removes it. Safe for concurrent use.
+func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation) {
+	conn.actorIDs.Store(translation)
+}
+
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
 // next 20th of a second, after which the data is flushed and sent over the connection.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
@@ -582,7 +615,11 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			_ = conn.hdr.Write(buf)
 			l := buf.Len()
 
-			converted.Marshal(conn.proto.NewWriter(buf, conn.shieldID.Load()))
+			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
+			if translation := conn.actorIDs.Load(); translation != nil {
+				w = translation.WrapWriter(w)
+			}
+			converted.Marshal(w)
 			if conn.packetFunc != nil {
 				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
@@ -629,10 +666,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
 		defer conn.encMu.Unlock()
-		if err := conn.enc.Encode(immediate); err != nil && !errors.Is(err, net.ErrClosed) {
-			// Should never happen.
-			panic(fmt.Errorf("error encoding packet batch: %w", err))
-		}
+		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
 	}
 	return nil
 }
@@ -834,10 +868,7 @@ func (conn *Conn) Flush() error {
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	if err := conn.enc.Encode(toSend); err != nil && !errors.Is(err, net.ErrClosed) {
-		// Should never happen.
-		panic(fmt.Errorf("error encoding packet batch: %w", err))
-	}
+	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
@@ -848,13 +879,35 @@ func (conn *Conn) Flush() error {
 	conn.sendMu.Lock()
 	conn.bufferedSendSpare = toSend[:0]
 	conn.sendMu.Unlock()
-	return nil
+	return encodeErr
+}
+
+// handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
+// connection context before closing the transport, so transport-specific errors caused by that close are
+// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+func (conn *Conn) handleEncodeError(err error, op string) error {
+	if err == nil {
+		return nil
+	}
+	if conn.ctx.Err() != nil {
+		return conn.closeErr(op)
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	panic(fmt.Errorf("error encoding packet batch: %w", err))
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
 // packets currently pending are sent out.
 func (conn *Conn) Close() error {
 	return conn.close(net.ErrClosed)
+}
+
+// Abort immediately cancels the Conn context and closes its raw transport without flushing buffered packets.
+// It is safe to call concurrently with Close and may be used to unblock a Close waiting on a backpressured peer.
+func (conn *Conn) Abort() error {
+	return conn.abort(net.ErrClosed)
 }
 
 // LocalAddr returns the local address of the underlying connection.
@@ -1276,19 +1329,26 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		}
 	}
 
-	// Allow newer clients to connect. Most protocol updates are still playable for the most part.
-	// if pk.ClientProtocol > protocol.CurrentProtocol {
-	// 	found = true
-	// } else {
-	// 	found = true // just allow all
-	// }
+	if !found && conn.acceptNewerProtocols && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+		// The client runs a Minecraft version this build predates. Serve it with the newest protocol
+		// known: packets whose layout is unchanged in the client's version still decode correctly.
+		conn.proto = newestAccepted(conn.acceptedProto)
+		conn.pool = conn.proto.Packets(true)
+		found = true
+	}
 
 	if !found {
 		status := packet.PlayStatusLoginFailedClient
-		// Dead code because of the newly added check above
 		if pk.ClientProtocol > protocol.CurrentProtocol {
 			// The server is outdated in this case, so we have to change the status we send.
 			status = packet.PlayStatusLoginFailedServer
+		}
+		// Only clients newer than every accepted protocol get the custom Disconnect: older clients
+		// may predate the current Disconnect wire layout and would mis-decode it, hiding the message.
+		if conn.protocolMismatchMessage != nil && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
+			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
+				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
+			}
 		}
 		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
 		return fmt.Errorf("incompatible protocol version: expected %v, got %v", protocol.CurrentProtocol, pk.ClientProtocol)
@@ -1491,7 +1551,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	totalPacks := len(pk.TexturePacks)
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       totalPacks,
-		downloadingPacks: make(map[string]downloadingPack),
+		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
@@ -1512,6 +1572,25 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			continue
 		}
 
+		cacheKey := ResourcePackCacheKey{
+			UUID:    pack.UUID,
+			Version: pack.Version,
+			Size:    pack.Size,
+		}
+		if conn.resourcePackCache != nil {
+			cachedPack, err := conn.resourcePackCache.Load(conn.ctx, cacheKey)
+			switch {
+			case err != nil:
+				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
+			case cachedPack != nil && !cacheKey.Matches(cachedPack):
+				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
+			case cachedPack != nil:
+				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
+				conn.packQueue.packAmount--
+				continue
+			}
+		}
+
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
 			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
@@ -1520,7 +1599,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
 				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
-				conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.ContentKey))
+				newPack = newPack.WithContentKey(pack.ContentKey)
+				conn.resourcePacks = append(conn.resourcePacks, newPack)
+				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
 				continue
 			}
@@ -1528,11 +1609,11 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = downloadingPack{
+		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
 			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
-			newFrag:    make(chan []byte),
 			contentKey: pack.ContentKey,
+			cacheKey:   cacheKey,
 		}
 	}
 
@@ -1548,6 +1629,17 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
+}
+
+// storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
+func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
+	if conn.resourcePackCache == nil || !key.Matches(pack) {
+		// A pack that does not match its own key would never be returned as a hit on a later login.
+		return
+	}
+	if err := conn.resourcePackCache.Store(conn.ctx, key, pack); err != nil {
+		conn.log.Warn("failed to store resource pack in cache", "UUID", pack.UUID(), "version", pack.Version(), "err", err)
+	}
 }
 
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
@@ -1591,15 +1683,6 @@ func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool 
 	return false
 }
 
-const (
-	// packChunkSize is the size of a single chunk of data from a resource pack: 128 KiB.
-	packChunkSize = 1024 * 128
-	// resourcePackChunkSendDelay spaces ResourcePackChunkData packets so slow clients are not flooded while
-	// downloading packs. Clients after 1.26.30 may fail resource pack downloads when pack chunks are sent
-	// too aggressively.
-	resourcePackChunkSendDelay = 200 * time.Millisecond
-)
-
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
 // handled differently depending on the response.
 func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClientResponse) error {
@@ -1610,7 +1693,10 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
-		conn.packQueue = &resourcePackQueue{packs: conn.resourcePacks}
+		conn.packQueue = &resourcePackQueue{
+			packs:     conn.resourcePacks,
+			chunkSize: conn.resourcePackDelivery.ChunkSize,
+		}
 		if err := conn.packQueue.Request(packs); err != nil {
 			return fmt.Errorf("lookup resource packs by UUID: %w", err)
 		}
@@ -1682,6 +1768,7 @@ func (conn *Conn) startGame() error {
 		EmoteChatMuted:               data.EmoteChatMuted,
 		GameRules:                    data.GameRules,
 		Time:                         data.Time,
+		DayCycleLockTime:             data.DayCycleLockTime,
 		Blocks:                       data.CustomBlocks,
 		AchievementsDisabled:         true,
 		Generator:                    1,
@@ -1753,52 +1840,100 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
 	delete(conn.packQueue.downloadingPacks, id)
-	conn.packQueue.awaitingPacks[id] = &pack
-
+	if pk.DataChunkSize == 0 {
+		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
+	}
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := int32(pk.Size / uint64(pk.DataChunkSize))
+	chunkCount := pk.Size / uint64(pk.DataChunkSize)
 	if pk.Size%uint64(pk.DataChunkSize) != 0 {
 		chunkCount++
 	}
+	if chunkCount > uint64(^uint32(0)) {
+		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
+	}
+	pack.chunkCount = uint32(chunkCount)
+	window := uint64(conn.resourcePackDownload.MaxInFlightChunks)
+	if window > chunkCount {
+		window = max(chunkCount, 1)
+	}
+	pack.newFrag = make(chan resourcePackChunk, window)
+	pack.requested = make(map[uint32]struct{})
+	conn.packQueue.awaitingPacks[id] = pack
 
 	idCopy := pk.UUID
 	go func() {
-		for i := int32(0); i < chunkCount; i++ {
-			_ = conn.WritePacket(&packet.ResourcePackChunkRequest{
+		fragments := make(map[uint32][]byte)
+		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
+		requestChunk := func(index uint32) error {
+			pack.mu.Lock()
+			pack.requested[index] = struct{}{}
+			pack.mu.Unlock()
+			return conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
-				ChunkIndex: i,
+				ChunkIndex: int32(index),
 			})
+		}
+
+		// fillWindow replenishes one request for each response accepted by the client.
+		fillWindow := func() bool {
+			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
+				if requestChunk(nextRequest) != nil {
+					return false
+				}
+				nextRequest++
+			}
+			return true
+		}
+
+		if !fillWindow() {
+			return
+		}
+		for nextWrite < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
-				// Write the fragment to the full buffer of the downloading resource pack.
-				_, _ = pack.buf.Write(frag)
+				received++
+				fragments[frag.index] = frag.data
+				// Write the contiguous prefix in index order.
+				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
+					_, _ = pack.buf.Write(data)
+					delete(fragments, nextWrite)
+					nextWrite++
+				}
+				if !fillWindow() {
+					return
+				}
 			}
 		}
 		conn.packMu.Lock()
-		defer conn.packMu.Unlock()
-
 		if pack.buf.Len() != int(pack.size) {
 			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
+			conn.packMu.Unlock()
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
 			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
+			conn.packMu.Unlock()
 			return
 		}
+		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
-		conn.resourcePacks = append(conn.resourcePacks, newPack.WithContentKey(pack.contentKey))
-		if conn.packQueue.packAmount == 0 {
+		conn.resourcePacks = append(conn.resourcePacks, newPack)
+		packAmount := conn.packQueue.packAmount
+		conn.packMu.Unlock()
+
+		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack)
 			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 		}
+		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
 }
@@ -1813,38 +1948,53 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 		// download a resource pack.
 		return fmt.Errorf("chunk data for resource pack that was not being downloaded")
 	}
-	lastData := pack.buf.Len()+int(pack.chunkSize) >= int(pack.size)
-	if !lastData && uint32(len(pk.Data)) != pack.chunkSize {
-		// The chunk data didn't have the full size and wasn't the last data to be sent for the resource pack,
-		// meaning we got too little data.
-		return fmt.Errorf("expected chunk size %v, got %v", pack.chunkSize, len(pk.Data))
+	if pk.ChunkIndex >= pack.chunkCount {
+		return fmt.Errorf("chunk index %v exceeds resource pack chunk count %v", pk.ChunkIndex, pack.chunkCount)
 	}
-	if pk.ChunkIndex != pack.expectedIndex {
-		return fmt.Errorf("expected chunk index %v, got %v", pack.expectedIndex, pk.ChunkIndex)
+	chunkOffset := uint64(pk.ChunkIndex) * uint64(pack.chunkSize)
+	expectedSize := pack.size - chunkOffset
+	if expectedSize > uint64(pack.chunkSize) {
+		expectedSize = uint64(pack.chunkSize)
 	}
-	pack.expectedIndex++
-	pack.newFrag <- pk.Data
-	return nil
+	if uint64(len(pk.Data)) != expectedSize {
+		return fmt.Errorf("expected chunk size %v, got %v", expectedSize, len(pk.Data))
+	}
+	pack.mu.Lock()
+	if _, ok := pack.requested[pk.ChunkIndex]; !ok {
+		pack.mu.Unlock()
+		return fmt.Errorf("resource pack chunk %v was not requested or was already received", pk.ChunkIndex)
+	}
+	delete(pack.requested, pk.ChunkIndex)
+	pack.mu.Unlock()
+
+	// The data is cloned as the decoder may reuse the packet's backing array once this handler returns.
+	select {
+	case pack.newFrag <- resourcePackChunk{index: pk.ChunkIndex, data: bytes.Clone(pk.Data)}:
+		return nil
+	case <-conn.ctx.Done():
+		return conn.ctx.Err()
+	}
 }
 
 // handleResourcePackChunkRequest handles a resource pack chunk request, which requests a part of the resource
 // pack to be downloaded.
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
+	chunkSize := uint64(conn.packQueue.chunkSize)
 	uuid, _, _ := strings.Cut(pk.UUID, "_")
 	if current.UUID().String() != uuid {
 		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
 	}
-	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*packChunkSize {
-		return fmt.Errorf("expected pack UUID %v, but got %v", conn.packQueue.currentOffset/packChunkSize, pk.ChunkIndex)
+	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*chunkSize {
+		return fmt.Errorf("expected chunk index %v, but got %v", conn.packQueue.currentOffset/chunkSize, pk.ChunkIndex)
 	}
 	response := &packet.ResourcePackChunkData{
 		UUID:       pk.UUID,
 		ChunkIndex: uint32(pk.ChunkIndex),
 		DataOffset: conn.packQueue.currentOffset,
-		Data:       make([]byte, packChunkSize),
+		Data:       make([]byte, chunkSize),
 	}
-	conn.packQueue.currentOffset += packChunkSize
+	conn.packQueue.currentOffset += chunkSize
 	// We read the data directly into the response's data.
 	if n, err := current.ReadAt(response.Data, int64(response.DataOffset)); err != nil {
 		// If we hit an EOF, we don't need to return an error, as we've simply reached the end of the content
@@ -1857,6 +2007,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	if err := conn.WritePacket(response); err != nil {
 		return fmt.Errorf("send ResourcePackChunkData: %w", err)
 	}
+	if err := conn.Flush(); err != nil {
+		return fmt.Errorf("flush ResourcePackChunkData: %w", err)
+	}
 
 	lastChunk := response.DataOffset+uint64(len(response.Data)) >= uint64(current.Size())
 	if lastChunk {
@@ -1866,7 +2019,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 			conn.expect(packet.IDResourcePackClientResponse)
 		}
 	}
-	if err := waitResourcePackChunkSendDelay(conn.ctx); err != nil {
+	if err := waitResourcePackChunkSendDelay(conn.ctx, conn.resourcePackDelivery.ChunkSendDelay); err != nil {
 		return err
 	}
 
@@ -1874,8 +2027,11 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 }
 
 // waitResourcePackChunkSendDelay waits before processing the next resource pack chunk request.
-func waitResourcePackChunkSendDelay(ctx context.Context) error {
-	timer := time.NewTimer(resourcePackChunkSendDelay)
+func waitResourcePackChunkSendDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
 	select {
@@ -1934,6 +2090,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		EmoteChatMuted:               pk.EmoteChatMuted,
 		GameRules:                    pk.GameRules,
 		Time:                         pk.Time,
+		DayCycleLockTime:             pk.DayCycleLockTime,
 		ServerBlockStateChecksum:     pk.ServerBlockStateChecksum,
 		CustomBlocks:                 pk.Blocks,
 		PlayerMovementSettings:       pk.PlayerMovementSettings,
@@ -2130,19 +2287,55 @@ func (conn *Conn) encryptionKey(salt []byte, pub *ecdsa.PublicKey) ([32]byte, er
 	return sha256.Sum256(append(salt, sharedSecret...)), nil
 }
 
+// newestAccepted returns the Protocol with the highest ID out of the accepted protocols passed.
+func newestAccepted(accepted []Protocol) Protocol {
+	newest := accepted[0]
+	for _, pro := range accepted[1:] {
+		if pro.ID() > newest.ID() {
+			newest = pro
+		}
+	}
+	return newest
+}
+
+// newerThanAccepted reports whether clientProtocol is newer than every accepted protocol.
+func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
+	for _, pro := range accepted {
+		if clientProtocol <= pro.ID() {
+			return false
+		}
+	}
+	return true
+}
+
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
 func (conn *Conn) close(cause error) error {
-	var err error
-	conn.once.Do(func() {
-		err = conn.Flush()
-		conn.cancelFunc(cause)
-		_ = conn.conn.Close()
+	conn.closeOnce.Do(func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
+			}
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
+		}()
+		conn.gracefulCloseErr = conn.Flush()
 	})
-	return err
+	return conn.gracefulCloseErr
+}
+
+// abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
+// connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
+// another goroutine holds that write in progress. Callers giving up on a connection precisely because
+// the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
+func (conn *Conn) abort(cause error) error {
+	conn.abortOnce.Do(func() {
+		conn.cancelFunc(cause)
+		conn.abortErr = conn.conn.Close()
+	})
+	return conn.abortErr
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed

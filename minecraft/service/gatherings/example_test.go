@@ -10,6 +10,7 @@ import (
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/realms"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/gatherings"
 )
@@ -54,11 +55,18 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error joining experience: %s", err))
 	}
+	dialAddress, err := address.DialAddress()
+	if err != nil {
+		panic(fmt.Sprintf("error resolving experience transport: %s", err))
+	}
+	if realms.ParseNetworkProtocol(string(address.NetworkProtocol)) != realms.NetworkProtocolDefault {
+		panic("example does not configure NetherNet signaling")
+	}
 
 	conn, err := minecraft.Dialer{
 		XBLClient:     xbl,
 		PlayFabClient: pf,
-	}.DialTimeout("raknet", address.String(), time.Minute*5)
+	}.DialTimeout("raknet", dialAddress, time.Minute*5)
 	if err != nil {
 		panic(fmt.Sprintf("error connecting to experience: %s", err))
 	}

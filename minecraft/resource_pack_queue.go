@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
@@ -18,18 +19,30 @@ type resourcePackQueue struct {
 	currentOffset   uint64
 
 	packAmount       int
-	downloadingPacks map[string]downloadingPack
+	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
+	chunkSize        uint32
 }
 
 // downloadingPack is a resource pack that is being downloaded by a client connection.
 type downloadingPack struct {
-	buf           *bytes.Buffer
-	chunkSize     uint32
-	size          uint64
-	expectedIndex uint32
-	newFrag       chan []byte
-	contentKey    string
+	buf        *bytes.Buffer
+	chunkSize  uint32
+	chunkCount uint32
+	size       uint64
+	newFrag    chan resourcePackChunk
+	contentKey string
+	cacheKey   ResourcePackCacheKey
+
+	// mu guards requested, which tracks the chunk indices requested but not yet received.
+	mu        sync.Mutex
+	requested map[uint32]struct{}
+}
+
+// resourcePackChunk is a single received chunk of a resource pack, tagged with its index.
+type resourcePackChunk struct {
+	index uint32
+	data  []byte
 }
 
 // Request 'requests' all resource packs passed, provided they all exist in the resourcePackQueue. Clients
@@ -79,8 +92,8 @@ func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok 
 		}
 		return &packet.ResourcePackDataInfo{
 			UUID:          pack.UUID().String() + "_" + pack.Version(),
-			DataChunkSize: packChunkSize,
-			ChunkCount:    uint32(pack.DataChunkCount(packChunkSize)),
+			DataChunkSize: queue.chunkSize,
+			ChunkCount:    uint32(pack.DataChunkCount(int(queue.chunkSize))),
 			Size:          uint64(pack.Size()),
 			Hash:          checksum[:],
 			PackType:      packType,

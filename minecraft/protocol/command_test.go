@@ -9,8 +9,7 @@ func TestCommandArgTypeWireValues(t *testing.T) {
 		want uint32
 	}{
 		{"int", CommandArgTypeInt, 1},
-		{"float", CommandArgTypeFloat, 2},
-		{"value", CommandArgTypeValue, 3},
+		{"float", CommandArgTypeFloat, 3},
 		{"rvalue", CommandArgTypeRValue, 4},
 		{"wildcard_int", CommandArgTypeWildcardInt, 5},
 		{"target", CommandArgTypeTarget, 8},

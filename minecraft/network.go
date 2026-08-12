@@ -41,6 +41,12 @@ type identityDialer interface {
 	DialContextIdentity(ctx context.Context, address string, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error)
 }
 
+// identityProviderDialer is implemented by Networks that also need the verified issuer of
+// the identity token when authenticating the player at the transport layer.
+type identityProviderDialer interface {
+	DialContextIdentityProvider(ctx context.Context, address string, token string, privateKey *ecdsa.PrivateKey, identityProvider string) (net.Conn, error)
+}
+
 // NetworkListener represents a listening connection to a remote server. It is the equivalent of net.Listener, but with extra
 // functionality specific to Minecraft.
 type NetworkListener interface {

@@ -123,10 +123,18 @@ func (conf Config) RequestLiveTokenWriter(w io.Writer) (*oauth2.Token, error) {
 	return conf.RequestLiveTokenContext(context.Background(), w)
 }
 
+// RequestLiveTokenContext does a login request for Microsoft Live Connect using device auth. A login URL will
+// be printed to the io.Writer passed with a user code which the user must use to submit.
+// Once fully authenticated, an oauth2 token is returned which may be used to login to XBOX Live.
+// The context is used to control the deadline for polling the OAuth2 device authorization endpoint.
 func RequestLiveTokenContext(ctx context.Context, w io.Writer) (*oauth2.Token, error) {
 	return AndroidConfig.RequestLiveTokenContext(ctx, w)
 }
 
+// RequestLiveTokenContext does a login request for Microsoft Live Connect using device auth. A login URL will
+// be printed to the io.Writer passed with a user code which the user must use to submit.
+// Once fully authenticated, an oauth2 token is returned which may be used to login to XBOX Live.
+// The context is used to control the deadline for polling the OAuth2 device authorization endpoint.
 func (conf Config) RequestLiveTokenContext(ctx context.Context, w io.Writer) (*oauth2.Token, error) {
 	d, err := conf.DeviceAuth(ctx)
 	if err != nil {
