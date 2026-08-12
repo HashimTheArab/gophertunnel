@@ -699,7 +699,7 @@ func (r *Reader) ActorUniqueIDVaruint64(x *uint64) {
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
@@ -730,7 +730,7 @@ func (r *Reader) Varint32(x *int32) {
 // Varuint32 reads up to 5 bytes from the underlying buffer into a uint32.
 func (r *Reader) Varuint32(x *uint32) {
 	var v uint32
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)

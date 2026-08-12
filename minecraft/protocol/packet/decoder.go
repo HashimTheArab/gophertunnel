@@ -124,9 +124,6 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := decoder.walkBatch(data, nil); err != nil {
-		return nil, err
-	}
 	data = bytes.Clone(data)
 	err = decoder.walkBatch(data, func(packet []byte) error {
 		packets = append(packets, packet)
@@ -139,7 +136,8 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 }
 
 // DecodeFunc decodes one packet batch and calls f for each packet in the batch. The packet slice passed to f is
-// valid only until f returns.
+// valid only until f returns. The batch is validated in full before the first call to f, so a malformed batch
+// dispatches no packets at all.
 func (decoder *Decoder) DecodeFunc(f func([]byte) error) error {
 	data, pooled, err := decoder.readBatch()
 	if pooled != nil {
@@ -199,27 +197,25 @@ func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
 			}
 			data, pooled, err = decoder.decompressBatch(compression, data[1:])
 			if err != nil {
-				return nil, nil, fmt.Errorf("decompress batch: %w", err)
+				return nil, pooled, fmt.Errorf("decompress batch: %w", err)
 			}
 		}
 	}
 
-	if uint64(len(data)) > uint64(decoder.maxDecompressedLen) {
-		if pooled != nil {
-			putDecompressBuffer(pooled)
-		}
-		return nil, nil, fmt.Errorf("decode batch: decompressed size %v exceeds limit %v", len(data), decoder.maxDecompressedLen)
+	if len(data) > decoder.maxDecompressedLen {
+		return nil, pooled, fmt.Errorf("decode batch: decompressed size %v exceeds limit %v", len(data), decoder.maxDecompressedLen)
 	}
 	return data, pooled, nil
 }
 
+// decompressBatch decompresses a batch, borrowing a pooled buffer when the compression supports it. A non-nil
+// pooled buffer must be released by the caller, whether or not an error is returned.
 func (decoder *Decoder) decompressBatch(compression Compression, compressed []byte) ([]byte, *[]byte, error) {
 	if decompressor, ok := compression.(appendDecompression); ok {
 		pooled := getDecompressBuffer()
 		data, err := decompressor.DecompressAppend(*pooled, compressed, decoder.maxDecompressedLen)
 		if err != nil {
-			putDecompressBuffer(pooled)
-			return nil, nil, err
+			return nil, pooled, err
 		}
 		*pooled = data
 		return data, pooled, nil
@@ -278,7 +274,7 @@ func putDecompressBuffer(b *[]byte) {
 
 func readPacketLength(data []byte) (uint32, int, error) {
 	var length uint32
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if i >= len(data) {
 			return 0, 0, io.ErrUnexpectedEOF
 		}

@@ -223,29 +223,21 @@ func normalizeDecompressionLimit(limit int) int {
 func appendReader(dst []byte, r io.Reader, limit int) ([]byte, error) {
 	const chunkSize = 32 * 1024
 
+	// Reading limit+1 bytes detects overflow; cap the limit so the +1 cannot itself overflow.
+	limit = min(limit, math.MaxInt-1)
 	start := len(dst)
 	for {
-		readLen := cap(dst) - len(dst)
-		if readLen == 0 {
-			grow := chunkSize
-			if limit != math.MaxInt {
-				remaining := limit + 1 - (len(dst) - start)
-				grow = min(grow, remaining)
-			}
-			dst = slices.Grow(dst, grow)
-			readLen = cap(dst) - len(dst)
+		remaining := limit + 1 - (len(dst) - start)
+		if cap(dst) == len(dst) {
+			dst = slices.Grow(dst, min(chunkSize, remaining))
 		}
-		readLen = min(readLen, chunkSize)
-		if limit != math.MaxInt {
-			remaining := limit + 1 - (len(dst) - start)
-			readLen = min(readLen, remaining)
-		}
+		readLen := min(cap(dst)-len(dst), chunkSize, remaining)
 
 		n := len(dst)
 		dst = dst[:n+readLen]
 		read, err := r.Read(dst[n:])
 		dst = dst[:n+read]
-		if limit != math.MaxInt && len(dst)-start > limit {
+		if len(dst)-start > limit {
 			return nil, fmt.Errorf("size exceeds limit %d", limit)
 		}
 		if err == io.EOF {
