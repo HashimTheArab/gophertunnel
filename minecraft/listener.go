@@ -416,9 +416,9 @@ func (listener *Listener) updatePongData() {
 		ipv6Port = port
 	}
 
-	authOnline, authOffline := "0", "1"
-	if !listener.cfg.AuthenticationDisabled {
-		authOnline, authOffline = "1", "0"
+	authOnline, authOffline := "1", "0"
+	if listener.cfg.AuthenticationDisabled {
+		authOffline = "1"
 	}
 
 	s := listener.status()
