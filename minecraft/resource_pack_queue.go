@@ -3,6 +3,9 @@ package minecraft
 import (
 	"bytes"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
@@ -16,38 +19,49 @@ type resourcePackQueue struct {
 	currentOffset   uint64
 
 	packAmount       int
-	downloadingPacks map[string]downloadingPack
+	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
+	chunkSize        uint32
 }
 
 // downloadingPack is a resource pack that is being downloaded by a client connection.
 type downloadingPack struct {
-	buf           *bytes.Buffer
-	chunkSize     uint32
-	size          uint64
-	expectedIndex uint32
-	newFrag       chan []byte
-	contentKey    string
+	buf        *bytes.Buffer
+	chunkSize  uint32
+	chunkCount uint32
+	size       uint64
+	newFrag    chan resourcePackChunk
+	contentKey string
+	cacheKey   ResourcePackCacheKey
+
+	// mu guards requested, which tracks the chunk indices requested but not yet received.
+	mu        sync.Mutex
+	requested map[uint32]struct{}
 }
 
-// Request 'requests' all resource packs passed, provided they all exist in the resourcePackQueue. If not,
-// an error is returned.
+// resourcePackChunk is a single received chunk of a resource pack, tagged with its index.
+type resourcePackChunk struct {
+	index uint32
+	data  []byte
+}
+
+// Request 'requests' all resource packs passed, provided they all exist in the resourcePackQueue. Clients
+// generally request packs as "uuid_version", and ResourcePackDataInfo must use that same identifier shape so
+// the client can match the response to its request. Bare UUID requests are accepted for compatibility.
 func (queue *resourcePackQueue) Request(packs []string) error {
 	queue.packsToDownload = make(map[string]*resource.Pack)
-	for _, packUUID := range packs {
+	for _, requestedPackID := range packs {
+		uuid, version, hasVersion := strings.Cut(requestedPackID, "_")
 		found := false
 		for _, pack := range queue.packs {
-			// Mojang made some hack that merges the UUID with the version, so we need to combine that here
-			// too in order to find the proper pack.
-			id := pack.UUID().String()
-			if id+"_"+pack.Version() == packUUID {
-				queue.packsToDownload[id] = pack
+			if uuid == pack.UUID().String() && (!hasVersion || version == "" || version == pack.Version()) {
+				queue.packsToDownload[pack.UUID().String()] = pack
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("resource pack (UUID=%v) not found", packUUID)
+			return fmt.Errorf("resource pack (UUID=%v) not found", requestedPackID)
 		}
 	}
 	return nil
@@ -77,9 +91,9 @@ func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok 
 			packType = packet.ResourcePackTypeSkins
 		}
 		return &packet.ResourcePackDataInfo{
-			UUID:          pack.UUID().String(),
-			DataChunkSize: packChunkSize,
-			ChunkCount:    uint32(pack.DataChunkCount(packChunkSize)),
+			UUID:          pack.UUID().String() + "_" + pack.Version(),
+			DataChunkSize: queue.chunkSize,
+			ChunkCount:    uint32(pack.DataChunkCount(int(queue.chunkSize))),
 			Size:          uint64(pack.Size()),
 			Hash:          checksum[:],
 			PackType:      packType,

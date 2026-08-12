@@ -13,6 +13,10 @@ const (
 	ShapeDataBox
 	ShapeDataLine
 	ShapeDataSphere
+	ShapeDataCylinder
+	ShapeDataPyramid
+	ShapeDataEllipsoid
+	ShapeDataCone
 )
 
 // lookupShapeData looks up an ShapeData matching the shape data type passed.
@@ -31,6 +35,14 @@ func lookupShapeData(shapeDataType uint32, x *ShapeData) bool {
 		*x = &LineShape{}
 	case ShapeDataSphere:
 		*x = &SphereShape{}
+	case ShapeDataCylinder:
+		*x = &CylinderShape{}
+	case ShapeDataPyramid:
+		*x = &PyramidShape{}
+	case ShapeDataEllipsoid:
+		*x = &EllipsoidShape{}
+	case ShapeDataCone:
+		*x = &ConeShape{}
 	default:
 		return false
 	}
@@ -52,6 +64,14 @@ func lookupShapeDataType(x ShapeData, shapeDataType *uint32) bool {
 		*shapeDataType = ShapeDataLine
 	case *SphereShape:
 		*shapeDataType = ShapeDataSphere
+	case *CylinderShape:
+		*shapeDataType = ShapeDataCylinder
+	case *PyramidShape:
+		*shapeDataType = ShapeDataPyramid
+	case *EllipsoidShape:
+		*shapeDataType = ShapeDataEllipsoid
+	case *ConeShape:
+		*shapeDataType = ShapeDataCone
 	default:
 		return false
 	}
@@ -154,6 +174,74 @@ func (shape *ArrowShape) Marshal(io IO) {
 	OptionalFunc(io, &shape.Segments, io.Uint8)
 }
 
+// CylinderShape represents a cylinder debug shape.
+type CylinderShape struct {
+	// RadiusX is the radius of the cylinder along the X axis.
+	RadiusX mgl32.Vec2
+	// RadiusZ is the radius of the cylinder along the Z axis.
+	RadiusZ mgl32.Vec2
+	// Height is the height of the cylinder.
+	Height float32
+	// NumSegments is the number of segments used for the cylinder.
+	NumSegments byte
+}
+
+// Marshal ...
+func (shape *CylinderShape) Marshal(io IO) {
+	io.Vec2(&shape.RadiusX)
+	io.Vec2(&shape.RadiusZ)
+	io.Float32(&shape.Height)
+	io.Uint8(&shape.NumSegments)
+}
+
+// PyramidShape represents a pyramid debug shape.
+type PyramidShape struct {
+	// Width is the width along the X axis of the pyramid base.
+	Width float32
+	// Depth is the optional depth along the Z axis of the pyramid base. It defaults to Width if unset.
+	Depth Optional[float32]
+	// Height is the height of the pyramid.
+	Height float32
+}
+
+// Marshal ...
+func (shape *PyramidShape) Marshal(io IO) {
+	io.Float32(&shape.Width)
+	OptionalFunc(io, &shape.Depth, io.Float32)
+	io.Float32(&shape.Height)
+}
+
+// EllipsoidShape represents an ellipsoid debug shape.
+type EllipsoidShape struct {
+	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
+	Radii mgl32.Vec3
+	// SegmentsPerAxis is the number of segments used per axis for the ellipsoid.
+	SegmentsPerAxis byte
+}
+
+// Marshal ...
+func (shape *EllipsoidShape) Marshal(io IO) {
+	io.Vec3(&shape.Radii)
+	io.Uint8(&shape.SegmentsPerAxis)
+}
+
+// ConeShape represents a cone debug shape.
+type ConeShape struct {
+	// Radii are the radii along the X/Z axes of the cone base.
+	Radii mgl32.Vec2
+	// Height is the height of the cone.
+	Height float32
+	// NumSegments is the number of segments used for the cone.
+	NumSegments byte
+}
+
+// Marshal ...
+func (shape *ConeShape) Marshal(io IO) {
+	io.Vec2(&shape.Radii)
+	io.Float32(&shape.Height)
+	io.Uint8(&shape.NumSegments)
+}
+
 const (
 	PrimitiveShapeLine uint8 = iota
 	PrimitiveShapeBox
@@ -161,6 +249,10 @@ const (
 	PrimitiveShapeCircle
 	PrimitiveShapeText
 	PrimitiveShapeArrow
+	PrimitiveShapeCylinder
+	PrimitiveShapePyramid
+	PrimitiveShapeEllipsoid
+	PrimitiveShapeCone
 )
 
 // PrimitiveShape defines a single shape to be rendered on the client. Each shape has a unique NetworkID and a set of
@@ -170,7 +262,8 @@ type PrimitiveShape struct {
 	NetworkID uint64
 	// DimensionID is the optional dimension ID where the shape is rendered.
 	DimensionID Optional[int32]
-	// AttachedToEntityID is the optional unique ID of the entity the shape is attached to.
+	// AttachedToEntityID is the optional unique ID of the entity the shape is attached to. Mojang's documentation
+	// describes it as a runtime ID, but the field is an ActorUniqueID and the client resolves it as one.
 	AttachedToEntityID Optional[int64]
 	// Type is the type of the shape.
 	// If not set, the set shape will be cleared.
@@ -202,6 +295,6 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	OptionalFunc(io, &x.MaxRenderDistance, io.Float32)
 	OptionalFunc(io, &x.Colour, io.BEARGB)
 	OptionalFunc(io, &x.DimensionID, io.Varint32)
-	OptionalFunc(io, &x.AttachedToEntityID, io.Varint64)
+	OptionalFunc(io, &x.AttachedToEntityID, io.ActorUniqueID)
 	io.ShapeData(&x.ExtraShapeData)
 }

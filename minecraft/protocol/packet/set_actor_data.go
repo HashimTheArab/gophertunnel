@@ -27,8 +27,8 @@ func (*SetActorData) ID() uint32 {
 }
 
 func (pk *SetActorData) Marshal(io protocol.IO) {
-	io.Varuint64(&pk.EntityRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.EntityMetadata(&pk.EntityMetadata)
 	protocol.Single(io, &pk.EntityProperties)
-	io.Varuint64(&pk.Tick)
+	io.PlayerInputTick(&pk.Tick)
 }

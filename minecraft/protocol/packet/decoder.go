@@ -18,14 +18,13 @@ type Decoder struct {
 	r   io.Reader
 	buf []byte
 
-	// pr holds a packetReader (and io.Reader) that packets are read from if the io.Reader passed to
-	// NewDecoder implements the packetReader interface.
-	pr packetReader
+	// pr holds a PacketReader (and io.Reader) that packets are read from if the io.Reader passed to
+	// NewDecoder implements the PacketReader interface.
+	pr PacketReader
 
 	// header holds the batch header that is expected on the beginning of input packet data.
 	header             []byte
 	decompress         bool
-	compression        Compression
 	maxDecompressedLen int
 	encrypt            *encrypt
 	// disableEncryption indicates whether to prevent encryption from being enabled
@@ -35,26 +34,20 @@ type Decoder struct {
 	checkPacketLimit bool
 }
 
-// packetReader is used to read packets immediately instead of copying them in a buffer first. This is a
-// specific case made to reduce RAM usage.
-type packetReader interface {
-	ReadPacket() ([]byte, error)
-}
-
 // NewDecoder returns a new decoder decoding data from the io.Reader passed. One read call from the reader is
 // assumed to consume an entire packet.
 func NewDecoder(reader io.Reader) *Decoder {
 	var batch []byte
-	if b, ok := reader.(batchHeader); ok {
+	if b, ok := reader.(BatchHeaderer); ok {
 		batch = b.BatchHeader()
 	} else {
 		batch = []byte{header}
 	}
 	var disableEncryption bool
-	if d, ok := reader.(encryptionDisabler); ok {
+	if d, ok := reader.(EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
-	if pr, ok := reader.(packetReader); ok {
+	if pr, ok := reader.(PacketReader); ok {
 		return &Decoder{
 			checkPacketLimit:  true,
 			pr:                pr,
@@ -83,10 +76,10 @@ func (decoder *Decoder) EnableEncryption(keyBytes [32]byte) {
 	decoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Decoder.
-func (decoder *Decoder) EnableCompression(compression Compression, maxDecompressedLen int) {
+// EnableCompression enables compression for the Decoder. The compression argument is retained for API
+// compatibility; each batch identifies its own registered algorithm.
+func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int) {
 	decoder.decompress = true
-	decoder.compression = compression
 	decoder.maxDecompressedLen = maxDecompressedLen
 }
 
@@ -150,9 +143,6 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 			if !ok {
 				return nil, fmt.Errorf("decompress batch: unknown compression algorithm %v", data[0])
 			}
-			if compression != decoder.compression {
-				return nil, fmt.Errorf("decompress batch: unexpected compression algorithm: got %v, expected %v", compression, decoder.compression)
-			}
 			data, err = compression.Decompress(data[1:], decoder.maxDecompressedLen)
 			if err != nil {
 				return nil, fmt.Errorf("decompress batch: %w", err)
@@ -167,7 +157,10 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 			return nil, fmt.Errorf("decode batch: read packet length: %w", err)
 		}
 		if length == 0 {
-			return nil, fmt.Errorf("decode batch: empty packet")
+			if decoder.checkPacketLimit {
+				return nil, fmt.Errorf("decode batch: empty packet")
+			}
+			continue
 		}
 		if length > uint32(b.Len()) {
 			return nil, fmt.Errorf("decode batch: packet length %v exceeds remaining %v", length, b.Len())

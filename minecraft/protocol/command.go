@@ -73,10 +73,12 @@ const (
 	CommandArgEnum     = 0x200000
 	CommandArgSuffixed = 0x1000000
 	CommandArgSoftEnum = 0x4000000
+)
 
+const (
 	CommandArgTypeInt = iota + 1
+	_
 	CommandArgTypeFloat
-	CommandArgTypeValue
 	CommandArgTypeRValue
 	CommandArgTypeWildcardInt
 	CommandArgTypeOperator
@@ -352,7 +354,7 @@ func CommandOriginData(r IO, x *CommandOrigin) {
 	r.String(&originStr)
 	r.UUID(&x.UUID)
 	r.String(&x.RequestID)
-	r.Int64(&x.PlayerUniqueID)
+	r.ActorUniqueIDInt64(&x.PlayerUniqueID)
 	commandOriginFromString(r, &x.Origin, originStr)
 }
 

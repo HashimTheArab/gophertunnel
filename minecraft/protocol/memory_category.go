@@ -6,8 +6,10 @@ const (
 	MemoryCategoryActor
 	MemoryCategoryActorAnimation
 	MemoryCategoryActorRendering
+	MemoryCategoryBalancer
 	MemoryCategoryBlockTickingQueues
 	MemoryCategoryBiomeStorage
+	MemoryCategoryBlobs
 	MemoryCategoryCereal
 	MemoryCategoryCircuitSystem
 	MemoryCategoryClient
@@ -43,7 +45,6 @@ const (
 	MemoryCategoryLevelChunk
 	MemoryCategoryLevelChunkGen
 	MemoryCategoryLevelChunkGenThreadLocal
-	MemoryCategoryLightVolumeManager
 	MemoryCategoryNetwork
 	MemoryCategoryMarketplace
 	MemoryCategoryMaterialDragonCompiledDefinition
@@ -55,13 +56,29 @@ const (
 	MemoryCategoryMaterialVariationManager
 	MemoryCategoryMolang
 	MemoryCategoryOreUI
-	MemoryCategoryPersona
+	MemoryCategoryOreUIClient
+	MemoryCategoryPersonaPieces
+	MemoryCategoryPersonaAnimations
+	MemoryCategoryPersonaTextures
+	MemoryCategoryPersonaCharacters
+	MemoryCategoryPersonaSkinPacks
+	MemoryCategoryPersonaRepo
 	MemoryCategoryPlayer
 	MemoryCategoryRenderChunk
 	MemoryCategoryRenderChunkIndexBuffer
 	MemoryCategoryRenderChunkVertexBuffer
 	MemoryCategoryRendering
+	MemoryCategoryRenderingBGFXInit
+	MemoryCategoryRenderingBGFXStartFrame
+	MemoryCategoryRenderingBlockTessellator
+	MemoryCategoryRenderingEndFrame
+	MemoryCategoryRenderingGraphicsTasksInit
 	MemoryCategoryRenderingLibrary
+	MemoryCategoryRenderingPolygonOperatorPool
+	MemoryCategoryRenderingPBRTextureData
+	MemoryCategoryRenderingRenderRegistry
+	MemoryCategoryRenderingSetup
+	MemoryCategoryRenderingVertices
 	MemoryCategoryRequestLog
 	MemoryCategoryResourcePacks
 	MemoryCategorySound
@@ -69,11 +86,11 @@ const (
 	MemoryCategorySubChunkBlockData
 	MemoryCategorySubChunkLightData
 	MemoryCategoryTextures
-	MemoryCategoryVR
 	MemoryCategoryWeatherRenderer
 	MemoryCategoryWorldGenerator
 	MemoryCategoryTasks
 	MemoryCategoryTest
+	MemoryCategoryTestLoadTestTags
 	MemoryCategoryScripting
 	MemoryCategoryScriptingRuntime
 	MemoryCategoryScriptingContext
@@ -93,6 +110,9 @@ const (
 	MemoryCategoryGamefaceMedia
 	MemoryCategoryGamefaceJSON
 	MemoryCategoryGamefaceScriptEngine
+	MemoryCategoryGamefaceScript
+	MemoryCategoryGamefaceLayout
+	MemoryCategoryVR
 )
 
 // MemoryCategoryCounter represents a memory usage counter for a specific category.
@@ -147,4 +167,39 @@ func (x *SystemDiagnosticTimingInfo) Marshal(r IO) {
 	r.Uint64(&x.SystemIndex)
 	r.Uint64(&x.DurationNanos)
 	r.Uint8(&x.PercentOfTotal)
+}
+
+// SystemCategory maps a diagnostics category name to a system index.
+type SystemCategory struct {
+	CategoryName string
+	SystemIndex  uint64
+}
+
+// Marshal encodes/decodes a SystemCategory.
+func (x *SystemCategory) Marshal(r IO) {
+	r.String(&x.CategoryName)
+	r.Uint64(&x.SystemIndex)
+}
+
+// WhiskerScopeDataSummary represents a whisker profiler scope diagnostic summary.
+type WhiskerScopeDataSummary struct {
+	// Label is the label of the whisker scope.
+	Label string
+	// Indentation is the indentation string of the whisker scope within the profiler hierarchy.
+	Indentation string
+	// TotalHighCostNS is the total time, in nanoseconds, spent in the high-cost portion of the scope.
+	TotalHighCostNS uint64
+	// TotalMidCostNS is the total time, in nanoseconds, spent in the mid-cost portion of the scope.
+	TotalMidCostNS uint64
+	// TotalLowCostNS is the total time, in nanoseconds, spent in the low-cost portion of the scope.
+	TotalLowCostNS uint64
+}
+
+// Marshal encodes/decodes a WhiskerScopeDataSummary.
+func (x *WhiskerScopeDataSummary) Marshal(r IO) {
+	r.String(&x.Label)
+	r.String(&x.Indentation)
+	r.Uint64(&x.TotalHighCostNS)
+	r.Uint64(&x.TotalMidCostNS)
+	r.Uint64(&x.TotalLowCostNS)
 }

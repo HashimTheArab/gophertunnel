@@ -7,11 +7,30 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
 
 const maxPooledEncoderBufferCap = 1 << 20
+
+// BatchEncodeStats describes one encoded packet batch.
+type BatchEncodeStats struct {
+	PacketCount         int
+	UncompressedLen     int
+	OutputLen           int
+	MaxCompressedLen    int
+	BufferCap           int
+	CompressionID       uint16
+	Compressed          bool
+	BelowThreshold      bool
+	PooledBuffer        bool
+	EncodeDuration      time.Duration
+	CompressionDuration time.Duration
+}
+
+// BatchEncodeObserver is called after a packet batch has been encoded.
+type BatchEncodeObserver func(BatchEncodeStats)
 
 // Encoder handles the encoding of Minecraft packets that are sent to an io.Writer. The packets are compressed
 // and optionally encoded before they are sent to the io.Writer.
@@ -27,19 +46,20 @@ type Encoder struct {
 	// disableEncryption indicates whether to prevent encryption from being enabled
 	// even if it is requested on handshake during login.
 	disableEncryption bool
+	observer          BatchEncodeObserver
 }
 
 // NewEncoder returns a new Encoder for the io.Writer passed. Each final packet produced by the Encoder is
 // sent with a single call to io.Writer.Write().
 func NewEncoder(w io.Writer) *Encoder {
 	var batch []byte
-	if b, ok := w.(batchHeader); ok {
+	if b, ok := w.(BatchHeaderer); ok {
 		batch = b.BatchHeader()
 	} else {
 		batch = []byte{header}
 	}
 	var disableEncryption bool
-	if d, ok := w.(encryptionDisabler); ok {
+	if d, ok := w.(EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 	return &Encoder{
@@ -47,25 +67,6 @@ func NewEncoder(w io.Writer) *Encoder {
 		header:            batch,
 		disableEncryption: disableEncryption,
 	}
-}
-
-// batchHeader can be implemented by underlying transport connection provided to Encoder and Decoder
-// to specify the initial bytes that should appear at the beginning of packet data in wire.
-type batchHeader interface {
-	// BatchHeader returns initial bytes that should be appended to the produced data
-	// in Encoder and Decoder. It can be an empty slice if nothing is expected at the beginning.
-	BatchHeader() []byte
-}
-
-// encryptionDisabler may be implemented by the underlying transport connection to
-// prevent encryption from being enabled in Encoder and Decoder.
-//
-// Disabling encryption is strongly discouraged, as it removes protection against
-// replay attacks during login. Use only if you fully understand the implications.
-type encryptionDisabler interface {
-	// DisableEncryption reports whether encryption should be disabled for both
-	// Encoder and Decoder.
-	DisableEncryption() bool
 }
 
 // EnableEncryption enables encryption for the Encoder using the secret key bytes passed. Each packet sent
@@ -86,6 +87,12 @@ func (encoder *Encoder) EnableCompression(compression Compression, threshold int
 	encoder.compressionThreshold = threshold
 }
 
+// SetBatchEncodeObserver sets an observer called with metadata for each encoded
+// packet batch. The observer should be fast and non-blocking.
+func (encoder *Encoder) SetBatchEncodeObserver(observer BatchEncodeObserver) {
+	encoder.observer = observer
+}
+
 // Encode encodes the packets passed. It writes all of them as a single packet which is  compressed and
 // optionally encrypted.
 func (encoder *Encoder) Encode(packets [][]byte) error {
@@ -102,6 +109,14 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	}()
 
 	compression := encoder.compression
+	observer := encoder.observer
+	var stats BatchEncodeStats
+	var encodeStart time.Time
+	if observer != nil {
+		encodeStart = time.Now()
+		stats.PacketCount = len(packets)
+		stats.CompressionID = CompressionAlgorithmNone
+	}
 	_, _ = buf.Write(encoder.header)
 	if compression != nil {
 		_ = buf.WriteByte(0)
@@ -122,18 +137,35 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 	data := buf.Bytes()
 	if compression != nil {
 		batch := data[batchStart:]
+		if observer != nil {
+			stats.UncompressedLen = len(batch)
+		}
 		if len(batch) < encoder.compressionThreshold {
 			data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
+			if observer != nil {
+				stats.BelowThreshold = true
+			}
 		} else {
+			var compressionStart time.Time
+			if observer != nil {
+				compressionStart = time.Now()
+			}
 			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
 			_, _ = compressedBuf.Write(encoder.header)
-			_ = compressedBuf.WriteByte(byte(compression.EncodeCompression()))
+			compressionID := compression.EncodeCompression()
+			if observer != nil {
+				stats.CompressionID = compressionID
+			}
+			_ = compressedBuf.WriteByte(byte(compressionID))
 			var err error
 			if writer, ok := compression.(writeCompression); ok {
 				err = writer.compressTo(compressedBuf, batch)
 				data = compressedBuf.Bytes()
 			} else if appender, ok := compression.(appendCompression); ok {
 				if n := appender.MaxCompressedLen(len(batch)); n > 0 {
+					if observer != nil {
+						stats.MaxCompressedLen = n
+					}
 					compressedBuf.Grow(n)
 				}
 				dst := compressedBuf.Bytes()
@@ -147,14 +179,26 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 			if err != nil {
 				return fmt.Errorf("compress batch: %w", err)
 			}
+			if observer != nil {
+				stats.CompressionDuration = time.Since(compressionStart)
+				stats.Compressed = true
+				stats.BufferCap = compressedBuf.Cap()
+				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
+			}
 		}
+	} else if observer != nil {
+		stats.UncompressedLen = len(data) - len(encoder.header)
 	}
-
 	if encoder.encrypt != nil {
 		// If the encryption session is not nil, encryption is enabled, meaning we should encrypt the
 		// compressed data of this packet.
 		data = slices.Grow(data, 8)
 		data = encoder.encrypt.encrypt(data)
+	}
+	if observer != nil {
+		stats.OutputLen = len(data) - len(encoder.header)
+		stats.EncodeDuration = time.Since(encodeStart)
+		observer(stats)
 	}
 	if _, err := encoder.w.Write(data); err != nil {
 		return fmt.Errorf("write batch: %w", err)
