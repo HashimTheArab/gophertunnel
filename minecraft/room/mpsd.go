@@ -3,9 +3,9 @@ package room
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -19,6 +19,9 @@ import (
 type XBLAnnouncer struct {
 	// Client publishes and updates MPSD sessions.
 	Client *mpsd.Client
+	// Log reports failures encountered while publishing nonce updates after
+	// session membership changes. If nil, [slog.Default] is used.
+	Log *slog.Logger
 
 	// SessionReference specifies the internal ID of the session being published when the Session is nil.
 	SessionReference mpsd.SessionReference
@@ -32,6 +35,12 @@ type XBLAnnouncer struct {
 
 	// custom properties are encoded from Status for comparison in announcements.
 	custom []byte
+	// nonces maps active session members to their connection nonce.
+	nonces map[string]string
+	// lastStatus is the last status announced and is republished when nonces change.
+	lastStatus Status
+	// handledSession is the session whose member changes are currently handled.
+	handledSession *mpsd.Session
 	// readRestriction and joinRestriction track the effective MPSD restrictions used by Session.
 	readRestriction string
 	joinRestriction string
@@ -48,7 +57,14 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 	a.Lock()
 	defer a.Unlock()
 
-	custom, err := json.Marshal(status)
+	if a.nonces == nil {
+		a.nonces = make(map[string]string, len(status.Nonces))
+		for xuid, nonce := range status.Nonces {
+			a.nonces[xuid] = nonce
+		}
+	}
+	a.lastStatus = status
+	custom, err := a.marshalStatusLocked(status)
 	if err != nil {
 		return fmt.Errorf("encode: %w", err)
 	}
@@ -60,6 +76,7 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 		}
 	}
 	if bytes.Equal(custom, a.custom) && read == a.readRestriction && join == a.joinRestriction {
+		a.handleSessionLocked()
 		return nil
 	}
 
@@ -71,7 +88,12 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 		if err := a.Session.CloseContext(ctx); err != nil {
 			return fmt.Errorf("close stale session: %w", err)
 		}
-		a.Session = nil
+		a.resetSessionStateLocked()
+		custom, err = a.marshalStatusLocked(status)
+		if err != nil {
+			return fmt.Errorf("encode: %w", err)
+		}
+		config, read, join = a.publishConfig(status, custom)
 	}
 
 	if a.Session == nil {
@@ -95,6 +117,7 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 		a.custom = custom
 		a.readRestriction = read
 		a.joinRestriction = join
+		a.handleSessionLocked()
 		return nil
 	}
 	if err := a.Session.SetCustomProperties(ctx, custom); err != nil {
@@ -103,6 +126,7 @@ func (a *XBLAnnouncer) Announce(ctx context.Context, status Status) error {
 	a.custom = custom
 	a.readRestriction = read
 	a.joinRestriction = join
+	a.handleSessionLocked()
 	return nil
 }
 

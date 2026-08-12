@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 
-	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/p2p"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -18,34 +17,23 @@ type Status struct {
 	LevelID                 string               `json:"levelId"`
 	WorldName               string               `json:"worldName"`
 	WorldType               string               `json:"worldType"`
-	Protocol                int32                `json:"protocol"`
+	Protocol                int                  `json:"protocol"`
 	MemberCount             int                  `json:"MemberCount"`
 	MaxMemberCount          int                  `json:"MaxMemberCount"`
 	BroadcastSetting        p2p.BroadcastSetting `json:"BroadcastSetting"`
-	LanGame                 bool                 `json:"LanGame"`
-	IsEditorWorld           bool                 `json:"isEditorWorld"`
+	LANGame                 bool                 `json:"LanGame"`
+	EditorWorld             bool                 `json:"isEditorWorld"`
+	Hardcore                bool                 `json:"isHardcore"`
 	TransportLayer          int                  `json:"TransportLayer"`
 	OnlineCrossPlatformGame bool                 `json:"OnlineCrossPlatformGame"`
 	CrossPlayDisabled       bool                 `json:"CrossPlayDisabled"`
-	TitleID                 int64                `json:"TitleId"`
-	SupportedConnections    []Connection         `json:"SupportedConnections"`
-}
-
-type Connection struct {
-	ConnectionType int             `json:"ConnectionType"`
-	HostIPAddress  string          `json:"HostIpAddress"`
-	HostPort       uint16          `json:"HostPort"`
-	NetherNetID    p2p.NetherNetID `json:"NetherNetId"`
-	RakNetGUID     string          `json:"RakNetGUID,omitempty"`
-	PmsgID         uuid.UUID       `json:"PmsgId,omitempty"`
+	TitleID                 int                  `json:"TitleId"`
+	SupportedConnections    []p2p.Connection     `json:"SupportedConnections"`
+	Nonces                  map[string]string    `json:"nonces"`
 }
 
 const (
 	WorldTypeCreative = "Creative"
-)
-
-const (
-	ConnectionTypeUPNP = 6
 )
 
 type StatusProvider interface {
@@ -75,7 +63,7 @@ func DefaultStatus() Status {
 		WorldType:               WorldTypeCreative,
 		Protocol:                protocol.CurrentProtocol,
 		BroadcastSetting:        p2p.BroadcastSettingFriendsOfFriends,
-		LanGame:                 true,
+		LANGame:                 true,
 		OnlineCrossPlatformGame: true,
 		CrossPlayDisabled:       false,
 		TitleID:                 0,
