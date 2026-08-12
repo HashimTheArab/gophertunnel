@@ -247,7 +247,7 @@ func TestClientReturnsServiceError(t *testing.T) {
 	defer server.Close()
 
 	_, err := testClient(t, server).Images(context.Background(), "1")
-	var serviceErr *serviceinternal.Error
+	var serviceErr *service.ResponseError
 	if !errors.As(err, &serviceErr) {
 		t.Fatalf("error = %v, want Minecraft service error", err)
 	}
