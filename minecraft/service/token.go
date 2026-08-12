@@ -149,7 +149,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, NewResponseError(resp)
 	}
 	var result internal.Result[*Token]
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -196,7 +196,7 @@ func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, NewResponseError(resp)
 	}
 	var result internal.Result[*Token]
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -271,7 +271,7 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, NewResponseError(resp)
 	}
 	var config oidc.ProviderConfig
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
@@ -317,7 +317,7 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", internal.Err(resp)
+		return "", NewResponseError(resp)
 	}
 	var result internal.Result[*multiplayerToken]
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
