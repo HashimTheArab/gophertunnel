@@ -65,6 +65,9 @@ func (r *Reader) Bool(x *bool) {
 // errStringTooLong is an error set if a string decoded using the String method has a length that is too long.
 var errStringTooLong = errors.New("string length overflows a 32-bit integer")
 
+// maxByteSliceLength limits length-prefixed byte slices decoded from untrusted packets.
+const maxByteSliceLength = 16 * 1024 * 1024
+
 // StringUTF ...
 func (r *Reader) StringUTF(x *string) {
 	var length int16
@@ -105,7 +108,7 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
-	r.checkRemaining(l, "byte slice")
+	r.SliceLength(length, maxByteSliceLength)
 	data := make([]byte, l)
 	if _, err := r.r.Read(data); err != nil {
 		r.panic(err)
