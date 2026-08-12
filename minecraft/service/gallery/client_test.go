@@ -89,27 +89,98 @@ func TestClientUpload(t *testing.T) {
 }
 
 func TestClientFetch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/image.png" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		assertRequestHeaders(t, r)
 		_, _ = io.WriteString(w, "image bytes")
 	}))
-	defer server.Close()
+	defer imageServer.Close()
 
-	client := testClient(t, server)
-	contents, err := client.Fetch(context.Background(), Image{ID: "image-id", URL: server.URL + "/image.png"})
+	galleryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertRequestHeaders(t, r)
+		_, _ = io.WriteString(w, `{"result":{"showcasedImages":[{"id":"image-id","url":"`+imageServer.URL+`/image.png"}]}}`)
+	}))
+	defer galleryServer.Close()
+
+	client := testClient(t, galleryServer)
+	images, err := client.Images(context.Background(), "1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer contents.Close()
+	contents, err := client.Fetch(context.Background(), images[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := contents.Close(); err != nil {
+			t.Errorf("close image contents: %v", err)
+		}
+	}()
 	got, err := io.ReadAll(contents)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "image bytes" {
 		t.Fatalf("contents = %q", got)
+	}
+}
+
+func TestClientFetchRejectsImageNotReturnedByClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("request was sent")
+	}))
+	defer server.Close()
+
+	_, err := testClient(t, server).Fetch(context.Background(), Image{URL: server.URL + "/image.png"})
+	if err == nil {
+		t.Fatal("expected untrusted image error")
+	}
+}
+
+func TestClientFetchRejectsImageReturnedByDifferentClient(t *testing.T) {
+	imageServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("image request was sent")
+	}))
+	defer imageServer.Close()
+	galleryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"result":{"showcasedImages":[{"id":"image-id","url":"`+imageServer.URL+`/image.png"}]}}`)
+	}))
+	defer galleryServer.Close()
+
+	first := testClient(t, galleryServer)
+	images, err := first.Images(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := testClient(t, galleryServer)
+	if _, err := second.Fetch(context.Background(), images[0]); err == nil {
+		t.Fatal("expected image ownership error")
+	}
+}
+
+func TestClientFetchDoesNotFollowRedirects(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("redirect was followed")
+	}))
+	defer target.Close()
+	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer imageServer.Close()
+	galleryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"result":{"showcasedImages":[{"id":"image-id","url":"`+imageServer.URL+`/image.png"}]}}`)
+	}))
+	defer galleryServer.Close()
+
+	client := testClient(t, galleryServer)
+	images, err := client.Images(context.Background(), "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Fetch(context.Background(), images[0]); err == nil {
+		t.Fatal("expected redirect response error")
 	}
 }
 
@@ -125,6 +196,46 @@ func TestClientDelete(t *testing.T) {
 
 	if err := testClient(t, server).Delete(context.Background(), "image-id"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClientEscapesImageID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/api/v1.0/gallery/image%2Fid" {
+			t.Errorf("escaped path = %q", r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := testClient(t, server).Delete(context.Background(), "image/id"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientRejectsInvalidXUID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("request was sent")
+	}))
+	defer server.Close()
+	client := testClient(t, server)
+
+	for _, xuid := range []string{"", ".", "..", "1/2", "-1"} {
+		t.Run(xuid, func(t *testing.T) {
+			if _, err := client.Images(context.Background(), xuid); err == nil {
+				t.Fatal("expected invalid XUID error")
+			}
+		})
+	}
+}
+
+func TestEnvironmentNewRejectsInvalidServiceURI(t *testing.T) {
+	var nilEnvironment *Environment
+	if _, err := nilEnvironment.New(nil); err == nil {
+		t.Fatal("expected nil environment error")
+	}
+	if _, err := new(Environment).New(nil); err == nil {
+		t.Fatal("expected nil service URI error")
 	}
 }
 
@@ -171,9 +282,13 @@ func testClient(t *testing.T, server *httptest.Server) *Client {
 		t.Fatal(err)
 	}
 	env := &Environment{ServiceURI: serviceURL, HTTPClient: server.Client()}
-	return env.New(tokenSourceFunc(func(context.Context) (*service.Token, error) {
+	client, err := env.New(tokenSourceFunc(func(context.Context) (*service.Token, error) {
 		return &service.Token{AuthorizationHeader: "MCToken test-token"}, nil
 	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }
 
 func assertRequestHeaders(t *testing.T, r *http.Request) {

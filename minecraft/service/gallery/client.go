@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/service"
@@ -33,13 +34,19 @@ var DefaultEnvironment = &Environment{ServiceURI: &url.URL{
 }}
 
 // NewClient returns a new Client using DefaultEnvironment.
-func NewClient(src service.TokenSource) *Client {
+func NewClient(src service.TokenSource) (*Client, error) {
 	return DefaultEnvironment.New(src)
 }
 
 // New returns a new Client using src for authorization.
-func (e *Environment) New(src service.TokenSource) *Client {
-	return &Client{src: src, client: e.httpClient(), env: e}
+func (e *Environment) New(src service.TokenSource) (*Client, error) {
+	if e == nil {
+		return nil, errors.New("service/gallery: environment is nil")
+	}
+	if e.ServiceURI == nil || !e.ServiceURI.IsAbs() || e.ServiceURI.Host == "" {
+		return nil, errors.New("service/gallery: environment has invalid service URI")
+	}
+	return &Client{src: src, client: e.httpClient(), env: e}, nil
 }
 
 func (e *Environment) httpClient() *http.Client {
@@ -64,6 +71,9 @@ type Image struct {
 	LastModified time.Time `json:"lastModified"`
 	TakenAt      time.Time `json:"takenTime"`
 	URL          string    `json:"url"`
+
+	client   *Client
+	fetchURL string
 }
 
 // UploadOptions controls the metadata associated with an uploaded image.
@@ -77,10 +87,10 @@ type UploadOptions struct {
 
 // Images returns the images showcased by the player identified by xuid.
 func (c *Client) Images(ctx context.Context, xuid string) ([]Image, error) {
-	if xuid == "" {
-		return nil, errors.New("service/gallery: XUID is empty")
+	if _, err := strconv.ParseUint(xuid, 10, 64); err != nil || strings.Trim(xuid, "0123456789") != "" {
+		return nil, fmt.Errorf("service/gallery: invalid XUID %q", xuid)
 	}
-	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery/xuid", xuid).String()
+	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery/xuid", url.PathEscape(xuid)).String()
 	req, err := c.request(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
@@ -103,6 +113,11 @@ func (c *Client) Images(ctx context.Context, xuid string) ([]Image, error) {
 	}
 	if response.Result == nil {
 		return nil, errors.New("service/gallery: invalid images result")
+	}
+	for i := range response.Result.Images {
+		if err := c.trustImage(&response.Result.Images[i]); err != nil {
+			return nil, err
+		}
 	}
 	return response.Result.Images, nil
 }
@@ -137,20 +152,28 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 	if response.Data == nil {
 		return Image{}, errors.New("service/gallery: invalid upload result")
 	}
+	if err := c.trustImage(response.Data); err != nil {
+		return Image{}, err
+	}
 	return *response.Data, nil
 }
 
-// Fetch downloads image data. Image should be a value returned by Images or Upload. The caller
-// must close the returned reader.
+// Fetch downloads image data. Image must be an unchanged value returned by this Client's Images
+// or Upload method. The caller must close the returned reader. Redirects are rejected so that the
+// Minecraft service token is never forwarded beyond the URL supplied by the Gallery service.
 func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) {
-	if image.URL == "" {
-		return nil, errors.New("service/gallery: image URL is empty")
+	if image.client != c || image.fetchURL == "" || image.URL != image.fetchURL {
+		return nil, errors.New("service/gallery: image was not returned by this client or its URL was changed")
 	}
-	req, err := c.request(ctx, http.MethodGet, image.URL, nil)
+	req, err := c.request(ctx, http.MethodGet, image.fetchURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.client.Do(req)
+	client := *c.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -163,10 +186,10 @@ func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) 
 
 // Delete deletes the image identified by imageID.
 func (c *Client) Delete(ctx context.Context, imageID string) error {
-	if imageID == "" {
-		return errors.New("service/gallery: image ID is empty")
+	if imageID == "" || imageID == "." || imageID == ".." {
+		return errors.New("service/gallery: invalid image ID")
 	}
-	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery", imageID).String()
+	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery", url.PathEscape(imageID)).String()
 	req, err := c.request(ctx, http.MethodDelete, requestURL, nil)
 	if err != nil {
 		return err
@@ -179,6 +202,22 @@ func (c *Client) Delete(ctx context.Context, imageID string) error {
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return internal.Err(resp)
 	}
+	return nil
+}
+
+func (c *Client) trustImage(image *Image) error {
+	if image.URL == "" {
+		return nil
+	}
+	imageURL, err := url.Parse(image.URL)
+	if err != nil || !imageURL.IsAbs() || imageURL.Host == "" || imageURL.User != nil {
+		return fmt.Errorf("service/gallery: invalid image URL %q", image.URL)
+	}
+	if imageURL.Scheme != "https" && !(c.env.ServiceURI.Scheme == "http" && imageURL.Scheme == "http") {
+		return fmt.Errorf("service/gallery: unsupported image URL scheme %q", imageURL.Scheme)
+	}
+	image.client = c
+	image.fetchURL = image.URL
 	return nil
 }
 
