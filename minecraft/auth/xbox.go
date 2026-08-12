@@ -74,36 +74,45 @@ func (cache *XBLTokenCache) Device() xasd.TokenSource {
 // The [oauth2.TokenSource] is used to create a SISU session on the cache when needed.
 // Callers can set their own session to the context by using [ReuseTokenCache].
 func ContextSession(ctx context.Context, src oauth2.TokenSource) *sisu.Session {
+	httpClient, _ := contextClient(ctx)
 	if cache, ok := ctx.Value(tokenCacheContextKey).(*XBLTokenCache); ok {
 		cache.sessionMu.Lock()
 		defer cache.sessionMu.Unlock()
 		if cache.session == nil {
 			cache.session = cache.conf.New(src, &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        ContextClient(ctx),
+				HTTPClient:        httpClient,
 			})
 		}
 		return cache.session
 	}
-	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: ContextClient(ctx)})
+	return AndroidConfig.New(src, &sisu.SessionConfig{HTTPClient: httpClient})
 }
 
-// ContextClient returns the HTTP client configured on ctx for auth requests. A
-// nil return value lets the underlying auth session use its default client.
+// ContextClient returns the HTTP client configured on ctx for auth requests.
+// If no client is configured, [http.DefaultClient] is returned.
 func ContextClient(ctx context.Context) *http.Client {
-	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
+	if client, ok := contextClient(ctx); ok {
 		return client
+	}
+	return http.DefaultClient
+}
+
+// contextClient returns the explicitly configured auth HTTP client, if any.
+func contextClient(ctx context.Context) (*http.Client, bool) {
+	if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
+		return client, true
 	}
 	if client, ok := ctx.Value(xal.HTTPClient).(*http.Client); ok && client != nil {
-		return client
+		return client, true
 	}
-	return nil
+	return nil, false
 }
 
 // WithContextClient stores client on ctx for auth code paths that read HTTP
 // clients from the OAuth2 or XAL context keys.
 func WithContextClient(ctx context.Context, client *http.Client) context.Context {
-	if existing := ContextClient(ctx); existing != nil {
+	if existing, ok := contextClient(ctx); ok {
 		client = existing
 	}
 	if client == nil {
@@ -125,6 +134,13 @@ func (conf Config) NewTokenCache() *XBLTokenCache {
 		conf:   conf,
 		device: xasd.ReuseTokenSource(conf.Config.Config, nil, nil),
 	}
+}
+
+// ReuseTokenCache returns an [XBLTokenCache] that uses the provided [sisu.Session]
+// to request XBL tokens. Callers can embed the returned [XBLTokenCache] via [WithXBLTokenCache]
+// for usage in [RequestXBLToken].
+func ReuseTokenCache(session *sisu.Session) *XBLTokenCache {
+	return AndroidConfig.ReuseTokenCache(session)
 }
 
 // ReuseTokenCache returns an [XBLTokenCache] that uses the provided [sisu.Session]
@@ -192,8 +208,8 @@ var (
 	}
 
 	// Win32Config is the configuration for Minecraft: Bedrock Edition on Windows
-	// devices. It is provided for reference only and does not support authentication,
-	// as retrieving the RPS ticket required for device token requests is not yet known.
+	// devices. It is provided for reference only and is not functional, as retrieving
+	// the RPS ticket required for device token requests is not yet known.
 	Win32Config = Config{
 		sisu.Config{
 			Config: xal.Config{
@@ -237,7 +253,7 @@ var (
 				},
 				UserAgent: "XAL",
 				Sandbox:   "RETAIL",
-				// TODO: Obtain TitleID from titlehub
+				TitleID:   2044456598,
 			},
 			ClientID: "000000004827c78e",
 		},
@@ -266,6 +282,7 @@ func RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty 
 // RequestXBLToken requests an Xbox Live token using the OAuth2 token identifying the user's Microsoft Account.
 // If an [XBLTokenCache] is present in ctx (via [WithXBLTokenCache]), it reuses or newly creates a SISU session inside the cache.
 func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token, relyingParty string) (*XBLToken, error) {
+	httpClient, _ := contextClient(ctx)
 	var s *sisu.Session
 	if cache, ok := ctx.Value(tokenCacheContextKey).(*XBLTokenCache); ok {
 		if cache.conf != conf {
@@ -275,7 +292,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		if cache.session == nil {
 			cache.session = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
 				DeviceTokenSource: cache.device,
-				HTTPClient:        ContextClient(ctx),
+				HTTPClient:        httpClient,
 			})
 		}
 		s = cache.session
@@ -284,7 +301,7 @@ func (conf Config) RequestXBLToken(ctx context.Context, liveToken *oauth2.Token,
 		// If the cache storage does not exist, we request a new session every time
 		// which may cause rate-limiting issues.
 		s = conf.New(conf.TokenSource(context.WithoutCancel(ctx), liveToken), &sisu.SessionConfig{
-			HTTPClient: ContextClient(ctx),
+			HTTPClient: httpClient,
 		})
 	}
 	token, err := s.XSTSToken(ctx, relyingParty)

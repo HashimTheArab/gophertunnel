@@ -124,9 +124,6 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	req.Header.Set("User-Agent", internal.UserAgent)
 
 	httpClient := auth.ContextClient(ctx)
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
 	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
 		return nil, err
