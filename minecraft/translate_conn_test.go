@@ -28,15 +28,15 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 	conn := testConn()
 	conn.SetActorIDTranslation(swapTranslation())
 
-	var dst [][]byte
+	var dst packetQueue
 	conn.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 100})
-	if len(dst) != 1 {
-		t.Fatalf("expected 1 encoded packet, got %d", len(dst))
+	if len(dst.packets) != 1 {
+		t.Fatalf("expected 1 encoded packet, got %d", len(dst.packets))
 	}
 
 	// Decoding through a connection without a translation must expose the translated ID.
 	plain := testConn()
-	data, err := parseData(dst[0], plain)
+	data, err := parseData(dst.packets[0], plain)
 	if err != nil {
 		t.Fatalf("parse encoded packet: %v", err)
 	}
@@ -51,12 +51,12 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 
 func TestConnActorIDTranslationDecode(t *testing.T) {
 	plain := testConn()
-	var dst [][]byte
+	var dst packetQueue
 	plain.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 200})
 
 	conn := testConn()
 	conn.SetActorIDTranslation(swapTranslation())
-	data, err := parseData(dst[0], conn)
+	data, err := parseData(dst.packets[0], conn)
 	if err != nil {
 		t.Fatalf("parse encoded packet: %v", err)
 	}

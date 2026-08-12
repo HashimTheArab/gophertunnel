@@ -205,6 +205,8 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonDenyListed:                                    "You are in deny list.",
 }
 
+const maxPooledPacketBufferCap = 1 << 20
+
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
 // ReadBatch must not be called on multiple goroutines simultaneously.
@@ -285,16 +287,21 @@ type Conn struct {
 	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
 
-	// sendMu protects bufferedSend/bufferedSendSpare.
+	// sendMu protects bufferedSend/bufferedSendSpare and packetWriter.
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and network writes (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
 	encMu sync.Mutex
-	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
-	// they are sent each 20th of a second.
-	bufferedSend      [][]byte
-	bufferedSendSpare [][]byte
-	hdr               *packet.Header
+	// directMu protects directSend between packet marshaling and encoder writes.
+	directMu sync.Mutex
+	// bufferedSend contains packets that are 'written'. They are buffered until they are sent each 20th
+	// of a second.
+	bufferedSend      packetQueue
+	bufferedSendSpare packetQueue
+	// directSend is reused by WritePacketDirect while directMu is held.
+	directSend   packetQueue
+	packetWriter protocol.IO
+	hdr          *packet.Header
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -597,35 +604,101 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	return nil
 }
 
-// encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
-// accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
-// appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
-	buf := internal.BufferPool.Get().(*bytes.Buffer)
-	defer func() {
-		// Reset the buffer, so we can return it to the buffer pool safely.
-		buf.Reset()
-		internal.BufferPool.Put(buf)
-	}()
-
+// encodePacketsTo marshals the provided packet (including header) into one or more byte slices, accounting
+// for protocol conversions and invoking packetFunc callbacks. Encoded packet buffers appended to dst are
+// owned by dst and must be released after the queue is encoded.
+func (conn *Conn) encodePacketsTo(dst *packetQueue, pks ...packet.Packet) {
+	if _, ok := conn.proto.(proto); ok {
+		for _, pk := range pks {
+			conn.encodePacketTo(dst, pk)
+		}
+		return
+	}
 	for _, pk := range pks {
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-			buf.Reset()
-			conn.hdr.PacketID = converted.ID()
-			_ = conn.hdr.Write(buf)
-			l := buf.Len()
-
-			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
-			if translation := conn.actorIDs.Load(); translation != nil {
-				w = translation.WrapWriter(w)
-			}
-			converted.Marshal(w)
-			if conn.packetFunc != nil {
-				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
-			}
-			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
+			conn.encodePacketTo(dst, converted)
 		}
 	}
+}
+
+func (conn *Conn) encodePacketTo(dst *packetQueue, pk packet.Packet) {
+	buf := internal.BufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	conn.hdr.PacketID = pk.ID()
+	_ = conn.hdr.Write(buf)
+	l := buf.Len()
+
+	conn.marshalPacket(buf, pk)
+	if conn.packetFunc != nil {
+		conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+	}
+	dst.appendPooled(buf)
+}
+
+type resettablePacketWriter interface {
+	protocol.IO
+	Reset(interface {
+		io.Writer
+		io.ByteWriter
+	}, int32)
+}
+
+func (conn *Conn) marshalPacket(buf *bytes.Buffer, pk packet.Packet) {
+	shieldID := conn.shieldID.Load()
+	var w protocol.IO
+	if writer, ok := conn.packetWriter.(resettablePacketWriter); ok {
+		writer.Reset(buf, shieldID)
+		w = writer
+	} else {
+		writer := conn.proto.NewWriter(buf, shieldID)
+		if resettable, ok := writer.(resettablePacketWriter); ok {
+			conn.packetWriter = resettable
+		}
+		w = writer
+	}
+	if translation := conn.actorIDs.Load(); translation != nil {
+		w = translation.WrapWriter(w)
+	}
+	pk.Marshal(w)
+}
+
+type packetQueue struct {
+	packets [][]byte
+	buffers []*bytes.Buffer
+}
+
+func (q *packetQueue) appendBorrowed(packet []byte) {
+	q.packets = append(q.packets, packet)
+	q.buffers = append(q.buffers, nil)
+}
+
+func (q *packetQueue) appendPooled(buf *bytes.Buffer) {
+	q.packets = append(q.packets, buf.Bytes())
+	q.buffers = append(q.buffers, buf)
+}
+
+func (q *packetQueue) reset() {
+	q.packets = q.packets[:0]
+	q.buffers = q.buffers[:0]
+}
+
+func (q *packetQueue) release() {
+	for i, buf := range q.buffers {
+		q.packets[i] = nil
+		q.buffers[i] = nil
+		if buf != nil {
+			releasePacketBuffer(buf)
+		}
+	}
+	q.reset()
+}
+
+func releasePacketBuffer(buf *bytes.Buffer) {
+	if buf.Cap() > maxPooledPacketBufferCap {
+		return
+	}
+	buf.Reset()
+	internal.BufferPool.Put(buf)
 }
 
 // WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
@@ -654,21 +727,21 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 		return conn.closeErr("write packet direct")
 	default:
 	}
-	// Use a small stack-allocated buffer for the common case (usually 1 slice),
-	// allowing append to spill to heap only if more capacity is needed.
-	var stackBuf [4][]byte
-	immediate := stackBuf[:0]
-
+	conn.directMu.Lock()
 	conn.sendMu.Lock()
-	conn.encodePacketsTo(&immediate, pks...)
+	conn.directSend.reset()
+	conn.encodePacketsTo(&conn.directSend, pks...)
 	conn.sendMu.Unlock()
 
-	if len(immediate) > 0 {
+	var err error
+	if len(conn.directSend.packets) > 0 {
 		conn.encMu.Lock()
-		defer conn.encMu.Unlock()
-		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
+		err = conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
+		conn.encMu.Unlock()
 	}
-	return nil
+	conn.directSend.release()
+	conn.directMu.Unlock()
+	return err
 }
 
 // ReadPacket reads a packet from the Conn, depending on the packet ID that is found in front of the packet
@@ -794,7 +867,7 @@ func (conn *Conn) Write(b []byte) (n int, err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	conn.bufferedSend = append(conn.bufferedSend, b)
+	conn.bufferedSend.appendBorrowed(b)
 	return len(b), nil
 }
 
@@ -856,7 +929,7 @@ func (conn *Conn) Flush() error {
 	defer conn.encMu.Unlock()
 
 	conn.sendMu.Lock()
-	if len(conn.bufferedSend) == 0 {
+	if len(conn.bufferedSend.packets) == 0 {
 		conn.sendMu.Unlock()
 		return nil
 	}
@@ -864,20 +937,16 @@ func (conn *Conn) Flush() error {
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
-	conn.bufferedSend = conn.bufferedSendSpare[:0]
-	conn.bufferedSendSpare = nil
+	conn.bufferedSend = conn.bufferedSendSpare
+	conn.bufferedSend.reset()
+	conn.bufferedSendSpare = packetQueue{}
 	conn.sendMu.Unlock()
 
-	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
-
-	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
-	// to packet payloads alive, causing an 'invisible' memory leak.
-	for i := range toSend {
-		toSend[i] = nil
-	}
+	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend.packets), "flush")
+	toSend.release()
 
 	conn.sendMu.Lock()
-	conn.bufferedSendSpare = toSend[:0]
+	conn.bufferedSendSpare = toSend
 	conn.sendMu.Unlock()
 	return encodeErr
 }
