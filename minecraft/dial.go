@@ -248,18 +248,20 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			// If a MultiplayerTokenSource was not provided, log in to PlayFab
 			// account and use a default implementation instead.
 			if d.PlayFabClient == nil {
-				client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, playFabSigner, playfab.ClientConfig{
-					HTTPClient:    d.HTTPClient,
-					CreateAccount: true,
+				src, err := e.NewTokenSource(ctx, playFabSigner, service.TokenSourceConfig{
+					HTTPClient: d.HTTPClient,
+					PlayFab: playfab.ClientConfig{
+						CreateAccount: true,
+					},
 				})
 				if err != nil {
 					return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to playfab: %w", err)}
 				}
-				defer client.Close()
-
-				d.PlayFabClient = client
+				defer src.Close()
+				m = &multiplayerTokenSource{src: src, env: e}
+			} else {
+				m = &multiplayerTokenSource{src: e.TokenSource(d.PlayFabClient, service.TokenConfig{}), env: e}
 			}
-			m = &multiplayerTokenSource{src: e.TokenSource(d.PlayFabClient, service.TokenConfig{}), env: e}
 		}
 		token, err = m.MultiplayerToken(ctx, &key.PublicKey)
 		if err != nil {
