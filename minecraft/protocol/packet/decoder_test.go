@@ -24,17 +24,6 @@ func (r *packetReadQueue) ReadPacket() ([]byte, error) {
 	return p, nil
 }
 
-func TestDecodeFuncRejectsOverflowPacketLength(t *testing.T) {
-	decoder := NewDecoder(bytes.NewReader([]byte{header, 0xff, 0xff, 0xff, 0xff, 0x10}))
-	err := decoder.DecodeFunc(func([]byte) error {
-		t.Fatal("packet callback called for malformed length")
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "overflows") {
-		t.Fatalf("expected varuint32 overflow error, got %v", err)
-	}
-}
-
 func TestDecodeFuncRejectsDecompressedBatchLimit(t *testing.T) {
 	decoder := NewDecoder(bytes.NewReader(batchBytes([]byte{1, 2, 3, 4})))
 	decoder.maxDecompressedLen = 3

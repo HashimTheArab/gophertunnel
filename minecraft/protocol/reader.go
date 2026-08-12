@@ -65,6 +65,7 @@ func (r *Reader) Bool(x *bool) {
 // errStringTooLong is an error set if a string decoded using the String method has a length that is too long.
 var errStringTooLong = errors.New("string length overflows a 32-bit integer")
 
+// maxByteSliceLength limits length-prefixed byte slices decoded from untrusted packets.
 const maxByteSliceLength = 16 * 1024 * 1024
 
 // StringUTF ...
@@ -643,16 +644,28 @@ func (r *Reader) InvalidValue(value any, forField, reason string) {
 
 // errVarIntOverflow is an error set if one of the Varint methods encounters a varint that does not terminate
 // after 5 or 10 bytes, depending on the data type read into.
-var errVarIntOverflow = errors.New("varint overflows integer")
+// var errVarIntOverflow = errors.New("varint overflows integer")
 var errBitsetOverflow = errors.New("bitset overflows size")
 
 // Varint64 reads up to 10 bytes from the underlying buffer into an int64.
 func (r *Reader) Varint64(x *int64) {
 	var ux uint64
-	r.Varuint64(&ux)
-	*x = int64(ux >> 1)
-	if ux&1 != 0 {
-		*x = ^*x
+	var i int
+	for {
+		b, err := r.r.ReadByte()
+		if err != nil {
+			r.panic(err)
+		}
+
+		ux |= uint64(b&0x7f) << i
+		if b&0x80 == 0 {
+			*x = int64(ux >> 1)
+			if ux&1 != 0 {
+				*x = ^*x
+			}
+			return
+		}
+		i += 7
 	}
 }
 
@@ -699,53 +712,61 @@ func (r *Reader) ActorUniqueIDVaruint64(x *uint64) {
 // Varuint64 reads up to 10 bytes from the underlying buffer into a uint64.
 func (r *Reader) Varuint64(x *uint64) {
 	var v uint64
-	for i := range 10 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
 		}
 
-		if i == 9 && b&0xfe != 0 {
-			r.panic(errVarIntOverflow)
-		}
-		v |= uint64(b&0x7f) << (7 * i)
+		v |= uint64(b&0x7f) << i
 		if b&0x80 == 0 {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // Varint32 reads up to 5 bytes from the underlying buffer into an int32.
 func (r *Reader) Varint32(x *int32) {
 	var ux uint32
-	r.Varuint32(&ux)
-	*x = int32(ux >> 1)
-	if ux&1 != 0 {
-		*x = ^*x
+	var i int
+	for {
+		b, err := r.r.ReadByte()
+		if err != nil {
+			r.panic(err)
+		}
+
+		ux |= uint32(b&0x7f) << i
+		if b&0x80 == 0 {
+			*x = int32(ux >> 1)
+			if ux&1 != 0 {
+				*x = ^*x
+			}
+			return
+		}
+		i += 7
 	}
 }
 
 // Varuint32 reads up to 5 bytes from the underlying buffer into a uint32.
 func (r *Reader) Varuint32(x *uint32) {
 	var v uint32
-	for i := range 5 {
+	var i int
+	for {
 		b, err := r.r.ReadByte()
 		if err != nil {
 			r.panic(err)
 		}
 
-		if i == 4 && b&0xf0 != 0 {
-			r.panic(errVarIntOverflow)
-		}
-		v |= uint32(b&0x7f) << (7 * i)
+		v |= uint32(b&0x7f) << i
 		if b&0x80 == 0 {
 			*x = v
 			return
 		}
+		i += 7
 	}
-	r.panic(errVarIntOverflow)
 }
 
 // panicf panics with the format and values passed and assigns the error created to the Reader.

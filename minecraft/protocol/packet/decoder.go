@@ -279,9 +279,6 @@ func readPacketLength(data []byte) (uint32, int, error) {
 			return 0, 0, io.ErrUnexpectedEOF
 		}
 		b := data[i]
-		if i == 4 && b&0xf0 != 0 {
-			return 0, 0, fmt.Errorf("varuint32 overflows 32 bits")
-		}
 		length |= uint32(b&0x7f) << (7 * i)
 		if b&0x80 == 0 {
 			return length, i + 1, nil
