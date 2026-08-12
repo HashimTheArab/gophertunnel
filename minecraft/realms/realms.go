@@ -1,6 +1,7 @@
 package realms
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,7 @@ type Client struct {
 	xblToken       *auth.XBLToken
 	httpClient     *http.Client
 	authHTTPClient *http.Client
-	requestFunc    func(ctx context.Context, method, path string) ([]byte, int, error)
+	requestFunc    func(ctx context.Context, method, path string, body []byte) ([]byte, int, error)
 }
 
 const (
@@ -118,6 +119,25 @@ type Realm struct {
 	client *Client
 }
 
+// StoryOptIn is an opt-in state used by Realms Stories settings.
+type StoryOptIn string
+
+const (
+	StoryOptInNone   StoryOptIn = "NONE"
+	StoryOptInOptIn  StoryOptIn = "OPT_IN"
+	StoryOptInOptOut StoryOptIn = "OPT_OUT"
+)
+
+// StorySettings contains the settings controlling Realms Stories for a realm.
+type StorySettings struct {
+	AutoStories   bool       `json:"autostories"`
+	Coordinates   bool       `json:"coordinates"`
+	Notifications bool       `json:"notifications"`
+	PlayerOptIn   StoryOptIn `json:"playerOptIn"`
+	RealmOptIn    StoryOptIn `json:"realmOptIn"`
+	Timeline      bool       `json:"timeline"`
+}
+
 // RealmAddress contains the address returned by the Realms join endpoint along
 // with the signalling protocol used for connecting to it.
 type RealmAddress struct {
@@ -193,6 +213,45 @@ func (r *Realm) OnlinePlayers(ctx context.Context) (players []Player, err error)
 	return response.Players, nil
 }
 
+// StorySettings gets the Realms Stories settings for this realm.
+func (r *Realm) StorySettings(ctx context.Context) (StorySettings, error) {
+	if r.client == nil {
+		return StorySettings{}, fmt.Errorf("realm client is nil")
+	}
+	return r.client.StorySettings(ctx, r.ID)
+}
+
+// UpdateStorySettings updates the Realms Stories settings for this realm.
+func (r *Realm) UpdateStorySettings(ctx context.Context, settings StorySettings) error {
+	if r.client == nil {
+		return fmt.Errorf("realm client is nil")
+	}
+	return r.client.UpdateStorySettings(ctx, r.ID, settings)
+}
+
+// StorySettings gets the Realms Stories settings for a realm.
+func (r *Client) StorySettings(ctx context.Context, realmID int) (StorySettings, error) {
+	body, _, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/stories/settings", realmID))
+	if err != nil {
+		return StorySettings{}, err
+	}
+	var settings StorySettings
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return StorySettings{}, err
+	}
+	return settings, nil
+}
+
+// UpdateStorySettings updates the Realms Stories settings for a realm.
+func (r *Client) UpdateStorySettings(ctx context.Context, realmID int, settings StorySettings) error {
+	body, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	_, _, err = r.requestPost(ctx, fmt.Sprintf("/worlds/%d/stories/settings", realmID), body)
+	return err
+}
+
 // xboxToken returns the xbox token used for the api.
 func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 	if r.xblToken != nil && r.xblToken.Valid() {
@@ -213,16 +272,16 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 }
 
 func (r *Client) requestGet(ctx context.Context, path string) (body []byte, status int, err error) {
-	return r.request(ctx, http.MethodGet, path)
+	return r.request(ctx, http.MethodGet, path, nil)
 }
 
-func (r *Client) requestPost(ctx context.Context, path string) (body []byte, status int, err error) {
-	return r.request(ctx, http.MethodPost, path)
+func (r *Client) requestPost(ctx context.Context, path string, requestBody []byte) (body []byte, status int, err error) {
+	return r.request(ctx, http.MethodPost, path, requestBody)
 }
 
-func (r *Client) request(ctx context.Context, method, path string) (body []byte, status int, err error) {
+func (r *Client) request(ctx context.Context, method, path string, requestBody []byte) (body []byte, status int, err error) {
 	if r.requestFunc != nil {
-		return r.requestFunc(ctx, method, path)
+		return r.requestFunc(ctx, method, path, requestBody)
 	}
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
@@ -230,12 +289,15 @@ func (r *Client) request(ctx context.Context, method, path string) (body []byte,
 	if path[0] != '/' {
 		path = "/" + path
 	}
-	req, err := http.NewRequestWithContext(ctx, method, realmsBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, realmsBaseURL+path, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("User-Agent", "MCPE/UWP")
 	req.Header.Set("Client-Version", protocol.CurrentVersion)
+	if requestBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	xbl, err := r.xboxToken(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -297,7 +359,7 @@ func (c *Client) Realm(ctx context.Context, code string) (Realm, error) {
 
 // AcceptRealmInviteCode accepts a Realm invite code and returns the joined Realm.
 func (c *Client) AcceptRealmInviteCode(ctx context.Context, code string) (Realm, error) {
-	body, _, err := c.requestPost(ctx, fmt.Sprintf("/invites/v1/link/accept/%s", code))
+	body, _, err := c.requestPost(ctx, fmt.Sprintf("/invites/v1/link/accept/%s", code), nil)
 	if err != nil {
 		return Realm{}, err
 	}
