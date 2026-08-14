@@ -19,17 +19,21 @@ type Self struct {
 
 // Tracker mirrors the client-visible state built up by packets delivered to a
 // client: entities, player-list entries, boss bars, own-player effects,
-// scoreboard objectives and the open container. It is not safe for concurrent
-// use; the caller synchronizes Observe against ClearPackets.
+// scoreboard objectives, volume entities and the open container. It is not safe
+// for concurrent use; the caller synchronizes Observe against ClearPackets.
 type Tracker struct {
 	// objectives holds every objective the client still has registered. A server
 	// may point a display slot at a new objective without removing the old one,
 	// and the client keeps the old one until it is explicitly removed.
-	objectives        map[string]struct{}
-	actors            map[int64]struct{}
-	players           map[uuid.UUID]struct{}
+	objectives map[string]struct{}
+	actors     map[int64]struct{}
+	// players maps each list entry to its entity unique ID, so an AddPlayer
+	// whose ability data carries no unique ID can still be recorded under the
+	// ID a later RemoveActor identifies it by.
+	players           map[uuid.UUID]int64
 	bossBars          map[int64]struct{}
 	effects           map[int32]struct{}
+	volumes           map[uint32]int32
 	containerOpen     bool
 	containerWindowID byte
 	containerType     byte
@@ -43,9 +47,10 @@ func NewTracker() *Tracker {
 	return &Tracker{
 		objectives: make(map[string]struct{}),
 		actors:     make(map[int64]struct{}),
-		players:    make(map[uuid.UUID]struct{}),
+		players:    make(map[uuid.UUID]int64),
 		bossBars:   make(map[int64]struct{}),
 		effects:    make(map[int32]struct{}),
+		volumes:    make(map[uint32]int32),
 	}
 }
 
@@ -56,6 +61,7 @@ func Tracked(pk packet.Packet) bool {
 	case *packet.SetDisplayObjective, *packet.RemoveObjective,
 		*packet.AddActor, *packet.AddItemActor, *packet.AddPainting, *packet.AddPlayer, *packet.RemoveActor,
 		*packet.PlayerList, *packet.BossEvent, *packet.MobEffect,
+		*packet.AddVolumeEntity, *packet.RemoveVolumeEntity,
 		*packet.ContainerOpen, *packet.ContainerClose:
 		return true
 	default:
@@ -83,18 +89,24 @@ func (t *Tracker) Observe(pk packet.Packet, self Self) {
 	case *packet.AddPainting:
 		t.actors[pk.EntityUniqueID] = struct{}{}
 	case *packet.AddPlayer:
+		// Ability data may carry no unique ID; the list entry that preceded the
+		// AddPlayer knows it, and only then does the runtime ID stand in.
 		id := pk.AbilityData.EntityUniqueID
 		if id == 0 {
-			id = int64(pk.EntityRuntimeID)
+			if listID := t.players[pk.UUID]; listID != 0 {
+				id = listID
+			} else {
+				id = int64(pk.EntityRuntimeID)
+			}
 		}
 		t.actors[id] = struct{}{}
-		t.players[pk.UUID] = struct{}{}
+		t.players[pk.UUID] = id
 	case *packet.RemoveActor:
 		delete(t.actors, pk.EntityUniqueID)
 	case *packet.PlayerList:
 		for _, entry := range pk.Entries {
 			if entry.ActionType == protocol.PlayerListActionAdd {
-				t.players[entry.UUID] = struct{}{}
+				t.players[entry.UUID] = entry.EntityUniqueID
 				if self != (Self{}) && entry.EntityUniqueID == self.UniqueID {
 					t.selfUUID = entry.UUID
 				}
@@ -117,6 +129,10 @@ func (t *Tracker) Observe(pk packet.Packet, self Self) {
 		} else {
 			t.effects[pk.EffectType] = struct{}{}
 		}
+	case *packet.AddVolumeEntity:
+		t.volumes[pk.EntityRuntimeID] = pk.Dimension
+	case *packet.RemoveVolumeEntity:
+		delete(t.volumes, pk.EntityRuntimeID)
 	case *packet.ContainerOpen:
 		t.containerOpen = true
 		t.containerWindowID, t.containerType = pk.WindowID, pk.ContainerType
@@ -146,7 +162,7 @@ func (t *Tracker) closeContainer(windowID byte) {
 func (t *Tracker) ClearPackets(self Self) []packet.Packet {
 	packets := make(
 		[]packet.Packet, 0,
-		len(t.objectives)+len(t.actors)+len(t.bossBars)+len(t.effects)+8,
+		len(t.objectives)+len(t.actors)+len(t.bossBars)+len(t.effects)+len(t.volumes)+8,
 	)
 	for name := range t.objectives {
 		packets = append(packets, &packet.RemoveObjective{ObjectiveName: name})
@@ -179,6 +195,9 @@ func (t *Tracker) ClearPackets(self Self) []packet.Packet {
 			Operation:       packet.MobEffectRemove,
 		})
 	}
+	for id, dimension := range t.volumes {
+		packets = append(packets, &packet.RemoveVolumeEntity{EntityRuntimeID: id, Dimension: dimension})
+	}
 	if t.containerOpen {
 		packets = append(packets, &packet.ContainerClose{
 			WindowID:      t.containerWindowID,
@@ -197,14 +216,16 @@ func (t *Tracker) ClearPackets(self Self) []packet.Packet {
 		emptyInventory(protocol.WindowIDArmour, protocol.ContainerArmor, 4),
 		emptyInventory(protocol.WindowIDOffHand, protocol.ContainerOffhand, 1),
 	)
+	selfListID := t.players[t.selfUUID]
 	t.objectives = make(map[string]struct{})
 	t.actors = make(map[int64]struct{})
-	t.players = make(map[uuid.UUID]struct{})
+	t.players = make(map[uuid.UUID]int64)
 	if t.selfUUID != uuid.Nil {
-		t.players[t.selfUUID] = struct{}{}
+		t.players[t.selfUUID] = selfListID
 	}
 	t.bossBars = make(map[int64]struct{})
 	t.effects = make(map[int32]struct{})
+	t.volumes = make(map[uint32]int32)
 	t.containerOpen = false
 	return packets
 }

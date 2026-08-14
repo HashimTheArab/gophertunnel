@@ -26,6 +26,8 @@ func clearByType(t *Tracker, self Self) map[string][]packet.Packet {
 			key = "bossbar"
 		case *packet.MobEffect:
 			key = "effect"
+		case *packet.RemoveVolumeEntity:
+			key = "volume"
 		case *packet.ContainerClose:
 			key = "container"
 		default:
@@ -45,6 +47,7 @@ func TestClearPacketsRoundTrip(t *testing.T) {
 	tr.Observe(&packet.AddPainting{EntityUniqueID: 4, EntityRuntimeID: 4}, testSelf)
 	tr.Observe(&packet.BossEvent{BossEntityUniqueID: 5, EventType: packet.BossEventShow}, testSelf)
 	tr.Observe(&packet.MobEffect{EntityRuntimeID: 1, EffectType: 9, Operation: packet.MobEffectAdd}, testSelf)
+	tr.Observe(&packet.AddVolumeEntity{EntityRuntimeID: 6, Dimension: 1}, testSelf)
 	tr.Observe(&packet.ContainerOpen{WindowID: 7, ContainerType: 0}, testSelf)
 
 	byType := clearByType(tr, testSelf)
@@ -62,6 +65,11 @@ func TestClearPacketsRoundTrip(t *testing.T) {
 	}
 	if n := len(byType["container"]); n != 1 {
 		t.Errorf("container closes: got %d, want 1", n)
+	}
+	if n := len(byType["volume"]); n != 1 {
+		t.Errorf("volume removals: got %d, want 1", n)
+	} else if volume := byType["volume"][0].(*packet.RemoveVolumeEntity); volume.EntityRuntimeID != 6 || volume.Dimension != 1 {
+		t.Errorf("volume removal: got runtime ID %d dimension %d", volume.EntityRuntimeID, volume.Dimension)
 	}
 	effect := byType["effect"][0].(*packet.MobEffect)
 	if effect.EntityRuntimeID != testSelf.RuntimeID || effect.Operation != packet.MobEffectRemove {
@@ -91,6 +99,8 @@ func TestObserveRemovals(t *testing.T) {
 	tr.Observe(&packet.BossEvent{BossEntityUniqueID: 5, EventType: packet.BossEventUnregisterPlayer}, testSelf)
 	tr.Observe(&packet.MobEffect{EntityRuntimeID: 1, EffectType: 9, Operation: packet.MobEffectAdd}, testSelf)
 	tr.Observe(&packet.MobEffect{EntityRuntimeID: 1, EffectType: 9, Operation: packet.MobEffectRemove}, testSelf)
+	tr.Observe(&packet.AddVolumeEntity{EntityRuntimeID: 6, Dimension: 1}, testSelf)
+	tr.Observe(&packet.RemoveVolumeEntity{EntityRuntimeID: 6, Dimension: 1}, testSelf)
 
 	for key, packets := range clearByType(tr, testSelf) {
 		if key != "tail" {
@@ -148,17 +158,27 @@ func TestZeroSelfDisablesRecognition(t *testing.T) {
 	}
 }
 
-// AddPlayer with zero ability data falls back to the runtime ID, matching how
-// RemoveActor will later identify the entity.
+// AddPlayer with zero ability data takes the unique ID from the player-list
+// entry that preceded it, so RemoveActor can later identify the entity; the
+// runtime ID is only a last resort.
 func TestAddPlayerUniqueIDFallback(t *testing.T) {
+	listed := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	unlisted := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+
 	tr := NewTracker()
-	tr.Observe(&packet.AddPlayer{
-		EntityRuntimeID: 42,
-		UUID:            uuid.MustParse("11111111-1111-1111-1111-111111111111"),
-	}, testSelf)
+	tr.Observe(&packet.PlayerList{Entries: []protocol.PlayerListEntry{
+		{ActionType: protocol.PlayerListActionAdd, UUID: listed, EntityUniqueID: 7},
+	}}, testSelf)
+	tr.Observe(&packet.AddPlayer{EntityRuntimeID: 42, UUID: listed}, testSelf)
 	actors := clearByType(tr, testSelf)["actor"]
+	if len(actors) != 1 || actors[0].(*packet.RemoveActor).EntityUniqueID != 7 {
+		t.Errorf("actor removals: %v, want the list entry's unique ID 7", actors)
+	}
+
+	tr.Observe(&packet.AddPlayer{EntityRuntimeID: 42, UUID: unlisted}, testSelf)
+	actors = clearByType(tr, testSelf)["actor"]
 	if len(actors) != 1 || actors[0].(*packet.RemoveActor).EntityUniqueID != 42 {
-		t.Errorf("actor removals: %v", actors)
+		t.Errorf("actor removals: %v, want the runtime ID fallback 42", actors)
 	}
 }
 
@@ -203,6 +223,7 @@ func TestTrackedMatchesObserve(t *testing.T) {
 		&packet.SetDisplayObjective{}, &packet.RemoveObjective{},
 		&packet.AddActor{}, &packet.AddItemActor{}, &packet.AddPainting{}, &packet.AddPlayer{}, &packet.RemoveActor{},
 		&packet.PlayerList{}, &packet.BossEvent{}, &packet.MobEffect{},
+		&packet.AddVolumeEntity{}, &packet.RemoveVolumeEntity{},
 		&packet.ContainerOpen{}, &packet.ContainerClose{},
 	}
 	for _, pk := range tracked {
