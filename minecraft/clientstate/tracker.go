@@ -1,6 +1,5 @@
 // Package clientstate tracks the client-visible state a server builds up on a
-// Bedrock connection, so a proxy replacing that server can take the state back
-// off the client without reconnecting it.
+// connection, so a proxy swapping that server out can take it back off the client.
 package clientstate
 
 import (
@@ -9,27 +8,21 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// Self identifies the connection's own player entity, so state on other
-// entities and the player's own list entry can be told apart. A zero Self
-// disables self recognition for the call it is passed to.
+// Self identifies the connection's own player entity. A zero Self disables
+// self recognition.
 type Self struct {
 	RuntimeID uint64
 	UniqueID  int64
 }
 
-// Tracker mirrors the client-visible state built up by packets delivered to a
-// client: entities, player-list entries, boss bars, own-player effects,
-// scoreboard objectives, volume entities and the open container. It is not safe
-// for concurrent use; the caller synchronizes Observe against ClearPackets.
+// Tracker mirrors the client-visible state delivered to a client so a server
+// swap can remove it. The caller synchronizes Observe against ClearPackets.
 type Tracker struct {
-	// objectives holds every objective the client still has registered. A server
-	// may point a display slot at a new objective without removing the old one,
-	// and the client keeps the old one until it is explicitly removed.
+	// objectives survive display-slot changes; only RemoveObjective drops one.
 	objectives map[string]struct{}
 	actors     map[int64]struct{}
-	// players maps each list entry to its entity unique ID, so an AddPlayer
-	// whose ability data carries no unique ID can still be recorded under the
-	// ID a later RemoveActor identifies it by.
+	// players maps list entries to entity unique IDs, for AddPlayer packets
+	// whose ability data carries none.
 	players           map[uuid.UUID]int64
 	bossBars          map[int64]struct{}
 	effects           map[int32]struct{}
@@ -37,8 +30,8 @@ type Tracker struct {
 	containerOpen     bool
 	containerWindowID byte
 	containerType     byte
-	// selfUUID is the UUID of the player's own list entry, recognized by unique
-	// ID. It survives ClearPackets: the entry is retained on the client.
+	// selfUUID is the player's own list entry, recognized by unique ID; the
+	// entry and this field survive ClearPackets.
 	selfUUID uuid.UUID
 }
 
@@ -69,14 +62,11 @@ func Tracked(pk packet.Packet) bool {
 	}
 }
 
-// Observe records the state pk creates or removes. Only packets actually
-// delivered to the client may be observed: ClearPackets must target the state
-// the client really holds, not what the server tried to send.
+// Observe records the state pk creates or removes. Observe only packets that
+// were delivered: ClearPackets must target what the client really holds.
 func (t *Tracker) Observe(pk packet.Packet, self Self) {
 	switch pk := pk.(type) {
 	case *packet.SetDisplayObjective:
-		// The objective a slot stops showing stays registered on the client, so
-		// it is only dropped by an explicit RemoveObjective.
 		if pk.ObjectiveName != "" {
 			t.objectives[pk.ObjectiveName] = struct{}{}
 		}
@@ -89,8 +79,6 @@ func (t *Tracker) Observe(pk packet.Packet, self Self) {
 	case *packet.AddPainting:
 		t.actors[pk.EntityUniqueID] = struct{}{}
 	case *packet.AddPlayer:
-		// Ability data may carry no unique ID; the list entry that preceded the
-		// AddPlayer knows it, and only then does the runtime ID stand in.
 		id := pk.AbilityData.EntityUniqueID
 		if id == 0 {
 			if listID := t.players[pk.UUID]; listID != 0 {
@@ -141,8 +129,8 @@ func (t *Tracker) Observe(pk packet.Packet, self Self) {
 	}
 }
 
-// ObserveClient records client-authored state changes, currently a client
-// closing the open container on its own.
+// ObserveClient records client-authored state changes: a client closing the
+// open container on its own.
 func (t *Tracker) ObserveClient(pk packet.Packet) {
 	if closed, ok := pk.(*packet.ContainerClose); ok {
 		t.closeContainer(closed.WindowID)
@@ -155,10 +143,9 @@ func (t *Tracker) closeContainer(windowID byte) {
 	}
 }
 
-// ClearPackets returns packets that take every piece of tracked state off the
-// client, plus the state no packet announces: titles, an open form and the
-// inventory. The player's own entity and list entry are retained. The Tracker
-// resets to track the next server's state.
+// ClearPackets returns packets taking every piece of tracked state off the
+// client, plus what no packet announces: titles, an open form, the inventory.
+// The player's own entity and list entry are retained; the Tracker resets.
 func (t *Tracker) ClearPackets(self Self) []packet.Packet {
 	packets := make(
 		[]packet.Packet, 0,
@@ -208,9 +195,7 @@ func (t *Tracker) ClearPackets(self Self) []packet.Packet {
 	packets = append(packets,
 		&packet.SetTitle{ActionType: packet.TitleActionClear},
 		&packet.SetTitle{ActionType: packet.TitleActionReset},
-		// Drop any form the retired server left open, so the client cannot
-		// submit its ID to the replacement and collide with a form the
-		// replacement opens later.
+		// A form left open could collide with a form ID the replacement opens.
 		&packet.ClientBoundCloseForm{},
 		emptyInventory(protocol.WindowIDInventory, protocol.ContainerCombinedHotBarAndInventory, 36),
 		emptyInventory(protocol.WindowIDArmour, protocol.ContainerArmor, 4),
