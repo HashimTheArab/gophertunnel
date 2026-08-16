@@ -125,8 +125,9 @@ type ListenConfig struct {
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
 	// PrepareResourcePackOffer is called exactly once after the login handshake and FetchResourcePacks, but
 	// before ResourcePacksInfo is written. The connection context is cancelled when the peer disconnects.
-	// Implementations may perform cancellable preparation and call Conn.ConfigureResourcePackOffer or
-	// Conn.ConfigureResourcePackStack to replace the offer for this exact connection. A non-nil error aborts it.
+	// Implementations may perform cancellable preparation and call Conn.ConfigureResourcePackOffer,
+	// Conn.ConfigureResourcePackOfferSnapshot or Conn.ConfigureResourcePackStack to replace the offer for this
+	// exact connection. A non-nil error aborts it.
 	PrepareResourcePackOffer func(ctx context.Context, conn *Conn) error
 
 	// AfterHandshake is called after the initial login handshake handler completes. Use PrepareResourcePackOffer
