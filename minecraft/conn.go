@@ -1406,23 +1406,25 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	// This is a temporary workaround until the protocol version is properly bumped in a future release.
 	var majorVer, minorVer, patchVer int
 	_, _ = fmt.Sscanf(conn.clientData.GameVersion, "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-	if majorVer == 1 && minorVer == 26 && patchVer < 44 {
-		// Check if one of the accepted protocols matches the client's protocol version, such as
-		// 1.26.43, 1.26.42, 1.26.41, or 1.26.40. If a matching protocol is found, use it instead
-		// of the current protocol.
+	if majorVer == 1 && minorVer == 26 {
+		legacyClient := patchVer < 44
+		negotiatedProtocol := conn.proto.ID()
+		// RequestNetworkSettings cannot distinguish these versions because they share a protocol ID.
+		// Select the matching wire format now that the login claim exposes the game version.
 		for _, pro := range conn.acceptedProto {
-			if pro.ID() == protocol.CurrentProtocol {
-				var majorVer, minorVer, patchVer int
-				_, _ = fmt.Sscanf(pro.Ver(), "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-				if majorVer == 1 && minorVer == 26 && patchVer < 44 {
-					conn.proto = pro
-					conn.pool = pro.Packets(true)
-					break
-				}
+			if pro.ID() != negotiatedProtocol {
+				continue
+			}
+			var proMajor, proMinor, proPatch int
+			_, _ = fmt.Sscanf(pro.Ver(), "%d.%d.%d", &proMajor, &proMinor, &proPatch)
+			if proMajor == majorVer && proMinor == minorVer && (proPatch < 44) == legacyClient {
+				conn.proto = pro
+				conn.pool = pro.Packets(true)
+				break
 			}
 		}
 
-		if conn.proto.Ver() == protocol.CurrentVersion {
+		if legacyClient && conn.proto.Ver() == protocol.CurrentVersion {
 			_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
 			return fmt.Errorf("incompatible protocol game version: expected %s, got %s", protocol.CurrentVersion, conn.clientData.GameVersion)
 		}
