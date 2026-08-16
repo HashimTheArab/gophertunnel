@@ -1672,10 +1672,10 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
 // that resource packs are applied in.
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
-	// We currently don't apply resource packs in any way, so instead we just check if all resource packs in
-	// the stacks are also downloaded.
+	// We currently don't apply resource packs in any way. Required stacks must still be complete, while optional
+	// stacks may reference packs the client deliberately did not download.
 	for _, pack := range pk.TexturePacks {
-		if !conn.hasPack(pack.UUID, pack.Version, false) {
+		if !conn.hasPack(pack.UUID, pack.Version, false) && pk.TexturePackRequired {
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
 		}
 	}
