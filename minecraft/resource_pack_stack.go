@@ -93,7 +93,7 @@ func (snapshot ResourcePackStackSnapshot) Packs() []*resource.Pack {
 	return packs
 }
 
-// Required reports whether either ResourcePacksInfo or ResourcePackStack required the server packs.
+// Required reports the exact required bit sent in ResourcePackStack.
 func (snapshot ResourcePackStackSnapshot) Required() bool {
 	return snapshot.required
 }

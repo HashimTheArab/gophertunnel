@@ -807,8 +807,7 @@ func (conn *Conn) ResourcePackOffer() (ResourcePackOfferSnapshot, bool) {
 	return conn.resourcePackOffer.withPacks(conn.resourcePacks), true
 }
 
-// TexturePacksRequired reports the exact required bit observed for a Dialer connection or configured for
-// a Listener connection. ResourcePacksInfo and ResourcePackStack are combined conservatively using OR.
+// TexturePacksRequired reports whether either ResourcePacksInfo or ResourcePackStack required the server packs.
 func (conn *Conn) TexturePacksRequired() bool {
 	conn.packMu.Lock()
 	defer conn.packMu.Unlock()
@@ -889,13 +888,14 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 		stack.experimentsPreviouslyToggled,
 		stack.includeEditorPacks,
 	)
+	required := texturePacksRequired
 	if conn.resourcePackOffer == nil {
 		conn.resourcePacks = snapshot.Packs()
 	} else {
-		conn.resourcePackOffer.texturePackRequired = texturePacksRequired
+		required = required || conn.resourcePackOffer.texturePackRequired
 	}
 	conn.resourcePackStack = &snapshot
-	conn.texturePacksRequired = texturePacksRequired
+	conn.texturePacksRequired = required
 	return nil
 }
 
@@ -1898,7 +1898,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	conn.texturePacksRequired = required
 	snapshot := newResourcePackStackSnapshot(
 		ordered,
-		required,
+		stackRequired,
 		pk.BaseGameVersion,
 		pk.Experiments,
 		pk.ExperimentsPreviouslyToggled,
@@ -1951,6 +1951,9 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			resourcePacks = slices.Clone(conn.resourcePacks)
 		}
 		texturePacksRequired := conn.texturePacksRequired
+		if hasConfiguredStack {
+			texturePacksRequired = conn.resourcePackStack.required
+		}
 		conn.packMu.Unlock()
 		pk := &packet.ResourcePackStack{
 			TexturePackRequired:          texturePacksRequired,
