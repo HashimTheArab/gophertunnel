@@ -6,10 +6,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
-// ResourcePackStackEntry is one downloaded resource pack selected by a server, together with the exact
-// sub-pack name selected for it. Its contents are immutable: Pack returns a fresh copy on every call.
+// ResourcePackStackEntry is one resource pack selected by a server, together with the exact identity and
+// sub-pack name sent for it. Pack returns nil for client-builtin or deliberately ignored entries, and a fresh
+// copy for downloaded entries.
 type ResourcePackStackEntry struct {
 	pack        *resource.Pack
+	uuid        string
+	version     string
 	subPackName string
 }
 
@@ -21,14 +24,23 @@ func (entry ResourcePackStackEntry) Pack() *resource.Pack {
 	return entry.pack.Clone()
 }
 
+// UUID returns the exact resource-pack UUID sent by the server.
+func (entry ResourcePackStackEntry) UUID() string {
+	return entry.uuid
+}
+
+// Version returns the exact resource-pack version sent by the server.
+func (entry ResourcePackStackEntry) Version() string {
+	return entry.version
+}
+
 // SubPackName returns the exact sub-pack name selected by the server. An empty name is a valid selection.
 func (entry ResourcePackStackEntry) SubPackName() string {
 	return entry.subPackName
 }
 
-// ResourcePackStackSnapshot is an immutable snapshot of the downloaded server resource packs in the exact
-// order in which the server requested that they be applied. Client-builtin and deliberately ignored packs are
-// not included because they have no downloaded pack content to hand off.
+// ResourcePackStackSnapshot is an immutable snapshot of the server resource-pack stack in the exact order in
+// which it was sent. Entries without downloaded content are retained with a nil Pack.
 type ResourcePackStackSnapshot struct {
 	entries  []ResourcePackStackEntry
 	required bool
@@ -37,7 +49,10 @@ type ResourcePackStackSnapshot struct {
 func newResourcePackStackSnapshot(entries []ResourcePackStackEntry, required bool) ResourcePackStackSnapshot {
 	cloned := make([]ResourcePackStackEntry, len(entries))
 	for i, entry := range entries {
-		cloned[i] = ResourcePackStackEntry{pack: entry.pack.Clone(), subPackName: entry.subPackName}
+		cloned[i] = entry
+		if entry.pack != nil {
+			cloned[i].pack = entry.pack.Clone()
+		}
 	}
 	return ResourcePackStackSnapshot{entries: cloned, required: required}
 }
@@ -47,12 +62,14 @@ func (snapshot ResourcePackStackSnapshot) Entries() []ResourcePackStackEntry {
 	return slices.Clone(snapshot.entries)
 }
 
-// Packs returns independently owned copies of the downloaded packs in application order. Use Entries when
-// sub-pack selections must also be retained.
+// Packs returns independently owned copies of the downloaded packs in application order. Entries without
+// downloaded content are omitted. Use Entries to retain exact identities, positions, and sub-pack selections.
 func (snapshot ResourcePackStackSnapshot) Packs() []*resource.Pack {
-	packs := make([]*resource.Pack, len(snapshot.entries))
-	for i, entry := range snapshot.entries {
-		packs[i] = entry.Pack()
+	packs := make([]*resource.Pack, 0, len(snapshot.entries))
+	for _, entry := range snapshot.entries {
+		if pack := entry.Pack(); pack != nil {
+			packs = append(packs, pack)
+		}
 	}
 	return packs
 }

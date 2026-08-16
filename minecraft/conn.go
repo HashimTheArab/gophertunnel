@@ -846,16 +846,8 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 	if !conn.resourcePackOfferPreparing {
 		return errors.New("configure resource pack stack outside preparation")
 	}
-	entries := slices.Clone(stack.entries)
-	packs := make([]*resource.Pack, len(entries))
-	for i, entry := range entries {
-		if entry.pack == nil {
-			return errors.New("configure resource pack stack with nil pack")
-		}
-		packs[i] = entry.pack.Clone()
-	}
-	snapshot := ResourcePackStackSnapshot{entries: entries, required: texturePacksRequired}
-	conn.resourcePacks = packs
+	snapshot := newResourcePackStackSnapshot(stack.entries, texturePacksRequired)
+	conn.resourcePacks = snapshot.Packs()
 	conn.resourcePackStack = &snapshot
 	conn.texturePacksRequired = texturePacksRequired
 	return nil
@@ -1599,15 +1591,18 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
 		WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
 	}
-	for i, pack := range resourcePacks {
+	for _, pack := range resourcePacks {
 		texturePack := protocol.TexturePackInfo{
 			UUID:        pack.UUID(),
 			Version:     pack.Version(),
 			Size:        uint64(pack.Size()),
 			DownloadURL: pack.DownloadURL(),
 		}
-		if i < len(resourcePackStackEntries) {
-			texturePack.SubPackName = resourcePackStackEntries[i].subPackName
+		for _, entry := range resourcePackStackEntries {
+			if entry.pack != nil && entry.uuid == pack.UUID().String() && entry.version == pack.Version() {
+				texturePack.SubPackName = entry.subPackName
+				break
+			}
 		}
 		if pack.Encrypted() {
 			texturePack.ContentKey = pack.ContentKey()
@@ -1812,7 +1807,9 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			}
 		}
 		if matched != nil {
-			ordered = append(ordered, ResourcePackStackEntry{pack: matched, subPackName: stackPack.SubPackName})
+			ordered = append(ordered, ResourcePackStackEntry{
+				pack: matched, uuid: stackPack.UUID, version: stackPack.Version, subPackName: stackPack.SubPackName,
+			})
 			continue
 		}
 		available := false
@@ -1834,6 +1831,9 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			conn.packMu.Unlock()
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", stackPack.UUID, stackPack.Version)
 		}
+		ordered = append(ordered, ResourcePackStackEntry{
+			uuid: stackPack.UUID, version: stackPack.Version, subPackName: stackPack.SubPackName,
+		})
 	}
 	required := conn.texturePacksRequired || pk.TexturePackRequired
 	conn.texturePacksRequired = required
@@ -1891,15 +1891,17 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		} else {
 			for _, entry := range stackEntries {
 				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-					UUID: entry.pack.UUID().String(), Version: entry.pack.Version(), SubPackName: entry.subPackName,
+					UUID: entry.uuid, Version: entry.version, SubPackName: entry.subPackName,
 				})
 			}
 		}
-		for _, exempted := range exemptedPacks {
-			pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-				UUID:    exempted.uuid,
-				Version: exempted.version,
-			})
+		if !hasConfiguredStack {
+			for _, exempted := range exemptedPacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
+					UUID:    exempted.uuid,
+					Version: exempted.version,
+				})
+			}
 		}
 		if err := conn.WritePacket(pk); err != nil {
 			return fmt.Errorf("send ResourcePackStack: %w", err)
