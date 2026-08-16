@@ -341,22 +341,6 @@ func (pack Pack) WithDownloadURL(url string) *Pack {
 	return &pack
 }
 
-// Clone returns an independently owned copy of the pack. The archive data is shared read-only, while all
-// manifest data exposed through Pack methods is copied so changes made through one Pack cannot affect another.
-func (pack Pack) Clone() *Pack {
-	manifest := *pack.manifest
-	manifest.Modules = append([]Module(nil), manifest.Modules...)
-	manifest.Dependencies = append([]Dependency(nil), manifest.Dependencies...)
-	manifest.Capabilities = append([]Capability(nil), manifest.Capabilities...)
-	if manifest.Metadata != nil {
-		metadata := *manifest.Metadata
-		metadata.Authors = append([]string(nil), metadata.Authors...)
-		manifest.Metadata = &metadata
-	}
-	pack.manifest = &manifest
-	return &pack
-}
-
 // Manifest returns the manifest found in the manifest.json of the resource pack. It contains information
 // about the pack such as its name.
 func (pack *Pack) Manifest() Manifest {
