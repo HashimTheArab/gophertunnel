@@ -6,19 +6,18 @@ const (
 	// DefaultResourcePackChunkSize is the size of a single chunk of data from a resource pack sent by a
 	// Listener: 128 KiB.
 	DefaultResourcePackChunkSize = 1024 * 128
-	// DefaultResourcePackChunkSendDelay is the delay a Listener leaves between ResourcePackChunkData
-	// packets, so slow clients are not flooded while downloading packs. Clients after 1.26.30 may fail
-	// resource pack downloads when pack chunks are sent too aggressively.
-	DefaultResourcePackChunkSendDelay = 200 * time.Millisecond
+	// DefaultResourcePackChunkSendDelay is the default delay between ResourcePackChunkData packets. Resource
+	// pack chunks are not paced by default.
+	DefaultResourcePackChunkSendDelay time.Duration = 0
 )
 
 // ResourcePackDeliveryConfig controls how a Listener sends resource pack data to clients. The zero value
-// keeps the conservative defaults.
+// uses the default chunk size without pacing.
 type ResourcePackDeliveryConfig struct {
 	// ChunkSize is the size of each ResourcePackChunkData payload. Zero uses DefaultResourcePackChunkSize.
 	ChunkSize uint32
-	// ChunkSendDelay is the delay after each ResourcePackChunkData packet. Zero uses
-	// DefaultResourcePackChunkSendDelay; a negative delay disables pacing.
+	// ChunkSendDelay is the optional delay after each ResourcePackChunkData packet. Values below one disable
+	// pacing.
 	ChunkSendDelay time.Duration
 }
 
@@ -36,9 +35,7 @@ func (config ResourcePackDeliveryConfig) normalized() ResourcePackDeliveryConfig
 	if config.ChunkSize == 0 {
 		config.ChunkSize = defaults.ChunkSize
 	}
-	if config.ChunkSendDelay == 0 {
-		config.ChunkSendDelay = defaults.ChunkSendDelay
-	} else if config.ChunkSendDelay < 0 {
+	if config.ChunkSendDelay < 0 {
 		config.ChunkSendDelay = 0
 	}
 	return config
