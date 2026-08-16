@@ -31,16 +31,14 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/text"
 )
 
-// exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
-// applied by sending them in the ResourcePackStack packet.
-type exemptedResourcePack struct {
+// resourcePackIdentity identifies a resource pack without requiring its contents.
+type resourcePackIdentity struct {
 	uuid    string
 	version string
 }
 
-// exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
-// in the ResourcePackStack packet.
-var exemptedPacks = []exemptedResourcePack{
+// clientBuiltinPacks lists resource packs that clients provide locally and therefore do not need to download.
+var clientBuiltinPacks = []resourcePackIdentity{
 	{
 		uuid:    "d34cfa4b-2ad1-453d-a0db-668b429a3ea0",
 		version: "1.26.40",
@@ -350,7 +348,7 @@ type Conn struct {
 	resourcePackDelivery ResourcePackDeliveryConfig
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
 	// func returning false for the specific pack.
-	ignoredResourcePacks []exemptedResourcePack
+	ignoredResourcePacks []resourcePackIdentity
 
 	cacheEnabled bool
 
@@ -1773,7 +1771,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			continue
 		}
 		if conn.downloadResourcePack != nil && !conn.downloadResourcePack(uuid.MustParse(id), pack.Version, index, totalPacks) {
-			conn.ignoredResourcePacks = append(conn.ignoredResourcePacks, exemptedResourcePack{
+			conn.ignoredResourcePacks = append(conn.ignoredResourcePacks, resourcePackIdentity{
 				uuid:    id,
 				version: pack.Version,
 			})
@@ -1872,8 +1870,8 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			continue
 		}
 		available := false
-		for _, exempted := range exemptedPacks {
-			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+		for _, builtin := range clientBuiltinPacks {
+			if builtin.uuid == stackPack.UUID && builtin.version == stackPack.Version {
 				available = true
 				break
 			}
@@ -1971,14 +1969,6 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			for _, entry := range stackEntries {
 				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
 					UUID: entry.uuid, Version: entry.version, SubPackName: entry.subPackName,
-				})
-			}
-		}
-		if !hasConfiguredStack {
-			for _, exempted := range exemptedPacks {
-				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-					UUID:    exempted.uuid,
-					Version: exempted.version,
 				})
 			}
 		}
