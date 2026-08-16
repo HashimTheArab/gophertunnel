@@ -1855,6 +1855,7 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 // that resource packs are applied in.
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	conn.packMu.Lock()
+	stackRequired := pk.TexturePackRequired
 	ordered := make([]ResourcePackStackEntry, 0, len(pk.TexturePacks))
 	for _, stackPack := range pk.TexturePacks {
 		var matched *resource.Pack
@@ -1885,7 +1886,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 				}
 			}
 		}
-		if !available {
+		if !available && stackRequired {
 			conn.packMu.Unlock()
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", stackPack.UUID, stackPack.Version)
 		}
@@ -1893,7 +1894,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			uuid: stackPack.UUID, version: stackPack.Version, subPackName: stackPack.SubPackName,
 		})
 	}
-	required := conn.texturePacksRequired || pk.TexturePackRequired
+	required := conn.texturePacksRequired || stackRequired
 	conn.texturePacksRequired = required
 	snapshot := newResourcePackStackSnapshot(
 		ordered,
