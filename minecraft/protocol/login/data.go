@@ -250,6 +250,14 @@ type ClientData struct {
 	PartyID string `json:"PartyId"`
 	// PartyLeader is if the client is the leader of the party they are in.
 	PartyLeader bool `json:"IsPartyLeader"`
+	// ProfileHash is a client-generated hash of the equipped persona skin.
+	ProfileHash string `json:"ProfileHash"`
+	// Nonce is a randomly generated, hex-encoded string produced by the host. For peer-to-peer
+	// worlds, a client that wishes to connect must first join the host's Xbox Live multiplayer session
+	// and wait for the host to assign it a nonce, then include that same value here.
+	// This prevents unauthorized clients from connecting using only the host's connection details,
+	// such as its Player Messaging ID (PMID) or IP address.
+	Nonce string `json:",omitempty"`
 }
 
 // PersonaPiece represents a piece of a persona skin. All pieces are sent separately.
@@ -347,7 +355,7 @@ func (data ClientData) Validate() error {
 	if _, err := strconv.ParseUint(data.PlatformOnlineID, 10, 64); err != nil && len(data.PlatformOnlineID) != 0 {
 		return fmt.Errorf("PlatformOnlineID must be parseable as an int64 or empty, but got %v", data.PlatformOnlineID)
 	}
-	if _, err := uuid.Parse(data.SelfSignedID); err != nil {
+	if _, err := uuid.Parse(data.SelfSignedID); data.SelfSignedID != "" && err != nil {
 		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
 	}
 	if strings.Contains(data.ServerAddress, "://") {

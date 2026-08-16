@@ -21,6 +21,7 @@ type resourcePackQueue struct {
 	packAmount       int
 	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
+	chunkSize        uint32
 }
 
 // downloadingPack is a resource pack that is being downloaded by a client connection.
@@ -31,6 +32,7 @@ type downloadingPack struct {
 	size       uint64
 	newFrag    chan resourcePackChunk
 	contentKey string
+	cacheKey   ResourcePackCacheKey
 
 	mu        sync.Mutex
 	requested map[uint32]struct{}
@@ -88,8 +90,8 @@ func (queue *resourcePackQueue) NextPack() (pk *packet.ResourcePackDataInfo, ok 
 		}
 		return &packet.ResourcePackDataInfo{
 			UUID:          pack.UUID().String() + "_" + pack.Version(),
-			DataChunkSize: packChunkSize,
-			ChunkCount:    uint32(pack.DataChunkCount(packChunkSize)),
+			DataChunkSize: queue.chunkSize,
+			ChunkCount:    uint32(pack.DataChunkCount(int(queue.chunkSize))),
 			Size:          uint64(pack.Len()),
 			Hash:          checksum[:],
 			PackType:      packType,
