@@ -3,6 +3,7 @@ package minecraft
 import (
 	"slices"
 
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
@@ -42,11 +43,22 @@ func (entry ResourcePackStackEntry) SubPackName() string {
 // ResourcePackStackSnapshot is an immutable snapshot of the server resource-pack stack in the exact order in
 // which it was sent. Entries without downloaded content are retained with a nil Pack.
 type ResourcePackStackSnapshot struct {
-	entries  []ResourcePackStackEntry
-	required bool
+	entries                      []ResourcePackStackEntry
+	required                     bool
+	baseGameVersion              string
+	experiments                  []protocol.ExperimentData
+	experimentsPreviouslyToggled bool
+	includeEditorPacks           bool
 }
 
-func newResourcePackStackSnapshot(entries []ResourcePackStackEntry, required bool) ResourcePackStackSnapshot {
+func newResourcePackStackSnapshot(
+	entries []ResourcePackStackEntry,
+	required bool,
+	baseGameVersion string,
+	experiments []protocol.ExperimentData,
+	experimentsPreviouslyToggled bool,
+	includeEditorPacks bool,
+) ResourcePackStackSnapshot {
 	cloned := make([]ResourcePackStackEntry, len(entries))
 	for i, entry := range entries {
 		cloned[i] = entry
@@ -54,7 +66,14 @@ func newResourcePackStackSnapshot(entries []ResourcePackStackEntry, required boo
 			cloned[i].pack = entry.pack.Clone()
 		}
 	}
-	return ResourcePackStackSnapshot{entries: cloned, required: required}
+	return ResourcePackStackSnapshot{
+		entries:                      cloned,
+		required:                     required,
+		baseGameVersion:              baseGameVersion,
+		experiments:                  slices.Clone(experiments),
+		experimentsPreviouslyToggled: experimentsPreviouslyToggled,
+		includeEditorPacks:           includeEditorPacks,
+	}
 }
 
 // Entries returns independently owned entries in application order.
@@ -77,4 +96,24 @@ func (snapshot ResourcePackStackSnapshot) Packs() []*resource.Pack {
 // Required reports whether either ResourcePacksInfo or ResourcePackStack required the server packs.
 func (snapshot ResourcePackStackSnapshot) Required() bool {
 	return snapshot.required
+}
+
+// BaseGameVersion returns the exact base game version sent by the server.
+func (snapshot ResourcePackStackSnapshot) BaseGameVersion() string {
+	return snapshot.baseGameVersion
+}
+
+// Experiments returns an independently owned copy of the experiments sent with the stack.
+func (snapshot ResourcePackStackSnapshot) Experiments() []protocol.ExperimentData {
+	return slices.Clone(snapshot.experiments)
+}
+
+// ExperimentsPreviouslyToggled reports the exact state sent by the server.
+func (snapshot ResourcePackStackSnapshot) ExperimentsPreviouslyToggled() bool {
+	return snapshot.experimentsPreviouslyToggled
+}
+
+// IncludeEditorPacks reports whether the server requested vanilla editor packs in the stack.
+func (snapshot ResourcePackStackSnapshot) IncludeEditorPacks() bool {
+	return snapshot.includeEditorPacks
 }

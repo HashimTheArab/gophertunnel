@@ -813,8 +813,12 @@ func (conn *Conn) ResourcePackStack() (ResourcePackStackSnapshot, bool) {
 		return ResourcePackStackSnapshot{}, false
 	}
 	return ResourcePackStackSnapshot{
-		entries:  slices.Clone(conn.resourcePackStack.entries),
-		required: conn.resourcePackStack.required,
+		entries:                      slices.Clone(conn.resourcePackStack.entries),
+		required:                     conn.resourcePackStack.required,
+		baseGameVersion:              conn.resourcePackStack.baseGameVersion,
+		experiments:                  slices.Clone(conn.resourcePackStack.experiments),
+		experimentsPreviouslyToggled: conn.resourcePackStack.experimentsPreviouslyToggled,
+		includeEditorPacks:           conn.resourcePackStack.includeEditorPacks,
 	}, true
 }
 
@@ -846,7 +850,14 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 	if !conn.resourcePackOfferPreparing {
 		return errors.New("configure resource pack stack outside preparation")
 	}
-	snapshot := newResourcePackStackSnapshot(stack.entries, texturePacksRequired)
+	snapshot := newResourcePackStackSnapshot(
+		stack.entries,
+		texturePacksRequired,
+		stack.baseGameVersion,
+		stack.experiments,
+		stack.experimentsPreviouslyToggled,
+		stack.includeEditorPacks,
+	)
 	conn.resourcePacks = snapshot.Packs()
 	conn.resourcePackStack = &snapshot
 	conn.texturePacksRequired = texturePacksRequired
@@ -1837,7 +1848,14 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	}
 	required := conn.texturePacksRequired || pk.TexturePackRequired
 	conn.texturePacksRequired = required
-	snapshot := newResourcePackStackSnapshot(ordered, required)
+	snapshot := newResourcePackStackSnapshot(
+		ordered,
+		required,
+		pk.BaseGameVersion,
+		pk.Experiments,
+		pk.ExperimentsPreviouslyToggled,
+		pk.IncludeEditorPacks,
+	)
 	conn.resourcePackStack = &snapshot
 	conn.packMu.Unlock()
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
@@ -1871,17 +1889,27 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		conn.packMu.Lock()
 		hasConfiguredStack := conn.resourcePackStack != nil
 		var stackEntries []ResourcePackStackEntry
+		baseGameVersion := "*"
+		var experiments []protocol.ExperimentData
+		var experimentsPreviouslyToggled, includeEditorPacks bool
 		var resourcePacks []*resource.Pack
 		if hasConfiguredStack {
 			stackEntries = slices.Clone(conn.resourcePackStack.entries)
+			baseGameVersion = conn.resourcePackStack.baseGameVersion
+			experiments = slices.Clone(conn.resourcePackStack.experiments)
+			experimentsPreviouslyToggled = conn.resourcePackStack.experimentsPreviouslyToggled
+			includeEditorPacks = conn.resourcePackStack.includeEditorPacks
 		} else {
 			resourcePacks = slices.Clone(conn.resourcePacks)
 		}
 		texturePacksRequired := conn.texturePacksRequired
 		conn.packMu.Unlock()
 		pk := &packet.ResourcePackStack{
-			TexturePackRequired: texturePacksRequired,
-			BaseGameVersion:     "*",
+			TexturePackRequired:          texturePacksRequired,
+			BaseGameVersion:              baseGameVersion,
+			Experiments:                  experiments,
+			ExperimentsPreviouslyToggled: experimentsPreviouslyToggled,
+			IncludeEditorPacks:           includeEditorPacks,
 		}
 		if !hasConfiguredStack {
 			for _, pack := range resourcePacks {
