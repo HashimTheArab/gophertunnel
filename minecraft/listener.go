@@ -123,9 +123,15 @@ type ListenConfig struct {
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// PrepareResourcePackOffer is called exactly once after the login handshake and FetchResourcePacks, but
+	// before ResourcePacksInfo is written. The connection context is cancelled when the peer disconnects.
+	// Implementations may perform cancellable preparation and call Conn.ConfigureResourcePackOffer or
+	// Conn.ConfigureResourcePackStack to replace the offer for this exact connection. A non-nil error aborts it.
+	PrepareResourcePackOffer func(ctx context.Context, conn *Conn) error
 
-	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
-	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	// AfterHandshake is called after the initial login handshake handler completes. Use PrepareResourcePackOffer
+	// for work that must finish before LoginSuccess and ResourcePacksInfo are written. If AfterHandshake returns a
+	// non-nil error, the connection is aborted.
 	AfterHandshake func(c *Conn) error
 
 	// ConnHandler is called when a connection is ready for caller-owned packet handling. If set, ready connections
@@ -485,6 +491,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.resourcePackDelivery = listener.cfg.ResourcePackDelivery.normalized()
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
+	conn.prepareResourcePackOffer = listener.cfg.PrepareResourcePackOffer
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
 	conn.verifier = listener.verifier
