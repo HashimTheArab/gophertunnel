@@ -1231,7 +1231,10 @@ func (conn *Conn) startGame() {
 // nextResourcePackDownload moves to the next resource pack to download and sends a resource pack data info
 // packet with information about it.
 func (conn *Conn) nextResourcePackDownload() error {
-	pk, ok := conn.packQueue.NextPack()
+	pk, ok, err := conn.packQueue.NextPack()
+	if err != nil {
+		return fmt.Errorf("prepare ResourcePackDataInfo: %w", err)
+	}
 	if !ok {
 		return fmt.Errorf("no resource packs to download")
 	}
@@ -1270,26 +1273,25 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := pk.Size / uint64(pk.DataChunkSize)
-	if pk.Size%uint64(pk.DataChunkSize) != 0 {
-		chunkCount++
-	}
-	if chunkCount > uint64(1)<<31 {
+	chunkCount, ok := resourcePackChunkCount(pk.Size, pk.DataChunkSize)
+	if !ok {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
-	pack.chunkCount = uint32(chunkCount)
+	pack.chunkCount = chunkCount
 	window := conn.resourcePackDownload.MaxInFlightChunks
 	if window < 1 {
 		window = DefaultResourcePackMaxInFlightChunks
 	}
 	if chunkCount == 0 {
 		window = 1
-	} else if uint64(window) > chunkCount {
+	} else if uint64(window) > uint64(chunkCount) {
 		window = int(chunkCount)
 	}
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
+	conn.packMu.Lock()
 	conn.packQueue.awaitingPacks[id] = pack
+	conn.packMu.Unlock()
 
 	idCopy := pk.UUID
 	go func() {
@@ -1311,17 +1313,18 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		fillWindow := func() bool {
+		fillWindow := func() error {
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < uint64(window) {
 				if err := requestChunk(nextRequest); err != nil {
-					return false
+					return fmt.Errorf("request chunk %v: %w", nextRequest, err)
 				}
 				nextRequest++
 			}
-			return true
+			return nil
 		}
 
-		if !fillWindow() {
+		if err := fillWindow(); err != nil {
+			_ = conn.close(fmt.Errorf("download resource pack %v: %w", id, err))
 			return
 		}
 		for nextWrite < pack.chunkCount {
@@ -1337,25 +1340,26 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
-				if !fillWindow() {
+				if err := fillWindow(); err != nil {
+					_ = conn.close(fmt.Errorf("download resource pack %v: %w", id, err))
 					return
 				}
 			}
 		}
-		conn.packMu.Lock()
 		if pack.buf.Len() != int(pack.size) {
-			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
-			conn.packMu.Unlock()
+			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.buf.Len()))
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
-			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
-			conn.packMu.Unlock()
+			conn.log.Error("download resource pack: invalid full resource pack data", "UUID", id, "err", err)
+			_ = conn.close(fmt.Errorf("download resource pack %v: parse: %w", id, err))
 			return
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
+		conn.packMu.Lock()
+		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -1364,7 +1368,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack)
-			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
+			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
+				_ = conn.close(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
+				return
+			}
 		}
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
@@ -1375,7 +1382,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
 	pk.UUID = strings.Split(pk.UUID, "_")[0]
+	conn.packMu.Lock()
 	pack, ok := conn.packQueue.awaitingPacks[pk.UUID]
+	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
 		// download a resource pack.
@@ -1446,7 +1455,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	lastChunk := response.DataOffset+uint64(len(response.Data)) >= uint64(current.Len())
 	if lastChunk {
 		if !conn.packQueue.AllDownloaded() {
-			_ = conn.nextResourcePackDownload()
+			if err := conn.nextResourcePackDownload(); err != nil {
+				return err
+			}
 		} else {
 			conn.expect(packet.IDResourcePackClientResponse)
 		}
