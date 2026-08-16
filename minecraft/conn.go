@@ -1274,7 +1274,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	if pk.Size%uint64(pk.DataChunkSize) != 0 {
 		chunkCount++
 	}
-	if chunkCount > uint64(^uint32(0)) {
+	if chunkCount > uint64(1)<<31 {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
 	pack.chunkCount = uint32(chunkCount)
