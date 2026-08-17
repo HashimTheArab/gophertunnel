@@ -13,12 +13,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
-func TestResourcePackChunkRequestFlushesBeforeDelay(t *testing.T) {
-	const delay = 200 * time.Millisecond
-
+// TestResourcePackChunkRequestFlushes pins that a chunk reaches the transport while its request is being
+// handled. Nothing else pushes it out: the connection buffers writes until the flush rate elapses, and a
+// client that only requests more chunks once it receives one would stall behind that buffer.
+func TestResourcePackChunkRequestFlushes(t *testing.T) {
 	raw := &recordingConn{writes: make(chan []byte, 1)}
-	conn := newConn(raw, nil, slog.Default(), DefaultProtocol, -1, false)
-	conn.resourcePackDelivery.ChunkSendDelay = delay
+	conn := newConn(raw, nil, slog.Default(), DefaultProtocol, time.Hour, false)
 	pack := testResourcePack(t)
 	conn.packQueue = &resourcePackQueue{
 		currentPack:     pack,
@@ -27,7 +27,6 @@ func TestResourcePackChunkRequestFlushesBeforeDelay(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	started := time.Now()
 	go func() {
 		done <- conn.handlePacket(&packet.ResourcePackChunkRequest{
 			UUID:       pack.UUID().String(),
@@ -37,11 +36,8 @@ func TestResourcePackChunkRequestFlushesBeforeDelay(t *testing.T) {
 
 	select {
 	case <-raw.writes:
-		if elapsed := time.Since(started); elapsed >= delay {
-			t.Fatalf("chunk was flushed after the pacing delay: %v", elapsed)
-		}
-	case <-time.After(delay / 2):
-		t.Fatal("chunk was not flushed before the pacing delay")
+	case <-time.After(5 * time.Second):
+		t.Fatal("chunk was not flushed while its request was handled")
 	}
 
 	select {
@@ -49,7 +45,7 @@ func TestResourcePackChunkRequestFlushesBeforeDelay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("handle resource pack chunk request: %v", err)
 		}
-	case <-time.After(delay * 2):
+	case <-time.After(5 * time.Second):
 		t.Fatal("resource pack chunk request did not finish")
 	}
 }
