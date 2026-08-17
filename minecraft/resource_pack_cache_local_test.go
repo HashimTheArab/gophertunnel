@@ -58,6 +58,7 @@ func TestResourcePackDeliveryConfigNormalized(t *testing.T) {
 	}{
 		{name: "zero value keeps defaults", in: ResourcePackDeliveryConfig{}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize}},
 		{name: "explicit chunk size kept", in: ResourcePackDeliveryConfig{ChunkSize: 512}, want: ResourcePackDeliveryConfig{ChunkSize: 512}},
+		{name: "oversized chunk lowered to the client limit", in: ResourcePackDeliveryConfig{ChunkSize: MaxResourcePackChunkSize + 1}, want: ResourcePackDeliveryConfig{ChunkSize: MaxResourcePackChunkSize}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
