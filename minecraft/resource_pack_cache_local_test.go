@@ -56,10 +56,9 @@ func TestResourcePackDeliveryConfigNormalized(t *testing.T) {
 		in   ResourcePackDeliveryConfig
 		want ResourcePackDeliveryConfig
 	}{
-		{name: "zero value keeps defaults", in: ResourcePackDeliveryConfig{}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize, ChunkSendDelay: DefaultResourcePackChunkSendDelay}},
-		{name: "chunk size only keeps default delay", in: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024}, want: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024, ChunkSendDelay: DefaultResourcePackChunkSendDelay}},
-		{name: "negative delay disables pacing", in: ResourcePackDeliveryConfig{ChunkSendDelay: -1}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize, ChunkSendDelay: 0}},
-		{name: "explicit values kept", in: ResourcePackDeliveryConfig{ChunkSize: 512, ChunkSendDelay: time.Millisecond}, want: ResourcePackDeliveryConfig{ChunkSize: 512, ChunkSendDelay: time.Millisecond}},
+		{name: "zero value keeps defaults", in: ResourcePackDeliveryConfig{}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize}},
+		{name: "explicit chunk size kept", in: ResourcePackDeliveryConfig{ChunkSize: 512}, want: ResourcePackDeliveryConfig{ChunkSize: 512}},
+		{name: "oversized chunk lowered to the client limit", in: ResourcePackDeliveryConfig{ChunkSize: MaxResourcePackChunkSize + 1}, want: ResourcePackDeliveryConfig{ChunkSize: MaxResourcePackChunkSize}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

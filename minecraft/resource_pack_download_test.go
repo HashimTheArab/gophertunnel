@@ -30,6 +30,33 @@ func TestResourcePackDownloadConfigNormalized(t *testing.T) {
 	}
 }
 
+func TestResourcePackChunkCount(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		size      uint64
+		chunkSize uint32
+		want      uint32
+		wantOK    bool
+	}{
+		{name: "empty", chunkSize: 16, wantOK: true},
+		{name: "exact", size: 32, chunkSize: 16, want: 2, wantOK: true},
+		{name: "partial", size: 33, chunkSize: 16, want: 3, wantOK: true},
+		{name: "zero chunk size", size: 32},
+		{name: "max index", size: 1 << 31, chunkSize: 1, want: 1 << 31, wantOK: true},
+		{name: "index overflows int32", size: 1<<31 + 1, chunkSize: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := resourcePackChunkCount(test.size, test.chunkSize)
+			if ok != test.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, test.wantOK)
+			}
+			if got != test.want {
+				t.Fatalf("count = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	client, peer := net.Pipe()
 	defer client.Close()
@@ -55,6 +82,16 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 
 	if !waitForResourcePackRequest(t, pack, 99) {
 		t.Fatal("vanilla request window was not filled")
+	}
+	pack.mu.Lock()
+	_, requestedEarly := pack.requested[100]
+	requestCount := len(pack.requested)
+	pack.mu.Unlock()
+	if requestedEarly {
+		t.Fatal("request window exceeded before a chunk was received")
+	}
+	if requestCount != DefaultResourcePackMaxInFlightChunks {
+		t.Fatalf("initial request count = %d, want %d", requestCount, DefaultResourcePackMaxInFlightChunks)
 	}
 	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{
 		UUID:       id + "_1.0.0",
