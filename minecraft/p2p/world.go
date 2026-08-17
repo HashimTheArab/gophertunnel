@@ -138,6 +138,9 @@ type Connection struct {
 	// HostPort is the port of the RakNet listener.
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
+	// RakNetGUID is the GUID of the RakNet listener. It is only populated
+	// for legacy UPNP connections.
+	RakNetGUID string `json:"RakNetGUID,omitempty"`
 	// NetherNetID is the network ID of the NetherNet network for the host.
 	NetherNetID NetherNetID `json:"NetherNetId"`
 	// PlayerMessagingID is the player messaging ID of the host.
@@ -154,6 +157,16 @@ type Connection struct {
 // host. It is always decoded into its string form regardless of the JSON
 // representation used.
 type NetherNetID string
+
+// MarshalJSON encodes decimal network IDs as JSON numbers, matching the MPSD
+// custom properties published by Minecraft. Other identifiers, including the
+// UUIDs used by Realm presences, remain JSON strings.
+func (id NetherNetID) MarshalJSON() ([]byte, error) {
+	if n, err := strconv.ParseUint(string(id), 10, 64); err == nil {
+		return []byte(strconv.FormatUint(n, 10)), nil
+	}
+	return json.Marshal(string(id))
+}
 
 // UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
 // string into its string form. It never rejects a representable value; whether
@@ -255,6 +268,9 @@ const (
 )
 
 const (
+	// ConnectionTypeUPNP indicates a legacy RakNet connection advertised
+	// through UPNP.
+	ConnectionTypeUPNP = 6
 	// ConnectionTypeSignalingOverJSONRPC indicates that a JSON-RPC over
 	// WebSocket connection is used for the WebRTC signaling needed to
 	// establish a NetherNet connection.
