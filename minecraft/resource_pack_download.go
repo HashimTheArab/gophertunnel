@@ -10,6 +10,23 @@ type ResourcePackDownloadConfig struct {
 	MaxInFlightChunks int
 }
 
+// resourcePackChunkCount returns the number of chunks a pack of size bytes is split into. It reports false if
+// chunkSize is zero or if the resulting indices cannot be represented by ResourcePackChunkRequest.ChunkIndex,
+// which is a signed int32.
+func resourcePackChunkCount(size uint64, chunkSize uint32) (uint32, bool) {
+	if chunkSize == 0 {
+		return 0, false
+	}
+	count := size / uint64(chunkSize)
+	if size%uint64(chunkSize) != 0 {
+		count++
+	}
+	if count > uint64(1)<<31 {
+		return 0, false
+	}
+	return uint32(count), true
+}
+
 // normalized returns the configuration with defaults filled in.
 func (config ResourcePackDownloadConfig) normalized() ResourcePackDownloadConfig {
 	if config.MaxInFlightChunks < 1 {

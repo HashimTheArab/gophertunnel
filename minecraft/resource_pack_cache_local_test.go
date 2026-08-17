@@ -57,7 +57,7 @@ func TestResourcePackDeliveryConfigNormalized(t *testing.T) {
 		want ResourcePackDeliveryConfig
 	}{
 		{name: "zero value keeps defaults", in: ResourcePackDeliveryConfig{}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize, ChunkSendDelay: DefaultResourcePackChunkSendDelay}},
-		{name: "chunk size only keeps default delay", in: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024}, want: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024, ChunkSendDelay: DefaultResourcePackChunkSendDelay}},
+		{name: "chunk size only leaves pacing off", in: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024}, want: ResourcePackDeliveryConfig{ChunkSize: 1024 * 1024, ChunkSendDelay: 0}},
 		{name: "negative delay disables pacing", in: ResourcePackDeliveryConfig{ChunkSendDelay: -1}, want: ResourcePackDeliveryConfig{ChunkSize: DefaultResourcePackChunkSize, ChunkSendDelay: 0}},
 		{name: "explicit values kept", in: ResourcePackDeliveryConfig{ChunkSize: 512, ChunkSendDelay: time.Millisecond}, want: ResourcePackDeliveryConfig{ChunkSize: 512, ChunkSendDelay: time.Millisecond}},
 	}
