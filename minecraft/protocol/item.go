@@ -1,6 +1,10 @@
 package protocol
 
-import "github.com/sandertv/gophertunnel/minecraft/nbt"
+import (
+	"strings"
+
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
+)
 
 const (
 	ItemEntryVersionLegacy = iota
@@ -110,6 +114,121 @@ type ItemEntry struct {
 	Version int32
 	// Data is a map containing the components and properties of the item, if the item is component based.
 	Data map[string]any
+}
+
+// ItemSlotCapabilities contains the item-definition properties used by inventory container validation. ArmorSlot is
+// absent when the item is not wearable and otherwise uses the player armor-container indexes head=0, chest=1,
+// legs=2, feet=3 and body=4.
+type ItemSlotCapabilities struct {
+	AllowOffHand bool
+	ArmorSlot    Optional[uint8]
+}
+
+// SlotCapabilities returns the inventory slot capabilities declared by the item entry. Component-based entries use
+// their item-definition data. Vanilla entries without component data use the corresponding built-in item definition.
+func (x ItemEntry) SlotCapabilities() ItemSlotCapabilities {
+	caps := vanillaItemSlotCapabilities(x.Name)
+	components, _ := x.Data["components"].(map[string]any)
+	if properties, ok := components["item_properties"].(map[string]any); ok {
+		if allow, ok := itemComponentBool(properties["allow_off_hand"]); ok {
+			caps.AllowOffHand = allow
+		}
+	}
+	if allow, ok := itemComponentBool(components["minecraft:allow_off_hand"]); ok {
+		caps.AllowOffHand = allow
+	} else if component, ok := components["minecraft:allow_off_hand"].(map[string]any); ok {
+		if allow, ok := itemComponentBool(component["value"]); ok {
+			caps.AllowOffHand = allow
+		}
+	}
+	if wearable, ok := components["minecraft:wearable"].(map[string]any); ok {
+		if slot, ok := wearableItemArmorSlot(wearable["slot"]); ok {
+			caps.ArmorSlot = Option(slot)
+		}
+	}
+	return caps
+}
+
+func vanillaItemSlotCapabilities(name string) ItemSlotCapabilities {
+	caps := ItemSlotCapabilities{}
+	switch name {
+	case "minecraft:arrow", "minecraft:tipped_arrow", "minecraft:firework_rocket", "minecraft:map",
+		"minecraft:filled_map", "minecraft:nautilus_shell", "minecraft:shield", "minecraft:totem_of_undying":
+		caps.AllowOffHand = true
+	}
+	if !strings.HasPrefix(name, "minecraft:") {
+		return caps
+	}
+	switch name {
+	case "minecraft:carved_pumpkin", "minecraft:skull", "minecraft:skeleton_skull",
+		"minecraft:wither_skeleton_skull", "minecraft:zombie_head", "minecraft:player_head",
+		"minecraft:creeper_head", "minecraft:dragon_head", "minecraft:piglin_head":
+		caps.ArmorSlot = Option(uint8(0))
+	case "minecraft:elytra":
+		caps.ArmorSlot = Option(uint8(1))
+	case "minecraft:wolf_armor":
+		caps.ArmorSlot = Option(uint8(4))
+	default:
+		switch {
+		case strings.HasSuffix(name, "_helmet"):
+			caps.ArmorSlot = Option(uint8(0))
+		case strings.HasSuffix(name, "_chestplate"):
+			caps.ArmorSlot = Option(uint8(1))
+		case strings.HasSuffix(name, "_leggings"):
+			caps.ArmorSlot = Option(uint8(2))
+		case strings.HasSuffix(name, "_boots"):
+			caps.ArmorSlot = Option(uint8(3))
+		case strings.HasSuffix(name, "_horse_armor"), strings.HasSuffix(name, "_nautilus_armor"),
+			strings.HasSuffix(name, "_harness"):
+			caps.ArmorSlot = Option(uint8(4))
+		}
+	}
+	return caps
+}
+
+func itemComponentBool(value any) (bool, bool) {
+	switch value := value.(type) {
+	case bool:
+		return value, true
+	case uint8:
+		return value != 0, true
+	case int8:
+		return value != 0, true
+	case int32:
+		return value != 0, true
+	default:
+		return false, false
+	}
+}
+
+func wearableItemArmorSlot(value any) (uint8, bool) {
+	if slot, ok := value.(string); ok {
+		switch slot {
+		case "slot.armor.head":
+			return 0, true
+		case "slot.armor.chest":
+			return 1, true
+		case "slot.armor.legs":
+			return 2, true
+		case "slot.armor.feet":
+			return 3, true
+		case "slot.armor.body":
+			return 4, true
+		}
+	}
+	var equipmentSlot int32
+	switch value := value.(type) {
+	case int32:
+		equipmentSlot = value
+	case uint32:
+		equipmentSlot = int32(value)
+	default:
+		return 0, false
+	}
+	if equipmentSlot < 2 || equipmentSlot > 6 {
+		return 0, false
+	}
+	return uint8(equipmentSlot - 2), true
 }
 
 // Marshal encodes/decodes an ItemEntry.
