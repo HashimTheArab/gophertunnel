@@ -52,6 +52,10 @@ type Conn struct {
 	credentialsMu sync.Mutex
 }
 
+// errSignalNotAccepted reports that no registered notifier accepted an
+// incoming signal.
+var errSignalNotAccepted = errors.New("signaling/messaging: incoming signal was not accepted")
+
 // Signal sends a [nethernet.Signal] to a network. In the JSON-RPC signaling path,
 // signal.NetworkID is the remote player's messaging UUID rather than a NetherNet ID.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
@@ -315,11 +319,8 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return fmt.Errorf("decode signal: %w", err)
 		}
 
-		conn.notifiersMu.RLock()
-		notifiers := maps.Clone(conn.notifiers)
-		conn.notifiersMu.RUnlock()
-		for _, n := range notifiers {
-			_ = n.NotifySignal(signal)
+		if !conn.notifySignal(signal) {
+			return fmt.Errorf("%w: type %q, connection ID %d", errSignalNotAccepted, signal.Type, signal.ConnectionID)
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
@@ -346,6 +347,15 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		}
 		return fmt.Errorf("unknown inner request method: %q", envelope.Message.Method)
 	}
+}
+
+// notifySignal sends a signal to a stable snapshot of the registered
+// notifiers and reports whether at least one accepted it.
+func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
+	conn.notifiersMu.RLock()
+	notifiers := maps.Clone(conn.notifiers)
+	conn.notifiersMu.RUnlock()
+	return internal.NotifySignal(notifiers, signal)
 }
 
 // ping starts calling [MethodSystemPing] at 50 seconds interval.
