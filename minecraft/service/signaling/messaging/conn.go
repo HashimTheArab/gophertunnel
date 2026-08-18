@@ -315,11 +315,10 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return fmt.Errorf("decode signal: %w", err)
 		}
 
-		conn.notifiersMu.RLock()
-		notifiers := maps.Clone(conn.notifiers)
-		conn.notifiersMu.RUnlock()
-		for _, n := range notifiers {
-			_ = n.NotifySignal(signal)
+		if !conn.notifySignal(signal) {
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID))
+			return nil
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
@@ -346,6 +345,15 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		}
 		return fmt.Errorf("unknown inner request method: %q", envelope.Message.Method)
 	}
+}
+
+// notifySignal sends a signal to a stable snapshot of the registered
+// notifiers and reports whether at least one accepted it.
+func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
+	conn.notifiersMu.RLock()
+	notifiers := maps.Clone(conn.notifiers)
+	conn.notifiersMu.RUnlock()
+	return internal.NotifySignal(notifiers, signal)
 }
 
 // ping starts calling [MethodSystemPing] at 50 seconds interval.
