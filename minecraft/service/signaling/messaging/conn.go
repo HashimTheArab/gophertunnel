@@ -52,10 +52,6 @@ type Conn struct {
 	credentialsMu sync.Mutex
 }
 
-// errSignalNotAccepted reports that no registered notifier accepted an
-// incoming signal.
-var errSignalNotAccepted = errors.New("signaling/messaging: incoming signal was not accepted")
-
 // Signal sends a [nethernet.Signal] to a network. In the JSON-RPC signaling path,
 // signal.NetworkID is the remote player's messaging UUID rather than a NetherNet ID.
 func (conn *Conn) Signal(ctx context.Context, signal *nethernet.Signal) error {
@@ -320,7 +316,9 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		}
 
 		if !conn.notifySignal(signal) {
-			return fmt.Errorf("%w: type %q, connection ID %d", errSignalNotAccepted, signal.Type, signal.ConnectionID)
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID))
+			return nil
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{

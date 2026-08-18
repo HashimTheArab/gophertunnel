@@ -224,7 +224,6 @@ func (conn *Conn) handleMessage(message Message) {
 		signal.NetworkID = message.From
 		if !conn.notifySignal(signal) {
 			conn.d.Log.Warn("incoming signal was not accepted",
-				slog.String("type", signal.Type),
 				slog.Uint64("connection_id", signal.ConnectionID))
 		}
 	case MessageTypeError:
