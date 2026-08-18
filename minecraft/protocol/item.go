@@ -1,10 +1,6 @@
 package protocol
 
-import (
-	"strings"
-
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
-)
+import "github.com/sandertv/gophertunnel/minecraft/nbt"
 
 const (
 	ItemEntryVersionLegacy = iota
@@ -120,67 +116,30 @@ type ItemEntry struct {
 // absent when the item is not wearable and otherwise uses the player armor-container indexes head=0, chest=1,
 // legs=2, feet=3 and body=4.
 type ItemSlotCapabilities struct {
-	AllowOffHand bool
+	AllowOffHand Optional[bool]
 	ArmorSlot    Optional[uint8]
 }
 
-// SlotCapabilities returns the inventory slot capabilities declared by the item entry. Component-based entries use
-// their item-definition data. Vanilla entries without component data use the corresponding built-in item definition.
+// SlotCapabilities returns the inventory slot capabilities explicitly declared by the item entry's component data.
+// An absent field means the entry did not declare that capability.
 func (x ItemEntry) SlotCapabilities() ItemSlotCapabilities {
-	caps := vanillaItemSlotCapabilities(x.Name)
+	caps := ItemSlotCapabilities{}
 	components, _ := x.Data["components"].(map[string]any)
 	if properties, ok := components["item_properties"].(map[string]any); ok {
 		if allow, ok := itemComponentBool(properties["allow_off_hand"]); ok {
-			caps.AllowOffHand = allow
+			caps.AllowOffHand = Option(allow)
 		}
 	}
 	if allow, ok := itemComponentBool(components["minecraft:allow_off_hand"]); ok {
-		caps.AllowOffHand = allow
+		caps.AllowOffHand = Option(allow)
 	} else if component, ok := components["minecraft:allow_off_hand"].(map[string]any); ok {
 		if allow, ok := itemComponentBool(component["value"]); ok {
-			caps.AllowOffHand = allow
+			caps.AllowOffHand = Option(allow)
 		}
 	}
 	if wearable, ok := components["minecraft:wearable"].(map[string]any); ok {
 		if slot, ok := wearableItemArmorSlot(wearable["slot"]); ok {
 			caps.ArmorSlot = Option(slot)
-		}
-	}
-	return caps
-}
-
-func vanillaItemSlotCapabilities(name string) ItemSlotCapabilities {
-	caps := ItemSlotCapabilities{}
-	switch name {
-	case "minecraft:arrow", "minecraft:tipped_arrow", "minecraft:firework_rocket", "minecraft:map",
-		"minecraft:filled_map", "minecraft:nautilus_shell", "minecraft:shield", "minecraft:totem_of_undying":
-		caps.AllowOffHand = true
-	}
-	if !strings.HasPrefix(name, "minecraft:") {
-		return caps
-	}
-	switch name {
-	case "minecraft:carved_pumpkin", "minecraft:skull", "minecraft:skeleton_skull",
-		"minecraft:wither_skeleton_skull", "minecraft:zombie_head", "minecraft:player_head",
-		"minecraft:creeper_head", "minecraft:dragon_head", "minecraft:piglin_head":
-		caps.ArmorSlot = Option(uint8(0))
-	case "minecraft:elytra":
-		caps.ArmorSlot = Option(uint8(1))
-	case "minecraft:wolf_armor":
-		caps.ArmorSlot = Option(uint8(4))
-	default:
-		switch {
-		case strings.HasSuffix(name, "_helmet"):
-			caps.ArmorSlot = Option(uint8(0))
-		case strings.HasSuffix(name, "_chestplate"):
-			caps.ArmorSlot = Option(uint8(1))
-		case strings.HasSuffix(name, "_leggings"):
-			caps.ArmorSlot = Option(uint8(2))
-		case strings.HasSuffix(name, "_boots"):
-			caps.ArmorSlot = Option(uint8(3))
-		case strings.HasSuffix(name, "_horse_armor"), strings.HasSuffix(name, "_nautilus_armor"),
-			strings.HasSuffix(name, "_harness"):
-			caps.ArmorSlot = Option(uint8(4))
 		}
 	}
 	return caps
