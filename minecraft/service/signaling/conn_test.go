@@ -25,7 +25,9 @@ func (n *recordingNotifier) NotifySignal(*nethernet.Signal) bool {
 func TestConnHandleMessageLogsRejectedSignalWithoutPayload(t *testing.T) {
 	var logs bytes.Buffer
 	conn := &Conn{
-		d:         Dialer{Log: slog.New(slog.NewJSONHandler(&logs, nil))},
+		d: Dialer{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))},
 		notifiers: make(map[uint32]nethernet.Notifier),
 	}
 	signal := &nethernet.Signal{
