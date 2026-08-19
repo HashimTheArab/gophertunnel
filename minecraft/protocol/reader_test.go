@@ -35,7 +35,7 @@ func TestReaderAllowsEmptyTerminalStringAndByteSlice(t *testing.T) {
 			if err := WriteVaruint32(&buf, 0); err != nil {
 				t.Fatalf("write empty length: %v", err)
 			}
-			if err := recoverReaderError(func() { test.read(NewReader(&buf, 0, false)) }); err != nil {
+			if err := recoverReaderError(func() { test.read(NewReader(bytes.NewReader(buf.Bytes()), 0, false)) }); err != nil {
 				t.Fatalf("empty terminal %s panicked: %v", test.name, err)
 			}
 		})

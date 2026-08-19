@@ -48,7 +48,7 @@ func TestCommandEnumConstraintRoundTripsEmptyTerminalConstraints(t *testing.T) {
 	want.Marshal(NewWriter(&buf, 0))
 
 	var got CommandEnumConstraint
-	if err := recoverReaderError(func() { got.Marshal(NewReader(&buf, 0, false)) }); err != nil {
+	if err := recoverReaderError(func() { got.Marshal(NewReader(bytes.NewReader(buf.Bytes()), 0, false)) }); err != nil {
 		t.Fatalf("decode empty terminal constraints: %v", err)
 	}
 	if got.EnumValueIndex != want.EnumValueIndex || got.EnumIndex != want.EnumIndex || len(got.Constraints) != 0 {
