@@ -593,26 +593,14 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	return conn.encodePacketsTo(&conn.bufferedSend, pk)
+	conn.encodePacketsTo(&conn.bufferedSend, pk)
+	return nil
 }
 
 // encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
 // appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) (err error) {
-	base := len(*dst)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			clear((*dst)[base:])
-			*dst = (*dst)[:base]
-			if recoveredErr, ok := recovered.(error); ok {
-				err = fmt.Errorf("encode packet: %w", recoveredErr)
-			} else {
-				err = fmt.Errorf("encode packet: %v", recovered)
-			}
-		}
-	}()
-
+func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -638,7 +626,6 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) (err erro
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
 	}
-	return nil
 }
 
 // WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
@@ -652,11 +639,8 @@ func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 	}
 
 	conn.sendMu.Lock()
-	err := conn.encodePacketsTo(&conn.bufferedSend, pks...)
+	conn.encodePacketsTo(&conn.bufferedSend, pks...)
 	conn.sendMu.Unlock()
-	if err != nil {
-		return err
-	}
 
 	return conn.Flush()
 }
@@ -676,11 +660,8 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	immediate := stackBuf[:0]
 
 	conn.sendMu.Lock()
-	err := conn.encodePacketsTo(&immediate, pks...)
+	conn.encodePacketsTo(&immediate, pks...)
 	conn.sendMu.Unlock()
-	if err != nil {
-		return err
-	}
 
 	if len(immediate) > 0 {
 		conn.encMu.Lock()

@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestCommandArgTypeWireValues(t *testing.T) {
 	tests := []struct {
@@ -36,5 +39,19 @@ func TestCommandArgTypeWireValues(t *testing.T) {
 		if tt.got != tt.want {
 			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
 		}
+	}
+}
+
+func TestCommandEnumConstraintRoundTripsEmptyTerminalConstraints(t *testing.T) {
+	want := CommandEnumConstraint{EnumValueIndex: 3, EnumIndex: 4}
+	var buf bytes.Buffer
+	want.Marshal(NewWriter(&buf, 0))
+
+	var got CommandEnumConstraint
+	if err := recoverReaderError(func() { got.Marshal(NewReader(&buf, 0, false)) }); err != nil {
+		t.Fatalf("decode empty terminal constraints: %v", err)
+	}
+	if got.EnumValueIndex != want.EnumValueIndex || got.EnumIndex != want.EnumIndex || len(got.Constraints) != 0 {
+		t.Fatalf("constraint round-trip = %+v, want %+v", got, want)
 	}
 }

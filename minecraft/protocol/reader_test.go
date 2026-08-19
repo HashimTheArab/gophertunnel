@@ -22,6 +22,26 @@ func TestReaderByteSliceRejectsLengthLimit(t *testing.T) {
 	}
 }
 
+func TestReaderAllowsEmptyTerminalStringAndByteSlice(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		read func(*Reader)
+	}{
+		{name: "string", read: func(r *Reader) { var value string; r.String(&value) }},
+		{name: "byte slice", read: func(r *Reader) { var value []byte; r.ByteSlice(&value) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := WriteVaruint32(&buf, 0); err != nil {
+				t.Fatalf("write empty length: %v", err)
+			}
+			if err := recoverReaderError(func() { test.read(NewReader(&buf, 0, false)) }); err != nil {
+				t.Fatalf("empty terminal %s panicked: %v", test.name, err)
+			}
+		})
+	}
+}
+
 func recoverReaderError(f func()) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {

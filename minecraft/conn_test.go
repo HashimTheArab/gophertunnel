@@ -1111,21 +1111,6 @@ func TestZeroValueConnCloseDoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestWritePacketReturnsMarshalPanicAsError(t *testing.T) {
-	client, peer := net.Pipe()
-	defer peer.Close()
-	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
-	defer conn.Abort()
-
-	err := conn.WritePacket(&packet.Text{Message: strings.Repeat("x", 65537)})
-	if err == nil || !strings.Contains(err.Error(), "string too long") {
-		t.Fatalf("WritePacket error = %v, want string-too-long marshal error", err)
-	}
-	if len(conn.bufferedSend) != 0 {
-		t.Fatalf("WritePacket retained %d partial packets after marshal failure", len(conn.bufferedSend))
-	}
-}
-
 func TestHandleEncodeErrorReturnsActiveTransportError(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()

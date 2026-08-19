@@ -78,7 +78,7 @@ func (r *Reader) StringUTF(x *string) {
 	}
 	r.checkRemaining(l, "string")
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = *(*string)(unsafe.Pointer(&data))
@@ -110,7 +110,7 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	}
 	r.SliceLength(length, maxByteSliceLength)
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = data
