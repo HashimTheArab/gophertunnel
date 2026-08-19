@@ -593,14 +593,26 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	conn.encodePacketsTo(&conn.bufferedSend, pk)
-	return nil
+	return conn.encodePacketsTo(&conn.bufferedSend, pk)
 }
 
 // encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
 // appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
+func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) (err error) {
+	base := len(*dst)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			clear((*dst)[base:])
+			*dst = (*dst)[:base]
+			if recoveredErr, ok := recovered.(error); ok {
+				err = fmt.Errorf("encode packet: %w", recoveredErr)
+			} else {
+				err = fmt.Errorf("encode packet: %v", recovered)
+			}
+		}
+	}()
+
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -626,6 +638,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
 	}
+	return nil
 }
 
 // WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
@@ -639,8 +652,11 @@ func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 	}
 
 	conn.sendMu.Lock()
-	conn.encodePacketsTo(&conn.bufferedSend, pks...)
+	err := conn.encodePacketsTo(&conn.bufferedSend, pks...)
 	conn.sendMu.Unlock()
+	if err != nil {
+		return err
+	}
 
 	return conn.Flush()
 }
@@ -660,8 +676,11 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	immediate := stackBuf[:0]
 
 	conn.sendMu.Lock()
-	conn.encodePacketsTo(&immediate, pks...)
+	err := conn.encodePacketsTo(&immediate, pks...)
 	conn.sendMu.Unlock()
+	if err != nil {
+		return err
+	}
 
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
@@ -887,7 +906,7 @@ func (conn *Conn) Flush() error {
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
-// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+// ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
 func (conn *Conn) handleEncodeError(err error, op string) error {
 	if err == nil {
 		return nil
@@ -898,7 +917,7 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
-	panic(fmt.Errorf("error encoding packet batch: %w", err))
+	return conn.wrap(err, op)
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
