@@ -1098,6 +1098,32 @@ func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
 	}
 }
 
+func TestZeroValueConnCloseDoesNotPanic(t *testing.T) {
+	conn := &Conn{}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort error = %v, want nil", err)
+	}
+}
+
+func TestHandleEncodeErrorReturnsActiveTransportError(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+
+	want := errors.New("send queue full")
+	err := conn.handleEncodeError(want, "flush")
+	if !errors.Is(err, want) {
+		t.Fatalf("handleEncodeError error = %v, want %v", err, want)
+	}
+}
+
 type writeObservedConn struct {
 	net.Conn
 	started chan struct{}

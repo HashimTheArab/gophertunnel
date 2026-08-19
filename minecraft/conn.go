@@ -846,6 +846,9 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 // Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
 // are directly sent.
 func (conn *Conn) Flush() error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("flush")
@@ -884,7 +887,7 @@ func (conn *Conn) Flush() error {
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
-// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+// ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
 func (conn *Conn) handleEncodeError(err error, op string) error {
 	if err == nil {
 		return nil
@@ -895,7 +898,7 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
-	panic(fmt.Errorf("error encoding packet batch: %w", err))
+	return conn.wrap(err, op)
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
@@ -2359,8 +2362,12 @@ func (conn *Conn) close(cause error) error {
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
-		conn.cancelFunc(cause)
-		conn.abortErr = conn.conn.Close()
+		if conn.cancelFunc != nil {
+			conn.cancelFunc(cause)
+		}
+		if conn.conn != nil {
+			conn.abortErr = conn.conn.Close()
+		}
 	})
 	return conn.abortErr
 }
