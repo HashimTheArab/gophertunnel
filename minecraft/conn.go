@@ -846,6 +846,9 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 // Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
 // are directly sent.
 func (conn *Conn) Flush() error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("flush")
@@ -2359,8 +2362,12 @@ func (conn *Conn) close(cause error) error {
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
-		conn.cancelFunc(cause)
-		conn.abortErr = conn.conn.Close()
+		if conn.cancelFunc != nil {
+			conn.cancelFunc(cause)
+		}
+		if conn.conn != nil {
+			conn.abortErr = conn.conn.Close()
+		}
 	})
 	return conn.abortErr
 }

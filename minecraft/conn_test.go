@@ -1098,6 +1098,19 @@ func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
 	}
 }
 
+func TestZeroValueConnCloseDoesNotPanic(t *testing.T) {
+	conn := &Conn{}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort error = %v, want nil", err)
+	}
+}
+
 type writeObservedConn struct {
 	net.Conn
 	started chan struct{}
