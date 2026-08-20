@@ -3,6 +3,7 @@ module github.com/sandertv/gophertunnel
 go 1.26.1
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
