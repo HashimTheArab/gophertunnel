@@ -31,6 +31,11 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/text"
 )
 
+const (
+	protocolID12640To12644             = 2168
+	scoreboardDoubleOptionalPatch12644 = 44
+)
+
 // exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
 // applied by sending them in the ResourcePackStack packet.
 type exemptedResourcePack struct {
@@ -1404,32 +1409,32 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("parse login request: %w", err)
 	}
 
-	// TODO: Mojang bumped the protocol without changing the protocol version number in 1.26.44,
-	// so we need to check the game version to determine whether we need to downgrade the protocol.
-	// This is a temporary workaround until the protocol version is properly bumped in a future release.
+	// Minecraft 1.26.40 through 1.26.44 share protocol ID 2168 despite 1.26.44 changing
+	// the SetScore wire format. Select the matching format now that Login exposes the game version.
 	var majorVer, minorVer, patchVer int
 	_, _ = fmt.Sscanf(conn.clientData.GameVersion, "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-	if majorVer == 1 && minorVer == 26 {
-		legacyClient := patchVer < 44
+	if conn.proto.ID() == protocolID12640To12644 && majorVer == 1 && minorVer == 26 {
 		negotiatedProtocol := conn.proto.ID()
-		// RequestNetworkSettings cannot distinguish these versions because they share a protocol ID.
-		// Select the matching wire format now that the login claim exposes the game version.
+		matched := false
 		for _, pro := range conn.acceptedProto {
 			if pro.ID() != negotiatedProtocol {
 				continue
 			}
 			var proMajor, proMinor, proPatch int
 			_, _ = fmt.Sscanf(pro.Ver(), "%d.%d.%d", &proMajor, &proMinor, &proPatch)
-			if proMajor == majorVer && proMinor == minorVer && (proPatch < 44) == legacyClient {
+			matchesWireFormat := patchVer < scoreboardDoubleOptionalPatch12644 && proPatch < scoreboardDoubleOptionalPatch12644 ||
+				patchVer == scoreboardDoubleOptionalPatch12644 && proPatch == scoreboardDoubleOptionalPatch12644
+			if proMajor == majorVer && proMinor == minorVer && matchesWireFormat {
 				conn.proto = pro
 				conn.pool = pro.Packets(true)
+				matched = true
 				break
 			}
 		}
 
-		if legacyClient && conn.proto.Ver() == protocol.CurrentVersion {
+		if !matched {
 			_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
-			return fmt.Errorf("incompatible protocol game version: expected %s, got %s", protocol.CurrentVersion, conn.clientData.GameVersion)
+			return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, negotiatedProtocol)
 		}
 	}
 
