@@ -1,7 +1,6 @@
 package minecraft
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -15,7 +14,7 @@ import (
 var (
 	// ErrBlobCacheLimit is returned when accepting another cache-backed terrain packet would exceed a configured limit.
 	ErrBlobCacheLimit = errors.New("client blob cache limit exceeded")
-	// ErrBlobHashMismatch is returned when a stored or received blob does not match its advertised XXHash64 hash.
+	// ErrBlobHashMismatch is returned when a received blob does not match its advertised XXHash64 hash.
 	ErrBlobHashMismatch = errors.New("client blob cache hash mismatch")
 	// ErrUnexpectedBlob is returned when a server sends a blob that the resolver did not request.
 	ErrUnexpectedBlob = errors.New("unexpected client blob cache blob")
@@ -24,8 +23,10 @@ var (
 )
 
 // BlobStore stores client blob-cache payloads by their protocol XXHash64 hash. A store must be scoped to an upstream
-// protocol and block-registry domain: identical bytes may have different runtime-ID semantics in another domain. Calls
-// are serialised by ClientBlobCache. Put implementations that retain payload must copy it before returning.
+// protocol and block-registry domain: identical bytes may have different runtime-ID semantics in another domain. A
+// single resolver serialises its own calls; a store shared between resolvers must be safe for concurrent use. Stored
+// blobs must be immutable and already validated against their keys. Put implementations that retain payload must copy
+// it before returning and must keep it available while the resolver has pending packets.
 type BlobStore interface {
 	Get(hash uint64) (payload []byte, ok bool, err error)
 	Put(hash uint64, payload []byte) error
@@ -35,16 +36,15 @@ type BlobStore interface {
 type ClientBlobCacheLimits struct {
 	// MaxPendingPackets is the maximum number of cache-backed terrain packets waiting for missing blobs.
 	MaxPendingPackets int
-	// MaxPendingHashes is the maximum number of unique unresolved hashes across pending packets.
-	MaxPendingHashes int
 	// MaxPendingBytes is the maximum retained variable-size packet data across pending packets.
 	MaxPendingBytes int
 }
 
 // BlobCacheResult is produced when a cache-backed terrain packet is handled.
 type BlobCacheResult struct {
-	// Packets contains materialised, cache-disabled terrain packets ready for ordinary processing.
-	Packets []packet.Packet
+	// Packet is a materialised, cache-disabled terrain packet ready for ordinary processing, or nil if blobs are
+	// still missing.
+	Packet packet.Packet
 	// Status acknowledges every unique hash in the handled packet as a hit or miss. It must be sent to the server when
 	// non-nil, including when every hash was already present locally.
 	Status *packet.ClientCacheBlobStatus
@@ -52,37 +52,37 @@ type BlobCacheResult struct {
 
 // ClientBlobCache resolves cache-backed LevelChunk and SubChunk packets into ordinary terrain packets. It terminates
 // the upstream cache protocol: cache status and miss-response packets must not be forwarded to another cache domain.
-// Reset must be called when the upstream connection or its cache domain changes.
+// HandleLevelChunk and HandleSubChunk take ownership of their packet argument. The caller must not mutate it after the
+// call. Reset must be called when the upstream connection changes.
 type ClientBlobCache struct {
 	mu sync.Mutex
 
 	store  BlobStore
 	limits ClientBlobCacheLimits
 
-	pending      []pendingBlobPacket
-	outstanding  map[uint64]struct{}
+	pending      []*pendingBlobPacket
+	outstanding  map[uint64][]*pendingBlobPacket
 	pendingBytes int
 }
 
 type pendingBlobPacket struct {
-	level         *packet.LevelChunk
-	sub           *packet.SubChunk
-	hashes        []uint64
+	pk            packet.Packet
+	missing       int
 	retainedBytes int
 }
 
-// NewClientBlobCache creates a client blob-cache resolver backed by store.
+// NewClientBlobCache creates a resolver backed by store. Every limit must be positive.
 func NewClientBlobCache(store BlobStore, limits ClientBlobCacheLimits) (*ClientBlobCache, error) {
 	if store == nil {
 		return nil, errors.New("client blob cache store is nil")
 	}
-	if limits.MaxPendingPackets <= 0 || limits.MaxPendingHashes <= 0 || limits.MaxPendingBytes <= 0 {
+	if limits.MaxPendingPackets <= 0 || limits.MaxPendingBytes <= 0 {
 		return nil, errors.New("client blob cache limits must be positive")
 	}
 	return &ClientBlobCache{
 		store:       store,
 		limits:      limits,
-		outstanding: make(map[uint64]struct{}),
+		outstanding: make(map[uint64][]*pendingBlobPacket),
 	}, nil
 }
 
@@ -93,17 +93,15 @@ func (c *ClientBlobCache) HandleLevelChunk(pk *packet.LevelChunk) (BlobCacheResu
 		return BlobCacheResult{}, fmt.Errorf("%w: nil LevelChunk", ErrInvalidBlobCachePacket)
 	}
 	if !pk.CacheEnabled {
-		return BlobCacheResult{Packets: []packet.Packet{pk}}, nil
+		return BlobCacheResult{Packet: pk}, nil
 	}
 	if len(pk.BlobHashes) == 0 {
 		return BlobCacheResult{}, fmt.Errorf("%w: LevelChunk has caching enabled without hashes", ErrInvalidBlobCachePacket)
 	}
-	pending := pendingBlobPacket{
-		level:         cloneLevelChunk(pk),
-		hashes:        uniqueBlobHashes(pk.BlobHashes),
+	return c.handlePending(pendingBlobPacket{
+		pk:            pk,
 		retainedBytes: len(pk.RawPayload) + len(pk.BlobHashes)*8,
-	}
-	return c.handlePending(pending)
+	}, uniqueBlobHashes(pk.BlobHashes))
 }
 
 // HandleSubChunk resolves a SubChunk or retains it until its missing blobs arrive. A present per-entry BlobHash marks
@@ -114,19 +112,13 @@ func (c *ClientBlobCache) HandleSubChunk(pk *packet.SubChunk) (BlobCacheResult, 
 	}
 	hashes := subChunkBlobHashes(pk)
 	if len(hashes) == 0 {
-		if !pk.CacheEnabled {
-			return BlobCacheResult{Packets: []packet.Packet{pk}}, nil
-		}
-		out := cloneSubChunk(pk)
-		out.CacheEnabled = false
-		return BlobCacheResult{Packets: []packet.Packet{out}}, nil
+		pk.CacheEnabled = false
+		return BlobCacheResult{Packet: pk}, nil
 	}
-	pending := pendingBlobPacket{
-		sub:           cloneSubChunk(pk),
-		hashes:        uniqueBlobHashes(hashes),
+	return c.handlePending(pendingBlobPacket{
+		pk:            pk,
 		retainedBytes: subChunkRetainedBytes(pk),
-	}
-	return c.handlePending(pending)
+	}, uniqueBlobHashes(hashes))
 }
 
 // HandleMissResponse validates and stores requested blobs, returning terrain packets whose dependencies are now
@@ -138,62 +130,58 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	received := make(map[uint64]struct{}, len(pk.Blobs))
 	for _, blob := range pk.Blobs {
-		if _, ok := c.outstanding[blob.Hash]; !ok {
-			stored, found, err := c.getBlob(blob.Hash)
-			if err != nil {
-				return nil, err
-			}
-			if !found || !bytes.Equal(stored, blob.Payload) {
-				return nil, fmt.Errorf("%w: 0x%x", ErrUnexpectedBlob, blob.Hash)
-			}
-			continue
+		if len(c.outstanding[blob.Hash]) == 0 {
+			return nil, fmt.Errorf("%w: 0x%x", ErrUnexpectedBlob, blob.Hash)
+		}
+		if _, duplicate := received[blob.Hash]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate 0x%x", ErrUnexpectedBlob, blob.Hash)
 		}
 		if xxhash.Sum64(blob.Payload) != blob.Hash {
 			return nil, fmt.Errorf("%w: 0x%x", ErrBlobHashMismatch, blob.Hash)
 		}
+		received[blob.Hash] = struct{}{}
 	}
 	for _, blob := range pk.Blobs {
-		if _, ok := c.outstanding[blob.Hash]; !ok {
-			continue
-		}
-		if err := c.store.Put(blob.Hash, slices.Clone(blob.Payload)); err != nil {
+		if err := c.store.Put(blob.Hash, blob.Payload); err != nil {
 			return nil, fmt.Errorf("store client blob 0x%x: %w", blob.Hash, err)
 		}
 	}
 
+	resolved := make(map[*pendingBlobPacket]int)
+	for hash := range received {
+		for _, pending := range c.outstanding[hash] {
+			resolved[pending]++
+		}
+	}
 	ready := make([]packet.Packet, 0, len(c.pending))
-	left := make([]pendingBlobPacket, 0, len(c.pending))
-	nextOutstanding := make(map[uint64]struct{}, len(c.outstanding))
+	left := make([]*pendingBlobPacket, 0, len(c.pending))
 	leftBytes := 0
 	for _, pending := range c.pending {
-		complete, err := c.dependenciesPresent(pending.hashes)
+		if pending.missing != resolved[pending] {
+			left = append(left, pending)
+			leftBytes += pending.retainedBytes
+			continue
+		}
+		blobs, err := c.loadPacketBlobs(pending.pk)
 		if err != nil {
 			return nil, err
 		}
-		if !complete {
-			left = append(left, pending)
-			leftBytes += pending.retainedBytes
-			for _, hash := range pending.hashes {
-				_, ok, err := c.getBlob(hash)
-				if err != nil {
-					return nil, err
-				}
-				if !ok {
-					nextOutstanding[hash] = struct{}{}
-				}
-			}
-			continue
-		}
-		materialised, err := c.materialise(pending)
+		materialised, err := materialise(pending.pk, blobs)
 		if err != nil {
 			return nil, err
 		}
 		ready = append(ready, materialised)
 	}
+	for pending, count := range resolved {
+		pending.missing -= count
+	}
 	c.pending = left
-	c.outstanding = nextOutstanding
 	c.pendingBytes = leftBytes
+	for hash := range received {
+		delete(c.outstanding, hash)
+	}
 	return ready, nil
 }
 
@@ -206,60 +194,59 @@ func (c *ClientBlobCache) Reset() {
 	c.mu.Unlock()
 }
 
-// handlePending classifies one packet's dependencies and either materialises or retains it.
-func (c *ClientBlobCache) handlePending(pending pendingBlobPacket) (BlobCacheResult, error) {
+// handlePending materialises a packet whose blobs are all held locally, or retains it until the missing ones arrive.
+func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint64) (BlobCacheResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	hits, misses, err := c.classify(pending.hashes)
+	blobs, hits, misses, err := c.resolve(hashes)
 	if err != nil {
 		return BlobCacheResult{}, err
 	}
 	status := &packet.ClientCacheBlobStatus{HitHashes: hits, MissHashes: misses}
 	if len(misses) == 0 {
-		materialised, err := c.materialise(pending)
+		materialised, err := materialise(pending.pk, blobs)
 		if err != nil {
 			return BlobCacheResult{}, err
 		}
-		return BlobCacheResult{Packets: []packet.Packet{materialised}, Status: status}, nil
+		return BlobCacheResult{Packet: materialised, Status: status}, nil
 	}
 
-	additionalHashes := 0
-	for _, hash := range misses {
-		if _, ok := c.outstanding[hash]; !ok {
-			additionalHashes++
-		}
-	}
 	if len(c.pending)+1 > c.limits.MaxPendingPackets ||
-		len(c.outstanding)+additionalHashes > c.limits.MaxPendingHashes ||
 		c.pendingBytes+pending.retainedBytes > c.limits.MaxPendingBytes {
 		return BlobCacheResult{}, ErrBlobCacheLimit
 	}
-	c.pending = append(c.pending, pending)
+	pending.missing = len(misses)
+	retained := &pending
+	c.pending = append(c.pending, retained)
 	c.pendingBytes += pending.retainedBytes
 	for _, hash := range misses {
-		c.outstanding[hash] = struct{}{}
+		c.outstanding[hash] = append(c.outstanding[hash], retained)
 	}
 	return BlobCacheResult{Status: status}, nil
 }
 
-// classify splits hashes into locally available hits and unresolved misses while preserving their first occurrence.
-func (c *ClientBlobCache) classify(hashes []uint64) (hits, misses []uint64, err error) {
+// resolve reads every hash from the store once, splitting them into locally available hits and unresolved misses in
+// first-occurrence order. The returned payloads let a caller materialise without reading the store again.
+func (c *ClientBlobCache) resolve(hashes []uint64) (blobs map[uint64][]byte, hits, misses []uint64, err error) {
+	blobs = make(map[uint64][]byte, len(hashes))
+	hits = make([]uint64, 0, len(hashes))
 	for _, hash := range hashes {
-		_, ok, getErr := c.getBlob(hash)
+		payload, ok, getErr := c.getBlob(hash)
 		if getErr != nil {
-			return nil, nil, getErr
+			return nil, nil, nil, getErr
 		}
-		if ok {
-			hits = append(hits, hash)
-		} else {
+		if !ok {
 			misses = append(misses, hash)
+			continue
 		}
+		blobs[hash] = payload
+		hits = append(hits, hash)
 	}
-	return hits, misses, nil
+	return blobs, hits, misses, nil
 }
 
-// getBlob retrieves and validates one stored blob.
+// getBlob retrieves one stored blob.
 func (c *ClientBlobCache) getBlob(hash uint64) ([]byte, bool, error) {
 	payload, ok, err := c.store.Get(hash)
 	if err != nil {
@@ -268,83 +255,75 @@ func (c *ClientBlobCache) getBlob(hash uint64) ([]byte, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	if xxhash.Sum64(payload) != hash {
-		return nil, false, fmt.Errorf("%w: stored blob 0x%x", ErrBlobHashMismatch, hash)
-	}
 	return payload, true, nil
 }
 
-// dependenciesPresent reports whether every hash is available in the backing store.
-func (c *ClientBlobCache) dependenciesPresent(hashes []uint64) (bool, error) {
-	for _, hash := range hashes {
-		_, ok, err := c.getBlob(hash)
-		if err != nil || !ok {
-			return false, err
-		}
+// loadPacketBlobs retrieves all blobs needed to materialise pk.
+func (c *ClientBlobCache) loadPacketBlobs(pk packet.Packet) (map[uint64][]byte, error) {
+	var hashes []uint64
+	switch pk := pk.(type) {
+	case *packet.LevelChunk:
+		hashes = uniqueBlobHashes(pk.BlobHashes)
+	case *packet.SubChunk:
+		hashes = uniqueBlobHashes(subChunkBlobHashes(pk))
+	default:
+		return nil, fmt.Errorf("%w: %T is not cache-backed", ErrInvalidBlobCachePacket, pk)
 	}
-	return true, nil
+	blobs, _, misses, err := c.resolve(hashes)
+	if err != nil {
+		return nil, err
+	}
+	if len(misses) != 0 {
+		return nil, fmt.Errorf("client blob 0x%x is unavailable after being acknowledged", misses[0])
+	}
+	return blobs, nil
 }
 
-// materialise reconstructs a retained packet with cache metadata removed.
-func (c *ClientBlobCache) materialise(pending pendingBlobPacket) (packet.Packet, error) {
-	if pending.level != nil {
-		return c.materialiseLevelChunk(pending.level)
+// materialise rebuilds the owned pk with its cached payloads inlined and cache metadata cleared.
+func materialise(pk packet.Packet, blobs map[uint64][]byte) (packet.Packet, error) {
+	switch pk := pk.(type) {
+	case *packet.LevelChunk:
+		return materialiseLevelChunk(pk, blobs)
+	case *packet.SubChunk:
+		return materialiseSubChunk(pk, blobs)
 	}
-	return c.materialiseSubChunk(pending.sub)
+	return nil, fmt.Errorf("%w: %T is not cache-backed", ErrInvalidBlobCachePacket, pk)
 }
 
 // materialiseLevelChunk concatenates sub-chunk and biome blobs in advertised order before the packet's trailing data.
-func (c *ClientBlobCache) materialiseLevelChunk(pk *packet.LevelChunk) (*packet.LevelChunk, error) {
-	total := len(pk.RawPayload)
-	blobs := make([][]byte, len(pk.BlobHashes))
-	for i, hash := range pk.BlobHashes {
-		blob, ok, err := c.getBlob(hash)
-		if err != nil {
-			return nil, err
-		}
+func materialiseLevelChunk(pk *packet.LevelChunk, blobs map[uint64][]byte) (*packet.LevelChunk, error) {
+	payloads := make([][]byte, 0, len(pk.BlobHashes)+1)
+	for _, hash := range pk.BlobHashes {
+		blob, ok := blobs[hash]
 		if !ok {
 			return nil, fmt.Errorf("client blob 0x%x is unavailable", hash)
 		}
-		blobs[i] = blob
-		total += len(blob)
+		payloads = append(payloads, blob)
 	}
-	payload := make([]byte, 0, total)
-	for _, blob := range blobs {
-		payload = append(payload, blob...)
-	}
-	payload = append(payload, pk.RawPayload...)
-	out := cloneLevelChunk(pk)
-	out.CacheEnabled = false
-	out.BlobHashes = nil
-	out.RawPayload = payload
-	return out, nil
+	pk.CacheEnabled = false
+	pk.BlobHashes = nil
+	pk.RawPayload = slices.Concat(append(payloads, pk.RawPayload)...)
+	return pk, nil
 }
 
 // materialiseSubChunk prepends each cached sub-chunk blob to its entry-local trailing payload.
-func (c *ClientBlobCache) materialiseSubChunk(pk *packet.SubChunk) (*packet.SubChunk, error) {
-	out := cloneSubChunk(pk)
-	out.CacheEnabled = false
-	for i := range out.SubChunkEntries {
-		entry := &out.SubChunkEntries[i]
+func materialiseSubChunk(pk *packet.SubChunk, blobs map[uint64][]byte) (*packet.SubChunk, error) {
+	pk.CacheEnabled = false
+	for i := range pk.SubChunkEntries {
+		entry := &pk.SubChunkEntries[i]
 		hash, ok := entry.BlobHash.Value()
 		if !ok {
 			continue
 		}
-		blob, found, err := c.getBlob(hash)
-		if err != nil {
-			return nil, err
-		}
+		blob, found := blobs[hash]
 		if !found {
 			return nil, fmt.Errorf("client blob 0x%x is unavailable", hash)
 		}
 		tail, _ := entry.RawPayload.Value()
-		payload := make([]byte, 0, len(blob)+len(tail))
-		payload = append(payload, blob...)
-		payload = append(payload, tail...)
-		entry.RawPayload = protocol.Option(payload)
+		entry.RawPayload = protocol.Option(slices.Concat(blob, tail))
 		entry.BlobHash = protocol.Optional[uint64]{}
 	}
-	return out, nil
+	return pk, nil
 }
 
 // uniqueBlobHashes returns the first occurrence of every hash in hashes.
@@ -361,7 +340,7 @@ func uniqueBlobHashes(hashes []uint64) []uint64 {
 	return unique
 }
 
-// subChunkBlobHashes returns every present per-entry blob hash.
+// subChunkBlobHashes returns the per-entry blob hashes, which may repeat: entries commonly share one blob.
 func subChunkBlobHashes(pk *packet.SubChunk) []uint64 {
 	hashes := make([]uint64, 0, len(pk.SubChunkEntries))
 	for _, entry := range pk.SubChunkEntries {
@@ -387,34 +366,4 @@ func subChunkRetainedBytes(pk *packet.SubChunk) int {
 		}
 	}
 	return total
-}
-
-// cloneLevelChunk clones slices retained or replaced by the resolver.
-func cloneLevelChunk(pk *packet.LevelChunk) *packet.LevelChunk {
-	out := *pk
-	out.BlobHashes = slices.Clone(pk.BlobHashes)
-	out.RawPayload = slices.Clone(pk.RawPayload)
-	return &out
-}
-
-// cloneSubChunk clones entry slices retained or replaced by the resolver.
-func cloneSubChunk(pk *packet.SubChunk) *packet.SubChunk {
-	out := *pk
-	out.SubChunkEntries = slices.Clone(pk.SubChunkEntries)
-	for i := range out.SubChunkEntries {
-		entry := &out.SubChunkEntries[i]
-		entry.RawPayload = cloneOptionalSlice(entry.RawPayload)
-		entry.HeightMapData = cloneOptionalSlice(entry.HeightMapData)
-		entry.RenderHeightMapData = cloneOptionalSlice(entry.RenderHeightMapData)
-	}
-	return &out
-}
-
-// cloneOptionalSlice clones the value held by an Optional slice while preserving absence and present-empty state.
-func cloneOptionalSlice[T any](value protocol.Optional[[]T]) protocol.Optional[[]T] {
-	slice, ok := value.Value()
-	if !ok {
-		return protocol.Optional[[]T]{}
-	}
-	return protocol.Option(slices.Clone(slice))
 }
