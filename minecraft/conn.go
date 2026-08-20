@@ -1527,7 +1527,7 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	if err != nil {
 		return fmt.Errorf("parse server token: %w", err)
 	}
-	raw, _ := tok.Headers[0].ExtraHeaders["x5u"]
+	raw := tok.Headers[0].ExtraHeaders["x5u"]
 	kStr, _ := raw.(string)
 
 	pub := new(ecdsa.PublicKey)

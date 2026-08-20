@@ -181,6 +181,10 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 			continue
 		}
 		if !packetUsesBlobCache(pending.pk) {
+			if pending.retainedBytes > remainingBytes {
+				return nil, ErrBlobCacheLimit
+			}
+			remainingBytes -= pending.retainedBytes
 			plans = append(plans, materialisePlan{pk: pending.pk})
 			continue
 		}
