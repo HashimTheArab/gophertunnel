@@ -1109,6 +1109,11 @@ func (conn *Conn) receive(data []byte) error {
 		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
+		if conn.cacheEnabled && !conn.loginSuccessReceived && pkData.h.PacketID == packet.IDPlayStatus {
+			if err := conn.handlePassthroughPlayStatus(pkData); err != nil {
+				return err
+			}
+		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
@@ -1139,6 +1144,20 @@ func (conn *Conn) receive(data []byte) error {
 		return nil
 	}
 	return conn.handle(pkData)
+}
+
+// handlePassthroughPlayStatus performs login-success negotiation before the packet is exposed to the caller.
+func (conn *Conn) handlePassthroughPlayStatus(pkData *packetData) error {
+	pks, err := pkData.ensureOwned().decode(conn)
+	if err != nil {
+		return err
+	}
+	for _, pk := range pks {
+		if status, ok := pk.(*packet.PlayStatus); ok && status.Status == packet.PlayStatusLoginSuccess {
+			return conn.handleLoginSuccess()
+		}
+	}
+	return nil
 }
 
 // queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
@@ -2203,16 +2222,7 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
-		if conn.loginSuccessReceived {
-			return nil
-		}
-		conn.loginSuccessReceived = true
-		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
-			return fmt.Errorf("send ClientCacheStatus: %w", err)
-		}
-		// The next packet we expect is the ResourcePacksInfo packet.
-		conn.expect(packet.IDResourcePacksInfo)
-		return conn.Flush()
+		return conn.handleLoginSuccess()
 	case packet.PlayStatusLoginFailedClient:
 		_ = conn.close(conn.closeErr("client outdated"))
 		return fmt.Errorf("client outdated")
@@ -2245,6 +2255,19 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	default:
 		return fmt.Errorf("unknown play status %v", pk.Status)
 	}
+}
+
+// handleLoginSuccess sends the client capabilities required before resource-pack negotiation.
+func (conn *Conn) handleLoginSuccess() error {
+	if conn.loginSuccessReceived {
+		return nil
+	}
+	conn.loginSuccessReceived = true
+	if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
+		return fmt.Errorf("send ClientCacheStatus: %w", err)
+	}
+	conn.expect(packet.IDResourcePacksInfo)
+	return conn.Flush()
 }
 
 // tryFinaliseClientConn attempts to finalise the client connection by sending
