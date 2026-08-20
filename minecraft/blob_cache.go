@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -480,7 +481,7 @@ func subChunkBlobHashes(pk *packet.SubChunk) []uint64 {
 
 // subChunkRetainedBytes estimates retained variable-size packet data for limit enforcement.
 func subChunkRetainedBytes(pk *packet.SubChunk) int {
-	total := len(pk.SubChunkEntries) * 8
+	total := len(pk.SubChunkEntries) * int(unsafe.Sizeof(protocol.SubChunkEntry{}))
 	for _, entry := range pk.SubChunkEntries {
 		if payload, ok := entry.RawPayload.Value(); ok {
 			total += len(payload)
