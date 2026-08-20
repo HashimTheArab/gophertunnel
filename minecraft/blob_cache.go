@@ -23,8 +23,9 @@ var (
 // BlobStore stores client blob-cache payloads by their protocol XXHash64 hash. A store must be scoped to an upstream
 // protocol and block-registry domain: identical bytes may have different runtime-ID semantics in another domain. A
 // single resolver serialises its own calls; a store shared between resolvers must be safe for concurrent use. Stored
-// blobs must be immutable and already validated against their keys. Put implementations that retain payload must copy
-// it before returning and must keep it available while the resolver has pending packets.
+// blobs must be immutable and already validated against their keys. Put must be idempotent: It must succeed without
+// replacing the stored payload when hash already exists. Implementations that retain payload must copy it before
+// returning and must keep it available while the resolver has pending packets.
 type BlobStore interface {
 	Get(hash uint64) (payload []byte, ok bool, err error)
 	Put(hash uint64, payload []byte) error
