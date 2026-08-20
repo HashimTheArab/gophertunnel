@@ -1404,16 +1404,14 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("parse login request: %w", err)
 	}
 
-	// TODO: Mojang bumped the protocol without changing the protocol version number in 1.26.44,
-	// so we need to check the game version to determine whether we need to downgrade the protocol.
-	// This is a temporary workaround until the protocol version is properly bumped in a future release.
+	// Minecraft 1.26.40 through 1.26.44 share protocol ID 2168 despite 1.26.44 changing
+	// the SetScore wire format. Select the matching format now that Login exposes the game version.
 	var majorVer, minorVer, patchVer int
 	_, _ = fmt.Sscanf(conn.clientData.GameVersion, "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-	if majorVer == 1 && minorVer == 26 {
+	if conn.proto.ID() == 2168 && majorVer == 1 && minorVer == 26 {
 		legacyClient := patchVer < 44
 		negotiatedProtocol := conn.proto.ID()
-		// RequestNetworkSettings cannot distinguish these versions because they share a protocol ID.
-		// Select the matching wire format now that the login claim exposes the game version.
+		matched := false
 		for _, pro := range conn.acceptedProto {
 			if pro.ID() != negotiatedProtocol {
 				continue
@@ -1423,11 +1421,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 			if proMajor == majorVer && proMinor == minorVer && (proPatch < 44) == legacyClient {
 				conn.proto = pro
 				conn.pool = pro.Packets(true)
+				matched = true
 				break
 			}
 		}
 
-		if legacyClient && conn.proto.Ver() == protocol.CurrentVersion {
+		if !matched {
 			_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
 			return fmt.Errorf("incompatible protocol game version: expected %s, got %s", protocol.CurrentVersion, conn.clientData.GameVersion)
 		}
