@@ -321,6 +321,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
+	if conn.clientData.GameVersion == "" {
+		conn.clientData.GameVersion = d.Protocol.Ver()
+	}
 	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte

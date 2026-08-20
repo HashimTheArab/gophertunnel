@@ -31,6 +31,11 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/text"
 )
 
+const (
+	protocolID12640To12644             = 2168
+	scoreboardDoubleOptionalPatch12644 = 44
+)
+
 // exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
 // applied by sending them in the ResourcePackStack packet.
 type exemptedResourcePack struct {
@@ -1408,8 +1413,7 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	// the SetScore wire format. Select the matching format now that Login exposes the game version.
 	var majorVer, minorVer, patchVer int
 	_, _ = fmt.Sscanf(conn.clientData.GameVersion, "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-	if conn.proto.ID() == 2168 && majorVer == 1 && minorVer == 26 {
-		legacyClient := patchVer < 44
+	if conn.proto.ID() == protocolID12640To12644 && majorVer == 1 && minorVer == 26 {
 		negotiatedProtocol := conn.proto.ID()
 		matched := false
 		for _, pro := range conn.acceptedProto {
@@ -1418,7 +1422,9 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 			}
 			var proMajor, proMinor, proPatch int
 			_, _ = fmt.Sscanf(pro.Ver(), "%d.%d.%d", &proMajor, &proMinor, &proPatch)
-			if proMajor == majorVer && proMinor == minorVer && (proPatch < 44) == legacyClient {
+			matchesWireFormat := patchVer < scoreboardDoubleOptionalPatch12644 && proPatch < scoreboardDoubleOptionalPatch12644 ||
+				patchVer == scoreboardDoubleOptionalPatch12644 && proPatch == scoreboardDoubleOptionalPatch12644
+			if proMajor == majorVer && proMinor == minorVer && matchesWireFormat {
 				conn.proto = pro
 				conn.pool = pro.Packets(true)
 				matched = true
@@ -1428,7 +1434,7 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 
 		if !matched {
 			_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
-			return fmt.Errorf("incompatible protocol game version: expected %s, got %s", protocol.CurrentVersion, conn.clientData.GameVersion)
+			return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, negotiatedProtocol)
 		}
 	}
 
