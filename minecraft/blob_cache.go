@@ -187,11 +187,7 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	}
 	ready := make([]packet.Packet, 0, len(plans))
 	for _, plan := range plans {
-		materialised, err := materialise(plan.pk, plan.blobs)
-		if err != nil {
-			return nil, err
-		}
-		ready = append(ready, materialised)
+		ready = append(ready, materialise(plan.pk, plan.blobs))
 	}
 	for pending, count := range resolved {
 		pending.missing -= count
@@ -227,11 +223,7 @@ func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint
 		if _, err := materialisedPacketSize(pending.pk, blobs, c.limits.MaxPendingBytes); err != nil {
 			return BlobCacheResult{}, err
 		}
-		materialised, err := materialise(pending.pk, blobs)
-		if err != nil {
-			return BlobCacheResult{}, err
-		}
-		return BlobCacheResult{Packet: materialised, Status: status}, nil
+		return BlobCacheResult{Packet: materialise(pending.pk, blobs), Status: status}, nil
 	}
 
 	if len(c.pending)+1 > c.limits.MaxPendingPackets ||
@@ -326,22 +318,10 @@ func materialisedPacketSize(pk packet.Packet, blobs map[uint64][]byte, limit int
 			}
 		}
 	case *packet.SubChunk:
+		if err := add(subChunkRetainedBytes(pk)); err != nil {
+			return 0, err
+		}
 		for _, entry := range pk.SubChunkEntries {
-			if payload, ok := entry.RawPayload.Value(); ok {
-				if err := add(len(payload)); err != nil {
-					return 0, err
-				}
-			}
-			if heightMap, ok := entry.HeightMapData.Value(); ok {
-				if err := add(len(heightMap)); err != nil {
-					return 0, err
-				}
-			}
-			if renderHeightMap, ok := entry.RenderHeightMapData.Value(); ok {
-				if err := add(len(renderHeightMap)); err != nil {
-					return 0, err
-				}
-			}
 			if hash, ok := entry.BlobHash.Value(); ok {
 				blob, found := blobs[hash]
 				if !found {
@@ -359,34 +339,30 @@ func materialisedPacketSize(pk packet.Packet, blobs map[uint64][]byte, limit int
 }
 
 // materialise rebuilds the owned pk with its cached payloads inlined and cache metadata cleared.
-func materialise(pk packet.Packet, blobs map[uint64][]byte) (packet.Packet, error) {
+func materialise(pk packet.Packet, blobs map[uint64][]byte) packet.Packet {
 	switch pk := pk.(type) {
 	case *packet.LevelChunk:
 		return materialiseLevelChunk(pk, blobs)
 	case *packet.SubChunk:
 		return materialiseSubChunk(pk, blobs)
 	}
-	return nil, fmt.Errorf("%w: %T is not cache-backed", ErrInvalidBlobCachePacket, pk)
+	panic(fmt.Sprintf("cannot materialise client blob-cache packet %T", pk))
 }
 
 // materialiseLevelChunk concatenates sub-chunk and biome blobs in advertised order before the packet's trailing data.
-func materialiseLevelChunk(pk *packet.LevelChunk, blobs map[uint64][]byte) (*packet.LevelChunk, error) {
+func materialiseLevelChunk(pk *packet.LevelChunk, blobs map[uint64][]byte) *packet.LevelChunk {
 	payloads := make([][]byte, 0, len(pk.BlobHashes)+1)
 	for _, hash := range pk.BlobHashes {
-		blob, ok := blobs[hash]
-		if !ok {
-			return nil, fmt.Errorf("client blob 0x%x is unavailable", hash)
-		}
-		payloads = append(payloads, blob)
+		payloads = append(payloads, blobs[hash])
 	}
 	pk.CacheEnabled = false
 	pk.BlobHashes = nil
 	pk.RawPayload = slices.Concat(append(payloads, pk.RawPayload)...)
-	return pk, nil
+	return pk
 }
 
 // materialiseSubChunk prepends each cached sub-chunk blob to its entry-local trailing payload.
-func materialiseSubChunk(pk *packet.SubChunk, blobs map[uint64][]byte) (*packet.SubChunk, error) {
+func materialiseSubChunk(pk *packet.SubChunk, blobs map[uint64][]byte) *packet.SubChunk {
 	pk.CacheEnabled = false
 	for i := range pk.SubChunkEntries {
 		entry := &pk.SubChunkEntries[i]
@@ -394,15 +370,11 @@ func materialiseSubChunk(pk *packet.SubChunk, blobs map[uint64][]byte) (*packet.
 		if !ok {
 			continue
 		}
-		blob, found := blobs[hash]
-		if !found {
-			return nil, fmt.Errorf("client blob 0x%x is unavailable", hash)
-		}
 		tail, _ := entry.RawPayload.Value()
-		entry.RawPayload = protocol.Option(slices.Concat(blob, tail))
+		entry.RawPayload = protocol.Option(slices.Concat(blobs[hash], tail))
 		entry.BlobHash = protocol.Optional[uint64]{}
 	}
-	return pk, nil
+	return pk
 }
 
 // uniqueBlobHashes returns the first occurrence of every hash in hashes.
