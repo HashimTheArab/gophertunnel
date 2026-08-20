@@ -16,8 +16,6 @@ var (
 	ErrBlobCacheLimit = errors.New("client blob cache limit exceeded")
 	// ErrBlobHashMismatch is returned when a received blob does not match its advertised XXHash64 hash.
 	ErrBlobHashMismatch = errors.New("client blob cache hash mismatch")
-	// ErrUnexpectedBlob is returned when a server sends a blob that the resolver did not request.
-	ErrUnexpectedBlob = errors.New("unexpected client blob cache blob")
 	// ErrInvalidBlobCachePacket is returned when a cache-backed terrain packet is malformed.
 	ErrInvalidBlobCachePacket = errors.New("invalid client blob cache packet")
 )
@@ -140,19 +138,21 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	defer c.mu.Unlock()
 
 	received := make(map[uint64]struct{}, len(pk.Blobs))
+	expected := make([]protocol.CacheBlob, 0, len(pk.Blobs))
 	for _, blob := range pk.Blobs {
-		if len(c.outstanding[blob.Hash]) == 0 {
-			return nil, fmt.Errorf("%w: 0x%x", ErrUnexpectedBlob, blob.Hash)
-		}
-		if _, duplicate := received[blob.Hash]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate 0x%x", ErrUnexpectedBlob, blob.Hash)
-		}
 		if xxhash.Sum64(blob.Payload) != blob.Hash {
 			return nil, fmt.Errorf("%w: 0x%x", ErrBlobHashMismatch, blob.Hash)
 		}
+		if len(c.outstanding[blob.Hash]) == 0 {
+			continue
+		}
+		if _, duplicate := received[blob.Hash]; duplicate {
+			continue
+		}
 		received[blob.Hash] = struct{}{}
+		expected = append(expected, blob)
 	}
-	for _, blob := range pk.Blobs {
+	for _, blob := range expected {
 		if err := c.store.Put(blob.Hash, blob.Payload); err != nil {
 			return nil, fmt.Errorf("store client blob 0x%x: %w", blob.Hash, err)
 		}
