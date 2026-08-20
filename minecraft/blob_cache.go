@@ -18,7 +18,7 @@ var (
 	ErrBlobHashMismatch = errors.New("client blob cache hash mismatch")
 	// ErrUnexpectedBlob is returned when a server sends a blob that the resolver did not request.
 	ErrUnexpectedBlob = errors.New("unexpected client blob cache blob")
-	// ErrInvalidBlobCachePacket is returned when a cache-backed terrain packet has no blob dependencies.
+	// ErrInvalidBlobCachePacket is returned when a cache-backed terrain packet is malformed.
 	ErrInvalidBlobCachePacket = errors.New("invalid client blob cache packet")
 )
 
@@ -36,7 +36,8 @@ type BlobStore interface {
 type ClientBlobCacheLimits struct {
 	// MaxPendingPackets is the maximum number of cache-backed terrain packets waiting for missing blobs.
 	MaxPendingPackets int
-	// MaxPendingBytes is the maximum retained variable-size packet data across pending packets.
+	// MaxPendingBytes is the maximum retained variable-size data across pending packets and the maximum materialised
+	// data returned by one call.
 	MaxPendingBytes int
 }
 
@@ -71,6 +72,11 @@ type pendingBlobPacket struct {
 	retainedBytes int
 }
 
+type materialisePlan struct {
+	pk    packet.Packet
+	blobs map[uint64][]byte
+}
+
 // NewClientBlobCache creates a resolver backed by store. Every limit must be positive.
 func NewClientBlobCache(store BlobStore, limits ClientBlobCacheLimits) (*ClientBlobCache, error) {
 	if store == nil {
@@ -95,8 +101,11 @@ func (c *ClientBlobCache) HandleLevelChunk(pk *packet.LevelChunk) (BlobCacheResu
 	if !pk.CacheEnabled {
 		return BlobCacheResult{Packet: pk}, nil
 	}
-	if len(pk.BlobHashes) == 0 {
-		return BlobCacheResult{}, fmt.Errorf("%w: LevelChunk has caching enabled without hashes", ErrInvalidBlobCachePacket)
+	if uint64(len(pk.BlobHashes)) != uint64(pk.SubChunkCount)+1 {
+		return BlobCacheResult{}, fmt.Errorf(
+			"%w: LevelChunk has %d hashes for %d sub-chunks",
+			ErrInvalidBlobCachePacket, len(pk.BlobHashes), pk.SubChunkCount,
+		)
 	}
 	return c.handlePending(pendingBlobPacket{
 		pk:            pk,
@@ -155,9 +164,10 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 			resolved[pending]++
 		}
 	}
-	ready := make([]packet.Packet, 0, len(c.pending))
+	plans := make([]materialisePlan, 0, len(c.pending))
 	left := make([]*pendingBlobPacket, 0, len(c.pending))
 	leftBytes := 0
+	remainingBytes := c.limits.MaxPendingBytes
 	for _, pending := range c.pending {
 		if pending.missing != resolved[pending] {
 			left = append(left, pending)
@@ -168,7 +178,16 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 		if err != nil {
 			return nil, err
 		}
-		materialised, err := materialise(pending.pk, blobs)
+		size, err := materialisedPacketSize(pending.pk, blobs, remainingBytes)
+		if err != nil {
+			return nil, err
+		}
+		remainingBytes -= size
+		plans = append(plans, materialisePlan{pk: pending.pk, blobs: blobs})
+	}
+	ready := make([]packet.Packet, 0, len(plans))
+	for _, plan := range plans {
+		materialised, err := materialise(plan.pk, plan.blobs)
 		if err != nil {
 			return nil, err
 		}
@@ -205,6 +224,9 @@ func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint
 	}
 	status := &packet.ClientCacheBlobStatus{HitHashes: hits, MissHashes: misses}
 	if len(misses) == 0 {
+		if _, err := materialisedPacketSize(pending.pk, blobs, c.limits.MaxPendingBytes); err != nil {
+			return BlobCacheResult{}, err
+		}
 		materialised, err := materialise(pending.pk, blobs)
 		if err != nil {
 			return BlobCacheResult{}, err
@@ -277,6 +299,63 @@ func (c *ClientBlobCache) loadPacketBlobs(pk packet.Packet) (map[uint64][]byte, 
 		return nil, fmt.Errorf("client blob 0x%x is unavailable after being acknowledged", misses[0])
 	}
 	return blobs, nil
+}
+
+// materialisedPacketSize returns the variable-size data held by a materialised packet, rejecting sizes above limit.
+func materialisedPacketSize(pk packet.Packet, blobs map[uint64][]byte, limit int) (int, error) {
+	total := 0
+	add := func(size int) error {
+		if size > limit-total {
+			return ErrBlobCacheLimit
+		}
+		total += size
+		return nil
+	}
+	switch pk := pk.(type) {
+	case *packet.LevelChunk:
+		if err := add(len(pk.RawPayload)); err != nil {
+			return 0, err
+		}
+		for _, hash := range pk.BlobHashes {
+			blob, ok := blobs[hash]
+			if !ok {
+				return 0, fmt.Errorf("client blob 0x%x is unavailable", hash)
+			}
+			if err := add(len(blob)); err != nil {
+				return 0, err
+			}
+		}
+	case *packet.SubChunk:
+		for _, entry := range pk.SubChunkEntries {
+			if payload, ok := entry.RawPayload.Value(); ok {
+				if err := add(len(payload)); err != nil {
+					return 0, err
+				}
+			}
+			if heightMap, ok := entry.HeightMapData.Value(); ok {
+				if err := add(len(heightMap)); err != nil {
+					return 0, err
+				}
+			}
+			if renderHeightMap, ok := entry.RenderHeightMapData.Value(); ok {
+				if err := add(len(renderHeightMap)); err != nil {
+					return 0, err
+				}
+			}
+			if hash, ok := entry.BlobHash.Value(); ok {
+				blob, found := blobs[hash]
+				if !found {
+					return 0, fmt.Errorf("client blob 0x%x is unavailable", hash)
+				}
+				if err := add(len(blob)); err != nil {
+					return 0, err
+				}
+			}
+		}
+	default:
+		return 0, fmt.Errorf("%w: %T is not cache-backed", ErrInvalidBlobCachePacket, pk)
+	}
+	return total, nil
 }
 
 // materialise rebuilds the owned pk with its cached payloads inlined and cache metadata cleared.
