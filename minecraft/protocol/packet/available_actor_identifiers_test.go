@@ -32,3 +32,23 @@ func TestAvailableActorIdentifiers_AddIdentifier(t *testing.T) {
 		t.Fatalf("added identifier = %#v", identifiers[1])
 	}
 }
+
+func TestAvailableActorIdentifiers_AddIdentifierRejectsInvalidNames(t *testing.T) {
+	data, err := nbt.Marshal(map[string]any{"idlist": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, identifier := range []string{
+		"lunar:foo:bar",
+		"lunar:bad name",
+		"Lunar:foo",
+		"lunar:Upper",
+		"lunar:",
+		":foo",
+	} {
+		pk := &AvailableActorIdentifiers{SerialisedEntityIdentifiers: data}
+		if err := pk.AddIdentifier(identifier); err == nil {
+			t.Errorf("AddIdentifier(%q) succeeded, want validation error", identifier)
+		}
+	}
+}
