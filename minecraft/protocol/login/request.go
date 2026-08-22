@@ -185,8 +185,7 @@ func parseLegacyChain(chain []string, now time.Time) (IdentityData, *ecdsa.Publi
 	}
 
 	// The first token holds the client's public key in the x5u (it's self signed).
-	//lint:ignore S1005 Double assignment is done explicitly to prevent panics.
-	raw, _ := tok.Headers[0].ExtraHeaders["x5u"]
+	raw := tok.Headers[0].ExtraHeaders["x5u"]
 	if err := parseAsKey(raw, key); err != nil {
 		return IdentityData{}, nil, false, fmt.Errorf("parse x5u: %w", err)
 	}
