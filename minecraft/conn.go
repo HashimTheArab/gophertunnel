@@ -32,8 +32,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/text"
 )
 
-const ()
-
 // exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
 // applied by sending them in the ResourcePackStack packet.
 type exemptedResourcePack struct {
@@ -1397,6 +1395,52 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
 // and returns an error if it couldn't be done successfully.
+func (conn *Conn) handleLogin(pk *packet.Login) error {
+	var (
+		err        error
+		authResult login.AuthResult
+	)
+	conn.identityData, conn.clientData, authResult, err = login.Parse(pk.ConnectionRequest, conn.verifier)
+	if err != nil {
+		return fmt.Errorf("parse login request: %w", err)
+	}
+
+	// Mojang has shipped wire changes without bumping the protocol ID, so several
+	// accepted protocols may share the negotiated one. Login is the first point
+	// that carries the client's game version, which is what tells them apart.
+	if err := conn.selectProtocolByGameVersion(); err != nil {
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
+		return err
+	}
+
+	// Make sure the player is logged in with XBOX Live when necessary.
+	if !authResult.XBOXLiveAuthenticated && conn.authEnabled {
+		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
+		return fmt.Errorf("client was not authenticated to XBOX Live")
+	}
+	if pkc, ok := conn.conn.(publicKeyConn); ok {
+		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+		}
+	}
+	if conn.allow != nil {
+		if reason, ok := conn.allow(conn.RemoteAddr(), conn.identityData, conn.clientData); !ok {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonKicked, Message: reason})
+			return conn.Close()
+		}
+	}
+	if conn.disableEncryption {
+		return conn.handleClientToServerHandshake()
+	}
+	// The next expected packet is a response from the client to the handshake.
+	conn.expect(packet.IDClientToServerHandshake)
+	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
+		return fmt.Errorf("enable encryption: %w", err)
+	}
+	return nil
+}
+
 // selectProtocolByGameVersion narrows the negotiated protocol to the accepted
 // one whose version is the newest that the client's game version reaches. It is
 // a no-op unless several accepted protocols share the negotiated ID, and it
@@ -1465,52 +1509,6 @@ func compareGameVersion(a, b [3]int) int {
 		}
 	}
 	return 0
-}
-
-func (conn *Conn) handleLogin(pk *packet.Login) error {
-	var (
-		err        error
-		authResult login.AuthResult
-	)
-	conn.identityData, conn.clientData, authResult, err = login.Parse(pk.ConnectionRequest, conn.verifier)
-	if err != nil {
-		return fmt.Errorf("parse login request: %w", err)
-	}
-
-	// Mojang has shipped wire changes without bumping the protocol ID, so several
-	// accepted protocols may share the negotiated one. Login is the first point
-	// that carries the client's game version, which is what tells them apart.
-	if err := conn.selectProtocolByGameVersion(); err != nil {
-		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
-		return err
-	}
-
-	// Make sure the player is logged in with XBOX Live when necessary.
-	if !authResult.XBOXLiveAuthenticated && conn.authEnabled {
-		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
-		return fmt.Errorf("client was not authenticated to XBOX Live")
-	}
-	if pkc, ok := conn.conn.(publicKeyConn); ok {
-		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
-			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
-		}
-	}
-	if conn.allow != nil {
-		if reason, ok := conn.allow(conn.RemoteAddr(), conn.identityData, conn.clientData); !ok {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonKicked, Message: reason})
-			return conn.Close()
-		}
-	}
-	if conn.disableEncryption {
-		return conn.handleClientToServerHandshake()
-	}
-	// The next expected packet is a response from the client to the handshake.
-	conn.expect(packet.IDClientToServerHandshake)
-	if err := conn.enableEncryption(authResult.PublicKey); err != nil {
-		return fmt.Errorf("enable encryption: %w", err)
-	}
-	return nil
 }
 
 // publicKeyConn is implemented by underlying [net.Conn] of the Conn to provide access

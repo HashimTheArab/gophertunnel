@@ -5,23 +5,20 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// Minecraft 1.26.40 through 1.26.44 all report protocol 2168, so a listener
-// cannot tell them apart by ID alone and must select on the login game version.
-const (
-	protocol2168 = 2168
-	version12640 = "1.26.40"
-	version12644 = "1.26.44"
-)
+// protocol2168 is reported by Minecraft 1.26.40 through 1.26.44 alike, so a
+// listener cannot tell those versions apart by ID and selects on the login
+// game version instead.
+const protocol2168 = 2168
 
 // Protocol12640 returns the protocol used by Minecraft 1.26.40 through 1.26.43.
 func Protocol12640() Protocol {
-	return BasicProtocol{Protocol: protocol2168, Version: version12640}
+	return BasicProtocol{Protocol: protocol2168, Version: "1.26.40"}
 }
 
 // Protocol12644 returns the protocol used by Minecraft 1.26.44, which changed
 // the scoreboard entry encoding without changing the protocol ID.
 func Protocol12644() Protocol {
-	return protocol12644{BasicProtocol: BasicProtocol{Protocol: protocol2168, Version: version12644}}
+	return protocol12644{BasicProtocol: BasicProtocol{Protocol: protocol2168, Version: "1.26.44"}}
 }
 
 type protocol12644 struct {
