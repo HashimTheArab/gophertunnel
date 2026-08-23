@@ -49,4 +49,4 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 )
 
-replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20260823150354-9a64e4c45d72
+replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20260823153546-be88caaf5e8f
