@@ -14,6 +14,7 @@ import (
 	"net"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,10 +32,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/text"
 )
 
-const (
-	protocolID12640To12644             = 2168
-	scoreboardDoubleOptionalPatch12644 = 44
-)
+const ()
 
 // exemptedResourcePack is a resource pack that is exempted from being downloaded. These packs may be directly
 // applied by sending them in the ResourcePackStack packet.
@@ -1399,6 +1397,76 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
 // and returns an error if it couldn't be done successfully.
+// selectProtocolByGameVersion narrows the negotiated protocol to the accepted
+// one whose version is the newest that the client's game version reaches. It is
+// a no-op unless several accepted protocols share the negotiated ID, and it
+// leaves the negotiation alone when the client reports a version it cannot
+// parse, since that value is client-controlled.
+func (conn *Conn) selectProtocolByGameVersion() error {
+	id := conn.proto.ID()
+	var candidates []Protocol
+	for _, pro := range conn.acceptedProto {
+		if pro.ID() == id {
+			candidates = append(candidates, pro)
+		}
+	}
+	if len(candidates) < 2 {
+		return nil
+	}
+	clientVer, ok := parseGameVersion(conn.clientData.GameVersion)
+	if !ok {
+		return nil
+	}
+
+	var best Protocol
+	var bestVer [3]int
+	for _, pro := range candidates {
+		ver, ok := parseGameVersion(pro.Ver())
+		if !ok || compareGameVersion(ver, clientVer) > 0 {
+			continue
+		}
+		if best == nil || compareGameVersion(ver, bestVer) > 0 {
+			best, bestVer = pro, ver
+		}
+	}
+	if best == nil {
+		return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, id)
+	}
+	conn.proto = best
+	conn.pool = best.Packets(true)
+	return nil
+}
+
+// parseGameVersion reads the leading major.minor.patch of a game version,
+// ignoring any build revision after it.
+func parseGameVersion(version string) (parsed [3]int, ok bool) {
+	fields := strings.SplitN(version, ".", 4)
+	if len(fields) < 3 {
+		return parsed, false
+	}
+	for i := range parsed {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil || n < 0 {
+			return parsed, false
+		}
+		parsed[i] = n
+	}
+	return parsed, true
+}
+
+// compareGameVersion orders two parsed game versions.
+func compareGameVersion(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
 func (conn *Conn) handleLogin(pk *packet.Login) error {
 	var (
 		err        error
@@ -1409,33 +1477,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("parse login request: %w", err)
 	}
 
-	// Minecraft 1.26.40 through 1.26.44 share protocol ID 2168 despite 1.26.44 changing
-	// the SetScore wire format. Select the matching format now that Login exposes the game version.
-	var majorVer, minorVer, patchVer int
-	_, _ = fmt.Sscanf(conn.clientData.GameVersion, "%d.%d.%d", &majorVer, &minorVer, &patchVer)
-	if conn.proto.ID() == protocolID12640To12644 && majorVer == 1 && minorVer == 26 {
-		negotiatedProtocol := conn.proto.ID()
-		matched := false
-		for _, pro := range conn.acceptedProto {
-			if pro.ID() != negotiatedProtocol {
-				continue
-			}
-			var proMajor, proMinor, proPatch int
-			_, _ = fmt.Sscanf(pro.Ver(), "%d.%d.%d", &proMajor, &proMinor, &proPatch)
-			matchesWireFormat := patchVer < scoreboardDoubleOptionalPatch12644 && proPatch < scoreboardDoubleOptionalPatch12644 ||
-				patchVer == scoreboardDoubleOptionalPatch12644 && proPatch == scoreboardDoubleOptionalPatch12644
-			if proMajor == majorVer && proMinor == minorVer && matchesWireFormat {
-				conn.proto = pro
-				conn.pool = pro.Packets(true)
-				matched = true
-				break
-			}
-		}
-
-		if !matched {
-			_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
-			return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, negotiatedProtocol)
-		}
+	// Mojang has shipped wire changes without bumping the protocol ID, so several
+	// accepted protocols may share the negotiated one. Login is the first point
+	// that carries the client's game version, which is what tells them apart.
+	if err := conn.selectProtocolByGameVersion(); err != nil {
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
+		return err
 	}
 
 	// Make sure the player is logged in with XBOX Live when necessary.
