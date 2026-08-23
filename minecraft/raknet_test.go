@@ -83,6 +83,24 @@ func TestRakNetListenUsesServerID(t *testing.T) {
 	}
 }
 
+func TestRakNetListenGeneratesServerIDsByDefault(t *testing.T) {
+	first, err := (RakNet{}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen first: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	second, err := (RakNet{}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen second: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	if first.ID() == second.ID() {
+		t.Fatalf("generated listener IDs are equal: %d", first.ID())
+	}
+}
+
 func TestRakNetPingContextAllowsNilLogger(t *testing.T) {
 	t.Parallel()
 
