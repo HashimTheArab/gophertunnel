@@ -69,6 +69,38 @@ func TestRakNetDialContextUsesUpstreamDialer(t *testing.T) {
 	}
 }
 
+func TestRakNetListenUsesServerID(t *testing.T) {
+	const serverID = 123456789
+
+	listener, err := (RakNet{ServerID: serverID}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	if got := listener.ID(); got != serverID {
+		t.Fatalf("listener ID = %d, want %d", got, serverID)
+	}
+}
+
+func TestRakNetListenGeneratesServerIDsByDefault(t *testing.T) {
+	first, err := (RakNet{}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen first: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+
+	second, err := (RakNet{}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen second: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	if first.ID() == second.ID() {
+		t.Fatalf("generated listener IDs are equal: %d", first.ID())
+	}
+}
+
 func TestRakNetPingContextAllowsNilLogger(t *testing.T) {
 	t.Parallel()
 

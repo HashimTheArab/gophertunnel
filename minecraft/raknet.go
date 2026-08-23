@@ -11,6 +11,9 @@ import (
 // RakNet is an implementation of a RakNet v10 Network.
 type RakNet struct {
 	l *slog.Logger
+	// ServerID is the RakNet server GUID advertised by listeners. If zero, each
+	// listener generates its own ID.
+	ServerID int64
 	// Logger overrides the logger used for RakNet dial and listen errors.
 	// If nil, the logger passed by RegisterNetwork is used.
 	Logger *slog.Logger
@@ -31,7 +34,10 @@ func (r RakNet) PingContext(ctx context.Context, address string) (response []byt
 
 // Listen ...
 func (r RakNet) Listen(address string) (NetworkListener, error) {
-	return raknet.ListenConfig{ErrorLog: r.logger().With("net origin", "raknet")}.Listen(address)
+	return raknet.ListenConfig{
+		ErrorLog: r.logger().With("net origin", "raknet"),
+		ServerID: r.ServerID,
+	}.Listen(address)
 }
 
 func (r RakNet) dialer() raknet.Dialer {
