@@ -9,11 +9,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
 
@@ -24,12 +24,19 @@ type Client struct {
 	httpClient     *http.Client
 	authHTTPClient *http.Client
 	requestFunc    func(ctx context.Context, method, path string, body []byte) ([]byte, int, error)
+
+	negotiateMu sync.Mutex // Serialises Client-Version negotiation so one rejection triggers one search.
+
+	versionMu        sync.Mutex
+	preferredVersion string    // Version to send, empty for protocol.CurrentVersion.
+	acceptedVersion  string    // Version Realms accepted, empty until a rejection forces a search.
+	searchFailedAt   time.Time // When the last search found no accepted version.
 }
 
-const (
-	realmsBaseURL      = "https://bedrock.frontendlegacy.realms.minecraft-services.net"
-	realmsRelyingParty = "https://pocket.realms.minecraft.net/"
-)
+const realmsRelyingParty = "https://pocket.realms.minecraft.net/"
+
+// realmsBaseURL is a variable so tests may point the client at a stub server.
+var realmsBaseURL = "https://bedrock.frontendlegacy.realms.minecraft-services.net"
 
 var (
 	ErrPlayerNotInRealm = errors.New("player not in realm")
@@ -306,6 +313,21 @@ func (r *Client) request(ctx context.Context, method, path string, requestBody [
 	if r.requestFunc != nil {
 		return r.requestFunc(ctx, method, path, requestBody)
 	}
+	sent := r.clientVersion()
+	body, status, err = r.send(ctx, method, path, requestBody, sent)
+	if !unknownClientVersion(status, body) {
+		return body, status, err
+	}
+	version, retry := r.negotiateClientVersion(ctx, sent)
+	if !retry {
+		return body, status, err
+	}
+	return r.send(ctx, method, path, requestBody, version)
+}
+
+// send performs a single request against the realms api with an explicit
+// Client-Version, without negotiating a replacement for a rejected one.
+func (r *Client) send(ctx context.Context, method, path string, requestBody []byte, clientVersion string) (body []byte, status int, err error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}
@@ -317,7 +339,7 @@ func (r *Client) request(ctx context.Context, method, path string, requestBody [
 		return nil, 0, err
 	}
 	req.Header.Set("User-Agent", "MCPE/UWP")
-	req.Header.Set("Client-Version", protocol.CurrentVersion)
+	req.Header.Set("Client-Version", clientVersion)
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
