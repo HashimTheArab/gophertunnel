@@ -10,13 +10,25 @@ import (
 // TestLegacyProtocolsShareCurrentID guards the reason these adapters exist: a
 // listener selects them on game version because the ID cannot distinguish them.
 func TestLegacyProtocolsShareCurrentID(t *testing.T) {
-	for _, proto := range []Protocol{Protocol12640(), Protocol12644()} {
+	protocols := SupportedLegacyProtocols()
+	if len(protocols) == 0 {
+		t.Fatal("SupportedLegacyProtocols returned no protocols")
+	}
+	for _, proto := range protocols {
 		if got := proto.ID(); got != protocol2168 {
 			t.Fatalf("%s: ID = %d, want %d", proto.Ver(), got, protocol2168)
 		}
 		if proto.ID() == protocol.CurrentProtocol && proto.Ver() == protocol.CurrentVersion {
 			t.Fatalf("%s: adapter must not shadow the current protocol", proto.Ver())
 		}
+	}
+}
+
+func TestSupportedLegacyProtocols_ReturnsIndependentSlice(t *testing.T) {
+	protocols := SupportedLegacyProtocols()
+	protocols[0] = nil
+	if SupportedLegacyProtocols()[0] == nil {
+		t.Fatal("caller mutation changed the supported legacy protocol list")
 	}
 }
 

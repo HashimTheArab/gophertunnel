@@ -10,6 +10,13 @@ import (
 // game version instead.
 const protocol2168 = 2168
 
+// SupportedLegacyProtocols returns the older Minecraft protocols for which
+// this package provides compatibility adapters. The returned slice is newly
+// allocated and may be modified by the caller.
+func SupportedLegacyProtocols() []Protocol {
+	return []Protocol{Protocol12640(), Protocol12644()}
+}
+
 // Protocol12640 returns the protocol used by Minecraft 1.26.40 through 1.26.43.
 func Protocol12640() Protocol {
 	return BasicProtocol{Protocol: protocol2168, Version: "1.26.40"}
