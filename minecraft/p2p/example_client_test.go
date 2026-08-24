@@ -69,7 +69,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error joining world: %s", err))
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	target, err := session.ClientTarget()
 	if err != nil {
@@ -79,7 +79,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error dialing client signaling: %s", err))
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	address := target.DialAddress()
 
