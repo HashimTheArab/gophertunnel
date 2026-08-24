@@ -87,6 +87,48 @@ func TestDialClientSignalingSelectsWebSocket(t *testing.T) {
 	}
 }
 
+func TestClientTargetCloseIsIdempotentAcrossCopies(t *testing.T) {
+	t.Parallel()
+
+	session := &testClientSession{
+		connection: Connection{
+			Type:              ConnectionTypeSignalingOverJSONRPC,
+			NetherNetID:       "123456789",
+			PlayerMessagingID: uuid.New(),
+		},
+		nonce: "joined-player-nonce",
+	}
+	target, err := ClientTargetFromSession(session)
+	if err != nil {
+		t.Fatalf("ClientTargetFromSession: %v", err)
+	}
+	targetCopy := target
+	if err := target.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := targetCopy.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if session.closeCount != 1 {
+		t.Fatalf("session Close calls = %d, want 1", session.closeCount)
+	}
+}
+
+type testClientSession struct {
+	connection Connection
+	nonce      string
+	closeCount int
+}
+
+func (s *testClientSession) Connection() Connection { return s.connection }
+
+func (s *testClientSession) Nonce() string { return s.nonce }
+
+func (s *testClientSession) Close() error {
+	s.closeCount++
+	return nil
+}
+
 type testSignalingConn struct {
 	local net.Conn
 	peer  net.Conn

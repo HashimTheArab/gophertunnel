@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -35,9 +36,15 @@ type ClientSignalingOptions struct {
 
 // ClientTarget binds a joined friend-world session to its remote dial metadata and per-player login nonce.
 type ClientTarget struct {
-	session    ClientSession
+	lease      *clientTargetLease
 	connection Connection
 	nonce      string
+}
+
+type clientTargetLease struct {
+	session ClientSession
+	once    sync.Once
+	err     error
 }
 
 // ClientSession is a joined friend-world session that supplies outbound connection metadata and a login nonce.
@@ -65,7 +72,7 @@ func ClientTargetFromSession(s ClientSession) (ClientTarget, error) {
 	if nonce == "" {
 		return ClientTarget{}, errors.New("minecraft/p2p: joined session has no nonce")
 	}
-	return ClientTarget{session: s, connection: connection, nonce: nonce}, nil
+	return ClientTarget{lease: &clientTargetLease{session: s}, connection: connection, nonce: nonce}, nil
 }
 
 // DialAddress returns the remote address used by the selected connection type.
@@ -91,12 +98,15 @@ func (t ClientTarget) DialSignaling(ctx context.Context, src service.TokenSource
 	return DialClientSignaling(ctx, t.connection.Type, src, opts)
 }
 
-// Close leaves the joined friend-world session.
+// Close leaves the joined friend-world session. It is safe to call more than once and on copied targets.
 func (t ClientTarget) Close() error {
-	if t.session == nil {
+	if t.lease == nil || t.lease.session == nil {
 		return nil
 	}
-	return t.session.Close()
+	t.lease.once.Do(func() {
+		t.lease.err = t.lease.session.Close()
+	})
+	return t.lease.err
 }
 
 // DialClientSignaling opens client-side signaling for a resolved NetherNet connection type.
