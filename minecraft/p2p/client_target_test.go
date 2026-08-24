@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -85,6 +86,30 @@ func TestDialClientSignalingSelectsWebSocket(t *testing.T) {
 	}
 	if conn != want {
 		t.Fatal("DialClientSignaling returned a different signaling connection")
+	}
+}
+
+func TestDialClientSignalingReturnsNilConnectionOnBuiltInDialFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, connectionType := range []int{
+		ConnectionTypeSignalingOverJSONRPC,
+		ConnectionTypeSignalingOverWebSocket,
+	} {
+		connectionType := connectionType
+		t.Run(fmt.Sprintf("connection_type_%d", connectionType), func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			conn, err := DialClientSignaling(ctx, connectionType, nil, ClientSignalingOptions{})
+			if err == nil {
+				t.Fatal("DialClientSignaling returned nil error for canceled context")
+			}
+			if conn != nil {
+				t.Fatalf("DialClientSignaling connection = %#v, want nil after dial failure", conn)
+			}
+		})
 	}
 }
 

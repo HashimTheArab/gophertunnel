@@ -122,12 +122,20 @@ func DialClientSignaling(ctx context.Context, connectionType int, src service.To
 		if opts.JSONRPCDial != nil {
 			return opts.JSONRPCDial(ctx, src, opts)
 		}
-		return messaging.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}.DialContext(ctx, src)
+		conn, err := (messaging.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
 	case ConnectionTypeSignalingOverWebSocket:
 		if opts.WebSocketDial != nil {
 			return opts.WebSocketDial(ctx, src, opts)
 		}
-		return signaling.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}.DialContext(ctx, src)
+		conn, err := (signaling.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
 	default:
 		return nil, fmt.Errorf("minecraft/p2p: unsupported client signaling connection type: %d", connectionType)
 	}
