@@ -71,11 +71,11 @@ func ExampleClient() {
 	}
 	defer func() { _ = session.Close() }()
 
-	target, err := session.ClientTarget()
+	target, err := ClientTargetFromSession(session)
 	if err != nil {
 		panic(fmt.Sprintf("error preparing client target: %s", err))
 	}
-	s, err := target.DialSignaling(context.TODO(), src, ClientSignalingOptions{})
+	s, err := DialClientSignaling(context.TODO(), target.ConnectionType(), src, ClientSignalingOptions{})
 	if err != nil {
 		panic(fmt.Sprintf("error dialing client signaling: %s", err))
 	}

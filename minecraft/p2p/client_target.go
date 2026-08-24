@@ -54,11 +54,6 @@ type ClientSession interface {
 	Close() error
 }
 
-// ClientTarget returns the outbound client target represented by the joined session.
-func (s *Session) ClientTarget() (ClientTarget, error) {
-	return ClientTargetFromSession(s)
-}
-
 // ClientTargetFromSession returns the outbound client target represented by a joined session.
 func ClientTargetFromSession(s ClientSession) (ClientTarget, error) {
 	if s == nil {
@@ -91,11 +86,6 @@ func (t ClientTarget) ApplyClientData(data *login.ClientData) {
 		return
 	}
 	data.Nonce = t.nonce
-}
-
-// DialSignaling opens the outbound signaling connection selected by the joined target.
-func (t ClientTarget) DialSignaling(ctx context.Context, src service.TokenSource, opts ClientSignalingOptions) (SignalingConn, error) {
-	return DialClientSignaling(ctx, t.connection.Type, src, opts)
 }
 
 // Close leaves the joined friend-world session. It is safe to call more than once and on copied targets.

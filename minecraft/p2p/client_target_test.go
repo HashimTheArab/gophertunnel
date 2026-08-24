@@ -14,7 +14,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service"
 )
 
-func TestSessionClientTargetPreservesJSONRPCDestinationAndNonce(t *testing.T) {
+func TestClientTargetFromSessionPreservesJSONRPCDestinationAndNonce(t *testing.T) {
 	t.Parallel()
 
 	playerMessagingID := uuid.New()
@@ -27,9 +27,9 @@ func TestSessionClientTargetPreservesJSONRPCDestinationAndNonce(t *testing.T) {
 		nonce: "joined-player-nonce",
 	}
 
-	target, err := session.ClientTarget()
+	target, err := ClientTargetFromSession(session)
 	if err != nil {
-		t.Fatalf("ClientTarget: %v", err)
+		t.Fatalf("ClientTargetFromSession: %v", err)
 	}
 	if got := target.DialAddress(); got != playerMessagingID.String() {
 		t.Fatalf("DialAddress = %q, want Player Messaging ID %q", got, playerMessagingID)
