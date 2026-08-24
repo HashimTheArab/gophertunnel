@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -114,10 +115,43 @@ func TestClientTargetCloseIsIdempotentAcrossCopies(t *testing.T) {
 	}
 }
 
+func TestClientTargetCloseRetriesFailedSessionLeave(t *testing.T) {
+	t.Parallel()
+
+	transientErr := errors.New("temporary MPSD failure")
+	session := &testClientSession{
+		connection: Connection{
+			Type:              ConnectionTypeSignalingOverJSONRPC,
+			NetherNetID:       "123456789",
+			PlayerMessagingID: uuid.New(),
+		},
+		nonce:       "joined-player-nonce",
+		closeErrors: []error{transientErr, nil},
+	}
+	target, err := ClientTargetFromSession(session)
+	if err != nil {
+		t.Fatalf("ClientTargetFromSession: %v", err)
+	}
+	targetCopy := target
+	if err := target.Close(); !errors.Is(err, transientErr) {
+		t.Fatalf("first Close error = %v, want %v", err, transientErr)
+	}
+	if err := targetCopy.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatalf("Close after successful retry: %v", err)
+	}
+	if session.closeCount != 2 {
+		t.Fatalf("session Close calls = %d, want 2", session.closeCount)
+	}
+}
+
 type testClientSession struct {
-	connection Connection
-	nonce      string
-	closeCount int
+	connection  Connection
+	nonce       string
+	closeCount  int
+	closeErrors []error
 }
 
 func (s *testClientSession) Connection() Connection { return s.connection }
@@ -126,6 +160,11 @@ func (s *testClientSession) Nonce() string { return s.nonce }
 
 func (s *testClientSession) Close() error {
 	s.closeCount++
+	if len(s.closeErrors) != 0 {
+		err := s.closeErrors[0]
+		s.closeErrors = s.closeErrors[1:]
+		return err
+	}
 	return nil
 }
 

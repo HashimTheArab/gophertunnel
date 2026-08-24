@@ -43,8 +43,8 @@ type ClientTarget struct {
 
 type clientTargetLease struct {
 	session ClientSession
-	once    sync.Once
-	err     error
+	mu      sync.Mutex
+	closed  bool
 }
 
 // ClientSession is a joined friend-world session that supplies outbound connection metadata and a login nonce.
@@ -103,10 +103,16 @@ func (t ClientTarget) Close() error {
 	if t.lease == nil || t.lease.session == nil {
 		return nil
 	}
-	t.lease.once.Do(func() {
-		t.lease.err = t.lease.session.Close()
-	})
-	return t.lease.err
+	t.lease.mu.Lock()
+	defer t.lease.mu.Unlock()
+	if t.lease.closed {
+		return nil
+	}
+	if err := t.lease.session.Close(); err != nil {
+		return err
+	}
+	t.lease.closed = true
+	return nil
 }
 
 // DialClientSignaling opens client-side signaling for a resolved NetherNet connection type.
