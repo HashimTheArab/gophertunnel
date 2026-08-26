@@ -15,6 +15,7 @@ type packetData struct {
 	ownedFull    []byte
 	ownedPayload []byte
 	owned        bool
+	pooled       bool
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
@@ -61,6 +62,7 @@ func (p *packetData) ensureOwned(pooled bool) *packetData {
 		resetPacketPayload(p.payload, full[payloadOffset:])
 	}
 	p.owned = true
+	p.pooled = pooled
 	return p
 }
 
@@ -75,11 +77,14 @@ func (p *packetData) release() {
 	if !p.owned {
 		return
 	}
-	releaseOwnedPacketBuffer(p.ownedFull)
-	releaseOwnedPacketBuffer(p.ownedPayload)
+	if p.pooled {
+		releaseOwnedPacketBuffer(p.ownedFull)
+		releaseOwnedPacketBuffer(p.ownedPayload)
+	}
 	p.ownedFull = nil
 	p.ownedPayload = nil
 	p.owned = false
+	p.pooled = false
 	p.full = nil
 	p.payload.Reset()
 }
@@ -87,10 +92,13 @@ func (p *packetData) release() {
 // takeFull transfers the complete frame to a raw-byte caller instead of recycling it.
 func (p *packetData) takeFull() []byte {
 	if p.owned {
-		releaseOwnedPacketBuffer(p.ownedPayload)
+		if p.pooled {
+			releaseOwnedPacketBuffer(p.ownedPayload)
+		}
 		p.ownedFull = nil
 		p.ownedPayload = nil
 		p.owned = false
+		p.pooled = false
 	}
 	return p.full[:len(p.full):len(p.full)]
 }
@@ -100,6 +108,7 @@ func (p *packetData) detachOwnedStorage() {
 	p.ownedFull = nil
 	p.ownedPayload = nil
 	p.owned = false
+	p.pooled = false
 }
 
 // releasePacketData releases every retained packet in packets.
@@ -121,7 +130,7 @@ func (err unknownPacketError) Error() string {
 func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 	reuseInput := canReusePacketBuffers(conn.proto)
 	defer func() {
-		if reuseInput || err != nil || len(pks) == 0 {
+		if reuseInput || err != nil {
 			p.release()
 		} else {
 			p.detachOwnedStorage()

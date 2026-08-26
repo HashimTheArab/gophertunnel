@@ -244,6 +244,43 @@ func TestCustomZeroCopyReaderRetainsOwnedBuffer(t *testing.T) {
 	}
 }
 
+func TestFilteredCustomPacketRetainsOwnedBuffer(t *testing.T) {
+	const frameLength = 256
+	held := drainOwnedPacketBufferClassForTest(frameLength)
+	defer func() {
+		for _, buffer := range held {
+			releaseOwnedPacketBuffer(buffer)
+		}
+	}()
+
+	custom := &packetBufferFilteringProtocol{
+		packetBufferZeroCopyReaderProtocol: packetBufferZeroCopyReaderProtocol{
+			BasicProtocol: BasicProtocol{Protocol: DefaultProtocol.ID(), Version: DefaultProtocol.Ver()},
+		},
+	}
+	conn := &Conn{proto: custom, pool: packet.Pool{}}
+	want := bytes.Repeat([]byte{7}, frameLength)
+	data := (&packetData{
+		h:       &packet.Header{PacketID: 700},
+		full:    want,
+		payload: bytes.NewBuffer(want),
+	}).ensureOwned(false)
+	decoded, err := data.decode(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 0 {
+		t.Fatalf("decoded %d packets, want filtered output", len(decoded))
+	}
+
+	reused := acquireOwnedPacketBuffer(frameLength)
+	clear(reused)
+	defer releaseOwnedPacketBuffer(reused)
+	if !bytes.Equal(custom.retained.Payload, bytes.Repeat([]byte{7}, frameLength)) {
+		t.Fatal("filtered custom packet payload changed after pool reuse")
+	}
+}
+
 func TestOutgoingPacketFuncPayloadIsOwned(t *testing.T) {
 	conn := newConn(packetBufferBenchmarkTransport{}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	payload := []byte{1, 2, 3, 4, 5, 6, 7, 8}
@@ -564,6 +601,17 @@ func (p packetBufferZeroCopyReaderProtocol) NewReader(src ByteReader, shieldID i
 type packetBufferZeroCopyReader struct {
 	protocol.IO
 	buffer *bytes.Buffer
+}
+
+type packetBufferFilteringProtocol struct {
+	packetBufferZeroCopyReaderProtocol
+	retained *packet.Unknown
+}
+
+// ConvertToLatest retains the decoded packet while filtering it from returned output.
+func (p *packetBufferFilteringProtocol) ConvertToLatest(pk packet.Packet, _ *Conn) []packet.Packet {
+	p.retained = pk.(*packet.Unknown)
+	return nil
 }
 
 // Bytes transfers the remaining input without copying it.
