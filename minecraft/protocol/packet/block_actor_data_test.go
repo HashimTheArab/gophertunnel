@@ -63,6 +63,25 @@ func TestBlockActorData_LazyDecodeMaterialisedMutationEncodesMap(t *testing.T) {
 	}
 }
 
+func TestBlockActorData_LazyDecodeMaterialisedNilEncodesEmptyCompound(t *testing.T) {
+	t.Parallel()
+
+	got := NewLazyBlockActorData()
+	got.Marshal(protocol.NewReader(bytes.NewBuffer(blockActorDataGoldenWire()), 0, true))
+	if err := got.MaterialiseNBT(); err != nil {
+		t.Fatalf("MaterialiseNBT() error = %v", err)
+	}
+	got.NBTData = nil
+
+	var encoded bytes.Buffer
+	got.Marshal(protocol.NewWriter(&encoded, 0))
+	var decoded BlockActorData
+	decoded.Marshal(protocol.NewReader(bytes.NewBuffer(encoded.Bytes()), 0, true))
+	if decoded.NBTData == nil || len(decoded.NBTData) != 0 {
+		t.Fatalf("decoded NBTData = %#v, want non-nil empty map", decoded.NBTData)
+	}
+}
+
 func TestBlockActorData_LazyZeroNBTMaterialisesAsEmptyMap(t *testing.T) {
 	t.Parallel()
 

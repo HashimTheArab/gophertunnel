@@ -54,6 +54,7 @@ func (pk *BlockActorData) MaterialiseNBT() error {
 	if err := pk.rawNBTData.Unmarshal(&pk.NBTData, nbt.NetworkLittleEndian); err != nil {
 		return err
 	}
+	pk.decodeNBTLazily = false
 	pk.rawNBTData = nbt.RawMessage{}
 	return nil
 }

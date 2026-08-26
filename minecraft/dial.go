@@ -151,6 +151,11 @@ func serverPacketPool(p Protocol, lazyBlockActorData bool) packet.Pool {
 		if _, current := factory().(*packet.BlockActorData); !current {
 			return pool
 		}
+		cloned := make(packet.Pool, len(pool))
+		for id, factory := range pool {
+			cloned[id] = factory
+		}
+		pool = cloned
 		pool[packet.IDBlockActorData] = func() packet.Packet { return packet.NewLazyBlockActorData() }
 	}
 	return pool
