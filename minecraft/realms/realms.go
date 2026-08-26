@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
 
@@ -34,6 +36,11 @@ type Client struct {
 }
 
 const realmsRelyingParty = "https://pocket.realms.minecraft.net/"
+
+const (
+	statusRetryWith        = 277
+	defaultRealmRetryAfter = 5 * time.Second
+)
 
 // realmsBaseURL is a variable so tests may point the client at a stub server.
 var realmsBaseURL = "https://bedrock.frontendlegacy.realms.minecraft-services.net"
@@ -159,27 +166,45 @@ type RealmAddress struct {
 
 // Address requests the address and protocol used to connect to this realm.
 // It will wait for the realm to start if it is currently offline.
-func (r *Realm) Address(ctx context.Context) (RealmAddress, error) {
+func (r *Realm) Address(ctx context.Context, pingResults ...PingResult) (RealmAddress, error) {
 	if r.client == nil {
 		return RealmAddress{}, fmt.Errorf("realm client is nil")
 	}
-	return r.client.RealmAddress(ctx, r.ID)
+	return r.client.RealmAddress(ctx, r.ID, pingResults...)
 }
 
 // RealmAddress requests the address and protocol used to connect to a realm
 // from the api, and waits for the realm to start if it is currently offline.
-func (r *Client) RealmAddress(ctx context.Context, realmID int) (RealmAddress, error) {
-	ticker := time.NewTicker(time.Second * 3)
-	defer ticker.Stop()
+func (r *Client) RealmAddress(ctx context.Context, realmID int, pingResults ...PingResult) (RealmAddress, error) {
+	if pingResults == nil {
+		pingResults = []PingResult{}
+	}
+	requestBody, err := json.Marshal(struct {
+		JoinIntention string       `json:"joinIntention"`
+		PingRegions   []PingResult `json:"pingRegions"`
+	}{
+		JoinIntention: "VANILLA",
+		PingRegions:   pingResults,
+	})
+	if err != nil {
+		return RealmAddress{}, fmt.Errorf("encode join request: %w", err)
+	}
 	for {
-		body, status, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
+		body, status, err := r.requestPost(ctx, fmt.Sprintf("/worlds/%d/join", realmID), requestBody)
 		if err != nil {
 			switch status {
-			case 503:
+			case http.StatusServiceUnavailable, statusRetryWith:
+				delay := defaultRealmRetryAfter
+				var retry *retryAfterError
+				if errors.As(err, &retry) {
+					delay = retry.delay
+				}
+				timer := time.NewTimer(delay)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return RealmAddress{}, ctx.Err()
-				case <-ticker.C:
+				case <-timer.C:
 					continue
 				}
 			case 404:
@@ -338,8 +363,10 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("User-Agent", "MCPE/UWP")
+	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 	req.Header.Set("Client-Version", clientVersion)
+	req.Header.Set("X-ClientPlatform", "Android")
+	req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -349,7 +376,12 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req)
+	retryOptions := authclient.RetryOptions{}
+	if method == http.MethodPost && strings.HasPrefix(path, "/worlds/") && strings.HasSuffix(path, "/join") {
+		// Realm startup retries follow the service's Retry-After response rather than the generic HTTP backoff.
+		retryOptions.Attempts = 1
+	}
+	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -360,11 +392,43 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 		return nil, resp.StatusCode, err
 	}
 
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, httpResponseError(resp.StatusCode, body)
+	if resp.StatusCode == statusRetryWith || resp.StatusCode >= 400 {
+		responseErr := httpResponseError(resp.StatusCode, body)
+		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == statusRetryWith {
+			return body, resp.StatusCode, &retryAfterError{
+				delay: retryAfter(resp.Header.Get("Retry-After")),
+				err:   responseErr,
+			}
+		}
+		return body, resp.StatusCode, responseErr
 	}
 
 	return body, resp.StatusCode, nil
+}
+
+// retryAfterError carries the delay requested by a retryable Realms response.
+type retryAfterError struct {
+	delay time.Duration
+	err   error
+}
+
+// Error returns the underlying Realms response error.
+func (e *retryAfterError) Error() string {
+	return e.err.Error()
+}
+
+// Unwrap returns the underlying Realms response error.
+func (e *retryAfterError) Unwrap() error {
+	return e.err
+}
+
+// retryAfter parses the integer seconds used by the vanilla Realms client, falling back to five seconds.
+func retryAfter(value string) time.Duration {
+	seconds, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	if err != nil || seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return defaultRealmRetryAfter
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 const maxHTTPErrorBodyPreview = 512

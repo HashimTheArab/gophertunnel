@@ -11,10 +11,15 @@ import (
 )
 
 func TestRealmAddressRequestsImmediately(t *testing.T) {
-	requests := make(chan string, 1)
+	type recordedRequest struct {
+		method string
+		path   string
+		body   []byte
+	}
+	requests := make(chan recordedRequest, 1)
 	c := &Client{
-		requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
-			requests <- method + " " + path
+		requestFunc: func(_ context.Context, method, path string, body []byte) ([]byte, int, error) {
+			requests <- recordedRequest{method: method, path: path, body: body}
 			return []byte(`{"address":"127.0.0.1:19132","networkProtocol":"DEFAULT"}`), http.StatusOK, nil
 		},
 	}
@@ -31,11 +36,21 @@ func TestRealmAddressRequestsImmediately(t *testing.T) {
 	}
 	select {
 	case got := <-requests:
-		if got != "GET /worlds/42/join" {
-			t.Fatalf("request = %q", got)
+		if got.method != http.MethodPost || got.path != "/worlds/42/join" {
+			t.Fatalf("request = %s %s", got.method, got.path)
+		}
+		var body struct {
+			JoinIntention string            `json:"joinIntention"`
+			PingRegions   []json.RawMessage `json:"pingRegions"`
+		}
+		if err := json.Unmarshal(got.body, &body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if body.JoinIntention != "VANILLA" || body.PingRegions == nil || len(body.PingRegions) != 0 {
+			t.Fatalf("request body = %+v", body)
 		}
 	default:
-		t.Fatal("RealmAddress did not request before waiting for the poll ticker")
+		t.Fatal("RealmAddress did not request before waiting for a retry delay")
 	}
 }
 

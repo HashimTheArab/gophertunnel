@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,17 @@ func stubRealms(t *testing.T, acceptedVersion string) (*Client, *[]string) {
 	var mu sync.Mutex
 	var versions []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/join") {
+			if got := r.UserAgent(); got != "libhttpclient/1.0.0.0" {
+				t.Errorf("User-Agent = %q", got)
+			}
+			if got := r.Header.Get("X-ClientPlatform"); got != "Android" {
+				t.Errorf("X-ClientPlatform = %q", got)
+			}
+			if got := r.Header.Get("X-NetworkProtocolVersion"); got != strconv.Itoa(protocol.CurrentProtocol) {
+				t.Errorf("X-NetworkProtocolVersion = %q", got)
+			}
+		}
 		version := r.Header.Get("Client-Version")
 		mu.Lock()
 		versions = append(versions, r.URL.Path+" "+version)
