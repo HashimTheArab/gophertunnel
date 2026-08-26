@@ -45,6 +45,9 @@ func (pk *BlockActorData) NBTFields(fields ...string) (map[string]any, error) {
 		}
 		return selected, nil
 	}
+	if !pk.decodeNBTLazily {
+		return map[string]any{}, nil
+	}
 	return pk.rawNBTData.DecodeFields(nbt.NetworkLittleEndian, fields...)
 }
 
@@ -52,6 +55,10 @@ func (pk *BlockActorData) NBTFields(fields ...string) (map[string]any, error) {
 // mutations to NBTData are encoded normally.
 func (pk *BlockActorData) MaterialiseNBT() error {
 	if pk.NBTData != nil {
+		return nil
+	}
+	if !pk.decodeNBTLazily {
+		pk.NBTData = map[string]any{}
 		return nil
 	}
 	if err := pk.rawNBTData.Unmarshal(&pk.NBTData, nbt.NetworkLittleEndian); err != nil {

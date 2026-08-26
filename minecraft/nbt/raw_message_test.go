@@ -124,6 +124,34 @@ func TestRawMessage_WriteToRejectsEmptyMessage(t *testing.T) {
 	}
 }
 
+func TestRawMessage_ReadsLargeBigEndianString(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		encoding Encoding
+		root     []byte
+	}{
+		{name: "big-endian", encoding: BigEndian, root: []byte{byte(tagStruct), 0x00, 0x00}},
+		{name: "network-big-endian", encoding: NetworkBigEndian, root: []byte{byte(tagStruct)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := append([]byte{}, test.root...)
+			raw = append(raw, byte(tagString), 0x00, 0x00, 0x80, 0x00)
+			raw = append(raw, bytes.Repeat([]byte{'a'}, 32768)...)
+			raw = append(raw, byte(tagEnd))
+
+			message, err := ReadRaw(bytes.NewReader(raw), test.encoding, false)
+			if err != nil {
+				t.Fatalf("ReadRaw() error = %v", err)
+			}
+			if got := message.Bytes(); !bytes.Equal(got, raw) {
+				t.Fatalf("ReadRaw() bytes differ: got %d bytes, want %d", len(got), len(raw))
+			}
+		})
+	}
+}
+
 // encodeRawMessageFixture returns representative nested block-actor NBT.
 func encodeRawMessageFixture(t *testing.T) []byte {
 	t.Helper()

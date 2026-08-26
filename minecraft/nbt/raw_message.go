@@ -291,6 +291,10 @@ func (d *Decoder) skipString() error {
 	if err != nil {
 		return BufferOverrunError{Op: "String"}
 	}
+	switch d.Encoding.(type) {
+	case bigEndian, networkBigEndian:
+		return d.skipBytes(int32(uint16(length)), "String")
+	}
 	return d.skipBytes(int32(length), "String")
 }
 

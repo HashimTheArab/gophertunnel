@@ -94,6 +94,30 @@ func TestBlockActorData_NewLazyPacketEncodesEmptyNBT(t *testing.T) {
 	}
 }
 
+func TestBlockActorData_NBTFieldsTreatsNonLazyNilAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	fields, err := (&BlockActorData{}).NBTFields("pairx")
+	if err != nil {
+		t.Fatalf("NBTFields() error = %v", err)
+	}
+	if len(fields) != 0 {
+		t.Fatalf("NBTFields() = %#v, want empty map", fields)
+	}
+}
+
+func TestBlockActorData_MaterialiseTreatsNonLazyNilAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	pk := &BlockActorData{}
+	if err := pk.MaterialiseNBT(); err != nil {
+		t.Fatalf("MaterialiseNBT() error = %v", err)
+	}
+	if pk.NBTData == nil || len(pk.NBTData) != 0 {
+		t.Fatalf("NBTData = %#v, want non-nil empty map", pk.NBTData)
+	}
+}
+
 func TestBlockActorData_LazyZeroNBTMaterialisesAsEmptyMap(t *testing.T) {
 	t.Parallel()
 
