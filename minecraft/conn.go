@@ -1861,50 +1861,16 @@ func (conn *Conn) startGame() error {
 	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
 		return err
 	}
-	if err := conn.WritePacket(&packet.StartGame{
-		Difficulty:                   data.Difficulty,
-		EntityUniqueID:               data.EntityUniqueID,
-		EntityRuntimeID:              data.EntityRuntimeID,
-		PlayerGameMode:               data.PlayerGameMode,
-		PlayerPosition:               data.PlayerPosition,
-		Pitch:                        data.Pitch,
-		Yaw:                          data.Yaw,
-		WorldSeed:                    data.WorldSeed,
-		Dimension:                    data.Dimension,
-		WorldSpawn:                   data.WorldSpawn,
-		EditorWorldType:              data.EditorWorldType,
-		CreatedInEditor:              data.CreatedInEditor,
-		ExportedFromEditor:           data.ExportedFromEditor,
-		PersonaDisabled:              data.PersonaDisabled,
-		CustomSkinsDisabled:          data.CustomSkinsDisabled,
-		EmoteChatMuted:               data.EmoteChatMuted,
-		GameRules:                    data.GameRules,
-		Time:                         data.Time,
-		DayCycleLockTime:             data.DayCycleLockTime,
-		Blocks:                       data.CustomBlocks,
-		AchievementsDisabled:         true,
-		Generator:                    1,
-		EducationFeaturesEnabled:     true,
-		MultiPlayerGame:              true,
-		MultiPlayerCorrelationID:     cmp.Or(data.MultiPlayerCorrelationID, uuid.Must(uuid.NewRandom()).String()),
-		CommandsEnabled:              true,
-		WorldName:                    data.WorldName,
-		LANBroadcastEnabled:          true,
-		PlayerMovementSettings:       data.PlayerMovementSettings,
-		WorldGameMode:                data.WorldGameMode,
-		Hardcore:                     data.Hardcore,
-		XBLBroadcastMode:             data.XBLBroadcastMode,
-		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
-		PlayerPermissions:            data.PlayerPermissions,
-		Experiments:                  data.Experiments,
-		ClientSideGeneration:         data.ClientSideGeneration,
-		ChatRestrictionLevel:         data.ChatRestrictionLevel,
-		DisablePlayerInteractions:    data.DisablePlayerInteractions,
-		BaseGameVersion:              data.BaseGameVersion,
-		GameVersion:                  protocol.CurrentVersion,
-		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
-		PropertyData:                 data.PropertyData,
-	}); err != nil {
+	pk := StartGameFromGameData(data)
+	pk.AchievementsDisabled = true
+	pk.Generator = 1
+	pk.EducationFeaturesEnabled = true
+	pk.MultiPlayerGame = true
+	pk.MultiPlayerCorrelationID = cmp.Or(data.MultiPlayerCorrelationID, uuid.Must(uuid.NewRandom()).String())
+	pk.CommandsEnabled = true
+	pk.LANBroadcastEnabled = true
+	pk.GameVersion = protocol.CurrentVersion
+	if err := conn.WritePacket(pk); err != nil {
 		return err
 	}
 	if err := conn.WritePacket(&packet.ItemRegistry{Items: data.Items}); err != nil {
@@ -2176,6 +2142,50 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
+}
+
+// StartGameFromGameData returns the StartGame packet encoding data, inverting
+// GameDataFromStartGame. Fields GameData does not carry are left zero;
+// TestStartGameGameDataRoundTrip keeps the two mappings in sync.
+func StartGameFromGameData(data GameData) *packet.StartGame {
+	return &packet.StartGame{
+		Difficulty:                   data.Difficulty,
+		WorldName:                    data.WorldName,
+		WorldSeed:                    data.WorldSeed,
+		EntityUniqueID:               data.EntityUniqueID,
+		EntityRuntimeID:              data.EntityRuntimeID,
+		PlayerGameMode:               data.PlayerGameMode,
+		BaseGameVersion:              data.BaseGameVersion,
+		PlayerPosition:               data.PlayerPosition,
+		Pitch:                        data.Pitch,
+		Yaw:                          data.Yaw,
+		Dimension:                    data.Dimension,
+		WorldSpawn:                   data.WorldSpawn,
+		EditorWorldType:              data.EditorWorldType,
+		CreatedInEditor:              data.CreatedInEditor,
+		ExportedFromEditor:           data.ExportedFromEditor,
+		PersonaDisabled:              data.PersonaDisabled,
+		CustomSkinsDisabled:          data.CustomSkinsDisabled,
+		EmoteChatMuted:               data.EmoteChatMuted,
+		GameRules:                    data.GameRules,
+		Time:                         data.Time,
+		DayCycleLockTime:             data.DayCycleLockTime,
+		ServerBlockStateChecksum:     data.ServerBlockStateChecksum,
+		Blocks:                       data.CustomBlocks,
+		PlayerMovementSettings:       data.PlayerMovementSettings,
+		WorldGameMode:                data.WorldGameMode,
+		Hardcore:                     data.Hardcore,
+		XBLBroadcastMode:             data.XBLBroadcastMode,
+		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
+		PlayerPermissions:            data.PlayerPermissions,
+		ChatRestrictionLevel:         data.ChatRestrictionLevel,
+		DisablePlayerInteractions:    data.DisablePlayerInteractions,
+		ClientSideGeneration:         data.ClientSideGeneration,
+		Experiments:                  data.Experiments,
+		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
+		PropertyData:                 data.PropertyData,
+		MultiPlayerCorrelationID:     data.MultiPlayerCorrelationID,
+	}
 }
 
 func GameDataFromStartGame(pk *packet.StartGame) GameData {
