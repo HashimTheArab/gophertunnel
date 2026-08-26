@@ -143,7 +143,7 @@ type Connection struct {
 	// compatibility detail is decoded into NetherNetID instead.
 	RakNetGUID string `json:"RakNetGUID,omitempty"`
 	// NetherNetID is the network ID of the NetherNet network for the host.
-	NetherNetID NetherNetID `json:"NetherNetId"`
+	NetherNetID NetherNetID `json:"NetherNetId,omitempty"`
 	// PlayerMessagingID is the player messaging ID of the host.
 	// When joining a World, clients use it together with [NetherNetID]
 	// as the destination for signaling messages needed to establish the
@@ -152,43 +152,21 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
-// connectionJSON is the single wire representation used by both connection
-// encoding and decoding.
-type connectionJSON struct {
-	Type              int          `json:"ConnectionType"`
-	HostIPAddress     string       `json:"HostIpAddress"`
-	HostPort          uint16       `json:"HostPort"`
-	NetherNetID       *NetherNetID `json:"NetherNetId,omitempty"`
-	RakNetGUID        string       `json:"RakNetGUID,omitempty"`
-	PlayerMessagingID *uuid.UUID   `json:"PmsgId,omitempty"`
-}
+type connectionAlias Connection
 
 // MarshalJSON encodes the discriminator-dependent connection shape used by
 // vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
 // legacy RakNetGUID property, while JSON-RPC signaling uses NetherNetId and
 // PmsgId.
 func (c Connection) MarshalJSON() ([]byte, error) {
-	wire := connectionJSON{
-		Type:          c.Type,
-		HostIPAddress: c.HostIPAddress,
-		HostPort:      c.HostPort,
-	}
+	wire := connectionAlias(c)
 	switch c.Type {
 	case ConnectionTypeSignalingOverWebSocket:
 		wire.RakNetGUID = string(c.NetherNetID)
+		wire.NetherNetID = ""
+		wire.PlayerMessagingID = uuid.Nil
 	case ConnectionTypeSignalingOverJSONRPC:
-		wire.NetherNetID = &c.NetherNetID
-		if c.PlayerMessagingID != uuid.Nil {
-			wire.PlayerMessagingID = &c.PlayerMessagingID
-		}
-	default:
-		if c.NetherNetID != "" {
-			wire.NetherNetID = &c.NetherNetID
-		}
-		wire.RakNetGUID = c.RakNetGUID
-		if c.PlayerMessagingID != uuid.Nil {
-			wire.PlayerMessagingID = &c.PlayerMessagingID
-		}
+		wire.RakNetGUID = ""
 	}
 	return json.Marshal(wire)
 }
@@ -198,26 +176,14 @@ func (c Connection) MarshalJSON() ([]byte, error) {
 // legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
 // PmsgId.
 func (c *Connection) UnmarshalJSON(b []byte) error {
-	var wire connectionJSON
+	var wire connectionAlias
 	if err := json.Unmarshal(b, &wire); err != nil {
 		return err
 	}
-	c.Type = wire.Type
-	c.HostIPAddress = wire.HostIPAddress
-	c.HostPort = wire.HostPort
-	c.NetherNetID = ""
-	c.RakNetGUID = ""
-	c.PlayerMessagingID = uuid.Nil
-	if wire.PlayerMessagingID != nil {
-		c.PlayerMessagingID = *wire.PlayerMessagingID
-	}
-	if wire.Type == ConnectionTypeSignalingOverWebSocket {
-		c.NetherNetID = NetherNetID(wire.RakNetGUID)
-	} else {
-		if wire.NetherNetID != nil {
-			c.NetherNetID = *wire.NetherNetID
-		}
-		c.RakNetGUID = wire.RakNetGUID
+	*c = Connection(wire)
+	if c.Type == ConnectionTypeSignalingOverWebSocket {
+		c.NetherNetID = NetherNetID(c.RakNetGUID)
+		c.RakNetGUID = ""
 	}
 	return nil
 }
