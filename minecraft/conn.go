@@ -1151,9 +1151,18 @@ func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
 	if !conn.cacheEnabled || conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
 		return nil
 	}
-	pks, err := pkData.ensureOwned().decode(conn)
+	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
+		return nil
+	}
+	probe := &packetData{
+		h:       pkData.h,
+		full:    pkData.full,
+		payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+		owned:   true,
+	}
+	pks, err := probe.decodePacket(conn)
 	if err != nil {
-		return err
+		return nil
 	}
 	for _, pk := range pks {
 		if status, ok := pk.(*packet.PlayStatus); ok && status.Status == packet.PlayStatusLoginSuccess {
@@ -2318,7 +2327,9 @@ func (conn *Conn) handleLoginSuccess() error {
 	if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 		return fmt.Errorf("send ClientCacheStatus: %w", err)
 	}
-	conn.expect(packet.IDResourcePacksInfo)
+	if !conn.disablePacketHandling {
+		conn.expect(packet.IDResourcePacksInfo)
+	}
 	return conn.Flush()
 }
 
