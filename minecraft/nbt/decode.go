@@ -107,6 +107,214 @@ func UnmarshalEncoding(data []byte, v any, encoding Encoding) error {
 	}}).Decode(v)
 }
 
+// UnmarshalNetworkFiltered decodes only the root compound entries for which keep returns true. Entries that
+// are not kept are validated and skipped without materialising their values. This is useful for network NBT
+// consumers that need a small, known subset of a potentially large compound.
+func UnmarshalNetworkFiltered(data []byte, m *map[string]any, keep func(string) bool) error {
+	buf := bytes.NewBuffer(data)
+	d := NewDecoderWithEncoding(buf, NetworkLittleEndian)
+	d.AllowZero = true
+	if err := d.DecodeFiltered(m, keep); err != nil {
+		return err
+	}
+	if buf.Len() != 0 {
+		return fmt.Errorf("%d unread bytes after NBT compound", buf.Len())
+	}
+	return nil
+}
+
+// ValidateNetwork validates one complete NetworkLittleEndian NBT value without materialising it.
+func ValidateNetwork(data []byte) error {
+	return UnmarshalNetworkFiltered(data, nil, nil)
+}
+
+// DecodeFiltered decodes selected entries of the next root compound into m. Unselected entries are still
+// traversed and validated, but their values and nested names are not allocated.
+func (d *Decoder) DecodeFiltered(m *map[string]any, keep func(string) bool) error {
+	t, _, err := d.tag()
+	if err != nil {
+		return err
+	}
+	if t == tagEnd && d.AllowZero {
+		if m != nil {
+			*m = nil
+		}
+		return nil
+	}
+	if t != tagStruct {
+		return UnexpectedTagError{Off: d.r.off, TagType: t}
+	}
+	if m == nil && keep == nil {
+		return d.skipTag(tagStruct)
+	}
+	if m != nil {
+		*m = nil
+	}
+	d.depth++
+	defer func() { d.depth-- }()
+	for {
+		nestedType, name, err := d.tag()
+		if err != nil {
+			return err
+		}
+		if !nestedType.IsValid() {
+			return UnknownTagError{Off: d.r.off, Op: "FilteredCompound", TagType: nestedType}
+		}
+		if nestedType == tagEnd {
+			return nil
+		}
+		if keep == nil || !keep(name) {
+			if err := d.skipTag(nestedType); err != nil {
+				return err
+			}
+			continue
+		}
+		var value any
+		if err := d.unmarshalTag(reflect.ValueOf(&value).Elem(), nestedType, name); err != nil {
+			return err
+		}
+		if m != nil {
+			if *m == nil {
+				*m = make(map[string]any)
+			}
+			(*m)[name] = value
+		}
+	}
+}
+
+// skipTag consumes a tag payload without constructing its Go representation.
+func (d *Decoder) skipTag(t tagType) error {
+	if d.depth >= maximumNestingDepth {
+		return MaximumDepthReachedError{}
+	}
+	if d.r.off >= maximumNetworkOffset && d.Encoding == NetworkLittleEndian {
+		return MaximumBytesReadError{}
+	}
+	switch t {
+	case tagByte:
+		_, err := d.r.ReadByte()
+		return err
+	case tagInt16:
+		_, err := d.Encoding.Int16(d.r)
+		return err
+	case tagInt32:
+		_, err := d.Encoding.Int32(d.r)
+		return err
+	case tagInt64:
+		_, err := d.Encoding.Int64(d.r)
+		return err
+	case tagFloat32:
+		_, err := d.Encoding.Float32(d.r)
+		return err
+	case tagFloat64:
+		_, err := d.Encoding.Float64(d.r)
+		return err
+	case tagString:
+		return d.skipString()
+	case tagByteArray:
+		n, err := d.Encoding.Int32(d.r)
+		if err != nil || n < 0 {
+			return BufferOverrunError{Op: "SkipByteArray"}
+		}
+		return d.skipBytes(int(n), "SkipByteArray")
+	case tagInt32Array:
+		n, err := d.Encoding.Int32(d.r)
+		if err != nil || n < 0 {
+			return BufferOverrunError{Op: "SkipInt32Array"}
+		}
+		for range n {
+			if _, err := d.Encoding.Int32(d.r); err != nil {
+				return BufferOverrunError{Op: "SkipInt32Array"}
+			}
+		}
+		return nil
+	case tagInt64Array:
+		n, err := d.Encoding.Int32(d.r)
+		if err != nil || n < 0 {
+			return BufferOverrunError{Op: "SkipInt64Array"}
+		}
+		for range n {
+			if _, err := d.Encoding.Int64(d.r); err != nil {
+				return BufferOverrunError{Op: "SkipInt64Array"}
+			}
+		}
+		return nil
+	case tagSlice:
+		itemTypeByte, err := d.r.ReadByte()
+		if err != nil {
+			return BufferOverrunError{Op: "SkipSlice"}
+		}
+		itemType := tagType(itemTypeByte)
+		if !itemType.IsValid() {
+			return UnknownTagError{Off: d.r.off, Op: "SkipSlice", TagType: itemType}
+		}
+		n, err := d.Encoding.Int32(d.r)
+		if err != nil || n < 0 {
+			return BufferOverrunError{Op: "SkipSlice"}
+		}
+		d.depth++
+		defer func() { d.depth-- }()
+		for range n {
+			if err := d.skipTag(itemType); err != nil {
+				return err
+			}
+		}
+		return nil
+	case tagStruct:
+		d.depth++
+		defer func() { d.depth-- }()
+		for {
+			nestedTypeByte, err := d.r.ReadByte()
+			if err != nil {
+				return BufferOverrunError{Op: "SkipCompound"}
+			}
+			nestedType := tagType(nestedTypeByte)
+			if !nestedType.IsValid() {
+				return UnknownTagError{Off: d.r.off, Op: "SkipCompound", TagType: nestedType}
+			}
+			if nestedType == tagEnd {
+				return nil
+			}
+			if err := d.skipString(); err != nil {
+				return err
+			}
+			if err := d.skipTag(nestedType); err != nil {
+				return err
+			}
+		}
+	default:
+		return UnknownTagError{Off: d.r.off, Op: "Skip", TagType: t}
+	}
+}
+
+func (d *Decoder) skipString() error {
+	if encoding, ok := d.Encoding.(networkLittleEndian); ok {
+		n, err := encoding.stringLength(d.r)
+		if err != nil {
+			return err
+		}
+		if n > maxStringSize {
+			return InvalidStringError{N: uint(n), Off: d.r.off, Err: errStringTooLong}
+		}
+		return d.skipBytes(int(n), "SkipString")
+	}
+	_, err := d.Encoding.String(d.r)
+	return err
+}
+
+func (d *Decoder) skipBytes(n int, op string) error {
+	if d.Encoding == NetworkLittleEndian && int64(n) > maximumNetworkOffset-d.r.off {
+		return MaximumBytesReadError{}
+	}
+	if err := d.checkRemaining(n, op); err != nil {
+		return err
+	}
+	if len(d.r.Next(n)) != n {
+		return BufferOverrunError{Op: op}
+	}
+	return nil
+}
+
 // These types are initialised once and re-used for each Unmarshal call.
 var stringType = reflect.TypeOf("")
 var byteType = reflect.TypeOf(byte(0))

@@ -217,6 +217,29 @@ func (r *Reader) NBT(m *map[string]any, encoding nbt.Encoding) {
 	}
 }
 
+// NBTWithRaw retains the remaining NBT bytes without decoding them. It is intended for packet fields where
+// the NBT compound is the final field. The bytes are validated before being exposed.
+func (r *Reader) NBTWithRaw(raw *[]byte, _ *map[string]any, encoding nbt.Encoding) {
+	if encoding != nbt.NetworkLittleEndian {
+		r.panicf("raw NBT requires NetworkLittleEndian encoding")
+	}
+	if buf, ok := r.r.(interface {
+		Len() int
+		Next(int) []byte
+	}); ok {
+		*raw = buf.Next(buf.Len())
+	} else {
+		var err error
+		*raw, err = io.ReadAll(r.r)
+		if err != nil {
+			r.panic(err)
+		}
+	}
+	if err := nbt.ValidateNetwork(*raw); err != nil {
+		r.panic(err)
+	}
+}
+
 // NBTList reads a list of NBT tags from the underlying buffer.
 func (r *Reader) NBTList(m *[]any, encoding nbt.Encoding) {
 	if err := nbt.NewDecoderWithEncoding(r.r, encoding).Decode(m); err != nil {

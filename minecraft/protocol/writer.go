@@ -604,6 +604,15 @@ func (w *Writer) NBT(x *map[string]any, encoding nbt.Encoding) {
 	}
 }
 
+// NBTWithRaw writes raw NBT when present, preserving its exact wire representation. Otherwise it encodes m.
+func (w *Writer) NBTWithRaw(raw *[]byte, m *map[string]any, encoding nbt.Encoding) {
+	if len(*raw) != 0 {
+		_, _ = w.w.Write(*raw)
+		return
+	}
+	w.NBT(m, encoding)
+}
+
 // NBTList writes a slice as NBT to the underlying buffer using the encoding passed.
 func (w *Writer) NBTList(x *[]any, encoding nbt.Encoding) {
 	if err := nbt.NewEncoderWithEncoding(w.w, encoding).Encode(*x); err != nil {

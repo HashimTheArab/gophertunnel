@@ -1,5 +1,7 @@
 package protocol
 
+import "github.com/sandertv/gophertunnel/minecraft/nbt"
+
 // entityMetadataActorIDKeys holds the entity metadata keys whose values are actor unique IDs.
 var entityMetadataActorIDKeys = map[uint32]struct{}{
 	EntityDataKeyOwner:                    {},
@@ -50,6 +52,18 @@ func (t ActorIDTranslation) WrapWriter(io IO) IO {
 type translationReader struct {
 	IO
 	t ActorIDTranslation
+}
+
+// NBTWithRaw forwards optional raw-NBT support exposed by the concrete reader. Packet implementations use a
+// regular NBT decode when the wrapped IO does not support it.
+func (r *translationReader) NBTWithRaw(raw *[]byte, m *map[string]any, encoding nbt.Encoding) {
+	if io, ok := r.IO.(interface {
+		NBTWithRaw(*[]byte, *map[string]any, nbt.Encoding)
+	}); ok {
+		io.NBTWithRaw(raw, m, encoding)
+		return
+	}
+	r.IO.NBT(m, encoding)
 }
 
 func (r *translationReader) ActorRuntimeID(x *uint64) {
@@ -104,6 +118,17 @@ func (r *translationReader) SliceLength(value uint32, max uint32) {
 type translationWriter struct {
 	IO
 	t ActorIDTranslation
+}
+
+// NBTWithRaw forwards optional raw-NBT support exposed by the concrete writer.
+func (w *translationWriter) NBTWithRaw(raw *[]byte, m *map[string]any, encoding nbt.Encoding) {
+	if io, ok := w.IO.(interface {
+		NBTWithRaw(*[]byte, *map[string]any, nbt.Encoding)
+	}); ok {
+		io.NBTWithRaw(raw, m, encoding)
+		return
+	}
+	w.IO.NBT(m, encoding)
 }
 
 func (w *translationWriter) ActorRuntimeID(x *uint64) {
