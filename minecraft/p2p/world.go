@@ -187,10 +187,15 @@ type NetherNetID string
 // MarshalJSON preserves the vanilla MPSD shape by encoding decimal network
 // IDs as JSON numbers and opaque IDs such as UUIDs as JSON strings.
 func (id NetherNetID) MarshalJSON() ([]byte, error) {
-	if _, err := strconv.ParseUint(string(id), 10, 64); err == nil {
-		return []byte(id), nil
+	s := string(id)
+	if value, err := strconv.ParseUint(s, 10, 64); err == nil {
+		canonical := strconv.FormatUint(value, 10)
+		if value == 0 || canonical != s {
+			return nil, fmt.Errorf("minecraft/p2p: invalid decimal NetherNetID %q", s)
+		}
+		return []byte(canonical), nil
 	}
-	return json.Marshal(string(id))
+	return json.Marshal(s)
 }
 
 // UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
@@ -221,8 +226,11 @@ func (id *NetherNetID) UnmarshalJSON(b []byte) error {
 // by Realm presences where it mirrors PlayerMessagingID.
 func (id NetherNetID) Validate() error {
 	s := string(id)
-	if _, err := strconv.ParseUint(s, 10, 64); err == nil {
-		return nil
+	if value, err := strconv.ParseUint(s, 10, 64); err == nil {
+		if value != 0 && strconv.FormatUint(value, 10) == s {
+			return nil
+		}
+		return fmt.Errorf("minecraft/p2p: NetherNetID %q is not a canonical non-zero uint64", s)
 	}
 	if err := uuid.Validate(s); err == nil {
 		return nil

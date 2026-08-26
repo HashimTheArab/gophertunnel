@@ -30,6 +30,23 @@ func TestNetherNetIDMarshalJSONPreservesVanillaNumberShape(t *testing.T) {
 	}
 }
 
+func TestNetherNetIDRejectsInvalidDecimalForms(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []NetherNetID{"0", "01"} {
+		id := id
+		t.Run(string(id), func(t *testing.T) {
+			t.Parallel()
+			if err := id.Validate(); err == nil {
+				t.Fatalf("Validate(%q) succeeded", id)
+			}
+			if _, err := json.Marshal(id); err == nil {
+				t.Fatalf("MarshalJSON(%q) succeeded", id)
+			}
+		})
+	}
+}
+
 func TestConnectionUnmarshalWebSocketUsesRakNetGUID(t *testing.T) {
 	t.Parallel()
 

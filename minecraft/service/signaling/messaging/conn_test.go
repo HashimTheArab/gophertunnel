@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/creachadair/jrpc2"
 	"github.com/creachadair/jrpc2/channel"
@@ -14,6 +18,48 @@ import (
 	"github.com/df-mc/go-nethernet"
 	"github.com/google/uuid"
 )
+
+func TestCredentialsRejectsWarmCacheAfterClose(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(net.ErrClosed)
+	conn := &Conn{
+		ctx:               ctx,
+		credentials:       &nethernet.Credentials{ExpirationInSeconds: 60},
+		credentialsExpiry: time.Now().Add(time.Minute),
+	}
+	if _, err := conn.Credentials(context.Background()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Credentials() error = %v, want net.ErrClosed", err)
+	}
+}
+
+func TestCredentialsRejectsNonPositiveExpiry(t *testing.T) {
+	t.Parallel()
+
+	for _, expiry := range []int{0, -1} {
+		expiry := expiry
+		t.Run(fmt.Sprint(expiry), func(t *testing.T) {
+			t.Parallel()
+			clientChannel, serverChannel := channel.Direct()
+			server := jrpc2.NewServer(handler.Map{
+				MethodSignalingCredentials: handler.New(func(context.Context, map[string]any) (*nethernet.Credentials, error) {
+					return &nethernet.Credentials{ExpirationInSeconds: expiry}, nil
+				}),
+			}, nil).Start(serverChannel)
+			defer server.Stop()
+			client := jrpc2.NewClient(clientChannel, nil)
+			defer client.Close()
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(net.ErrClosed)
+			conn := &Conn{client: client, ctx: ctx}
+
+			if _, err := conn.Credentials(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid credentials") {
+				t.Fatalf("Credentials() error = %v, want invalid credentials for expiry %d", err, expiry)
+			}
+		})
+	}
+}
 
 // acceptingNotifier accepts every signal delivered by a test.
 type acceptingNotifier struct{}
