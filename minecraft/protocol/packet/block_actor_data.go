@@ -15,6 +15,46 @@ type BlockActorData struct {
 	// client can see the block update. The NBTData should contain all properties of the block, not just
 	// properties that were changed.
 	NBTData map[string]any
+
+	decodeNBTLazily bool
+	rawNBTData      nbt.RawMessage
+}
+
+// NewLazyBlockActorData returns a BlockActorData that retains decoded NBT in
+// its original wire form until NBTData is materialised. Generated packets and
+// normal decoded packets continue to use NBTData directly.
+func NewLazyBlockActorData() *BlockActorData {
+	return &BlockActorData{decodeNBTLazily: true}
+}
+
+// NBTFields returns only the requested top-level NBT fields. It avoids
+// materialising other fields when the packet was decoded lazily. Mutating the
+// returned map does not mutate the packet; call MaterialiseNBT before changing
+// data that should be encoded.
+func (pk *BlockActorData) NBTFields(fields ...string) (map[string]any, error) {
+	if pk.NBTData != nil {
+		selected := make(map[string]any, len(fields))
+		for _, field := range fields {
+			if value, ok := pk.NBTData[field]; ok {
+				selected[field] = value
+			}
+		}
+		return selected, nil
+	}
+	return pk.rawNBTData.DecodeFields(nbt.NetworkLittleEndian, fields...)
+}
+
+// MaterialiseNBT decodes the complete raw NBT value into NBTData. Subsequent
+// mutations to NBTData are encoded normally.
+func (pk *BlockActorData) MaterialiseNBT() error {
+	if pk.NBTData != nil {
+		return nil
+	}
+	if err := pk.rawNBTData.Unmarshal(&pk.NBTData, nbt.NetworkLittleEndian); err != nil {
+		return err
+	}
+	pk.rawNBTData = nbt.RawMessage{}
+	return nil
 }
 
 // ID ...
@@ -24,5 +64,9 @@ func (*BlockActorData) ID() uint32 {
 
 func (pk *BlockActorData) Marshal(io protocol.IO) {
 	io.BlockPos(&pk.Position)
+	if pk.decodeNBTLazily && pk.NBTData == nil {
+		io.RawNBT(&pk.rawNBTData, nbt.NetworkLittleEndian)
+		return
+	}
 	io.NBT(&pk.NBTData, nbt.NetworkLittleEndian)
 }
