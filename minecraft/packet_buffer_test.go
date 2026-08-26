@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -124,8 +125,30 @@ func TestDisablingActorIDTranslationReleasesCachedWriter(t *testing.T) {
 	}
 
 	conn.SetActorIDTranslation(nil)
+	if err := conn.WritePacket(&packet.PlayStatus{}); err != nil {
+		t.Fatal(err)
+	}
 	if conn.translatedPacketWriter != nil {
 		t.Fatal("translated packet writer remained cached after translation was disabled")
+	}
+}
+
+func TestSetActorIDTranslationDoesNotWaitForPacketWriter(t *testing.T) {
+	conn := newConn(packetBufferBenchmarkTransport{}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	conn.sendMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		conn.SetActorIDTranslation(nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		conn.sendMu.Unlock()
+	case <-time.After(time.Second):
+		conn.sendMu.Unlock()
+		<-done
+		t.Fatal("SetActorIDTranslation waited for the packet writer")
 	}
 }
 
@@ -384,6 +407,26 @@ func TestWritePacketDirectBypassesBufferedQueue(t *testing.T) {
 	if got := packetBufferPayloadOrder(t, transport.snapshot()); !bytes.Equal(got, []byte{2, 1}) {
 		t.Fatalf("direct then buffered payloads = %v, want [2 1]", got)
 	}
+}
+
+func TestWritePacketDirectReleasesEncoderLockAfterPanic(t *testing.T) {
+	conn := newConn(packetBufferBenchmarkTransport{}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	conn.SetPacketBatchFunc(func(packet.BatchEncodeStats) {
+		panic("test observer panic")
+	})
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("WritePacketDirect did not propagate the observer panic")
+			}
+		}()
+		_ = conn.WritePacketDirect(&packet.PlayStatus{})
+	}()
+
+	if !conn.encMu.TryLock() {
+		t.Fatal("encoder mutex remained locked after a recovered direct-write panic")
+	}
+	conn.encMu.Unlock()
 }
 
 func TestPacketBufferPoolsDropOversizedStorage(t *testing.T) {

@@ -589,13 +589,7 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 // written to the connection, typically a symmetric swap so both directions share one
 // mapping. A nil translation removes it. Safe for concurrent use.
 func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation) {
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
 	conn.actorIDs.Store(translation)
-	if translation == nil {
-		conn.translatedPacketWriter = nil
-	}
 }
 
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
@@ -670,6 +664,7 @@ func (conn *Conn) packetWriterFor(dst ByteWriter) protocol.IO {
 		conn.translatedPacketWriter = translation.ReuseWriter(conn.translatedPacketWriter, w)
 		return conn.translatedPacketWriter
 	}
+	conn.translatedPacketWriter = nil
 	return w
 }
 
@@ -707,9 +702,11 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	conn.sendMu.Unlock()
 
 	if len(conn.directSend.packets) > 0 {
-		conn.encMu.Lock()
-		err := conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
-		conn.encMu.Unlock()
+		err := func() error {
+			conn.encMu.Lock()
+			defer conn.encMu.Unlock()
+			return conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
+		}()
 		conn.directSend.reset()
 		return err
 	}
