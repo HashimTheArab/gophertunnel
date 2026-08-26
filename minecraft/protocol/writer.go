@@ -604,6 +604,13 @@ func (w *Writer) NBT(x *map[string]any, encoding nbt.Encoding) {
 	}
 }
 
+// RawNBT writes an encoded NBT value without materialising it.
+func (w *Writer) RawNBT(message *nbt.RawMessage, _ nbt.Encoding) {
+	if _, err := message.WriteTo(w.w); err != nil {
+		panic(err)
+	}
+}
+
 // NBTList writes a slice as NBT to the underlying buffer using the encoding passed.
 func (w *Writer) NBTList(x *[]any, encoding nbt.Encoding) {
 	if err := nbt.NewEncoderWithEncoding(w.w, encoding).Encode(*x); err != nil {

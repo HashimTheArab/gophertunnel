@@ -51,6 +51,7 @@ type IO interface {
 	ByteFloat(x *float32)
 	Bytes(p *[]byte)
 	NBT(m *map[string]any, encoding nbt.Encoding)
+	RawNBT(message *nbt.RawMessage, encoding nbt.Encoding)
 	NBTList(m *[]any, encoding nbt.Encoding)
 	UUID(x *uuid.UUID)
 	RGB(x *color.RGBA)

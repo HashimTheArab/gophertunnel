@@ -217,6 +217,18 @@ func (r *Reader) NBT(m *map[string]any, encoding nbt.Encoding) {
 	}
 }
 
+// RawNBT reads and validates an encoded NBT value without materialising it.
+func (r *Reader) RawNBT(message *nbt.RawMessage, encoding nbt.Encoding) {
+	var err error
+	*message, err = nbt.ReadRaw(r.r, encoding, true)
+	if err == nil {
+		err = message.ValidateCompound(true)
+	}
+	if err != nil {
+		r.panic(err)
+	}
+}
+
 // NBTList reads a list of NBT tags from the underlying buffer.
 func (r *Reader) NBTList(m *[]any, encoding nbt.Encoding) {
 	if err := nbt.NewDecoderWithEncoding(r.r, encoding).Decode(m); err != nil {

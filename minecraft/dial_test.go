@@ -19,6 +19,7 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/xal"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"golang.org/x/oauth2"
@@ -732,6 +733,94 @@ func TestDialContextNetworkUsesExplicitNetwork(t *testing.T) {
 	if !errors.Is(err, dialErr) {
 		t.Fatalf("DialContextNetwork error = %v, want %v", err, dialErr)
 	}
+}
+
+func TestServerPacketPool_LazyBlockActorDataIsOptIn(t *testing.T) {
+	t.Parallel()
+
+	for _, protocolTest := range []struct {
+		name     string
+		protocol Protocol
+	}{
+		{name: "current", protocol: DefaultProtocol},
+		{name: "1.26.40", protocol: Protocol12640()},
+		{name: "1.26.44", protocol: Protocol12644()},
+	} {
+		t.Run(protocolTest.name, func(t *testing.T) {
+			for _, lazy := range []bool{false, true} {
+				pk := serverPacketPool(protocolTest.protocol, lazy)[packet.IDBlockActorData]().(*packet.BlockActorData)
+				wire := []byte{0x02, 0x80, 0x01, 0x03, 0x0a, 0x00, 0x03, 0x05, 'p', 'a', 'i', 'r', 'x', 0x04, 0x00}
+				pk.Marshal(protocol.NewReader(bytes.NewBuffer(wire), 0, true))
+				if lazy && pk.NBTData != nil {
+					t.Fatalf("lazy NBTData = %#v, want nil", pk.NBTData)
+				}
+				if !lazy && pk.NBTData == nil {
+					t.Fatal("default NBTData is nil")
+				}
+			}
+		})
+	}
+}
+
+func TestServerPacketPool_PreservesProtocolSpecificBlockActorData(t *testing.T) {
+	t.Parallel()
+
+	p := customBlockActorProtocol{Protocol: DefaultProtocol}
+	got := serverPacketPool(p, true)[packet.IDBlockActorData]()
+	if _, ok := got.(*customBlockActorData); !ok {
+		t.Fatalf("lazy pool BlockActorData = %T, want %T", got, &customBlockActorData{})
+	}
+}
+
+func TestServerPacketPool_DoesNotMutateProtocolPool(t *testing.T) {
+	t.Parallel()
+
+	pool := DefaultProtocol.Packets(false)
+	p := sharedPacketPoolProtocol{Protocol: DefaultProtocol, pool: pool}
+	got := serverPacketPool(p, true)
+	if _, ok := got[packet.IDBlockActorData]().(*packet.BlockActorData); !ok {
+		t.Fatalf("lazy pool BlockActorData = %T, want %T", got[packet.IDBlockActorData](), &packet.BlockActorData{})
+	}
+	original := p.Packets(false)
+	blockActorData := original[packet.IDBlockActorData]().(*packet.BlockActorData)
+	blockActorData.Marshal(protocol.NewReader(bytes.NewBuffer(blockActorDataGoldenWireForDialTest()), 0, true))
+	if blockActorData.NBTData == nil {
+		t.Fatal("protocol pool was changed to lazy BlockActorData")
+	}
+}
+
+type customBlockActorProtocol struct {
+	Protocol
+}
+
+// Packets replaces BlockActorData with a protocol-specific wire representation.
+func (p customBlockActorProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		pool[packet.IDBlockActorData] = func() packet.Packet { return &customBlockActorData{} }
+	}
+	return pool
+}
+
+type customBlockActorData struct{}
+
+// ID returns the BlockActorData packet ID.
+func (*customBlockActorData) ID() uint32 { return packet.IDBlockActorData }
+
+// Marshal implements packet.Packet for the protocol-specific fixture.
+func (*customBlockActorData) Marshal(protocol.IO) {}
+
+type sharedPacketPoolProtocol struct {
+	Protocol
+	pool packet.Pool
+}
+
+// Packets returns the same packet pool on each call.
+func (p sharedPacketPoolProtocol) Packets(bool) packet.Pool { return p.pool }
+
+// blockActorDataGoldenWireForDialTest returns a valid BlockActorData payload.
+func blockActorDataGoldenWireForDialTest() []byte {
+	return []byte{0x02, 0x80, 0x01, 0x03, 0x0a, 0x00, 0x03, 0x05, 'p', 'a', 'i', 'r', 'x', 0x04, 0x00}
 }
 
 type dialTestNetwork struct {

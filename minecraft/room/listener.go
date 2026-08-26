@@ -100,9 +100,9 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 			if status.TransportLayer == 0 {
 				status.TransportLayer = p2p.TransportLayerNetherNet
 			}
-			status.SupportedConnections = append(status.SupportedConnections, Connection{
-				ConnectionType: p2p.ConnectionTypeSignalingOverWebSocket,
-				NetherNetID:    p2p.NetherNetID(addr.NetworkID),
+			status.SupportedConnections = append(status.SupportedConnections, p2p.Connection{
+				Type:        p2p.ConnectionTypeSignalingOverWebSocket,
+				NetherNetID: p2p.NetherNetID(addr.NetworkID),
 			})
 		case *net.UDPAddr:
 			if status.TransportLayer == 0 {
@@ -111,11 +111,11 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 			if status.RakNetGUID == "" {
 				status.RakNetGUID = strconv.FormatInt(l.n.ID(), 10)
 			}
-			status.SupportedConnections = append(status.SupportedConnections, Connection{
-				ConnectionType: ConnectionTypeUPNP,
-				HostIPAddress:  addr.IP.String(),
-				HostPort:       uint16(addr.Port),
-				RakNetGUID:     strconv.FormatInt(l.n.ID(), 10),
+			status.SupportedConnections = append(status.SupportedConnections, p2p.Connection{
+				Type:          ConnectionTypeUPNP,
+				HostIPAddress: addr.IP.String(),
+				HostPort:      uint16(addr.Port),
+				RakNetGUID:    strconv.FormatInt(l.n.ID(), 10),
 			})
 		default:
 			l.conf.Log.Debug("unsupported address type", slog.Any("address", addr))

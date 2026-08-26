@@ -135,6 +135,13 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
+	if conn.ctx != nil {
+		select {
+		case <-conn.ctx.Done():
+			return nil, context.Cause(conn.ctx)
+		default:
+		}
+	}
 
 	if conn.credentials != nil && time.Now().Before(conn.credentialsExpiry) {
 		return conn.credentials, nil
@@ -144,7 +151,7 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
 		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
 	}
-	if credentials == nil || credentials.ExpirationInSeconds == 0 {
+	if credentials == nil || credentials.ExpirationInSeconds <= 0 {
 		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
 	}
 

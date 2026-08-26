@@ -114,6 +114,10 @@ type Dialer struct {
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
+	// LazyBlockActorData retains BlockActorData NBT in its original wire form. Decoded packets leave NBTData
+	// nil until MaterialiseNBT is called; NBTFields may inspect selected top-level fields without doing so.
+	// The option is intended for proxies that usually forward these packets unchanged.
+	LazyBlockActorData bool
 
 	// MaxDecompressedLen is the maximum length of a decompressed packet batch. If 0, the default value is
 	// 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
@@ -138,6 +142,25 @@ type Dialer struct {
 	// the client when an XUID is present without logging in.
 	// For getting this to work with BDS, authentication should be disabled.
 	KeepXBLIdentityData bool
+}
+
+// serverPacketPool returns the server packet pool for p, optionally replacing
+// BlockActorData with its raw-backed decoder.
+func serverPacketPool(p Protocol, lazyBlockActorData bool) packet.Pool {
+	pool := p.Packets(false)
+	factory, ok := pool[packet.IDBlockActorData]
+	if lazyBlockActorData && ok {
+		if _, current := factory().(*packet.BlockActorData); !current {
+			return pool
+		}
+		cloned := make(packet.Pool, len(pool))
+		for id, factory := range pool {
+			cloned[id] = factory
+		}
+		pool = cloned
+		pool[packet.IDBlockActorData] = func() packet.Packet { return packet.NewLazyBlockActorData() }
+	}
+	return pool
 }
 
 // netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
@@ -307,7 +330,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			dialed.abort(err)
 		}
 	}()
-	conn.pool = conn.proto.Packets(false)
+	conn.pool = serverPacketPool(conn.proto, d.LazyBlockActorData)
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
