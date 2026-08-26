@@ -1148,7 +1148,7 @@ func (conn *Conn) receive(data []byte) error {
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
 // raw PlayStatus packet owned by a passthrough caller.
 func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
-	if !conn.cacheEnabled || conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
+	if conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
 		return nil
 	}
 	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
