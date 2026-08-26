@@ -166,7 +166,6 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 		bytes int
 	}
 	prospective := make(map[*pendingBlobPacket]retainedState)
-	additionalBytes := 0
 	for _, blob := range expected {
 		if err := c.store.Put(blob.Hash, blob.Payload); err != nil {
 			return nil, fmt.Errorf("store client blob 0x%x: %w", blob.Hash, err)
@@ -193,11 +192,7 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 			state.blobs[blob.Hash] = payload
 			state.bytes += len(payload)
 			prospective[pending] = state
-			additionalBytes += len(payload)
 		}
-	}
-	if additionalBytes > c.limits.MaxPendingBytes-c.pendingBytes {
-		return nil, ErrBlobCacheLimit
 	}
 
 	resolved := make(map[*pendingBlobPacket]int)
@@ -218,6 +213,9 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 		}
 		if blocked || pending.missing != resolved[pending] {
 			blocked = true
+			if retainedBytes > c.limits.MaxPendingBytes-leftBytes {
+				return nil, ErrBlobCacheLimit
+			}
 			left = append(left, pending)
 			leftBytes += retainedBytes
 			continue
