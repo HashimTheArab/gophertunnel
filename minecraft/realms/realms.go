@@ -194,12 +194,11 @@ func (r *Client) RealmAddress(ctx context.Context, realmID int, pingResults ...P
 		if err != nil {
 			switch status {
 			case http.StatusServiceUnavailable, statusRetryWith:
-				delay := defaultRealmRetryAfter
 				var retry *retryAfterError
-				if errors.As(err, &retry) {
-					delay = retry.delay
+				if !errors.As(err, &retry) {
+					return RealmAddress{}, err
 				}
-				timer := time.NewTimer(delay)
+				timer := time.NewTimer(retry.delay)
 				select {
 				case <-ctx.Done():
 					timer.Stop()
@@ -395,9 +394,8 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	if resp.StatusCode == statusRetryWith || resp.StatusCode >= 400 {
 		responseErr := httpResponseError(resp.StatusCode, body)
 		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == statusRetryWith {
-			return body, resp.StatusCode, &retryAfterError{
-				delay: retryAfter(resp.Header.Get("Retry-After")),
-				err:   responseErr,
+			if delay, ok := retryAfter(resp.Header.Get("Retry-After")); ok {
+				return body, resp.StatusCode, &retryAfterError{delay: delay, err: responseErr}
 			}
 		}
 		return body, resp.StatusCode, responseErr
@@ -422,13 +420,18 @@ func (e *retryAfterError) Unwrap() error {
 	return e.err
 }
 
-// retryAfter parses the integer seconds used by the vanilla Realms client, falling back to five seconds.
-func retryAfter(value string) time.Duration {
-	seconds, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
-	if err != nil || seconds > uint64((1<<63-1)/int64(time.Second)) {
-		return defaultRealmRetryAfter
+// retryAfter parses the integer seconds used by the vanilla Realms client. It reports false for a missing value and
+// falls back to five seconds for a present value that cannot be parsed.
+func retryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
 	}
-	return time.Duration(seconds) * time.Second
+	seconds, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return defaultRealmRetryAfter, true
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 const maxHTTPErrorBodyPreview = 512

@@ -54,23 +54,21 @@ func TestRealmAddressRequestsImmediately(t *testing.T) {
 	}
 }
 
-func TestRealmAddressPollsAfterServiceUnavailable(t *testing.T) {
+func TestRealmAddressDoesNotRetryServiceUnavailableWithoutRetryAfter(t *testing.T) {
 	attempts := 0
+	wantErr := errors.New("starting")
 	c := &Client{
 		requestFunc: func(_ context.Context, _, _ string, _ []byte) ([]byte, int, error) {
 			attempts++
-			return nil, http.StatusServiceUnavailable, errors.New("starting")
+			return nil, http.StatusServiceUnavailable, wantErr
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	if _, err := c.RealmAddress(ctx, 42); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("RealmAddress error = %v, want context deadline", err)
+	if _, err := c.RealmAddress(context.Background(), 42); !errors.Is(err, wantErr) {
+		t.Fatalf("RealmAddress error = %v, want %v", err, wantErr)
 	}
 	if attempts != 1 {
-		t.Fatalf("attempts = %d, want exactly one immediate attempt before poll wait", attempts)
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 
