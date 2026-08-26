@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"golang.org/x/oauth2"
 )
 
@@ -34,6 +36,11 @@ type Client struct {
 }
 
 const realmsRelyingParty = "https://pocket.realms.minecraft.net/"
+
+const (
+	statusRetryWith        = 277
+	defaultRealmRetryAfter = 5 * time.Second
+)
 
 // realmsBaseURL is a variable so tests may point the client at a stub server.
 var realmsBaseURL = "https://bedrock.frontendlegacy.realms.minecraft-services.net"
@@ -157,29 +164,48 @@ type RealmAddress struct {
 	} `json:"sessionRegionData"`
 }
 
-// Address requests the address and protocol used to connect to this realm.
-// It will wait for the realm to start if it is currently offline.
-func (r *Realm) Address(ctx context.Context) (RealmAddress, error) {
+// Address requests the address and protocol used to connect to this realm. The optional ping results are sent to
+// Realms to select a suitable service region; omitting them sends an empty pingRegions array. An offline Realm is
+// retried when the service supplies Retry-After.
+func (r *Realm) Address(ctx context.Context, pingResults ...PingResult) (RealmAddress, error) {
 	if r.client == nil {
 		return RealmAddress{}, fmt.Errorf("realm client is nil")
 	}
-	return r.client.RealmAddress(ctx, r.ID)
+	return r.client.RealmAddress(ctx, r.ID, pingResults...)
 }
 
-// RealmAddress requests the address and protocol used to connect to a realm
-// from the api, and waits for the realm to start if it is currently offline.
-func (r *Client) RealmAddress(ctx context.Context, realmID int) (RealmAddress, error) {
-	ticker := time.NewTicker(time.Second * 3)
-	defer ticker.Stop()
+// RealmAddress requests the address and protocol used to connect to a realm. The optional ping results are sent to
+// Realms to select a suitable service region; omitting them sends an empty pingRegions array. An offline Realm is
+// retried when the service supplies Retry-After.
+func (r *Client) RealmAddress(ctx context.Context, realmID int, pingResults ...PingResult) (RealmAddress, error) {
+	if pingResults == nil {
+		pingResults = []PingResult{}
+	}
+	requestBody, err := json.Marshal(struct {
+		JoinIntention string       `json:"joinIntention"`
+		PingRegions   []PingResult `json:"pingRegions"`
+	}{
+		JoinIntention: "VANILLA",
+		PingRegions:   pingResults,
+	})
+	if err != nil {
+		return RealmAddress{}, fmt.Errorf("encode join request: %w", err)
+	}
 	for {
-		body, status, err := r.requestGet(ctx, fmt.Sprintf("/worlds/%d/join", realmID))
+		body, status, err := r.requestWithOptions(ctx, http.MethodPost, fmt.Sprintf("/worlds/%d/join", realmID), requestBody, authclient.RetryOptions{Attempts: 1})
 		if err != nil {
 			switch status {
-			case 503:
+			case http.StatusServiceUnavailable, statusRetryWith:
+				var retry *retryAfterError
+				if !errors.As(err, &retry) {
+					return RealmAddress{}, err
+				}
+				timer := time.NewTimer(retry.delay)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return RealmAddress{}, ctx.Err()
-				case <-ticker.C:
+				case <-timer.C:
 					continue
 				}
 			case 404:
@@ -310,11 +336,16 @@ func (r *Client) requestPost(ctx context.Context, path string, requestBody []byt
 }
 
 func (r *Client) request(ctx context.Context, method, path string, requestBody []byte) (body []byte, status int, err error) {
+	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{})
+}
+
+// requestWithOptions performs a Realms request using the supplied HTTP retry policy while preserving version negotiation.
+func (r *Client) requestWithOptions(ctx context.Context, method, path string, requestBody []byte, retryOptions authclient.RetryOptions) (body []byte, status int, err error) {
 	if r.requestFunc != nil {
 		return r.requestFunc(ctx, method, path, requestBody)
 	}
 	sent := r.clientVersion()
-	body, status, err = r.send(ctx, method, path, requestBody, sent)
+	body, status, err = r.sendWithOptions(ctx, method, path, requestBody, sent, retryOptions)
 	if !unknownClientVersion(status, body) {
 		return body, status, err
 	}
@@ -322,12 +353,17 @@ func (r *Client) request(ctx context.Context, method, path string, requestBody [
 	if !retry {
 		return body, status, err
 	}
-	return r.send(ctx, method, path, requestBody, version)
+	return r.sendWithOptions(ctx, method, path, requestBody, version, retryOptions)
 }
 
 // send performs a single request against the realms api with an explicit
 // Client-Version, without negotiating a replacement for a rejected one.
 func (r *Client) send(ctx context.Context, method, path string, requestBody []byte, clientVersion string) (body []byte, status int, err error) {
+	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{})
+}
+
+// sendWithOptions performs one version-pinned Realms request using the supplied HTTP retry policy.
+func (r *Client) sendWithOptions(ctx context.Context, method, path string, requestBody []byte, clientVersion string, retryOptions authclient.RetryOptions) (body []byte, status int, err error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}
@@ -338,8 +374,10 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Header.Set("User-Agent", "MCPE/UWP")
+	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 	req.Header.Set("Client-Version", clientVersion)
+	req.Header.Set("X-ClientPlatform", "Android")
+	req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
 	if requestBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -349,22 +387,60 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	}
 	xbl.SetAuthHeader(req)
 
-	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req)
+	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
 
-	if resp.StatusCode >= 400 {
-		return body, resp.StatusCode, httpResponseError(resp.StatusCode, body)
+	if resp.StatusCode == statusRetryWith || resp.StatusCode >= 400 {
+		responseErr := httpResponseError(resp.StatusCode, body)
+		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == statusRetryWith {
+			if delay, ok := retryAfter(resp.Header.Get("Retry-After")); ok {
+				return body, resp.StatusCode, &retryAfterError{delay: delay, err: responseErr}
+			}
+		}
+		return body, resp.StatusCode, responseErr
 	}
 
 	return body, resp.StatusCode, nil
+}
+
+// retryAfterError carries the delay requested by a retryable Realms response.
+type retryAfterError struct {
+	delay time.Duration
+	err   error
+}
+
+// Error returns the underlying Realms response error.
+func (e *retryAfterError) Error() string {
+	return e.err.Error()
+}
+
+// Unwrap returns the underlying Realms response error.
+func (e *retryAfterError) Unwrap() error {
+	return e.err
+}
+
+// retryAfter parses the integer seconds used by the vanilla Realms client. It reports false for a missing value and
+// falls back to five seconds for a present value that cannot be parsed.
+func retryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	seconds, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || seconds > uint64((1<<63-1)/int64(time.Second)) {
+		return defaultRealmRetryAfter, true
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 const maxHTTPErrorBodyPreview = 512

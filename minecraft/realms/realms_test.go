@@ -11,10 +11,15 @@ import (
 )
 
 func TestRealmAddressRequestsImmediately(t *testing.T) {
-	requests := make(chan string, 1)
+	type recordedRequest struct {
+		method string
+		path   string
+		body   []byte
+	}
+	requests := make(chan recordedRequest, 1)
 	c := &Client{
-		requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
-			requests <- method + " " + path
+		requestFunc: func(_ context.Context, method, path string, body []byte) ([]byte, int, error) {
+			requests <- recordedRequest{method: method, path: path, body: body}
 			return []byte(`{"address":"127.0.0.1:19132","networkProtocol":"DEFAULT"}`), http.StatusOK, nil
 		},
 	}
@@ -31,31 +36,39 @@ func TestRealmAddressRequestsImmediately(t *testing.T) {
 	}
 	select {
 	case got := <-requests:
-		if got != "GET /worlds/42/join" {
-			t.Fatalf("request = %q", got)
+		if got.method != http.MethodPost || got.path != "/worlds/42/join" {
+			t.Fatalf("request = %s %s", got.method, got.path)
+		}
+		var body struct {
+			JoinIntention string            `json:"joinIntention"`
+			PingRegions   []json.RawMessage `json:"pingRegions"`
+		}
+		if err := json.Unmarshal(got.body, &body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if body.JoinIntention != "VANILLA" || body.PingRegions == nil || len(body.PingRegions) != 0 {
+			t.Fatalf("request body = %+v", body)
 		}
 	default:
-		t.Fatal("RealmAddress did not request before waiting for the poll ticker")
+		t.Fatal("RealmAddress did not request before waiting for a retry delay")
 	}
 }
 
-func TestRealmAddressPollsAfterServiceUnavailable(t *testing.T) {
+func TestRealmAddressDoesNotRetryServiceUnavailableWithoutRetryAfter(t *testing.T) {
 	attempts := 0
+	wantErr := errors.New("starting")
 	c := &Client{
 		requestFunc: func(_ context.Context, _, _ string, _ []byte) ([]byte, int, error) {
 			attempts++
-			return nil, http.StatusServiceUnavailable, errors.New("starting")
+			return nil, http.StatusServiceUnavailable, wantErr
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	if _, err := c.RealmAddress(ctx, 42); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("RealmAddress error = %v, want context deadline", err)
+	if _, err := c.RealmAddress(context.Background(), 42); !errors.Is(err, wantErr) {
+		t.Fatalf("RealmAddress error = %v, want %v", err, wantErr)
 	}
 	if attempts != 1 {
-		t.Fatalf("attempts = %d, want exactly one immediate attempt before poll wait", attempts)
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 
