@@ -48,6 +48,29 @@ func (w *Writer) Reset(dst interface {
 	w.shieldID = shieldID
 }
 
+// ResetWriter resets w only when it is a built-in Writer still writing directly to current.
+// It returns false for wrapped writers and adapted destinations so their factory remains authoritative.
+func ResetWriter(w IO, current, next interface {
+	io.Writer
+	io.ByteWriter
+}, shieldID int32) bool {
+	writer, ok := w.(*Writer)
+	if !ok || !sameWriterDestination(writer.w, current) {
+		return false
+	}
+	writer.Reset(next, shieldID)
+	return true
+}
+
+// sameWriterDestination safely compares potentially non-comparable writer implementations.
+func sameWriterDestination(a, b interface {
+	io.Writer
+	io.ByteWriter
+}) bool {
+	av, bv := reflect.ValueOf(a), reflect.ValueOf(b)
+	return av.IsValid() && bv.IsValid() && av.Type() == bv.Type() && av.Kind() == reflect.Pointer && av.Pointer() == bv.Pointer()
+}
+
 // Uint8 writes a uint8 to the underlying buffer.
 func (w *Writer) Uint8(x *uint8) {
 	_ = w.w.WriteByte(*x)

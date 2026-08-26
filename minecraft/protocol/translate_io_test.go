@@ -116,6 +116,23 @@ func TestActorIDTranslationWrapWriter(t *testing.T) {
 	assertTranslated(t, &got)
 }
 
+func TestActorIDTranslationReuseWriter(t *testing.T) {
+	first := new(bytes.Buffer)
+	wrapped := testTranslation().WrapWriter(NewWriter(first, 0))
+	untranslated().Marshal(wrapped)
+
+	second := new(bytes.Buffer)
+	reused := testTranslation().ReuseWriter(wrapped, NewWriter(second, 0))
+	if reused != wrapped {
+		t.Fatal("ReuseWriter replaced a compatible translation writer")
+	}
+	untranslated().Marshal(reused)
+
+	var got actorIDFields
+	got.Marshal(NewReader(second, 0, true))
+	assertTranslated(t, &got)
+}
+
 func TestActorIDTranslationWrapReader(t *testing.T) {
 	buf := new(bytes.Buffer)
 	untranslated().Marshal(NewWriter(buf, 0))

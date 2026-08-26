@@ -9,10 +9,12 @@ import (
 
 // packetData holds the data of a Minecraft packet.
 type packetData struct {
-	h       *packet.Header
-	full    []byte
-	payload *bytes.Buffer
-	owned   bool
+	h            *packet.Header
+	full         []byte
+	payload      *bytes.Buffer
+	ownedFull    []byte
+	ownedPayload []byte
+	owned        bool
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
@@ -35,19 +37,58 @@ func (p *packetData) ensureOwned() *packetData {
 	if p.owned {
 		return p
 	}
-	full := bytes.Clone(p.full)
 	payloadOffset := len(p.full) - p.payload.Len()
-	var payload []byte
+	full := acquireOwnedPacketBuffer(len(p.full))
+	copy(full, p.full)
+	p.ownedFull = full
+	p.full = full
 	if payloadOffset < 0 {
-		payload = bytes.Clone(p.payload.Bytes())
+		payload := acquireOwnedPacketBuffer(p.payload.Len())
+		copy(payload, p.payload.Bytes())
+		p.ownedPayload = payload
+		resetPacketPayload(p.payload, payload)
 	} else {
-		payload = full[payloadOffset:]
+		resetPacketPayload(p.payload, full[payloadOffset:])
 	}
-	return &packetData{
-		h:       p.h,
-		full:    full,
-		payload: bytes.NewBuffer(payload),
-		owned:   true,
+	p.owned = true
+	return p
+}
+
+// resetPacketPayload points payload at data without allocating another bytes.Buffer.
+func resetPacketPayload(payload *bytes.Buffer, data []byte) {
+	replacement := bytes.NewBuffer(data)
+	*payload = *replacement
+}
+
+// release returns owned packet storage after all decoded values have copied their wire data.
+func (p *packetData) release() {
+	if !p.owned {
+		return
+	}
+	releaseOwnedPacketBuffer(p.ownedFull)
+	releaseOwnedPacketBuffer(p.ownedPayload)
+	p.ownedFull = nil
+	p.ownedPayload = nil
+	p.owned = false
+	p.full = nil
+	p.payload.Reset()
+}
+
+// takeFull transfers the complete frame to a raw-byte caller instead of recycling it.
+func (p *packetData) takeFull() []byte {
+	if p.owned {
+		releaseOwnedPacketBuffer(p.ownedPayload)
+		p.ownedFull = nil
+		p.ownedPayload = nil
+		p.owned = false
+	}
+	return p.full[:len(p.full):len(p.full)]
+}
+
+// releasePacketData releases every retained packet in packets.
+func releasePacketData(packets []*packetData) {
+	for _, data := range packets {
+		data.release()
 	}
 }
 
@@ -61,6 +102,7 @@ func (err unknownPacketError) Error() string {
 
 // decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
 func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
+	defer p.release()
 	if _, ok := conn.pool[p.h.PacketID]; !ok && conn.disconnectOnUnknownPacket {
 		_ = conn.Close()
 		return nil, unknownPacketError{id: p.h.PacketID}
