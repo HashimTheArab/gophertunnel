@@ -152,20 +152,23 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
+// connectionJSON is the single wire representation used by both connection
+// encoding and decoding.
+type connectionJSON struct {
+	Type              int          `json:"ConnectionType"`
+	HostIPAddress     string       `json:"HostIpAddress"`
+	HostPort          uint16       `json:"HostPort"`
+	NetherNetID       *NetherNetID `json:"NetherNetId,omitempty"`
+	RakNetGUID        string       `json:"RakNetGUID,omitempty"`
+	PlayerMessagingID *uuid.UUID   `json:"PmsgId,omitempty"`
+}
+
 // MarshalJSON encodes the discriminator-dependent connection shape used by
 // vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
 // legacy RakNetGUID property, while JSON-RPC signaling uses NetherNetId and
 // PmsgId.
 func (c Connection) MarshalJSON() ([]byte, error) {
-	type wireConnection struct {
-		Type              int          `json:"ConnectionType"`
-		HostIPAddress     string       `json:"HostIpAddress"`
-		HostPort          uint16       `json:"HostPort"`
-		NetherNetID       *NetherNetID `json:"NetherNetId,omitempty"`
-		RakNetGUID        string       `json:"RakNetGUID,omitempty"`
-		PlayerMessagingID *uuid.UUID   `json:"PmsgId,omitempty"`
-	}
-	wire := wireConnection{
+	wire := connectionJSON{
 		Type:          c.Type,
 		HostIPAddress: c.HostIPAddress,
 		HostPort:      c.HostPort,
@@ -195,26 +198,25 @@ func (c Connection) MarshalJSON() ([]byte, error) {
 // legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
 // PmsgId.
 func (c *Connection) UnmarshalJSON(b []byte) error {
-	type wireConnection struct {
-		Type              int         `json:"ConnectionType"`
-		HostIPAddress     string      `json:"HostIpAddress"`
-		HostPort          uint16      `json:"HostPort"`
-		NetherNetID       NetherNetID `json:"NetherNetId"`
-		RakNetGUID        string      `json:"RakNetGUID"`
-		PlayerMessagingID uuid.UUID   `json:"PmsgId"`
-	}
-	var wire wireConnection
+	var wire connectionJSON
 	if err := json.Unmarshal(b, &wire); err != nil {
 		return err
 	}
 	c.Type = wire.Type
 	c.HostIPAddress = wire.HostIPAddress
 	c.HostPort = wire.HostPort
-	c.PlayerMessagingID = wire.PlayerMessagingID
+	c.NetherNetID = ""
+	c.RakNetGUID = ""
+	c.PlayerMessagingID = uuid.Nil
+	if wire.PlayerMessagingID != nil {
+		c.PlayerMessagingID = *wire.PlayerMessagingID
+	}
 	if wire.Type == ConnectionTypeSignalingOverWebSocket {
 		c.NetherNetID = NetherNetID(wire.RakNetGUID)
 	} else {
-		c.NetherNetID = wire.NetherNetID
+		if wire.NetherNetID != nil {
+			c.NetherNetID = *wire.NetherNetID
+		}
 		c.RakNetGUID = wire.RakNetGUID
 	}
 	return nil
