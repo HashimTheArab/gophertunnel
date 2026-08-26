@@ -184,6 +184,15 @@ func (c *Connection) UnmarshalJSON(b []byte) error {
 // representation used.
 type NetherNetID string
 
+// MarshalJSON preserves the vanilla MPSD shape by encoding decimal network
+// IDs as JSON numbers and opaque IDs such as UUIDs as JSON strings.
+func (id NetherNetID) MarshalJSON() ([]byte, error) {
+	if _, err := strconv.ParseUint(string(id), 10, 64); err == nil {
+		return []byte(id), nil
+	}
+	return json.Marshal(string(id))
+}
+
 // UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
 // string into its string form. It never rejects a representable value; whether
 // the ID is actually usable is decided by [Connection.Validate].

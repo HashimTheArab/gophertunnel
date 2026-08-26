@@ -49,7 +49,7 @@ func TestConnectionMarshalJSONRPCUsesMessagingFields(t *testing.T) {
 	if err := json.Unmarshal(b, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if got := fields["NetherNetId"]; got != "6503399194777609304" {
+	if got := fields["NetherNetId"]; got != float64(6503399194777609304) {
 		t.Fatalf("NetherNetId = %v, want the JSON-RPC network ID", got)
 	}
 	if got := fields["PmsgId"]; got != pmid.String() {
