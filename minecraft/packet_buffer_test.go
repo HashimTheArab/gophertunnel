@@ -113,6 +113,22 @@ func TestPacketBufferReuseRequiresExactBuiltInProtocol(t *testing.T) {
 	}
 }
 
+func TestDisablingActorIDTranslationReleasesCachedWriter(t *testing.T) {
+	conn := newConn(packetBufferBenchmarkTransport{}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	conn.SetActorIDTranslation(&protocol.ActorIDTranslation{})
+	if err := conn.WritePacket(&packet.PlayStatus{}); err != nil {
+		t.Fatal(err)
+	}
+	if conn.translatedPacketWriter == nil {
+		t.Fatal("translated packet writer was not cached")
+	}
+
+	conn.SetActorIDTranslation(nil)
+	if conn.translatedPacketWriter != nil {
+		t.Fatal("translated packet writer remained cached after translation was disabled")
+	}
+}
+
 func TestEnsureOwnedReusesPacketData(t *testing.T) {
 	borrowed := []byte{1, 2, 3}
 	data := &packetData{

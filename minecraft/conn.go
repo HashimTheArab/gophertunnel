@@ -589,7 +589,13 @@ func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 // written to the connection, typically a symmetric swap so both directions share one
 // mapping. A nil translation removes it. Safe for concurrent use.
 func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+
 	conn.actorIDs.Store(translation)
+	if translation == nil {
+		conn.translatedPacketWriter = nil
+	}
 }
 
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
