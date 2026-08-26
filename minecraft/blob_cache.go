@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
@@ -28,7 +29,8 @@ var (
 // single resolver serialises its own calls; a store shared between resolvers must be safe for concurrent use. Stored
 // blobs must be immutable and already validated against their keys. Put must be idempotent: It must succeed without
 // replacing the stored payload when hash already exists. Implementations that retain payload must copy it before
-// returning and must keep it available while the resolver has pending packets.
+// returning. A resolver may retain payload returned by Get, so the store must not mutate or reuse its backing memory
+// while the returned slice remains reachable.
 type BlobStore interface {
 	Get(hash uint64) (payload []byte, ok bool, err error)
 	Put(hash uint64, payload []byte) error
@@ -39,7 +41,8 @@ type ClientBlobCacheLimits struct {
 	// MaxPendingPackets is the maximum number of cache-backed terrain packets waiting for missing blobs.
 	MaxPendingPackets int
 	// MaxPendingBytes is the maximum retained variable-size data across pending packets and the maximum materialised
-	// data returned by one call.
+	// data returned by one call. A blob payload is charged once for every pending packet that depends on it, matching
+	// the packet's eventual materialised size even when those entries share one backing slice internally.
 	MaxPendingBytes int
 }
 
@@ -71,6 +74,7 @@ type ClientBlobCache struct {
 
 type pendingBlobPacket struct {
 	pk            packet.Packet
+	retainedBlobs map[uint64][]byte
 	missing       int
 	retainedBytes int
 }
@@ -157,9 +161,37 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 		received[blob.Hash] = struct{}{}
 		expected = append(expected, blob)
 	}
+	type retainedState struct {
+		blobs map[uint64][]byte
+		bytes int
+	}
+	prospective := make(map[*pendingBlobPacket]retainedState)
 	for _, blob := range expected {
 		if err := c.store.Put(blob.Hash, blob.Payload); err != nil {
 			return nil, fmt.Errorf("store client blob 0x%x: %w", blob.Hash, err)
+		}
+		payload, ok, err := c.getBlob(blob.Hash)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			payload = bytes.Clone(blob.Payload)
+		}
+		for _, pending := range c.outstanding[blob.Hash] {
+			if _, retained := pending.retainedBlobs[blob.Hash]; retained {
+				continue
+			}
+			state, exists := prospective[pending]
+			if !exists {
+				state.blobs = make(map[uint64][]byte, len(pending.retainedBlobs)+1)
+				for hash, retainedPayload := range pending.retainedBlobs {
+					state.blobs[hash] = retainedPayload
+				}
+				state.bytes = pending.retainedBytes
+			}
+			state.blobs[blob.Hash] = payload
+			state.bytes += len(payload)
+			prospective[pending] = state
 		}
 	}
 
@@ -175,23 +207,26 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	remainingBytes := c.limits.MaxPendingBytes
 	blocked := false
 	for _, pending := range c.pending {
+		blobs, retainedBytes := pending.retainedBlobs, pending.retainedBytes
+		if state, ok := prospective[pending]; ok {
+			blobs, retainedBytes = state.blobs, state.bytes
+		}
 		if blocked || pending.missing != resolved[pending] {
 			blocked = true
+			if retainedBytes > c.limits.MaxPendingBytes-leftBytes {
+				return nil, ErrBlobCacheLimit
+			}
 			left = append(left, pending)
-			leftBytes += pending.retainedBytes
+			leftBytes += retainedBytes
 			continue
 		}
 		if !packetUsesBlobCache(pending.pk) {
-			if pending.retainedBytes > remainingBytes {
+			if retainedBytes > remainingBytes {
 				return nil, ErrBlobCacheLimit
 			}
-			remainingBytes -= pending.retainedBytes
+			remainingBytes -= retainedBytes
 			plans = append(plans, materialisePlan{pk: pending.pk})
 			continue
-		}
-		blobs, err := c.loadPacketBlobs(pending.pk)
-		if err != nil {
-			return nil, err
 		}
 		size, err := materialisedPacketSize(pending.pk, blobs, remainingBytes)
 		if err != nil {
@@ -207,6 +242,10 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 		} else {
 			ready = append(ready, materialise(plan.pk, plan.blobs))
 		}
+	}
+	for pending, state := range prospective {
+		pending.retainedBlobs = state.blobs
+		pending.retainedBytes = state.bytes
 	}
 	for pending, count := range resolved {
 		pending.missing -= count
@@ -259,20 +298,26 @@ func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint
 		if len(c.pending) == 0 {
 			return BlobCacheResult{Packet: materialise(pending.pk, blobs), Statuses: statuses}, nil
 		}
+		pending.retainedBlobs = blobs
 		if err := c.retain(pending, nil); err != nil {
 			return BlobCacheResult{}, err
 		}
 		return BlobCacheResult{Statuses: statuses}, nil
 	}
 
+	pending.retainedBlobs = blobs
 	if err := c.retain(pending, misses); err != nil {
 		return BlobCacheResult{}, err
 	}
 	return BlobCacheResult{Statuses: statuses}, nil
 }
 
-// retain appends pending to the arrival queue and records its unresolved hashes. The caller must hold c.mu.
+// retain charges packet-local and retained blob data, appends pending to the arrival queue and records its unresolved
+// hashes. The caller must hold c.mu.
 func (c *ClientBlobCache) retain(pending pendingBlobPacket, misses []uint64) error {
+	for _, payload := range pending.retainedBlobs {
+		pending.retainedBytes += len(payload)
+	}
 	if len(c.pending)+1 > c.limits.MaxPendingPackets ||
 		c.pendingBytes+pending.retainedBytes > c.limits.MaxPendingBytes {
 		return ErrBlobCacheLimit
@@ -332,27 +377,6 @@ func (c *ClientBlobCache) getBlob(hash uint64) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	return payload, true, nil
-}
-
-// loadPacketBlobs retrieves all blobs needed to materialise pk.
-func (c *ClientBlobCache) loadPacketBlobs(pk packet.Packet) (map[uint64][]byte, error) {
-	var hashes []uint64
-	switch pk := pk.(type) {
-	case *packet.LevelChunk:
-		hashes = uniqueBlobHashes(pk.BlobHashes)
-	case *packet.SubChunk:
-		hashes = uniqueBlobHashes(subChunkBlobHashes(pk))
-	default:
-		return nil, fmt.Errorf("%w: %T is not cache-backed", ErrInvalidBlobCachePacket, pk)
-	}
-	blobs, _, misses, err := c.resolve(hashes)
-	if err != nil {
-		return nil, err
-	}
-	if len(misses) != 0 {
-		return nil, fmt.Errorf("client blob 0x%x is unavailable after being acknowledged", misses[0])
-	}
-	return blobs, nil
 }
 
 // packetUsesBlobCache reports whether pk still needs cached blobs materialised.
