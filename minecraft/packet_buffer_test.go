@@ -159,7 +159,7 @@ func TestEnsureOwnedReusesPacketData(t *testing.T) {
 		full:    borrowed,
 		payload: bytes.NewBuffer(borrowed[1:]),
 	}
-	owned := data.ensureOwned()
+	owned := data.ensureOwned(true)
 	if owned != data {
 		t.Fatal("ensureOwned allocated a replacement packetData")
 	}
@@ -173,12 +173,28 @@ func TestEnsureOwnedReusesPacketData(t *testing.T) {
 	}
 }
 
+func TestCustomProtocolOwnershipAvoidsPooledCapacity(t *testing.T) {
+	basic := BasicProtocol{Protocol: DefaultProtocol.ID(), Version: DefaultProtocol.Ver()}
+	conn := &Conn{proto: packetBufferCustomWriterProtocol{BasicProtocol: basic, newWriterCalls: new(int)}}
+	borrowed := make([]byte, 17)
+	conn.deferPacket(&packetData{
+		h:       &packet.Header{PacketID: 1},
+		full:    borrowed,
+		payload: bytes.NewBuffer(borrowed[1:]),
+	})
+
+	owned := conn.deferredPackets[0]
+	if cap(owned.ownedFull) >= minOwnedPacketBufferClass {
+		t.Fatalf("custom protocol owned capacity = %d, want less than pooled class size %d", cap(owned.ownedFull), minOwnedPacketBufferClass)
+	}
+}
+
 func TestIncomingOwnedPacketSteadyStateAllocations(t *testing.T) {
 	conn := &Conn{proto: DefaultProtocol, pool: DefaultProtocol.Packets(true)}
 	frame := packetBufferFramesForTest(t, &packet.PlayStatus{})
 	allocs := testing.AllocsPerRun(100, func() {
 		data := packetBufferData(frame)
-		if _, err := data.ensureOwned().decode(conn); err != nil {
+		if _, err := data.ensureOwned(true).decode(conn); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -190,7 +206,7 @@ func TestIncomingOwnedPacketSteadyStateAllocations(t *testing.T) {
 func TestDecodedPacketDoesNotAliasReleasedOwnedBuffer(t *testing.T) {
 	conn := &Conn{proto: DefaultProtocol, pool: DefaultProtocol.Packets(true)}
 	frame := packetBufferFramesForTest(t, &packet.Unknown{PacketID: 700, Payload: []byte{1, 2, 3}})
-	data := packetBufferData(frame).ensureOwned()
+	data := packetBufferData(frame).ensureOwned(true)
 	decoded, err := data.decode(conn)
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +232,7 @@ func TestCustomZeroCopyReaderRetainsOwnedBuffer(t *testing.T) {
 		}
 	}()
 
-	decoded, err := packetBufferData(frame).ensureOwned().decode(conn)
+	decoded, err := packetBufferData(frame).ensureOwned(true).decode(conn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1110,7 +1110,7 @@ func (conn *Conn) deferBatch(batch []*packetData) {
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
 // mode, the packet becomes part of the deferred batch flushed by the next flushBatch call.
 func (conn *Conn) deferPacket(pk *packetData) {
-	pk = pk.ensureOwned()
+	pk = pk.ensureOwned(canReusePacketBuffers(conn.proto))
 	if conn.batchReading {
 		conn.batchDeferred = append(conn.batchDeferred, pk)
 		return
@@ -1171,7 +1171,7 @@ func (conn *Conn) receive(data []byte) error {
 			if !conn.collectPacket(pkData) {
 				select {
 				case <-conn.ctx.Done():
-				case conn.packets <- pkData.ensureOwned():
+				case conn.packets <- pkData.ensureOwned(canReusePacketBuffers(conn.proto)):
 				}
 			}
 			return nil
@@ -1189,7 +1189,7 @@ func (conn *Conn) receive(data []byte) error {
 // queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
 // read first. It never blocks the goroutine processing incoming packets.
 func (conn *Conn) queuePacket(data *packetData) {
-	data = data.ensureOwned()
+	data = data.ensureOwned(canReusePacketBuffers(conn.proto))
 	select {
 	case <-conn.ctx.Done():
 	case previous := <-conn.packets:
@@ -1209,7 +1209,7 @@ func (conn *Conn) collectPacket(data *packetData) bool {
 	if !conn.batchReading {
 		return false
 	}
-	conn.pendingBatch = append(conn.pendingBatch, data.ensureOwned())
+	conn.pendingBatch = append(conn.pendingBatch, data.ensureOwned(canReusePacketBuffers(conn.proto)))
 	return true
 }
 

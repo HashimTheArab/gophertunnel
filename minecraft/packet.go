@@ -33,18 +33,28 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
 
-func (p *packetData) ensureOwned() *packetData {
+func (p *packetData) ensureOwned(pooled bool) *packetData {
 	if p.owned {
 		return p
 	}
 	payloadOffset := len(p.full) - p.payload.Len()
-	full := acquireOwnedPacketBuffer(len(p.full))
-	copy(full, p.full)
+	var full []byte
+	if pooled {
+		full = acquireOwnedPacketBuffer(len(p.full))
+		copy(full, p.full)
+	} else {
+		full = bytes.Clone(p.full)
+	}
 	p.ownedFull = full
 	p.full = full[:len(full):len(full)]
 	if payloadOffset < 0 {
-		payload := acquireOwnedPacketBuffer(p.payload.Len())
-		copy(payload, p.payload.Bytes())
+		var payload []byte
+		if pooled {
+			payload = acquireOwnedPacketBuffer(p.payload.Len())
+			copy(payload, p.payload.Bytes())
+		} else {
+			payload = bytes.Clone(p.payload.Bytes())
+		}
 		p.ownedPayload = payload
 		resetPacketPayload(p.payload, payload[:len(payload):len(payload)])
 	} else {

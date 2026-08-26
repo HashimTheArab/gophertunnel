@@ -91,7 +91,7 @@ func BenchmarkPacketDataOwnership(b *testing.B) {
 	}
 	for _, test := range tests {
 		b.Run(test.name, func(b *testing.B) {
-			conn := &Conn{batchReading: true}
+			conn := &Conn{batchReading: true, proto: DefaultProtocol}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
