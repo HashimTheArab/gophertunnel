@@ -146,7 +146,11 @@ type Dialer struct {
 // BlockActorData with its raw-backed decoder.
 func serverPacketPool(p Protocol, lazyBlockActorData bool) packet.Pool {
 	pool := p.Packets(false)
-	if lazyBlockActorData {
+	factory, ok := pool[packet.IDBlockActorData]
+	if lazyBlockActorData && ok {
+		if _, current := factory().(*packet.BlockActorData); !current {
+			return pool
+		}
 		pool[packet.IDBlockActorData] = func() packet.Packet { return packet.NewLazyBlockActorData() }
 	}
 	return pool

@@ -86,6 +86,16 @@ func TestRawMessage_ReadsGenericByteReader(t *testing.T) {
 	}
 }
 
+func TestRawMessage_RejectsTruncatedGenericReaderPayload(t *testing.T) {
+	t.Parallel()
+
+	// TAG_ByteArray, empty root name, length four, but only two payload bytes.
+	raw := []byte{byte(tagByteArray), 0x00, 0x08, 0x01, 0x02}
+	if _, err := ReadRaw(bytes.NewReader(raw), NetworkLittleEndian, false); err == nil {
+		t.Fatal("ReadRaw() accepted a truncated byte-array payload")
+	}
+}
+
 // encodeRawMessageFixture returns representative nested block-actor NBT.
 func encodeRawMessageFixture(t *testing.T) []byte {
 	t.Helper()

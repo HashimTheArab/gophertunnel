@@ -762,6 +762,37 @@ func TestServerPacketPool_LazyBlockActorDataIsOptIn(t *testing.T) {
 	}
 }
 
+func TestServerPacketPool_PreservesProtocolSpecificBlockActorData(t *testing.T) {
+	t.Parallel()
+
+	p := customBlockActorProtocol{Protocol: DefaultProtocol}
+	got := serverPacketPool(p, true)[packet.IDBlockActorData]()
+	if _, ok := got.(*customBlockActorData); !ok {
+		t.Fatalf("lazy pool BlockActorData = %T, want %T", got, &customBlockActorData{})
+	}
+}
+
+type customBlockActorProtocol struct {
+	Protocol
+}
+
+// Packets replaces BlockActorData with a protocol-specific wire representation.
+func (p customBlockActorProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		pool[packet.IDBlockActorData] = func() packet.Packet { return &customBlockActorData{} }
+	}
+	return pool
+}
+
+type customBlockActorData struct{}
+
+// ID returns the BlockActorData packet ID.
+func (*customBlockActorData) ID() uint32 { return packet.IDBlockActorData }
+
+// Marshal implements packet.Packet for the protocol-specific fixture.
+func (*customBlockActorData) Marshal(protocol.IO) {}
+
 type dialTestNetwork struct {
 	dial func(context.Context, string) (net.Conn, error)
 	ping func(context.Context, string) ([]byte, error)

@@ -251,8 +251,20 @@ func (d *Decoder) skipBytes(length int32, op string) error {
 	if err := d.checkRemaining(int(length), op); err != nil {
 		return err
 	}
-	if data := d.r.Next(int(length)); len(data) != int(length) {
-		return BufferOverrunError{Op: op}
+	if _, ok := d.r.Reader.(interface{ Next(int) []byte }); ok {
+		if data := d.r.Next(int(length)); len(data) != int(length) {
+			return BufferOverrunError{Op: op}
+		}
+		return nil
+	}
+	remaining := int(length)
+	var buf [4096]byte
+	for remaining > 0 {
+		n := min(remaining, len(buf))
+		if _, err := io.ReadFull(d.r, buf[:n]); err != nil {
+			return BufferOverrunError{Op: op}
+		}
+		remaining -= n
 	}
 	return nil
 }

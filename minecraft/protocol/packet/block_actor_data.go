@@ -28,9 +28,10 @@ func NewLazyBlockActorData() *BlockActorData {
 }
 
 // NBTFields returns only the requested top-level NBT fields. It avoids
-// materialising other fields when the packet was decoded lazily. Mutating the
-// returned map does not mutate the packet; call MaterialiseNBT before changing
-// data that should be encoded.
+// materialising other fields when the packet was decoded lazily. Treat the
+// returned values as read-only: nested maps and slices may alias an already
+// materialised NBTData map. Call MaterialiseNBT and mutate NBTData directly to
+// change data that should be encoded.
 func (pk *BlockActorData) NBTFields(fields ...string) (map[string]any, error) {
 	if pk.NBTData != nil {
 		selected := make(map[string]any, len(fields))
