@@ -50,7 +50,9 @@ func (QoSEnvironment) ping(ctx context.Context, region, address string) (PingRes
 	if err != nil {
 		return failedPingResult(region), fmt.Errorf("dial QoS beacon: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	stop := context.AfterFunc(ctx, func() {
 		_ = conn.Close()
