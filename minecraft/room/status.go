@@ -3,9 +3,7 @@ package room
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 
-	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/p2p"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -29,54 +27,7 @@ type Status struct {
 	OnlineCrossPlatformGame bool                 `json:"OnlineCrossPlatformGame"`
 	CrossPlayDisabled       bool                 `json:"CrossPlayDisabled"`
 	TitleID                 int64                `json:"TitleId"`
-	SupportedConnections    []Connection         `json:"SupportedConnections"`
-}
-
-type Connection struct {
-	ConnectionType int             `json:"ConnectionType"`
-	HostIPAddress  string          `json:"HostIpAddress"`
-	HostPort       uint16          `json:"HostPort"`
-	NetherNetID    p2p.NetherNetID `json:"NetherNetId"`
-	RakNetGUID     string          `json:"RakNetGUID,omitempty"`
-	PmsgID         uuid.UUID       `json:"PmsgId,omitempty"`
-}
-
-// MarshalJSON encodes the discriminator-dependent connection shape used by
-// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
-// legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
-// PmsgId.
-func (c Connection) MarshalJSON() ([]byte, error) {
-	type wireConnection struct {
-		ConnectionType int              `json:"ConnectionType"`
-		HostIPAddress  string           `json:"HostIpAddress"`
-		HostPort       uint16           `json:"HostPort"`
-		NetherNetID    *p2p.NetherNetID `json:"NetherNetId,omitempty"`
-		RakNetGUID     string           `json:"RakNetGUID,omitempty"`
-		PmsgID         *uuid.UUID       `json:"PmsgId,omitempty"`
-	}
-	wire := wireConnection{
-		ConnectionType: c.ConnectionType,
-		HostIPAddress:  c.HostIPAddress,
-		HostPort:       c.HostPort,
-	}
-	switch c.ConnectionType {
-	case p2p.ConnectionTypeSignalingOverWebSocket:
-		wire.RakNetGUID = string(c.NetherNetID)
-	case p2p.ConnectionTypeSignalingOverJSONRPC:
-		wire.NetherNetID = &c.NetherNetID
-		if c.PmsgID != uuid.Nil {
-			wire.PmsgID = &c.PmsgID
-		}
-	default:
-		if c.NetherNetID != "" {
-			wire.NetherNetID = &c.NetherNetID
-		}
-		wire.RakNetGUID = c.RakNetGUID
-		if c.PmsgID != uuid.Nil {
-			wire.PmsgID = &c.PmsgID
-		}
-	}
-	return json.Marshal(wire)
+	SupportedConnections    []p2p.Connection     `json:"SupportedConnections"`
 }
 
 const (

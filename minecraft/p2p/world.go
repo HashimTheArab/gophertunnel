@@ -138,6 +138,10 @@ type Connection struct {
 	// HostPort is the port of the RakNet listener.
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
+	// RakNetGUID is the GUID of a legacy RakNet listener. Direct WebSocket
+	// signaling also uses the RakNetGUID JSON property on the wire, but that
+	// compatibility detail is decoded into NetherNetID instead.
+	RakNetGUID string `json:"RakNetGUID,omitempty"`
 	// NetherNetID is the network ID of the NetherNet network for the host.
 	NetherNetID NetherNetID `json:"NetherNetId"`
 	// PlayerMessagingID is the player messaging ID of the host.
@@ -146,6 +150,44 @@ type Connection struct {
 	// WebRTC connection to the host.
 	// It is only populated when Type is [ConnectionTypeSignalingOverJSONRPC].
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
+}
+
+// MarshalJSON encodes the discriminator-dependent connection shape used by
+// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
+// legacy RakNetGUID property, while JSON-RPC signaling uses NetherNetId and
+// PmsgId.
+func (c Connection) MarshalJSON() ([]byte, error) {
+	type wireConnection struct {
+		Type              int          `json:"ConnectionType"`
+		HostIPAddress     string       `json:"HostIpAddress"`
+		HostPort          uint16       `json:"HostPort"`
+		NetherNetID       *NetherNetID `json:"NetherNetId,omitempty"`
+		RakNetGUID        string       `json:"RakNetGUID,omitempty"`
+		PlayerMessagingID *uuid.UUID   `json:"PmsgId,omitempty"`
+	}
+	wire := wireConnection{
+		Type:          c.Type,
+		HostIPAddress: c.HostIPAddress,
+		HostPort:      c.HostPort,
+	}
+	switch c.Type {
+	case ConnectionTypeSignalingOverWebSocket:
+		wire.RakNetGUID = string(c.NetherNetID)
+	case ConnectionTypeSignalingOverJSONRPC:
+		wire.NetherNetID = &c.NetherNetID
+		if c.PlayerMessagingID != uuid.Nil {
+			wire.PlayerMessagingID = &c.PlayerMessagingID
+		}
+	default:
+		if c.NetherNetID != "" {
+			wire.NetherNetID = &c.NetherNetID
+		}
+		wire.RakNetGUID = c.RakNetGUID
+		if c.PlayerMessagingID != uuid.Nil {
+			wire.PlayerMessagingID = &c.PlayerMessagingID
+		}
+	}
+	return json.Marshal(wire)
 }
 
 // UnmarshalJSON decodes the discriminator-dependent connection shape used by
@@ -173,6 +215,7 @@ func (c *Connection) UnmarshalJSON(b []byte) error {
 		c.NetherNetID = NetherNetID(wire.RakNetGUID)
 	} else {
 		c.NetherNetID = wire.NetherNetID
+		c.RakNetGUID = wire.RakNetGUID
 	}
 	return nil
 }
