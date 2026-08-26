@@ -648,7 +648,11 @@ func (conn *Conn) packetWriterFor(dst ByteWriter) protocol.IO {
 	}
 	shieldID := conn.shieldID.Load()
 	var w protocol.IO
-	if conn.packetWriter == nil || !protocol.ResetWriter(conn.packetWriter, conn.packetWriterDst, dst, shieldID) {
+	if !canReusePacketBuffers(conn.proto) {
+		w = conn.proto.NewWriter(dst, shieldID)
+		conn.packetWriter = nil
+		conn.packetWriterDst = nil
+	} else if conn.packetWriter == nil || !protocol.ResetWriter(conn.packetWriter, conn.packetWriterDst, dst, shieldID) {
 		w = conn.proto.NewWriter(dst, shieldID)
 		conn.packetWriter = w
 		conn.packetWriterDst = dst

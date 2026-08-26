@@ -59,6 +59,60 @@ func TestPacketWriterReuseRespectsCustomProtocolWriter(t *testing.T) {
 	}
 }
 
+func TestPacketWriterReusePreservesCustomShieldID(t *testing.T) {
+	const remappedShieldID int32 = 99
+	calls := 0
+	custom := packetBufferCustomWriterProtocol{
+		BasicProtocol:  BasicProtocol{Protocol: DefaultProtocol.ID(), Version: DefaultProtocol.Ver()},
+		newWriterCalls: &calls,
+		shieldID:       remappedShieldID,
+	}
+	conn := newConn(packetBufferBenchmarkTransport{}, nil, slog.New(internal.DiscardHandler{}), custom, -1, false)
+	conn.shieldID.Store(7)
+	var payloads [][]byte
+	conn.packetFunc = func(_ packet.Header, payload []byte, _, _ net.Addr) {
+		payloads = append(payloads, payload)
+	}
+	for range 2 {
+		if err := conn.WritePacket(packetBufferShieldPacket{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("custom Protocol.NewWriter called %d times, want 2", calls)
+	}
+	for i, payload := range payloads {
+		var got int32
+		protocol.NewReader(bytes.NewBuffer(payload), 0, false).Int32(&got)
+		if got != remappedShieldID {
+			t.Fatalf("packet %d shield ID = %d, want %d", i, got, remappedShieldID)
+		}
+	}
+}
+
+func TestPacketBufferReuseRequiresExactBuiltInProtocol(t *testing.T) {
+	basic := BasicProtocol{Protocol: DefaultProtocol.ID(), Version: DefaultProtocol.Ver()}
+	tests := []struct {
+		name string
+		p    Protocol
+		want bool
+	}{
+		{name: "default", p: DefaultProtocol, want: true},
+		{name: "basic", p: basic, want: true},
+		{name: "legacy", p: Protocol12644(), want: true},
+		{name: "pointer basic", p: &basic},
+		{name: "custom writer", p: packetBufferCustomWriterProtocol{BasicProtocol: basic, newWriterCalls: new(int)}},
+		{name: "custom reader", p: packetBufferZeroCopyReaderProtocol{BasicProtocol: basic}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := canReusePacketBuffers(test.p); got != test.want {
+				t.Fatalf("canReusePacketBuffers = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestEnsureOwnedReusesPacketData(t *testing.T) {
 	borrowed := []byte{1, 2, 3}
 	data := &packetData{
@@ -107,6 +161,31 @@ func TestDecodedPacketDoesNotAliasReleasedOwnedBuffer(t *testing.T) {
 	releaseOwnedPacketBuffer(reused)
 	if got := decoded[0].(*packet.Unknown).Payload; !bytes.Equal(got, []byte{1, 2, 3}) {
 		t.Fatalf("decoded payload changed after owned buffer reuse: %v", got)
+	}
+}
+
+func TestCustomZeroCopyReaderRetainsOwnedBuffer(t *testing.T) {
+	custom := packetBufferZeroCopyReaderProtocol{
+		BasicProtocol: BasicProtocol{Protocol: DefaultProtocol.ID(), Version: DefaultProtocol.Ver()},
+	}
+	conn := &Conn{proto: custom, pool: DefaultProtocol.Packets(true)}
+	frame := packetBufferFramesForTest(t, &packet.Unknown{PacketID: 700, Payload: bytes.Repeat([]byte{7}, 20<<10)})
+	held := drainOwnedPacketBufferClassForTest(len(frame))
+	defer func() {
+		for _, buffer := range held {
+			releaseOwnedPacketBuffer(buffer)
+		}
+	}()
+
+	decoded, err := packetBufferData(frame).ensureOwned().decode(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused := acquireOwnedPacketBuffer(len(frame))
+	clear(reused)
+	releaseOwnedPacketBuffer(reused)
+	if got := decoded[0].(*packet.Unknown).Payload; !bytes.Equal(got, bytes.Repeat([]byte{7}, 20<<10)) {
+		t.Fatal("custom zero-copy reader payload changed after incoming pool reuse")
 	}
 }
 
@@ -361,11 +440,15 @@ type packetBufferCustomWriterProtocol struct {
 	BasicProtocol
 	newWriterCalls *int
 	adapted        bool
+	shieldID       int32
 }
 
 // NewWriter records use of the custom protocol writer factory.
 func (p packetBufferCustomWriterProtocol) NewWriter(dst ByteWriter, shieldID int32) protocol.IO {
 	*p.newWriterCalls++
+	if p.shieldID != 0 {
+		return protocol.NewWriter(dst, p.shieldID)
+	}
 	if p.adapted {
 		return protocol.NewWriter(packetBufferWriterAdapter{ByteWriter: dst}, shieldID)
 	}
@@ -378,6 +461,60 @@ type packetBufferCustomWriter struct {
 
 type packetBufferWriterAdapter struct {
 	ByteWriter
+}
+
+type packetBufferShieldPacket struct{}
+
+// ID returns a test-only unknown packet ID.
+func (packetBufferShieldPacket) ID() uint32 { return 700 }
+
+// Marshal writes the writer-specific shield ID into the test payload.
+func (packetBufferShieldPacket) Marshal(io protocol.IO) {
+	shieldID := io.ShieldID()
+	io.Int32(&shieldID)
+}
+
+type packetBufferZeroCopyReaderProtocol struct {
+	BasicProtocol
+}
+
+// NewReader returns a legal reader that aliases leftover bytes into decoded packets.
+func (p packetBufferZeroCopyReaderProtocol) NewReader(src ByteReader, shieldID int32, enableLimits bool) protocol.IO {
+	return &packetBufferZeroCopyReader{
+		IO:     protocol.NewReader(src, shieldID, enableLimits),
+		buffer: src.(*bytes.Buffer),
+	}
+}
+
+type packetBufferZeroCopyReader struct {
+	protocol.IO
+	buffer *bytes.Buffer
+}
+
+// Bytes transfers the remaining input without copying it.
+func (r *packetBufferZeroCopyReader) Bytes(dst *[]byte) {
+	data := r.buffer.Bytes()
+	*dst = data[:len(data):len(data)]
+	r.buffer.Next(len(data))
+}
+
+// drainOwnedPacketBufferClassForTest removes retained buffers so the next release is deterministically reused.
+func drainOwnedPacketBufferClassForTest(length int) [][]byte {
+	for i := range ownedPacketBufferClasses {
+		class := &ownedPacketBufferClasses[i]
+		if length > class.size {
+			continue
+		}
+		class.mu.Lock()
+		count := len(class.buffers)
+		class.mu.Unlock()
+		buffers := make([][]byte, count)
+		for i := range buffers {
+			buffers[i] = acquireOwnedPacketBuffer(length)
+		}
+		return buffers
+	}
+	return nil
 }
 
 // Read keeps Decoder on its packet-oriented transport path.

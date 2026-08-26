@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"io"
+	"reflect"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -54,6 +55,9 @@ type ByteWriter interface {
 // convert any packets, as they are already of the right type.
 type proto struct{}
 
+// packetBufferReuseType opts the exact built-in protocol type into buffer and writer reuse.
+func (p proto) packetBufferReuseType() reflect.Type { return reflect.TypeOf(p) }
+
 func (proto) ID() int32     { return protocol.CurrentProtocol }
 func (p proto) Ver() string { return protocol.CurrentVersion }
 func (p proto) Packets(listener bool) packet.Pool {
@@ -87,3 +91,16 @@ type BasicProtocol struct {
 
 func (b BasicProtocol) ID() int32   { return b.Protocol }
 func (b BasicProtocol) Ver() string { return b.Version }
+
+// packetBufferReuseType opts an exact BasicProtocol value into buffer and writer reuse.
+func (b BasicProtocol) packetBufferReuseType() reflect.Type { return reflect.TypeOf(b) }
+
+type packetBufferReusableProtocol interface {
+	packetBufferReuseType() reflect.Type
+}
+
+// canReusePacketBuffers reports whether p's exact type owns the built-in copying reader and direct writer semantics.
+func canReusePacketBuffers(p Protocol) bool {
+	reusable, ok := p.(packetBufferReusableProtocol)
+	return ok && reusable.packetBufferReuseType() == reflect.TypeOf(p)
+}

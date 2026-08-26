@@ -41,12 +41,12 @@ func (p *packetData) ensureOwned() *packetData {
 	full := acquireOwnedPacketBuffer(len(p.full))
 	copy(full, p.full)
 	p.ownedFull = full
-	p.full = full
+	p.full = full[:len(full):len(full)]
 	if payloadOffset < 0 {
 		payload := acquireOwnedPacketBuffer(p.payload.Len())
 		copy(payload, p.payload.Bytes())
 		p.ownedPayload = payload
-		resetPacketPayload(p.payload, payload)
+		resetPacketPayload(p.payload, payload[:len(payload):len(payload)])
 	} else {
 		resetPacketPayload(p.payload, full[payloadOffset:])
 	}
@@ -85,6 +85,13 @@ func (p *packetData) takeFull() []byte {
 	return p.full[:len(p.full):len(p.full)]
 }
 
+// detachOwnedStorage prevents recycling storage that a custom reader may have retained in decoded output.
+func (p *packetData) detachOwnedStorage() {
+	p.ownedFull = nil
+	p.ownedPayload = nil
+	p.owned = false
+}
+
 // releasePacketData releases every retained packet in packets.
 func releasePacketData(packets []*packetData) {
 	for _, data := range packets {
@@ -102,7 +109,14 @@ func (err unknownPacketError) Error() string {
 
 // decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
 func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
-	defer p.release()
+	reuseInput := canReusePacketBuffers(conn.proto)
+	defer func() {
+		if reuseInput || err != nil || len(pks) == 0 {
+			p.release()
+		} else {
+			p.detachOwnedStorage()
+		}
+	}()
 	if _, ok := conn.pool[p.h.PacketID]; !ok && conn.disconnectOnUnknownPacket {
 		_ = conn.Close()
 		return nil, unknownPacketError{id: p.h.PacketID}
