@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -1885,7 +1886,7 @@ func (conn *Conn) startGame() error {
 		Generator:                    1,
 		EducationFeaturesEnabled:     true,
 		MultiPlayerGame:              true,
-		MultiPlayerCorrelationID:     uuid.Must(uuid.NewRandom()).String(),
+		MultiPlayerCorrelationID:     cmp.Or(data.MultiPlayerCorrelationID, uuid.Must(uuid.NewRandom()).String()),
 		CommandsEnabled:              true,
 		WorldName:                    data.WorldName,
 		LANBroadcastEnabled:          true,
@@ -2214,6 +2215,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 		PropertyData:                 pk.PropertyData,
+		MultiPlayerCorrelationID:     pk.MultiPlayerCorrelationID,
 	}
 }
 

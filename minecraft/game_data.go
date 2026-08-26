@@ -126,6 +126,9 @@ type GameData struct {
 	// such as gophertunnel:example or gophertunnel:custom_property, which can be used by resource packs
 	// to change skins, models, or other player behaviors at runtime.
 	PropertyData map[string]any
+	// MultiPlayerCorrelationID is the unique ID the server sent in StartGame to identify the world/session,
+	// used for telemetry. Proxies use it to recognize server software from the ID's format.
+	MultiPlayerCorrelationID string
 
 	// Dimensions is a list of dimension definitions sent by the DimensionData packet. This can include overriding
 	// the height of vanilla dimensions or registering new dimensions.
