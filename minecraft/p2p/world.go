@@ -148,6 +148,35 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
+// UnmarshalJSON decodes the discriminator-dependent connection shape used by
+// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
+// legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
+// PmsgId.
+func (c *Connection) UnmarshalJSON(b []byte) error {
+	type wireConnection struct {
+		Type              int         `json:"ConnectionType"`
+		HostIPAddress     string      `json:"HostIpAddress"`
+		HostPort          uint16      `json:"HostPort"`
+		NetherNetID       NetherNetID `json:"NetherNetId"`
+		RakNetGUID        string      `json:"RakNetGUID"`
+		PlayerMessagingID uuid.UUID   `json:"PmsgId"`
+	}
+	var wire wireConnection
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	c.Type = wire.Type
+	c.HostIPAddress = wire.HostIPAddress
+	c.HostPort = wire.HostPort
+	c.PlayerMessagingID = wire.PlayerMessagingID
+	if wire.Type == ConnectionTypeSignalingOverWebSocket {
+		c.NetherNetID = NetherNetID(wire.RakNetGUID)
+	} else {
+		c.NetherNetID = wire.NetherNetID
+	}
+	return nil
+}
+
 // NetherNetID is the NetherNet network ID advertised by a host. It is an opaque
 // identifier: MPSD custom properties encode it as either a JSON number or a JSON
 // string, and its value may be a decimal network ID or a UUID depending on the
