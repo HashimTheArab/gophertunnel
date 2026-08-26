@@ -40,6 +40,9 @@ func (m RawMessage) ValidateCompound(allowZero bool) error {
 
 // WriteTo writes the encoded NBT value without materialising it.
 func (m RawMessage) WriteTo(w io.Writer) (int64, error) {
+	if len(m.data) == 0 {
+		return 0, BufferOverrunError{Op: "ReadTag"}
+	}
 	n, err := w.Write(m.data)
 	if err == nil && n != len(m.data) {
 		err = io.ErrShortWrite
@@ -199,6 +202,9 @@ func (d *Decoder) skipTag(t tagType) error {
 			}
 		}
 	case tagSlice:
+		if d.depth >= maximumNestingDepth {
+			return MaximumDepthReachedError{}
+		}
 		d.depth++
 		defer func() { d.depth-- }()
 		elementTypeByte, err := d.r.ReadByte()

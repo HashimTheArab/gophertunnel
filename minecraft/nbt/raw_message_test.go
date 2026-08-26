@@ -2,6 +2,8 @@ package nbt
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"reflect"
 	"testing"
 )
@@ -93,6 +95,32 @@ func TestRawMessage_RejectsTruncatedGenericReaderPayload(t *testing.T) {
 	raw := []byte{byte(tagByteArray), 0x00, 0x08, 0x01, 0x02}
 	if _, err := ReadRaw(bytes.NewReader(raw), NetworkLittleEndian, false); err == nil {
 		t.Fatal("ReadRaw() accepted a truncated byte-array payload")
+	}
+}
+
+func TestRawMessage_RejectsNestedListsPastDepthLimit(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte{byte(tagStruct), 0x00, byte(tagSlice), 0x01, 'x'}
+	for range maximumNestingDepth {
+		raw = append(raw, byte(tagSlice), 0x02)
+	}
+	raw = append(raw, byte(tagByte), 0x00, byte(tagEnd))
+
+	_, err := ReadRaw(bytes.NewReader(raw), NetworkLittleEndian, false)
+	var depthErr MaximumDepthReachedError
+	if !errors.As(err, &depthErr) {
+		t.Fatalf("ReadRaw() error = %v, want MaximumDepthReachedError", err)
+	}
+}
+
+func TestRawMessage_WriteToRejectsEmptyMessage(t *testing.T) {
+	t.Parallel()
+
+	_, err := (RawMessage{}).WriteTo(io.Discard)
+	var overrun BufferOverrunError
+	if !errors.As(err, &overrun) {
+		t.Fatalf("WriteTo() error = %v, want BufferOverrunError", err)
 	}
 }
 

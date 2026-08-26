@@ -82,6 +82,18 @@ func TestBlockActorData_LazyDecodeMaterialisedNilEncodesEmptyCompound(t *testing
 	}
 }
 
+func TestBlockActorData_NewLazyPacketEncodesEmptyNBT(t *testing.T) {
+	t.Parallel()
+
+	var want bytes.Buffer
+	(&BlockActorData{}).Marshal(protocol.NewWriter(&want, 0))
+	var got bytes.Buffer
+	NewLazyBlockActorData().Marshal(protocol.NewWriter(&got, 0))
+	if !bytes.Equal(got.Bytes(), want.Bytes()) {
+		t.Fatalf("new lazy packet wire = %x, want %x", got.Bytes(), want.Bytes())
+	}
+}
+
 func TestBlockActorData_LazyZeroNBTMaterialisesAsEmptyMap(t *testing.T) {
 	t.Parallel()
 

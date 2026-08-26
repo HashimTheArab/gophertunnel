@@ -24,7 +24,10 @@ type BlockActorData struct {
 // its original wire form until NBTData is materialised. Generated packets and
 // normal decoded packets continue to use NBTData directly.
 func NewLazyBlockActorData() *BlockActorData {
-	return &BlockActorData{decodeNBTLazily: true}
+	return &BlockActorData{
+		decodeNBTLazily: true,
+		rawNBTData:      nbt.NewRawMessage([]byte{0x0a, 0x00, 0x00}),
+	}
 }
 
 // NBTFields returns only the requested top-level NBT fields. It avoids
