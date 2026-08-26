@@ -108,7 +108,8 @@ type Dialer struct {
 	// are converted from and to this Protocol.
 	Protocol Protocol
 
-	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
+	// connection control remains internal. When EnableClientCache is also set, cache negotiation remains automatic.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
@@ -128,7 +129,8 @@ type Dialer struct {
 
 	// EnableClientCache, if set to true, enables the client blob cache for the client. This means that the
 	// server will send chunks as blobs, which may be saved by the client so that chunks don't have to be
-	// transmitted every time, resulting in less network transmission.
+	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
+	// DisablePacketHandling is set.
 	EnableClientCache bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server

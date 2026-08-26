@@ -1110,10 +1110,8 @@ func (conn *Conn) receive(data []byte) error {
 		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
-		if conn.cacheEnabled && !conn.loginSuccessReceived && pkData.h.PacketID == packet.IDPlayStatus {
-			if err := conn.handlePassthroughPlayStatus(pkData); err != nil {
-				return err
-			}
+		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+			return err
 		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
@@ -1147,8 +1145,12 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
-// handlePassthroughPlayStatus performs login-success negotiation before the packet is exposed to the caller.
-func (conn *Conn) handlePassthroughPlayStatus(pkData *packetData) error {
+// handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
+// raw PlayStatus packet owned by a passthrough caller.
+func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
+	if !conn.cacheEnabled || conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
+		return nil
+	}
 	pks, err := pkData.ensureOwned().decode(conn)
 	if err != nil {
 		return err

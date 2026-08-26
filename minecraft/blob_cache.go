@@ -28,7 +28,8 @@ var (
 // single resolver serialises its own calls; a store shared between resolvers must be safe for concurrent use. Stored
 // blobs must be immutable and already validated against their keys. Put must be idempotent: It must succeed without
 // replacing the stored payload when hash already exists. Implementations that retain payload must copy it before
-// returning. Payload returned by Get must remain immutable after the call.
+// returning. A resolver may retain payload returned by Get, so the store must not mutate or reuse its backing memory
+// while the returned slice remains reachable.
 type BlobStore interface {
 	Get(hash uint64) (payload []byte, ok bool, err error)
 	Put(hash uint64, payload []byte) error
@@ -71,7 +72,7 @@ type ClientBlobCache struct {
 
 type pendingBlobPacket struct {
 	pk            packet.Packet
-	blobs         map[uint64][]byte
+	retainedBlobs map[uint64][]byte
 	missing       int
 	retainedBytes int
 }
@@ -161,7 +162,7 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	additionalBytes := 0
 	for _, blob := range expected {
 		for _, pending := range c.outstanding[blob.Hash] {
-			if _, retained := pending.blobs[blob.Hash]; !retained {
+			if _, retained := pending.retainedBlobs[blob.Hash]; !retained {
 				additionalBytes += len(blob.Payload)
 			}
 		}
@@ -185,13 +186,13 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 	}
 	for hash, payload := range stored {
 		for _, pending := range c.outstanding[hash] {
-			if pending.blobs == nil {
-				pending.blobs = make(map[uint64][]byte)
+			if pending.retainedBlobs == nil {
+				pending.retainedBlobs = make(map[uint64][]byte)
 			}
-			if _, retained := pending.blobs[hash]; retained {
+			if _, retained := pending.retainedBlobs[hash]; retained {
 				continue
 			}
-			pending.blobs[hash] = payload
+			pending.retainedBlobs[hash] = payload
 			pending.retainedBytes += len(payload)
 			c.pendingBytes += len(payload)
 		}
@@ -223,12 +224,12 @@ func (c *ClientBlobCache) HandleMissResponse(pk *packet.ClientCacheMissResponse)
 			plans = append(plans, materialisePlan{pk: pending.pk})
 			continue
 		}
-		size, err := materialisedPacketSize(pending.pk, pending.blobs, remainingBytes)
+		size, err := materialisedPacketSize(pending.pk, pending.retainedBlobs, remainingBytes)
 		if err != nil {
 			return nil, err
 		}
 		remainingBytes -= size
-		plans = append(plans, materialisePlan{pk: pending.pk, blobs: pending.blobs})
+		plans = append(plans, materialisePlan{pk: pending.pk, blobs: pending.retainedBlobs})
 	}
 	ready := make([]packet.Packet, 0, len(plans))
 	for _, plan := range plans {
@@ -289,14 +290,14 @@ func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint
 		if len(c.pending) == 0 {
 			return BlobCacheResult{Packet: materialise(pending.pk, blobs), Statuses: statuses}, nil
 		}
-		pending.blobs = blobs
+		pending.retainedBlobs = blobs
 		if err := c.retain(pending, nil); err != nil {
 			return BlobCacheResult{}, err
 		}
 		return BlobCacheResult{Statuses: statuses}, nil
 	}
 
-	pending.blobs = blobs
+	pending.retainedBlobs = blobs
 	if err := c.retain(pending, misses); err != nil {
 		return BlobCacheResult{}, err
 	}
@@ -305,7 +306,7 @@ func (c *ClientBlobCache) handlePending(pending pendingBlobPacket, hashes []uint
 
 // retain appends pending to the arrival queue and records its unresolved hashes. The caller must hold c.mu.
 func (c *ClientBlobCache) retain(pending pendingBlobPacket, misses []uint64) error {
-	for _, payload := range pending.blobs {
+	for _, payload := range pending.retainedBlobs {
 		pending.retainedBytes += len(payload)
 	}
 	if len(c.pending)+1 > c.limits.MaxPendingPackets ||

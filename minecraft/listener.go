@@ -133,7 +133,8 @@ type ListenConfig struct {
 	// reading the connection; returning a non-nil error closes the connection.
 	ConnHandler func(c *Conn) error
 
-	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
+	// connection control, including disconnect and encryption-handshake packets, remains internal.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
