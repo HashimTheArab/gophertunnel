@@ -164,8 +164,9 @@ type RealmAddress struct {
 	} `json:"sessionRegionData"`
 }
 
-// Address requests the address and protocol used to connect to this realm.
-// It will wait for the realm to start if it is currently offline.
+// Address requests the address and protocol used to connect to this realm. The optional ping results are sent to
+// Realms to select a suitable service region; omitting them sends an empty pingRegions array. An offline Realm is
+// retried when the service supplies Retry-After.
 func (r *Realm) Address(ctx context.Context, pingResults ...PingResult) (RealmAddress, error) {
 	if r.client == nil {
 		return RealmAddress{}, fmt.Errorf("realm client is nil")
@@ -173,8 +174,9 @@ func (r *Realm) Address(ctx context.Context, pingResults ...PingResult) (RealmAd
 	return r.client.RealmAddress(ctx, r.ID, pingResults...)
 }
 
-// RealmAddress requests the address and protocol used to connect to a realm
-// from the api, and waits for the realm to start if it is currently offline.
+// RealmAddress requests the address and protocol used to connect to a realm. The optional ping results are sent to
+// Realms to select a suitable service region; omitting them sends an empty pingRegions array. An offline Realm is
+// retried when the service supplies Retry-After.
 func (r *Client) RealmAddress(ctx context.Context, realmID int, pingResults ...PingResult) (RealmAddress, error) {
 	if pingResults == nil {
 		pingResults = []PingResult{}
@@ -190,7 +192,7 @@ func (r *Client) RealmAddress(ctx context.Context, realmID int, pingResults ...P
 		return RealmAddress{}, fmt.Errorf("encode join request: %w", err)
 	}
 	for {
-		body, status, err := r.requestPost(ctx, fmt.Sprintf("/worlds/%d/join", realmID), requestBody)
+		body, status, err := r.requestWithOptions(ctx, http.MethodPost, fmt.Sprintf("/worlds/%d/join", realmID), requestBody, authclient.RetryOptions{Attempts: 1})
 		if err != nil {
 			switch status {
 			case http.StatusServiceUnavailable, statusRetryWith:
@@ -334,11 +336,16 @@ func (r *Client) requestPost(ctx context.Context, path string, requestBody []byt
 }
 
 func (r *Client) request(ctx context.Context, method, path string, requestBody []byte) (body []byte, status int, err error) {
+	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{})
+}
+
+// requestWithOptions performs a Realms request using the supplied HTTP retry policy while preserving version negotiation.
+func (r *Client) requestWithOptions(ctx context.Context, method, path string, requestBody []byte, retryOptions authclient.RetryOptions) (body []byte, status int, err error) {
 	if r.requestFunc != nil {
 		return r.requestFunc(ctx, method, path, requestBody)
 	}
 	sent := r.clientVersion()
-	body, status, err = r.send(ctx, method, path, requestBody, sent)
+	body, status, err = r.sendWithOptions(ctx, method, path, requestBody, sent, retryOptions)
 	if !unknownClientVersion(status, body) {
 		return body, status, err
 	}
@@ -346,12 +353,17 @@ func (r *Client) request(ctx context.Context, method, path string, requestBody [
 	if !retry {
 		return body, status, err
 	}
-	return r.send(ctx, method, path, requestBody, version)
+	return r.sendWithOptions(ctx, method, path, requestBody, version, retryOptions)
 }
 
 // send performs a single request against the realms api with an explicit
 // Client-Version, without negotiating a replacement for a rejected one.
 func (r *Client) send(ctx context.Context, method, path string, requestBody []byte, clientVersion string) (body []byte, status int, err error) {
+	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{})
+}
+
+// sendWithOptions performs one version-pinned Realms request using the supplied HTTP retry policy.
+func (r *Client) sendWithOptions(ctx context.Context, method, path string, requestBody []byte, clientVersion string, retryOptions authclient.RetryOptions) (body []byte, status int, err error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("path is empty")
 	}
@@ -375,11 +387,6 @@ func (r *Client) send(ctx context.Context, method, path string, requestBody []by
 	}
 	xbl.SetAuthHeader(req)
 
-	retryOptions := authclient.RetryOptions{}
-	if method == http.MethodPost && strings.HasPrefix(path, "/worlds/") && strings.HasSuffix(path, "/join") {
-		// Realm startup retries follow the service's Retry-After response rather than the generic HTTP backoff.
-		retryOptions.Attempts = 1
-	}
 	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
 	if err != nil {
 		return nil, 0, err

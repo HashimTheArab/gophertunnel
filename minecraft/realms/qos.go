@@ -8,13 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/service"
 )
 
-const failedPingLatencyMS = 1500
+const (
+	failedPingLatencyMS = 1500
+	qosPingTimeout      = 1500 * time.Millisecond
+)
 
 // QoSEnvironment maps Azure region identifiers to their UDP QoS beacon addresses.
 type QoSEnvironment map[string]string
@@ -35,6 +39,9 @@ func (e QoSEnvironment) PingRegion(ctx context.Context, region string) (PingResu
 
 // ping exchanges a single payload with a QoS beacon and measures its round-trip latency.
 func (QoSEnvironment) ping(ctx context.Context, region, address string) (PingResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, qosPingTimeout)
+	defer cancel()
+
 	if _, _, err := net.SplitHostPort(address); err != nil {
 		address = net.JoinHostPort(address, "3075")
 	}
@@ -96,6 +103,9 @@ func (e QoSEnvironment) PingRegions(ctx context.Context) ([]PingResult, error) {
 		}()
 	}
 	wg.Wait()
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Region < results[j].Region
+	})
 	return results, errors.Join(append(errs, ctx.Err())...)
 }
 
