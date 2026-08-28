@@ -83,6 +83,18 @@ func TestRakNetListenUsesServerID(t *testing.T) {
 	}
 }
 
+func TestRakNetAppliesMTUCapToDialAndListen(t *testing.T) {
+	const maxMTU = 1190
+	network := RakNet{MaxMTU: maxMTU}
+
+	if got := network.dialer().MaxMTU; got != maxMTU {
+		t.Fatalf("dialer MaxMTU = %d, want %d", got, maxMTU)
+	}
+	if got := network.listenConfig().MaxMTU; got != maxMTU {
+		t.Fatalf("listener MaxMTU = %d, want %d", got, maxMTU)
+	}
+}
+
 func TestRakNetListenGeneratesServerIDsByDefault(t *testing.T) {
 	first, err := (RakNet{}).Listen("127.0.0.1:0")
 	if err != nil {
