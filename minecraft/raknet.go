@@ -23,6 +23,9 @@ type RakNet struct {
 	// MaxMTU caps both outbound MTU probes and MTU negotiation with incoming clients.
 	// If zero, go-raknet uses its default maximum.
 	MaxMTU uint16
+	// UpstreamPacketListener supplies a pre-bound or customized listener socket.
+	// If nil, go-raknet uses net.ListenPacket.
+	UpstreamPacketListener raknet.UpstreamPacketListener
 }
 
 // DialContext ...
@@ -43,9 +46,10 @@ func (r RakNet) Listen(address string) (NetworkListener, error) {
 // listenConfig builds the go-raknet listener configuration shared with tests.
 func (r RakNet) listenConfig() raknet.ListenConfig {
 	return raknet.ListenConfig{
-		ErrorLog: r.logger().With("net origin", "raknet"),
-		ServerID: r.ServerID,
-		MaxMTU:   r.MaxMTU,
+		ErrorLog:               r.logger().With("net origin", "raknet"),
+		ServerID:               r.ServerID,
+		MaxMTU:                 r.MaxMTU,
+		UpstreamPacketListener: r.UpstreamPacketListener,
 	}
 }
 

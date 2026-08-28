@@ -95,6 +95,18 @@ func TestRakNetAppliesMTUCapToDialAndListen(t *testing.T) {
 	}
 }
 
+func TestRakNetAppliesPacketListener(t *testing.T) {
+	listener := packetListenerStub{}
+	network := RakNet{UpstreamPacketListener: listener}
+	if _, ok := network.listenConfig().UpstreamPacketListener.(packetListenerStub); !ok {
+		t.Fatal("RakNet packet listener was not forwarded")
+	}
+}
+
+type packetListenerStub struct{}
+
+func (packetListenerStub) ListenPacket(string, string) (net.PacketConn, error) { return nil, nil }
+
 func TestRakNetListenGeneratesServerIDsByDefault(t *testing.T) {
 	first, err := (RakNet{}).Listen("127.0.0.1:0")
 	if err != nil {
