@@ -124,11 +124,15 @@ func ContainerTypeSlotCount(containerType byte) (int, bool) {
 		return 2, true
 	case ContainerTypeBrewingStand:
 		return 5, true
-	case ContainerTypeAnvil, ContainerTypeGrindstone, ContainerTypeCartography:
+	case ContainerTypeAnvil, ContainerTypeGrindstone, ContainerTypeCartography, ContainerTypeTrade:
 		return 3, true
 	case ContainerTypeDispenser, ContainerTypeDropper, ContainerTypeCrafter:
 		return 9, true
 	case ContainerTypeHopper:
+		return 5, true
+	case ContainerTypeCartChest, ContainerTypeChestBoat:
+		return 27, true
+	case ContainerTypeCartHopper:
 		return 5, true
 	case ContainerTypeBeacon, ContainerTypeDecoratedPot:
 		return 1, true
