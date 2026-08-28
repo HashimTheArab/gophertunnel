@@ -307,6 +307,16 @@ const (
 // the entity and varies on a per-entity basis.
 type EntityMetadata map[uint32]any
 
+// ContainerSizeFromEntityMetadata returns the positive client-visible
+// container capacity carried by entity metadata.
+func ContainerSizeFromEntityMetadata(metadata EntityMetadata) (int, bool) {
+	size, ok := metadata[EntityDataKeyContainerSize].(int32)
+	if !ok || size <= 0 {
+		return 0, false
+	}
+	return int(size), true
+}
+
 // NewEntityMetadata initializes and returns a new entity metadata map.
 func NewEntityMetadata() EntityMetadata {
 	return NewEntityMetadataWithCapacity(3)
