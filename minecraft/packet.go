@@ -9,10 +9,13 @@ import (
 
 // packetData holds the data of a Minecraft packet.
 type packetData struct {
-	h       *packet.Header
-	full    []byte
-	payload *bytes.Buffer
-	owned   bool
+	h            *packet.Header
+	full         []byte
+	payload      *bytes.Buffer
+	ownedFull    []byte
+	ownedPayload []byte
+	owned        bool
+	pooled       bool
 }
 
 // parseData parses the packet data slice passed into a packetData struct.
@@ -31,23 +34,87 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
 
-func (p *packetData) ensureOwned() *packetData {
+func (p *packetData) ensureOwned(pooled bool) *packetData {
 	if p.owned {
 		return p
 	}
-	full := bytes.Clone(p.full)
 	payloadOffset := len(p.full) - p.payload.Len()
-	var payload []byte
-	if payloadOffset < 0 {
-		payload = bytes.Clone(p.payload.Bytes())
+	var full []byte
+	if pooled {
+		full = acquireOwnedPacketBuffer(len(p.full))
+		copy(full, p.full)
 	} else {
-		payload = full[payloadOffset:]
+		full = bytes.Clone(p.full)
 	}
-	return &packetData{
-		h:       p.h,
-		full:    full,
-		payload: bytes.NewBuffer(payload),
-		owned:   true,
+	p.ownedFull = full
+	p.full = full[:len(full):len(full)]
+	if payloadOffset < 0 {
+		var payload []byte
+		if pooled {
+			payload = acquireOwnedPacketBuffer(p.payload.Len())
+			copy(payload, p.payload.Bytes())
+		} else {
+			payload = bytes.Clone(p.payload.Bytes())
+		}
+		p.ownedPayload = payload
+		resetPacketPayload(p.payload, payload[:len(payload):len(payload)])
+	} else {
+		resetPacketPayload(p.payload, full[payloadOffset:])
+	}
+	p.owned = true
+	p.pooled = pooled
+	return p
+}
+
+// resetPacketPayload points payload at data without allocating another bytes.Buffer.
+func resetPacketPayload(payload *bytes.Buffer, data []byte) {
+	replacement := bytes.NewBuffer(data)
+	*payload = *replacement
+}
+
+// release returns owned packet storage after all decoded values have copied their wire data.
+func (p *packetData) release() {
+	if !p.owned {
+		return
+	}
+	if p.pooled {
+		releaseOwnedPacketBuffer(p.ownedFull)
+		releaseOwnedPacketBuffer(p.ownedPayload)
+	}
+	p.ownedFull = nil
+	p.ownedPayload = nil
+	p.owned = false
+	p.pooled = false
+	p.full = nil
+	p.payload.Reset()
+}
+
+// takeFull transfers the complete frame to a raw-byte caller instead of recycling it.
+func (p *packetData) takeFull() []byte {
+	if p.owned {
+		if p.pooled {
+			releaseOwnedPacketBuffer(p.ownedPayload)
+		}
+		p.ownedFull = nil
+		p.ownedPayload = nil
+		p.owned = false
+		p.pooled = false
+	}
+	return p.full[:len(p.full):len(p.full)]
+}
+
+// detachOwnedStorage prevents recycling storage that a custom reader may have retained in decoded output.
+func (p *packetData) detachOwnedStorage() {
+	p.ownedFull = nil
+	p.ownedPayload = nil
+	p.owned = false
+	p.pooled = false
+}
+
+// releasePacketData releases every retained packet in packets.
+func releasePacketData(packets []*packetData) {
+	for _, data := range packets {
+		data.release()
 	}
 }
 
@@ -61,6 +128,14 @@ func (err unknownPacketError) Error() string {
 
 // decode decodes the packet payload held in the packetData and returns the packet.Packet decoded.
 func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
+	reuseInput := canReusePacketBuffers(conn.proto)
+	defer func() {
+		if reuseInput || err != nil {
+			p.release()
+		} else {
+			p.detachOwnedStorage()
+		}
+	}()
 	if _, ok := conn.pool[p.h.PacketID]; !ok && conn.disconnectOnUnknownPacket {
 		_ = conn.Close()
 		return nil, unknownPacketError{id: p.h.PacketID}

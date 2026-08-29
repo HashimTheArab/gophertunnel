@@ -46,6 +46,17 @@ func (t ActorIDTranslation) WrapWriter(io IO) IO {
 	return &translationWriter{IO: io, t: t.normalised()}
 }
 
+// ReuseWriter resets a writer previously returned by WrapWriter to encode through io.
+// Passing any other IO is safe and returns a newly wrapped writer.
+func (t ActorIDTranslation) ReuseWriter(wrapped, io IO) IO {
+	if w, ok := wrapped.(*translationWriter); ok {
+		w.IO = io
+		w.t = t.normalised()
+		return w
+	}
+	return t.WrapWriter(io)
+}
+
 // translationReader decodes through the wrapped IO and translates the decoded ID in place.
 type translationReader struct {
 	IO

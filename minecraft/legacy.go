@@ -1,6 +1,8 @@
 package minecraft
 
 import (
+	"reflect"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -24,6 +26,9 @@ func Protocol12644() Protocol {
 type protocol12644 struct {
 	BasicProtocol
 }
+
+// packetBufferReuseType opts the exact legacy protocol into buffer and writer reuse.
+func (p protocol12644) packetBufferReuseType() reflect.Type { return reflect.TypeOf(p) }
 
 func (p protocol12644) Packets(listener bool) packet.Pool {
 	pool := p.BasicProtocol.Packets(listener)
