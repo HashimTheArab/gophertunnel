@@ -2,13 +2,10 @@ package packet
 
 import (
 	"fmt"
-	"regexp"
 
 	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
-
-var actorIdentifierPattern = regexp.MustCompile(`^[a-z0-9_.-]+:[a-z0-9/._-]+$`)
 
 // AvailableActorIdentifiers is sent by the server at the start of the game to let the client know all
 // entities that are available on the server.
@@ -29,7 +26,7 @@ func (pk *AvailableActorIdentifiers) Marshal(io protocol.IO) {
 
 // AddIdentifier appends one namespaced actor identifier unless it is already advertised.
 func (pk *AvailableActorIdentifiers) AddIdentifier(identifier string) error {
-	if !actorIdentifierPattern.MatchString(identifier) {
+	if !protocol.ValidNamespacedIdentifier(identifier) {
 		return fmt.Errorf("add actor identifier: %q is not a valid namespaced identifier", identifier)
 	}
 	var root map[string]any
