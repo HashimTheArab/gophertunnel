@@ -136,6 +136,10 @@ type Dialer struct {
 	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
 	// DisablePacketHandling is set.
 	EnableClientCache bool
+	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
+	// ClientCacheStatus in passthrough mode. Relays that forward the real client's status set this so
+	// the server negotiates the cache once.
+	ForwardClientCacheStatus bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server
 	// if the authentication token is not set. This is technically not valid and some servers might kick
@@ -338,6 +342,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
+	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = d.MaxDecompressedLen
