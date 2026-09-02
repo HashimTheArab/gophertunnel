@@ -349,6 +349,9 @@ type Conn struct {
 	ignoredResourcePacks []exemptedResourcePack
 
 	cacheEnabled bool
+	// forwardClientCacheStatus skips the ClientCacheStatus normally sent after LoginSuccess; see
+	// Dialer.ForwardClientCacheStatus.
+	forwardClientCacheStatus bool
 
 	// allow filters what connections are allowed to connect to the Server. The
 	// address, identity data, and client data of the connection are passed. If
@@ -2336,8 +2339,10 @@ func (conn *Conn) handleLoginSuccess() error {
 		return nil
 	}
 	conn.loginSuccessReceived = true
-	if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
-		return fmt.Errorf("send ClientCacheStatus: %w", err)
+	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
+		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
+			return fmt.Errorf("send ClientCacheStatus: %w", err)
+		}
 	}
 	if !conn.disablePacketHandling {
 		conn.expect(packet.IDResourcePacksInfo)
