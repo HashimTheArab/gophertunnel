@@ -137,8 +137,8 @@ type Dialer struct {
 	// DisablePacketHandling is set.
 	EnableClientCache bool
 	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
-	// ClientCacheStatus in passthrough mode. Relays that forward the real client's status set this so
-	// the server negotiates the cache once.
+	// ClientCacheStatus. Relays that forward the real client's status set this so the server negotiates
+	// the cache once. It only applies with DisablePacketHandling; normal logins need the packet.
 	ForwardClientCacheStatus bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server

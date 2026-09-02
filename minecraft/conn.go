@@ -2339,7 +2339,7 @@ func (conn *Conn) handleLoginSuccess() error {
 		return nil
 	}
 	conn.loginSuccessReceived = true
-	if !conn.forwardClientCacheStatus {
+	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
 		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}

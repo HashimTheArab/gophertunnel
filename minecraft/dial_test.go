@@ -924,3 +924,37 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
+
+func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		// startScriptedLogin reads the ClientCacheStatus a normal login must still send.
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1, ForwardClientCacheStatus: true}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork ordinary login: %v (scripted server: %v)", err, <-network.done)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
