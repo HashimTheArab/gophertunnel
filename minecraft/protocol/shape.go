@@ -83,6 +83,10 @@ func lookupShapeDataType(x ShapeData, shapeDataType *uint32) bool {
 type ShapeData interface {
 	// Marshal encodes/decodes a serialised debug shape data object.
 	Marshal(r IO)
+	// Clone returns a copy that shares no storage with the receiver.
+	Clone() ShapeData
+	// Equal reports whether other is the same kind of shape data with equal values.
+	Equal(other ShapeData) bool
 }
 
 // LastShape points to using the last shape settings.
@@ -98,9 +102,33 @@ type LineShape struct {
 	LineEndLocation mgl32.Vec3
 }
 
+// Clone ...
+func (shape *LastShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *LastShape) Equal(other ShapeData) bool {
+	o, ok := other.(*LastShape)
+	return ok && *shape == *o
+}
+
 // Marshal ...
 func (shape *LineShape) Marshal(io IO) {
 	io.Vec3(&shape.LineEndLocation)
+}
+
+// Clone ...
+func (shape *LineShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *LineShape) Equal(other ShapeData) bool {
+	o, ok := other.(*LineShape)
+	return ok && *shape == *o
 }
 
 // TextShape represents a text debug shape.
@@ -132,6 +160,18 @@ func (shape *TextShape) Marshal(io IO) {
 	io.Bool(&shape.ShowBackfaceText)
 }
 
+// Clone ...
+func (shape *TextShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *TextShape) Equal(other ShapeData) bool {
+	o, ok := other.(*TextShape)
+	return ok && *shape == *o
+}
+
 // BoxShape represents a box debug shape.
 type BoxShape struct {
 	// BoxBound is the box bound of the shape.
@@ -143,6 +183,18 @@ func (shape *BoxShape) Marshal(io IO) {
 	io.Vec3(&shape.BoxBound)
 }
 
+// Clone ...
+func (shape *BoxShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *BoxShape) Equal(other ShapeData) bool {
+	o, ok := other.(*BoxShape)
+	return ok && *shape == *o
+}
+
 // SphereShape represents a circle or sphere debug shape.
 type SphereShape struct {
 	// Segments is the segments that used for the debug circle or sphere.
@@ -152,6 +204,18 @@ type SphereShape struct {
 // Marshal ...
 func (shape *SphereShape) Marshal(io IO) {
 	io.Uint8(&shape.Segments)
+}
+
+// Clone ...
+func (shape *SphereShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *SphereShape) Equal(other ShapeData) bool {
+	o, ok := other.(*SphereShape)
+	return ok && *shape == *o
 }
 
 // ArrowShape represents an arrow debug shape.
@@ -174,6 +238,18 @@ func (shape *ArrowShape) Marshal(io IO) {
 	OptionalFunc(io, &shape.Segments, io.Uint8)
 }
 
+// Clone ...
+func (shape *ArrowShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *ArrowShape) Equal(other ShapeData) bool {
+	o, ok := other.(*ArrowShape)
+	return ok && *shape == *o
+}
+
 // CylinderShape represents a cylinder debug shape.
 type CylinderShape struct {
 	// RadiusX is the radius of the cylinder along the X axis.
@@ -194,6 +270,18 @@ func (shape *CylinderShape) Marshal(io IO) {
 	io.Uint8(&shape.NumSegments)
 }
 
+// Clone ...
+func (shape *CylinderShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *CylinderShape) Equal(other ShapeData) bool {
+	o, ok := other.(*CylinderShape)
+	return ok && *shape == *o
+}
+
 // PyramidShape represents a pyramid debug shape.
 type PyramidShape struct {
 	// Width is the width along the X axis of the pyramid base.
@@ -211,6 +299,18 @@ func (shape *PyramidShape) Marshal(io IO) {
 	io.Float32(&shape.Height)
 }
 
+// Clone ...
+func (shape *PyramidShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *PyramidShape) Equal(other ShapeData) bool {
+	o, ok := other.(*PyramidShape)
+	return ok && *shape == *o
+}
+
 // EllipsoidShape represents an ellipsoid debug shape.
 type EllipsoidShape struct {
 	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
@@ -223,6 +323,18 @@ type EllipsoidShape struct {
 func (shape *EllipsoidShape) Marshal(io IO) {
 	io.Vec3(&shape.Radii)
 	io.Uint8(&shape.SegmentsPerAxis)
+}
+
+// Clone ...
+func (shape *EllipsoidShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *EllipsoidShape) Equal(other ShapeData) bool {
+	o, ok := other.(*EllipsoidShape)
+	return ok && *shape == *o
 }
 
 // ConeShape represents a cone debug shape.
@@ -240,6 +352,18 @@ func (shape *ConeShape) Marshal(io IO) {
 	io.Vec2(&shape.Radii)
 	io.Float32(&shape.Height)
 	io.Uint8(&shape.NumSegments)
+}
+
+// Clone ...
+func (shape *ConeShape) Clone() ShapeData {
+	clone := *shape
+	return &clone
+}
+
+// Equal ...
+func (shape *ConeShape) Equal(other ShapeData) bool {
+	o, ok := other.(*ConeShape)
+	return ok && *shape == *o
 }
 
 const (
@@ -282,6 +406,29 @@ type PrimitiveShape struct {
 	Colour Optional[color.RGBA]
 	// ExtraShapeData holding data specific to the type of shape (such as text string for the text shape).
 	ExtraShapeData ShapeData
+}
+
+// Clone returns a copy whose shape data shares no storage with x.
+func (x PrimitiveShape) Clone() PrimitiveShape {
+	if x.ExtraShapeData != nil {
+		x.ExtraShapeData = x.ExtraShapeData.Clone()
+	}
+	return x
+}
+
+// Equal reports whether x and other describe the same shape, comparing shape
+// data by value rather than by pointer. Every other field takes part through
+// struct equality, so a new field is compared without further work.
+func (x PrimitiveShape) Equal(other PrimitiveShape) bool {
+	data, otherData := x.ExtraShapeData, other.ExtraShapeData
+	x.ExtraShapeData, other.ExtraShapeData = nil, nil
+	if x != other {
+		return false
+	}
+	if data == nil || otherData == nil {
+		return data == nil && otherData == nil
+	}
+	return data.Equal(otherData)
 }
 
 // Marshal ...
