@@ -254,7 +254,7 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 		if err != nil {
 			return err
 		}
-		if err = d.checkRemaining(int(length), "ByteArray"); err != nil {
+		if err = d.r.checkRemaining(int(length), "ByteArray"); err != nil {
 			return err
 		}
 		if length < 0 {
@@ -348,7 +348,7 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 				val.Set(reflect.MakeSlice(sliceType, int(length), int(length)))
 				break
 			}
-			if err = d.checkRemaining(int(length), "ByteSlice"); err != nil {
+			if err = d.r.checkRemaining(int(length), "ByteSlice"); err != nil {
 				return err
 			}
 			b := make([]byte, length)
@@ -390,6 +390,10 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 			}
 			if length < 0 {
 				return BufferOverrunError{Op: "Slice"}
+			}
+			// Every non-empty list element requires at least one encoded byte.
+			if err := d.r.checkRemaining(int(length), "Slice"); err != nil {
+				return err
 			}
 			v := reflect.MakeSlice(sliceType, int(length), int(length))
 			for i := 0; i < int(length); i++ {
@@ -543,13 +547,6 @@ func (d *Decoder) tag() (t tagType, tagName string, err error) {
 		tagName, err = d.Encoding.String(d.r)
 	}
 	return t, tagName, err
-}
-
-func (d *Decoder) checkRemaining(length int, op string) error {
-	if remaining, ok := d.r.Reader.(interface{ Len() int }); ok && length > remaining.Len() {
-		return BufferOverrunError{Op: op}
-	}
-	return nil
 }
 
 // isAny checks if a reflect.Value has the type `any` or `interface{}`.

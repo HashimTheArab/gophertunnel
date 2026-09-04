@@ -57,3 +57,30 @@ func (b *offsetReader) Read(p []byte) (n int, err error) {
 	b.off += int64(n)
 	return
 }
+
+// checkRemaining rejects lengths that exceed a bounded reader before allocating memory.
+func (r *offsetReader) checkRemaining(length int, op string) error {
+	if length < 0 {
+		return BufferOverrunError{Op: op}
+	}
+	if remaining, ok := r.Reader.(interface{ Len() int }); ok && length > remaining.Len() {
+		return BufferOverrunError{Op: op}
+	}
+	return nil
+}
+
+// readArray checks a fixed-width array's byte count before multiplying or allocating.
+func (r *offsetReader) readArray(count int32, width int, op string) ([]byte, error) {
+	if count < 0 || uint64(count) > uint64(^uint(0)>>1)/uint64(width) {
+		return nil, BufferOverrunError{Op: op}
+	}
+	length := int(count) * width
+	if err := r.checkRemaining(length, op); err != nil {
+		return nil, err
+	}
+	data := make([]byte, length)
+	if _, err := r.Read(data); err != nil {
+		return nil, BufferOverrunError{Op: op}
+	}
+	return data, nil
+}

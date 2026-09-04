@@ -254,7 +254,7 @@ func (d *Decoder) skipBytes(length int32, op string) error {
 	if length < 0 {
 		return BufferOverrunError{Op: op}
 	}
-	if err := d.checkRemaining(int(length), op); err != nil {
+	if err := d.r.checkRemaining(int(length), op); err != nil {
 		return err
 	}
 	if _, ok := d.r.Reader.(interface{ Next(int) []byte }); ok {
