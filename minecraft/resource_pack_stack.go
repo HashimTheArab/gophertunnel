@@ -51,6 +51,7 @@ type ResourcePackStackSnapshot struct {
 	includeEditorPacks           bool
 }
 
+// newResourcePackStackSnapshot copies the ordered entries and stack settings.
 func newResourcePackStackSnapshot(
 	entries []ResourcePackStackEntry,
 	required bool,
