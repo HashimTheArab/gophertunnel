@@ -41,6 +41,7 @@ type ResourcePackOfferSnapshot struct {
 	texturePacks               []ResourcePackOfferEntry
 }
 
+// newResourcePackOfferSnapshot copies offer metadata and matches downloaded content.
 func newResourcePackOfferSnapshot(pk *packet.ResourcePacksInfo, packs []*resource.Pack) ResourcePackOfferSnapshot {
 	snapshot := ResourcePackOfferSnapshot{
 		texturePackRequired:        pk.TexturePackRequired,
@@ -57,6 +58,7 @@ func newResourcePackOfferSnapshot(pk *packet.ResourcePacksInfo, packs []*resourc
 	return snapshot
 }
 
+// matchingResourcePack returns an independent copy of the matching pack, if available.
 func matchingResourcePack(info protocol.TexturePackInfo, packs []*resource.Pack) *resource.Pack {
 	for _, pack := range packs {
 		if pack != nil && pack.UUID() == info.UUID && pack.Version() == info.Version {
@@ -66,6 +68,7 @@ func matchingResourcePack(info protocol.TexturePackInfo, packs []*resource.Pack)
 	return nil
 }
 
+// clone copies the snapshot and its pack metadata.
 func (snapshot ResourcePackOfferSnapshot) clone() ResourcePackOfferSnapshot {
 	cloned := snapshot
 	cloned.texturePacks = make([]ResourcePackOfferEntry, len(snapshot.texturePacks))
@@ -78,6 +81,7 @@ func (snapshot ResourcePackOfferSnapshot) clone() ResourcePackOfferSnapshot {
 	return cloned
 }
 
+// withPacks copies the offer with content matched from the supplied packs.
 func (snapshot ResourcePackOfferSnapshot) withPacks(packs []*resource.Pack) ResourcePackOfferSnapshot {
 	cloned := snapshot
 	cloned.texturePacks = make([]ResourcePackOfferEntry, len(snapshot.texturePacks))
@@ -87,6 +91,7 @@ func (snapshot ResourcePackOfferSnapshot) withPacks(packs []*resource.Pack) Reso
 	return cloned
 }
 
+// packet reconstructs the advertised offer without sharing its entry slice.
 func (snapshot ResourcePackOfferSnapshot) packet() *packet.ResourcePacksInfo {
 	pk := &packet.ResourcePacksInfo{
 		TexturePackRequired:        snapshot.texturePackRequired,
