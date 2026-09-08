@@ -283,6 +283,107 @@ func TestReadBatchOrdersDeferredAfterQueuedBatches(t *testing.T) {
 	}
 }
 
+func TestReadBatchPreservesOrderWhileBatchesArePublished(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	const batchCount = 10_000
+	producerDone := make(chan struct{})
+	go func() {
+		defer close(producerDone)
+		for i := range batchCount {
+			conn.collectPacket(&packetData{
+				h:       &packet.Header{PacketID: uint32(1000 + i)},
+				payload: bytes.NewBuffer(nil),
+			})
+			conn.flushBatch()
+		}
+	}()
+
+	for i := range batchCount {
+		packets, err := conn.ReadBatch()
+		if err != nil {
+			t.Fatalf("ReadBatch batch %d: %v", i, err)
+		}
+		if ids := packetIDs(packets); len(ids) != 1 || ids[0] != uint32(1000+i) {
+			t.Fatalf("batch %d IDs = %v, want [%d]", i, ids, 1000+i)
+		}
+	}
+	<-producerDone
+}
+
+func TestReadBatchWakesForDeferredOnlyBatch(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	type result struct {
+		packets []packet.Packet
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		packets, err := conn.ReadBatch()
+		resultCh <- result{packets: packets, err: err}
+	}()
+	<-started
+
+	// During login, a whole wire batch may consist only of packets deferred by the handshake.
+	// Publishing that batch must wake a ReadBatch already waiting for incoming traffic.
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("ReadBatch: %v", got.err)
+		}
+		if ids := packetIDs(got.packets); len(ids) != 1 || ids[0] != 700 {
+			t.Fatalf("ReadBatch IDs = %v, want [700]", ids)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadBatch did not wake for a deferred-only batch")
+	}
+}
+
+func TestReadBatchDrainsQueuedBatchBeforeDeadline(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+	deadline := make(chan time.Time)
+	conn.readDeadline = deadline
+
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+	close(deadline)
+
+	packets, err := conn.ReadBatch()
+	if err != nil {
+		t.Fatalf("ReadBatch: %v", err)
+	}
+	if ids := packetIDs(packets); len(ids) != 1 || ids[0] != 700 {
+		t.Fatalf("ReadBatch IDs = %v, want [700]", ids)
+	}
+	if _, err := conn.ReadBatch(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReadBatch after drained queue error = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
 func TestReadBatchStopsAfterConnClosingDecodeError(t *testing.T) {
 	client, serverConn := net.Pipe()
 	defer client.Close()
