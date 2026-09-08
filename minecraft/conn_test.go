@@ -283,6 +283,248 @@ func TestReadBatchOrdersDeferredAfterQueuedBatches(t *testing.T) {
 	}
 }
 
+func TestReadBatchPreservesOrderWhileBatchesArePublished(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	const batchCount = 10_000
+	producerDone := make(chan struct{})
+	go func() {
+		defer close(producerDone)
+		for i := range batchCount {
+			conn.collectPacket(&packetData{
+				h:       &packet.Header{PacketID: uint32(1000 + i)},
+				payload: bytes.NewBuffer(nil),
+			})
+			conn.flushBatch()
+		}
+	}()
+
+	for i := range batchCount {
+		packets, err := conn.ReadBatch()
+		if err != nil {
+			t.Fatalf("ReadBatch batch %d: %v", i, err)
+		}
+		if ids := packetIDs(packets); len(ids) != 1 || ids[0] != uint32(1000+i) {
+			t.Fatalf("batch %d IDs = %v, want [%d]", i, ids, 1000+i)
+		}
+	}
+	<-producerDone
+}
+
+func TestBatchReadQueueDoesNotRelocateFullBacklogAfterOneRead(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	batches := make([][]*packetData, batchQueueRetainedCapacity+1)
+	for i := range batchQueueRetainedCapacity {
+		batches[i] = []*packetData{{h: &packet.Header{PacketID: uint32(1000 + i)}}}
+		conn.queueBatch(batches[i])
+	}
+	if _, ok := conn.takeBatch(); !ok {
+		t.Fatal("takeBatch found an empty full queue")
+	}
+
+	// A FIFO that shifts the entire live backlog whenever a full queue loses and gains one entry
+	// performs O(capacity) work per batch under steady load. The remaining entries must stay put.
+	storage := conn.readBatches[:cap(conn.readBatches)]
+	positions := make(map[*packetData]int, batchQueueRetainedCapacity-1)
+	for i, batch := range storage {
+		if len(batch) != 0 {
+			positions[batch[0]] = i
+		}
+	}
+	batches[batchQueueRetainedCapacity] = []*packetData{{h: &packet.Header{PacketID: 2000}}}
+	conn.queueBatch(batches[batchQueueRetainedCapacity])
+	storage = conn.readBatches[:cap(conn.readBatches)]
+	for _, batch := range batches[1:batchQueueRetainedCapacity] {
+		position := positions[batch[0]]
+		if stored := storage[position]; len(stored) == 0 || stored[0] != batch[0] {
+			t.Fatalf("queued batch moved from slot %d after one dequeue/enqueue", position)
+		}
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		batch, ok := conn.takeBatch()
+		if !ok {
+			panic("takeBatch exhausted the full queue")
+		}
+		conn.queueBatch(batch)
+	}); allocs != 0 {
+		t.Fatalf("full-backlog dequeue/enqueue allocations = %v, want 0", allocs)
+	}
+}
+
+func TestBatchReadQueueClearsAllSlotsAfterDrain(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	for i := range batchQueueRetainedCapacity {
+		conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: uint32(1000 + i)}}})
+	}
+	for range batchQueueRetainedCapacity / 2 {
+		if _, ok := conn.takeBatch(); !ok {
+			t.Fatal("takeBatch exhausted the full queue early")
+		}
+	}
+	conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: 2000}}})
+	for range batchQueueRetainedCapacity/2 + 1 {
+		if _, ok := conn.takeBatch(); !ok {
+			t.Fatal("takeBatch exhausted the queue early")
+		}
+	}
+
+	for i, batch := range conn.readBatches[:cap(conn.readBatches)] {
+		if batch != nil {
+			t.Fatalf("drained queue retained a batch in physical slot %d", i)
+		}
+	}
+}
+
+func TestBatchReadQueuePreservesOrderAcrossWrapAndGrowth(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var want []uint32
+	nextID := uint32(1000)
+	for range batchQueueRetainedCapacity {
+		conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: nextID}}})
+		want = append(want, nextID)
+		nextID++
+	}
+	for range 3 {
+		batch, ok := conn.takeBatch()
+		if !ok || batch[0].h.PacketID != want[0] {
+			t.Fatal("takeBatch broke order while preparing a wrapped queue")
+		}
+		want = want[1:]
+	}
+	for range 4 {
+		conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: nextID}}})
+		want = append(want, nextID)
+		nextID++
+	}
+	// The fourth append grows a full ring whose head is non-zero, exercising both copy segments.
+	for cycle := range 500 {
+		for range cycle%5 + 1 {
+			conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: nextID}}})
+			want = append(want, nextID)
+			nextID++
+		}
+		for range min(cycle%3+1, len(want)) {
+			batch, ok := conn.takeBatch()
+			if !ok {
+				t.Fatal("takeBatch exhausted the mixed queue early")
+			}
+			if got := batch[0].h.PacketID; got != want[0] {
+				t.Fatalf("takeBatch ID = %d, want %d", got, want[0])
+			}
+			want = want[1:]
+		}
+	}
+	for len(want) != 0 {
+		batch, ok := conn.takeBatch()
+		if !ok {
+			t.Fatal("takeBatch exhausted the final queue early")
+		}
+		if got := batch[0].h.PacketID; got != want[0] {
+			t.Fatalf("takeBatch final ID = %d, want %d", got, want[0])
+		}
+		want = want[1:]
+	}
+	if len(conn.readBatches) != batchQueueRetainedCapacity {
+		t.Fatalf("drained burst queue capacity = %d, want %d", len(conn.readBatches), batchQueueRetainedCapacity)
+	}
+	for i, batch := range conn.readBatches {
+		if batch != nil {
+			t.Fatalf("drained burst queue retained a batch in physical slot %d", i)
+		}
+	}
+}
+
+func TestReadBatchWakesForDeferredOnlyBatch(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+
+	type result struct {
+		packets []packet.Packet
+		err     error
+	}
+	resultCh := make(chan result, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		packets, err := conn.ReadBatch()
+		resultCh <- result{packets: packets, err: err}
+	}()
+	<-started
+
+	// During login, a whole wire batch may consist only of packets deferred by the handshake.
+	// Publishing that batch must wake a ReadBatch already waiting for incoming traffic.
+	conn.deferPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("ReadBatch: %v", got.err)
+		}
+		if ids := packetIDs(got.packets); len(ids) != 1 || ids[0] != 700 {
+			t.Fatalf("ReadBatch IDs = %v, want [700]", ids)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadBatch did not wake for a deferred-only batch")
+	}
+}
+
+func TestReadBatchDrainsQueuedBatchBeforeDeadline(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.batchReading = true
+	deadline := make(chan time.Time)
+	conn.readDeadline = deadline
+
+	conn.collectPacket(&packetData{h: &packet.Header{PacketID: 700}, payload: bytes.NewBuffer(nil)})
+	conn.flushBatch()
+	close(deadline)
+
+	packets, err := conn.ReadBatch()
+	if err != nil {
+		t.Fatalf("ReadBatch: %v", err)
+	}
+	if ids := packetIDs(packets); len(ids) != 1 || ids[0] != 700 {
+		t.Fatalf("ReadBatch IDs = %v, want [700]", ids)
+	}
+	if _, err := conn.ReadBatch(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReadBatch after drained queue error = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
 func TestReadBatchStopsAfterConnClosingDecodeError(t *testing.T) {
 	client, serverConn := net.Pipe()
 	defer client.Close()

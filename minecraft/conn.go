@@ -40,6 +40,8 @@ type exemptedResourcePack struct {
 	version string
 }
 
+const batchQueueRetainedCapacity = 8
+
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
@@ -265,8 +267,9 @@ type Conn struct {
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.
 	packets chan *packetData
-	// packetBatches holds the packets from one decoder batch when batch reading is enabled.
-	packetBatches chan []*packetData
+	// batchReady signals that readBatches contains a batch. The buffered signal is level-triggered:
+	// readBatches remains the source of truth and may contain more than one batch.
+	batchReady chan struct{}
 	// batchReading, if true, preserves incoming network batch boundaries: packets must be read through
 	// ReadBatch and the single-packet read methods are unavailable.
 	batchReading bool
@@ -277,15 +280,17 @@ type Conn struct {
 	// batch reading is enabled. Like pendingBatch, it is owned by the processing goroutine.
 	batchDeferred []*packetData
 
-	deferredPacketMu sync.Mutex
+	// readQueueMu protects deferredPackets and readBatches.
+	readQueueMu sync.Mutex
 	// deferredPackets is a list of packets that were pushed back during the login sequence because they
 	// were not used by the connection yet. These packets are read the first when calling to Read or
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
-	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadBatch
-	// returns before the batches queued in packetBatches.
-	deferredBatches [][]*packetData
-	readDeadline    <-chan time.Time
+	// readBatches is ring storage holding complete network batches in receive order.
+	readBatches   [][]*packetData
+	readBatchHead int
+	readBatchLen  int
+	readDeadline  <-chan time.Time
 
 	// sendMu protects bufferedSend/bufferedSendSpare.
 	sendMu sync.Mutex
@@ -400,7 +405,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		salt:                 make([]byte, 16),
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
-		packetBatches:        make(chan []*packetData, 8),
+		batchReady:           make(chan struct{}, 1),
+		readBatches:          make([][]*packetData, batchQueueRetainedCapacity),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
 		conn:                 netConn,
@@ -745,29 +751,22 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
 	}
 	for {
-		batch, ok := conn.takeDeferredBatch()
+		batch, ok := conn.takeBatch()
 		if !ok {
 			// Prefer batches already queued over reporting a closed connection or an expired deadline,
 			// so that packets received before a disconnect are still delivered. A batch is flushed
 			// before the context is cancelled, so once either fires a queued batch is already visible
-			// and a final non-blocking receive drains it ahead of the error.
+			// and a final queue check drains it ahead of the error.
 			select {
-			case batch = <-conn.packetBatches:
-			default:
-				select {
-				case batch = <-conn.packetBatches:
-				case <-conn.ctx.Done():
-					select {
-					case batch = <-conn.packetBatches:
-					default:
-						return nil, conn.closeErr("read packets")
-					}
-				case <-conn.readDeadline:
-					select {
-					case batch = <-conn.packetBatches:
-					default:
-						return nil, conn.wrap(context.DeadlineExceeded, "read packets")
-					}
+			case <-conn.batchReady:
+				continue
+			case <-conn.ctx.Done():
+				if batch, ok = conn.takeBatch(); !ok {
+					return nil, conn.closeErr("read packets")
+				}
+			case <-conn.readDeadline:
+				if batch, ok = conn.takeBatch(); !ok {
+					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
 				}
 			}
 		}
@@ -1139,8 +1138,8 @@ func (conn *Conn) disconnectPacketMessage(pk *packet.Disconnect) string {
 // takeDeferredPacket locks the deferred packets lock and takes the next packet from the list of deferred
 // packets. If none was found, it returns false, and if one was found, the data and true is returned.
 func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
-	conn.deferredPacketMu.Lock()
-	defer conn.deferredPacketMu.Unlock()
+	conn.readQueueMu.Lock()
+	defer conn.readQueueMu.Unlock()
 
 	if len(conn.deferredPackets) == 0 {
 		return nil, false
@@ -1154,28 +1153,57 @@ func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
 	return data, true
 }
 
-// takeDeferredBatch takes the next batch from the list of deferred batches, reporting whether one was
-// found.
-func (conn *Conn) takeDeferredBatch() ([]*packetData, bool) {
-	conn.deferredPacketMu.Lock()
-	defer conn.deferredPacketMu.Unlock()
+// takeBatch takes the next complete network batch from the read queue.
+func (conn *Conn) takeBatch() ([]*packetData, bool) {
+	conn.readQueueMu.Lock()
+	defer conn.readQueueMu.Unlock()
 
-	if len(conn.deferredBatches) == 0 {
+	if conn.readBatchLen == 0 {
 		return nil, false
 	}
-	batch := conn.deferredBatches[0]
-	// Explicitly clear out the batch at offset 0 so that it may be garbage collected, like
+	batch := conn.readBatches[conn.readBatchHead]
+	// Explicitly clear out the consumed batch so that it may be garbage collected, like
 	// takeDeferredPacket does.
-	conn.deferredBatches[0] = nil
-	conn.deferredBatches = conn.deferredBatches[1:]
+	conn.readBatches[conn.readBatchHead] = nil
+	conn.readBatchHead = (conn.readBatchHead + 1) % len(conn.readBatches)
+	conn.readBatchLen--
+	if conn.readBatchLen == 0 {
+		// Reuse the old channel's small steady-state capacity, but release a queue that grew during
+		// a burst once it has been completely drained.
+		if len(conn.readBatches) > batchQueueRetainedCapacity {
+			conn.readBatches = make([][]*packetData, batchQueueRetainedCapacity)
+		}
+		conn.readBatchHead = 0
+		select {
+		case <-conn.batchReady:
+		default:
+		}
+	}
 	return batch, true
 }
 
-// deferBatch defers a batch so that it is returned by ReadBatch before any batch queued after it.
-func (conn *Conn) deferBatch(batch []*packetData) {
-	conn.deferredPacketMu.Lock()
-	conn.deferredBatches = append(conn.deferredBatches, batch)
-	conn.deferredPacketMu.Unlock()
+// queueBatch queues a complete network batch for ReadBatch without blocking the processing goroutine.
+func (conn *Conn) queueBatch(batch []*packetData) {
+	conn.readQueueMu.Lock()
+	if len(conn.readBatches) == 0 {
+		conn.readBatches = make([][]*packetData, batchQueueRetainedCapacity)
+	}
+	if conn.readBatchLen == len(conn.readBatches) {
+		grown := make([][]*packetData, len(conn.readBatches)*2)
+		copied := copy(grown, conn.readBatches[conn.readBatchHead:])
+		copy(grown[copied:], conn.readBatches[:conn.readBatchHead])
+		clear(conn.readBatches)
+		conn.readBatches = grown
+		conn.readBatchHead = 0
+	}
+	tail := (conn.readBatchHead + conn.readBatchLen) % len(conn.readBatches)
+	conn.readBatches[tail] = batch
+	conn.readBatchLen++
+	select {
+	case conn.batchReady <- struct{}{}:
+	default:
+	}
+	conn.readQueueMu.Unlock()
 }
 
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
@@ -1186,9 +1214,9 @@ func (conn *Conn) deferPacket(pk *packetData) {
 		conn.batchDeferred = append(conn.batchDeferred, pk)
 		return
 	}
-	conn.deferredPacketMu.Lock()
+	conn.readQueueMu.Lock()
 	conn.deferredPackets = append(conn.deferredPackets, pk)
-	conn.deferredPacketMu.Unlock()
+	conn.readQueueMu.Unlock()
 }
 
 // receive receives an incoming serialised packet from the underlying connection. If the connection is not yet
@@ -1324,29 +1352,19 @@ func (conn *Conn) flushBatch() {
 	if len(deferred) == 0 && len(batch) == 0 {
 		return
 	}
-	// Move a batch still queued to the deferred list first, so that the entries below cannot overtake
-	// it. This goroutine is the only sender, meaning the channel never holds more than one batch and
-	// the send below cannot block.
-	select {
-	case previous := <-conn.packetBatches:
-		conn.deferBatch(previous)
-	default:
-	}
 	if len(deferred) != 0 {
 		// Packets deferred during a wire batch precede the ones collected from it, so combining them
-		// keeps one network batch mapped to one ReadBatch result. The combined batch goes through the
-		// unbounded deferred list because deferral happens during login, before the connection is
-		// delivered and read, where a send to the bounded channel could block. Deferred packets stay
-		// readable after a close, matching deferredPackets in single-packet mode.
-		conn.deferBatch(append(deferred, batch...))
-		return
-	}
-	if conn.ctx.Err() != nil {
+		// keeps one network batch mapped to one ReadBatch result. Deferral happens during login, before
+		// the connection is delivered and read, so the FIFO remains unbounded as the old deferred list
+		// was. Deferred packets stay readable after a close, matching deferredPackets in single-packet
+		// mode.
+		batch = append(deferred, batch...)
+	} else if conn.ctx.Err() != nil {
 		// The connection closed: drop collected packets, matching queuePacket dropping post-close
 		// traffic in single-packet mode.
 		return
 	}
-	conn.packetBatches <- batch
+	conn.queueBatch(batch)
 }
 
 // handle tries to handle the incoming packetData.
