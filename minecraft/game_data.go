@@ -67,9 +67,6 @@ type GameData struct {
 	// WorldGameMode is the game mode that a player gets when it first spawns in the world. It is shown in the
 	// settings and is used if the PlayerGameMode is set to 5.
 	WorldGameMode int32
-	// GamePublishSetting specifies the multiplayer setting of the game. It is a value from 0-4, with 0 being
-	// no multiplayer enabled, 1 being invited only, 2 being friends only, 3 being friends of friends, and 4 being public.
-	GamePublishSetting int32
 	// Hardcore is if the world is in hardcore mode. In hardcore mode, the player cannot respawn after dying.
 	Hardcore bool
 	// XBLBroadcastMode is the mode used to broadcast the joined game across Xbox Live.
@@ -126,6 +123,9 @@ type GameData struct {
 	// such as gophertunnel:example or gophertunnel:custom_property, which can be used by resource packs
 	// to change skins, models, or other player behaviors at runtime.
 	PropertyData map[string]any
+	// MultiPlayerCorrelationID is the unique ID the server sent in StartGame to identify the world/session,
+	// used for telemetry. Proxies use it to recognize server software from the ID's format.
+	MultiPlayerCorrelationID string
 
 	// Dimensions is a list of dimension definitions sent by the DimensionData packet. This can include overriding
 	// the height of vanilla dimensions or registering new dimensions.

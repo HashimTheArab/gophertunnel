@@ -16,6 +16,7 @@ const (
 	WindowIDOffHand   = 119
 	WindowIDArmour    = 120
 	WindowIDUI        = 124
+	WindowIDRegistry  = 125
 )
 
 // InventoryAction represents a single action that took place during an inventory transaction. On itself, this

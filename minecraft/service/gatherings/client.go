@@ -148,7 +148,7 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 		}
 		return result.Data, nil
 	default:
-		return nil, internal.Err(resp)
+		return nil, service.NewResponseError(resp)
 	}
 }
 
@@ -255,6 +255,6 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 		}
 		return result.Data, nil
 	default:
-		return nil, internal.Err(resp)
+		return nil, service.NewResponseError(resp)
 	}
 }

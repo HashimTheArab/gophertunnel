@@ -11,6 +11,21 @@ const (
 	DimensionEnd
 )
 
+// DimensionID returns the dimension constant for a vanilla dimension identifier such as
+// "minecraft:overworld", reporting whether the name is known. "minecraft:end" is accepted
+// as a third-party alias for the vanilla "minecraft:the_end".
+func DimensionID(name string) (int32, bool) {
+	switch name {
+	case "minecraft:overworld":
+		return DimensionOverworld, true
+	case "minecraft:nether":
+		return DimensionNether, true
+	case "minecraft:the_end", "minecraft:end":
+		return DimensionEnd, true
+	}
+	return 0, false
+}
+
 // ChangeDimension is sent by the server to the client to send a dimension change screen client-side. Once the
 // screen is cleared client-side, the client will send a PlayerAction packet with
 // PlayerActionDimensionChangeDone.

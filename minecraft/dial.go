@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -109,11 +108,20 @@ type Dialer struct {
 	// are converted from and to this Protocol.
 	Protocol Protocol
 
-	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
+	// connection control remains internal. When EnableClientCache is also set, cache negotiation remains automatic.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
+	// LazyBlockActorData retains BlockActorData NBT in its original wire form. Decoded packets leave NBTData
+	// nil until MaterialiseNBT is called; NBTFields may inspect selected top-level fields without doing so.
+	// The option is intended for proxies that usually forward these packets unchanged.
+	LazyBlockActorData bool
+
+	// MaxDecompressedLen is the maximum length of a decompressed packet batch. If 0, the default value is
+	// 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
+	MaxDecompressedLen int
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
 	// FlushRate and are compressed/encrypted together to improve compression ratios. The lower this
@@ -125,14 +133,38 @@ type Dialer struct {
 
 	// EnableClientCache, if set to true, enables the client blob cache for the client. This means that the
 	// server will send chunks as blobs, which may be saved by the client so that chunks don't have to be
-	// transmitted every time, resulting in less network transmission.
+	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
+	// DisablePacketHandling is set.
 	EnableClientCache bool
+	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
+	// ClientCacheStatus. Relays that forward the real client's status set this so the server negotiates
+	// the cache once. It only applies with DisablePacketHandling; normal logins need the packet.
+	ForwardClientCacheStatus bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server
 	// if the authentication token is not set. This is technically not valid and some servers might kick
 	// the client when an XUID is present without logging in.
 	// For getting this to work with BDS, authentication should be disabled.
 	KeepXBLIdentityData bool
+}
+
+// serverPacketPool returns the server packet pool for p, optionally replacing
+// BlockActorData with its raw-backed decoder.
+func serverPacketPool(p Protocol, lazyBlockActorData bool) packet.Pool {
+	pool := p.Packets(false)
+	factory, ok := pool[packet.IDBlockActorData]
+	if lazyBlockActorData && ok {
+		if _, current := factory().(*packet.BlockActorData); !current {
+			return pool
+		}
+		cloned := make(packet.Pool, len(pool))
+		for id, factory := range pool {
+			cloned[id] = factory
+		}
+		pool = cloned
+		pool[packet.IDBlockActorData] = func() packet.Packet { return packet.NewLazyBlockActorData() }
+	}
+	return pool
 }
 
 // netherNetIdentityProvider returns the issuer in the same trailing-slash form the OIDC
@@ -302,7 +334,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			dialed.abort(err)
 		}
 	}()
-	conn.pool = conn.proto.Packets(false)
+	conn.pool = serverPacketPool(conn.proto, d.LazyBlockActorData)
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
@@ -310,14 +342,18 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.cacheEnabled = d.EnableClientCache
+	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
-	conn.maxDecompressedLen = math.MaxInt
+	conn.maxDecompressedLen = d.MaxDecompressedLen
 	conn.disablePacketHandling = d.DisablePacketHandling
 	conn.batchReading = d.EnableBatchReading
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
+	if conn.clientData.GameVersion == "" {
+		conn.clientData.GameVersion = d.Protocol.Ver()
+	}
 	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
@@ -402,30 +438,12 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
-		packets, err := conn.dec.Decode()
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				if cancelContext {
-					closeCause = err
-					cancel(err)
-				} else {
-					conn.log.Error(err.Error())
-				}
-			}
-			return
-		}
-		conn.reserveBatch(len(packets))
-		for _, data := range packets {
+		callbackErr := false
+		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
-				conn.flushBatch()
-				if cancelContext {
-					closeCause = err
-					cancel(err)
-				} else {
-					conn.log.Error(err.Error())
-				}
-				return
+				callbackErr = true
+				return err
 			}
 			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
 			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
@@ -451,6 +469,18 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 				}
 				cancelContext = false
 			}
+			return nil
+		}); err != nil {
+			conn.flushBatch()
+			if callbackErr || !errors.Is(err, net.ErrClosed) {
+				if cancelContext {
+					closeCause = err
+					cancel(err)
+				} else {
+					conn.log.Error(err.Error())
+				}
+			}
+			return
 		}
 		conn.flushBatch()
 	}

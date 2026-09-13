@@ -29,6 +29,7 @@ func BenchmarkFlateCompressionCompress(b *testing.B) {
 	}
 }
 
+// benchmarkEncoderEncode measures batched encoding with the selected compression algorithm.
 func benchmarkEncoderEncode(b *testing.B, compression Compression) {
 	var out bytes.Buffer
 	encoder := NewEncoder(&out)
@@ -52,6 +53,7 @@ func benchmarkEncoderEncode(b *testing.B, compression Compression) {
 	}
 }
 
+// benchmarkPackets constructs fixed-size packets with distinct repeating payloads.
 func benchmarkPackets(count, size int) [][]byte {
 	packets := make([][]byte, count)
 	for i := range packets {
@@ -64,6 +66,7 @@ func benchmarkPackets(count, size int) [][]byte {
 	return packets
 }
 
+// benchmarkPayload constructs a repeatable compression input.
 func benchmarkPayload(n int) []byte {
 	payload := make([]byte, n)
 	for i := range payload {

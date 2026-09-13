@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -205,8 +207,6 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonDenyListed:                                    "You are in deny list.",
 }
 
-const maxPooledPacketBufferCap = 1 << 20
-
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
 // ReadBatch must not be called on multiple goroutines simultaneously.
@@ -300,7 +300,7 @@ type Conn struct {
 	bufferedSendSpare packetQueue
 	// directSend is reused by WritePacketDirect while directMu is held.
 	directSend   packetQueue
-	packetWriter protocol.IO
+	packetWriter *protocol.Writer
 	hdr          *packet.Header
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
@@ -354,6 +354,9 @@ type Conn struct {
 	ignoredResourcePacks []exemptedResourcePack
 
 	cacheEnabled bool
+	// forwardClientCacheStatus skips the ClientCacheStatus normally sent after LoginSuccess; see
+	// Dialer.ForwardClientCacheStatus.
+	forwardClientCacheStatus bool
 
 	// allow filters what connections are allowed to connect to the Server. The
 	// address, identity data, and client data of the connection are passed. If
@@ -597,9 +600,6 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 		return conn.closeErr("write packet")
 	default:
 	}
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
 	conn.encodePacketsTo(&conn.bufferedSend, pk)
 	return nil
 }
@@ -608,7 +608,10 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 // for protocol conversions and invoking packetFunc callbacks. Encoded packet buffers appended to dst are
 // owned by dst and must be released after the queue is encoded.
 func (conn *Conn) encodePacketsTo(dst *packetQueue, pks ...packet.Packet) {
-	if _, ok := conn.proto.(proto); ok {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	switch conn.proto.(type) {
+	case proto, BasicProtocol, *BasicProtocol:
 		for _, pk := range pks {
 			conn.encodePacketTo(dst, pk)
 		}
@@ -621,40 +624,37 @@ func (conn *Conn) encodePacketsTo(dst *packetQueue, pks ...packet.Packet) {
 	}
 }
 
+// encodePacketTo appends one packet to the queue's shared marshal buffer.
 func (conn *Conn) encodePacketTo(dst *packetQueue, pk packet.Packet) {
-	buf := internal.BufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
+	if dst.buf == nil {
+		dst.buf = internal.BufferPool.Get()
+	}
+	buf := dst.buf
+	start := buf.Len()
 	conn.hdr.PacketID = pk.ID()
 	_ = conn.hdr.Write(buf)
-	l := buf.Len()
+	payloadStart := buf.Len()
 
 	conn.marshalPacket(buf, pk)
 	if conn.packetFunc != nil {
-		conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+		conn.packetFunc(*conn.hdr, buf.Bytes()[payloadStart:], conn.LocalAddr(), conn.RemoteAddr())
 	}
-	dst.appendPooled(buf)
+	dst.packets = append(dst.packets, buf.Bytes()[start:])
 }
 
-type resettablePacketWriter interface {
-	protocol.IO
-	Reset(interface {
-		io.Writer
-		io.ByteWriter
-	}, int32)
-}
-
+// marshalPacket reuses standard writers without retaining their destination between packets.
 func (conn *Conn) marshalPacket(buf *bytes.Buffer, pk packet.Packet) {
 	shieldID := conn.shieldID.Load()
 	var w protocol.IO
-	if writer, ok := conn.packetWriter.(resettablePacketWriter); ok {
-		writer.Reset(buf, shieldID)
-		w = writer
+	if conn.packetWriter != nil {
+		conn.packetWriter.Reset(buf, shieldID)
+		w = conn.packetWriter
 	} else {
-		writer := conn.proto.NewWriter(buf, shieldID)
-		if resettable, ok := writer.(resettablePacketWriter); ok {
-			conn.packetWriter = resettable
-		}
-		w = writer
+		w = conn.proto.NewWriter(buf, shieldID)
+		conn.packetWriter, _ = w.(*protocol.Writer)
+	}
+	if conn.packetWriter != nil {
+		defer conn.packetWriter.Reset(nil, 0)
 	}
 	if translation := conn.actorIDs.Load(); translation != nil {
 		w = translation.WrapWriter(w)
@@ -662,43 +662,22 @@ func (conn *Conn) marshalPacket(buf *bytes.Buffer, pk packet.Packet) {
 	pk.Marshal(w)
 }
 
+// packetQueue owns one marshal buffer and the packet views queued for one batch.
+// Views remain valid if growing buf moves its backing array. Raw Write slices are
+// borrowed separately and are never returned to the buffer pool.
 type packetQueue struct {
 	packets [][]byte
-	buffers []*bytes.Buffer
+	buf     *bytes.Buffer
 }
 
-func (q *packetQueue) appendBorrowed(packet []byte) {
-	q.packets = append(q.packets, packet)
-	q.buffers = append(q.buffers, nil)
-}
-
-func (q *packetQueue) appendPooled(buf *bytes.Buffer) {
-	q.packets = append(q.packets, buf.Bytes())
-	q.buffers = append(q.buffers, buf)
-}
-
-func (q *packetQueue) reset() {
-	q.packets = q.packets[:0]
-	q.buffers = q.buffers[:0]
-}
-
+// release drops packet references and returns the owned marshal buffer after encoding.
 func (q *packetQueue) release() {
-	for i, buf := range q.buffers {
-		q.packets[i] = nil
-		q.buffers[i] = nil
-		if buf != nil {
-			releasePacketBuffer(buf)
-		}
+	clear(q.packets)
+	q.packets = q.packets[:0]
+	if q.buf != nil {
+		internal.BufferPool.Put(q.buf)
+		q.buf = nil
 	}
-	q.reset()
-}
-
-func releasePacketBuffer(buf *bytes.Buffer) {
-	if buf.Cap() > maxPooledPacketBufferCap {
-		return
-	}
-	buf.Reset()
-	internal.BufferPool.Put(buf)
 }
 
 // WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
@@ -711,9 +690,7 @@ func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 	default:
 	}
 
-	conn.sendMu.Lock()
 	conn.encodePacketsTo(&conn.bufferedSend, pks...)
-	conn.sendMu.Unlock()
 
 	return conn.Flush()
 }
@@ -728,20 +705,16 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	default:
 	}
 	conn.directMu.Lock()
-	conn.sendMu.Lock()
-	conn.directSend.reset()
+	defer conn.directMu.Unlock()
+	defer conn.directSend.release()
 	conn.encodePacketsTo(&conn.directSend, pks...)
-	conn.sendMu.Unlock()
 
-	var err error
-	if len(conn.directSend.packets) > 0 {
-		conn.encMu.Lock()
-		err = conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
-		conn.encMu.Unlock()
+	if len(conn.directSend.packets) == 0 {
+		return nil
 	}
-	conn.directSend.release()
-	conn.directMu.Unlock()
-	return err
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	return conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
 }
 
 // ReadPacket reads a packet from the Conn, depending on the packet ID that is found in front of the packet
@@ -867,7 +840,7 @@ func (conn *Conn) Write(b []byte) (n int, err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	conn.bufferedSend.appendBorrowed(b)
+	conn.bufferedSend.packets = append(conn.bufferedSend.packets, b)
 	return len(b), nil
 }
 
@@ -919,6 +892,9 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 // Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
 // are directly sent.
 func (conn *Conn) Flush() error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("flush")
@@ -938,22 +914,21 @@ func (conn *Conn) Flush() error {
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
 	conn.bufferedSend = conn.bufferedSendSpare
-	conn.bufferedSend.reset()
 	conn.bufferedSendSpare = packetQueue{}
 	conn.sendMu.Unlock()
 
-	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend.packets), "flush")
-	toSend.release()
-
-	conn.sendMu.Lock()
-	conn.bufferedSendSpare = toSend
-	conn.sendMu.Unlock()
-	return encodeErr
+	defer func() {
+		toSend.release()
+		conn.sendMu.Lock()
+		conn.bufferedSendSpare = toSend
+		conn.sendMu.Unlock()
+	}()
+	return conn.handleEncodeError(conn.enc.Encode(toSend.packets), "flush")
 }
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
-// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+// ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
 func (conn *Conn) handleEncodeError(err error, op string) error {
 	if err == nil {
 		return nil
@@ -964,7 +939,7 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
-	panic(fmt.Errorf("error encoding packet batch: %w", err))
+	return conn.wrap(err, op)
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
@@ -1131,6 +1106,7 @@ func (conn *Conn) deferBatch(batch []*packetData) {
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
 // mode, the packet becomes part of the deferred batch flushed by the next flushBatch call.
 func (conn *Conn) deferPacket(pk *packetData) {
+	pk = pk.ensureOwned()
 	if conn.batchReading {
 		conn.batchDeferred = append(conn.batchDeferred, pk)
 		return
@@ -1174,6 +1150,9 @@ func (conn *Conn) receive(data []byte) error {
 		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
+		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+			return err
+		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
@@ -1191,7 +1170,7 @@ func (conn *Conn) receive(data []byte) error {
 			if !conn.collectPacket(pkData) {
 				select {
 				case <-conn.ctx.Done():
-				case conn.packets <- pkData:
+				case conn.packets <- pkData.ensureOwned():
 				}
 			}
 			return nil
@@ -1206,9 +1185,37 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
+// handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
+// raw PlayStatus packet owned by a passthrough caller.
+func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
+	if conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
+		return nil
+	}
+	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
+		return nil
+	}
+	probe := &packetData{
+		h:       pkData.h,
+		full:    pkData.full,
+		payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+		owned:   true,
+	}
+	pks, err := probe.decodePacket(conn)
+	if err != nil {
+		return nil
+	}
+	for _, pk := range pks {
+		if status, ok := pk.(*packet.PlayStatus); ok && status.Status == packet.PlayStatusLoginSuccess {
+			return conn.handleLoginSuccess()
+		}
+	}
+	return nil
+}
+
 // queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
 // read first. It never blocks the goroutine processing incoming packets.
 func (conn *Conn) queuePacket(data *packetData) {
+	data = data.ensureOwned()
 	select {
 	case <-conn.ctx.Done():
 	case previous := <-conn.packets:
@@ -1228,15 +1235,8 @@ func (conn *Conn) collectPacket(data *packetData) bool {
 	if !conn.batchReading {
 		return false
 	}
-	conn.pendingBatch = append(conn.pendingBatch, data)
+	conn.pendingBatch = append(conn.pendingBatch, data.ensureOwned())
 	return true
-}
-
-// reserveBatch pre-allocates the pending batch for n packets when batch reading is enabled.
-func (conn *Conn) reserveBatch(n int) {
-	if conn.batchReading && conn.pendingBatch == nil && n > 0 {
-		conn.pendingBatch = make([]*packetData, 0, n)
-	}
 }
 
 // flushBatch queues the network batch currently being collected, along with any packets deferred while
@@ -1390,14 +1390,22 @@ func (conn *Conn) handlePacket(pk packet.Packet) error {
 	return nil
 }
 
+// setProtocol installs the negotiated dialect and discards the previous dialect's cached writer.
+func (conn *Conn) setProtocol(p Protocol) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	conn.proto = p
+	conn.pool = p.Packets(true)
+	conn.packetWriter = nil
+}
+
 // handleRequestNetworkSettings handles an incoming RequestNetworkSettings packet. It returns an error if the protocol
 // version is not supported, otherwise sending back a NetworkSettings packet.
 func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings) error {
 	found := false
 	for _, pro := range conn.acceptedProto {
 		if pro.ID() == pk.ClientProtocol {
-			conn.proto = pro
-			conn.pool = pro.Packets(true)
+			conn.setProtocol(pro)
 			found = true
 			break
 		}
@@ -1406,8 +1414,7 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	if !found && conn.acceptNewerProtocols && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
 		// The client runs a Minecraft version this build predates. Serve it with the newest protocol
 		// known: packets whose layout is unchanged in the client's version still decode correctly.
-		conn.proto = newestAccepted(conn.acceptedProto)
-		conn.pool = conn.proto.Packets(true)
+		conn.setProtocol(newestAccepted(conn.acceptedProto))
 		found = true
 	}
 
@@ -1475,6 +1482,14 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("parse login request: %w", err)
 	}
 
+	// Mojang has shipped wire changes without bumping the protocol ID, so several
+	// accepted protocols may share the negotiated one. Login is the first point
+	// that carries the client's game version, which is what tells them apart.
+	if err := conn.selectProtocolByGameVersion(); err != nil {
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
+		return err
+	}
+
 	// Make sure the player is logged in with XBOX Live when necessary.
 	if !authResult.XBOXLiveAuthenticated && conn.authEnabled {
 		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
@@ -1501,6 +1516,75 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("enable encryption: %w", err)
 	}
 	return nil
+}
+
+// selectProtocolByGameVersion narrows the negotiated protocol to the accepted
+// one whose version is the newest that the client's game version reaches. It is
+// a no-op unless several accepted protocols share the negotiated ID, and it
+// leaves the negotiation alone when the client reports a version it cannot
+// parse, since that value is client-controlled.
+func (conn *Conn) selectProtocolByGameVersion() error {
+	id := conn.proto.ID()
+	var candidates []Protocol
+	for _, pro := range conn.acceptedProto {
+		if pro.ID() == id {
+			candidates = append(candidates, pro)
+		}
+	}
+	if len(candidates) < 2 {
+		return nil
+	}
+	clientVer, ok := parseGameVersion(conn.clientData.GameVersion)
+	if !ok {
+		return nil
+	}
+
+	var best Protocol
+	var bestVer [3]int
+	for _, pro := range candidates {
+		ver, ok := parseGameVersion(pro.Ver())
+		if !ok || compareGameVersion(ver, clientVer) > 0 {
+			continue
+		}
+		if best == nil || compareGameVersion(ver, bestVer) > 0 {
+			best, bestVer = pro, ver
+		}
+	}
+	if best == nil {
+		return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, id)
+	}
+	conn.setProtocol(best)
+	return nil
+}
+
+// parseGameVersion reads the leading major.minor.patch of a game version,
+// ignoring any build revision after it.
+func parseGameVersion(version string) (parsed [3]int, ok bool) {
+	fields := strings.SplitN(version, ".", 4)
+	if len(fields) < 3 {
+		return parsed, false
+	}
+	for i := range parsed {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil || n < 0 {
+			return parsed, false
+		}
+		parsed[i] = n
+	}
+	return parsed, true
+}
+
+// compareGameVersion orders two parsed game versions.
+func compareGameVersion(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 // publicKeyConn is implemented by underlying [net.Conn] of the Conn to provide access
@@ -1569,8 +1653,7 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	if err != nil {
 		return fmt.Errorf("parse server token: %w", err)
 	}
-	//lint:ignore S1005 Double assignment is done explicitly to prevent panics.
-	raw, _ := tok.Headers[0].ExtraHeaders["x5u"]
+	raw := tok.Headers[0].ExtraHeaders["x5u"]
 	kStr, _ := raw.(string)
 
 	pub := new(ecdsa.PublicKey)
@@ -1685,7 +1768,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
 		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
-			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
+			buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
 			contentKey: pack.ContentKey,
 			cacheKey:   cacheKey,
 		}
@@ -1719,10 +1802,10 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
 // that resource packs are applied in.
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
-	// We currently don't apply resource packs in any way, so instead we just check if all resource packs in
-	// the stacks are also downloaded.
+	// We currently don't apply resource packs in any way. Required stacks must still be complete, while optional
+	// stacks may reference packs the client deliberately did not download.
 	for _, pack := range pk.TexturePacks {
-		if !conn.hasPack(pack.UUID, pack.Version, false) {
+		if !conn.hasPack(pack.UUID, pack.Version, false) && pk.TexturePackRequired {
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
 		}
 	}
@@ -1823,50 +1906,16 @@ func (conn *Conn) startGame() error {
 	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
 		return err
 	}
-	if err := conn.WritePacket(&packet.StartGame{
-		Difficulty:                   data.Difficulty,
-		EntityUniqueID:               data.EntityUniqueID,
-		EntityRuntimeID:              data.EntityRuntimeID,
-		PlayerGameMode:               data.PlayerGameMode,
-		PlayerPosition:               data.PlayerPosition,
-		Pitch:                        data.Pitch,
-		Yaw:                          data.Yaw,
-		WorldSeed:                    data.WorldSeed,
-		Dimension:                    data.Dimension,
-		WorldSpawn:                   data.WorldSpawn,
-		EditorWorldType:              data.EditorWorldType,
-		CreatedInEditor:              data.CreatedInEditor,
-		ExportedFromEditor:           data.ExportedFromEditor,
-		PersonaDisabled:              data.PersonaDisabled,
-		CustomSkinsDisabled:          data.CustomSkinsDisabled,
-		EmoteChatMuted:               data.EmoteChatMuted,
-		GameRules:                    data.GameRules,
-		Time:                         data.Time,
-		DayCycleLockTime:             data.DayCycleLockTime,
-		Blocks:                       data.CustomBlocks,
-		AchievementsDisabled:         true,
-		Generator:                    1,
-		EducationFeaturesEnabled:     true,
-		MultiPlayerGame:              true,
-		MultiPlayerCorrelationID:     uuid.Must(uuid.NewRandom()).String(),
-		CommandsEnabled:              true,
-		WorldName:                    data.WorldName,
-		LANBroadcastEnabled:          true,
-		PlayerMovementSettings:       data.PlayerMovementSettings,
-		WorldGameMode:                data.WorldGameMode,
-		Hardcore:                     data.Hardcore,
-		XBLBroadcastMode:             data.XBLBroadcastMode,
-		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
-		PlayerPermissions:            data.PlayerPermissions,
-		Experiments:                  data.Experiments,
-		ClientSideGeneration:         data.ClientSideGeneration,
-		ChatRestrictionLevel:         data.ChatRestrictionLevel,
-		DisablePlayerInteractions:    data.DisablePlayerInteractions,
-		BaseGameVersion:              data.BaseGameVersion,
-		GameVersion:                  protocol.CurrentVersion,
-		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
-		PropertyData:                 data.PropertyData,
-	}); err != nil {
+	pk := StartGameFromGameData(data)
+	pk.AchievementsDisabled = true
+	pk.Generator = 1
+	pk.EducationFeaturesEnabled = true
+	pk.MultiPlayerGame = true
+	pk.MultiPlayerCorrelationID = cmp.Or(data.MultiPlayerCorrelationID, uuid.Must(uuid.NewRandom()).String())
+	pk.CommandsEnabled = true
+	pk.LANBroadcastEnabled = true
+	pk.GameVersion = protocol.CurrentVersion
+	if err := conn.WritePacket(pk); err != nil {
 		return err
 	}
 	if err := conn.WritePacket(&packet.ItemRegistry{Items: data.Items}); err != nil {
@@ -1882,7 +1931,10 @@ func (conn *Conn) startGame() error {
 // nextResourcePackDownload moves to the next resource pack to download and sends a resource pack data info
 // packet with information about it.
 func (conn *Conn) nextResourcePackDownload() error {
-	pk, ok := conn.packQueue.NextPack()
+	pk, ok, err := conn.packQueue.NextPack()
+	if err != nil {
+		return fmt.Errorf("prepare ResourcePackDataInfo: %w", err)
+	}
 	if !ok {
 		return fmt.Errorf("no resource packs to download")
 	}
@@ -1912,30 +1964,30 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		pack.size = pk.Size
 	}
 
-	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
-	delete(conn.packQueue.downloadingPacks, id)
 	if pk.DataChunkSize == 0 {
 		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
 	}
+
+	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
+	delete(conn.packQueue.downloadingPacks, id)
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := pk.Size / uint64(pk.DataChunkSize)
-	if pk.Size%uint64(pk.DataChunkSize) != 0 {
-		chunkCount++
-	}
-	if chunkCount > uint64(^uint32(0)) {
+	chunkCount, ok := resourcePackChunkCount(pk.Size, pk.DataChunkSize)
+	if !ok {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
-	pack.chunkCount = uint32(chunkCount)
+	pack.chunkCount = chunkCount
 	window := uint64(conn.resourcePackDownload.MaxInFlightChunks)
-	if window > chunkCount {
-		window = max(chunkCount, 1)
+	if window > uint64(chunkCount) {
+		window = max(uint64(chunkCount), 1)
 	}
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
+	conn.packMu.Lock()
 	conn.packQueue.awaitingPacks[id] = pack
+	conn.packMu.Unlock()
 
 	idCopy := pk.UUID
 	go func() {
@@ -1945,24 +1997,32 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
 			pack.mu.Unlock()
-			return conn.WritePacket(&packet.ResourcePackChunkRequest{
+			if err := conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
 				ChunkIndex: int32(index),
-			})
+			}); err != nil {
+				pack.mu.Lock()
+				delete(pack.requested, index)
+				pack.mu.Unlock()
+				return err
+			}
+			return nil
 		}
 
 		// fillWindow replenishes one request for each response accepted by the client.
-		fillWindow := func() bool {
+		fillWindow := func() error {
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
-				if requestChunk(nextRequest) != nil {
-					return false
+				if err := requestChunk(nextRequest); err != nil {
+					return fmt.Errorf("request chunk %v: %w", nextRequest, err)
 				}
 				nextRequest++
 			}
-			return true
+			return nil
 		}
 
-		if !fillWindow() {
+		if err := fillWindow(); err != nil {
+			// The transport already refused a write, so abort rather than let the cleanup flush block on it.
+			_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 			return
 		}
 		for nextWrite < pack.chunkCount {
@@ -1978,25 +2038,25 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
-				if !fillWindow() {
+				if err := fillWindow(); err != nil {
+					_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 					return
 				}
 			}
 		}
-		conn.packMu.Lock()
 		if pack.buf.Len() != int(pack.size) {
-			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
-			conn.packMu.Unlock()
+			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.buf.Len()))
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
-			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
-			conn.packMu.Unlock()
+			_ = conn.close(fmt.Errorf("download resource pack %v: parse: %w", id, err))
 			return
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
+		conn.packMu.Lock()
+		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -2005,7 +2065,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack)
-			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
+			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
+				return
+			}
 		}
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
@@ -2016,7 +2079,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
 	pk.UUID = strings.Split(pk.UUID, "_")[0]
+	conn.packMu.Lock()
 	pack, ok := conn.packQueue.awaitingPacks[pk.UUID]
+	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
 		// download a resource pack.
@@ -2088,32 +2153,14 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	lastChunk := response.DataOffset+uint64(len(response.Data)) >= uint64(current.Size())
 	if lastChunk {
 		if !conn.packQueue.AllDownloaded() {
-			_ = conn.nextResourcePackDownload()
+			if err := conn.nextResourcePackDownload(); err != nil {
+				return err
+			}
 		} else {
 			conn.expect(packet.IDResourcePackClientResponse)
 		}
 	}
-	if err := waitResourcePackChunkSendDelay(conn.ctx, conn.resourcePackDelivery.ChunkSendDelay); err != nil {
-		return err
-	}
-
 	return nil
-}
-
-// waitResourcePackChunkSendDelay waits before processing the next resource pack chunk request.
-func waitResourcePackChunkSendDelay(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
@@ -2140,6 +2187,50 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
+}
+
+// StartGameFromGameData returns the StartGame packet encoding data, inverting
+// GameDataFromStartGame. Fields GameData does not carry are left zero;
+// TestStartGameGameDataRoundTrip keeps the two mappings in sync.
+func StartGameFromGameData(data GameData) *packet.StartGame {
+	return &packet.StartGame{
+		Difficulty:                   data.Difficulty,
+		WorldName:                    data.WorldName,
+		WorldSeed:                    data.WorldSeed,
+		EntityUniqueID:               data.EntityUniqueID,
+		EntityRuntimeID:              data.EntityRuntimeID,
+		PlayerGameMode:               data.PlayerGameMode,
+		BaseGameVersion:              data.BaseGameVersion,
+		PlayerPosition:               data.PlayerPosition,
+		Pitch:                        data.Pitch,
+		Yaw:                          data.Yaw,
+		Dimension:                    data.Dimension,
+		WorldSpawn:                   data.WorldSpawn,
+		EditorWorldType:              data.EditorWorldType,
+		CreatedInEditor:              data.CreatedInEditor,
+		ExportedFromEditor:           data.ExportedFromEditor,
+		PersonaDisabled:              data.PersonaDisabled,
+		CustomSkinsDisabled:          data.CustomSkinsDisabled,
+		EmoteChatMuted:               data.EmoteChatMuted,
+		GameRules:                    data.GameRules,
+		Time:                         data.Time,
+		DayCycleLockTime:             data.DayCycleLockTime,
+		ServerBlockStateChecksum:     data.ServerBlockStateChecksum,
+		Blocks:                       data.CustomBlocks,
+		PlayerMovementSettings:       data.PlayerMovementSettings,
+		WorldGameMode:                data.WorldGameMode,
+		Hardcore:                     data.Hardcore,
+		XBLBroadcastMode:             data.XBLBroadcastMode,
+		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
+		PlayerPermissions:            data.PlayerPermissions,
+		ChatRestrictionLevel:         data.ChatRestrictionLevel,
+		DisablePlayerInteractions:    data.DisablePlayerInteractions,
+		ClientSideGeneration:         data.ClientSideGeneration,
+		Experiments:                  data.Experiments,
+		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
+		PropertyData:                 data.PropertyData,
+		MultiPlayerCorrelationID:     data.MultiPlayerCorrelationID,
+	}
 }
 
 func GameDataFromStartGame(pk *packet.StartGame) GameData {
@@ -2179,6 +2270,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 		PropertyData:                 pk.PropertyData,
+		MultiPlayerCorrelationID:     pk.MultiPlayerCorrelationID,
 	}
 }
 
@@ -2248,16 +2340,7 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
-		if conn.loginSuccessReceived {
-			return nil
-		}
-		conn.loginSuccessReceived = true
-		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
-			return fmt.Errorf("send ClientCacheStatus: %w", err)
-		}
-		// The next packet we expect is the ResourcePacksInfo packet.
-		conn.expect(packet.IDResourcePacksInfo)
-		return conn.Flush()
+		return conn.handleLoginSuccess()
 	case packet.PlayStatusLoginFailedClient:
 		_ = conn.close(conn.closeErr("client outdated"))
 		return fmt.Errorf("client outdated")
@@ -2290,6 +2373,23 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	default:
 		return fmt.Errorf("unknown play status %v", pk.Status)
 	}
+}
+
+// handleLoginSuccess sends the client capabilities required before resource-pack negotiation.
+func (conn *Conn) handleLoginSuccess() error {
+	if conn.loginSuccessReceived {
+		return nil
+	}
+	conn.loginSuccessReceived = true
+	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
+		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
+			return fmt.Errorf("send ClientCacheStatus: %w", err)
+		}
+	}
+	if !conn.disablePacketHandling {
+		conn.expect(packet.IDResourcePacksInfo)
+	}
+	return conn.Flush()
 }
 
 // tryFinaliseClientConn attempts to finalise the client connection by sending
@@ -2406,8 +2506,12 @@ func (conn *Conn) close(cause error) error {
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
-		conn.cancelFunc(cause)
-		conn.abortErr = conn.conn.Close()
+		if conn.cancelFunc != nil {
+			conn.cancelFunc(cause)
+		}
+		if conn.conn != nil {
+			conn.abortErr = conn.conn.Close()
+		}
 	})
 	return conn.abortErr
 }

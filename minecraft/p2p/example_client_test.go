@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/df-mc/go-xsapi/v2/xal/sisu"
@@ -14,8 +13,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/service"
-	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
-	"github.com/sandertv/gophertunnel/minecraft/service/signaling/messaging"
 )
 
 // ExampleClient lists the worlds and joins the first world in the result.
@@ -72,32 +69,19 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error joining world: %s", err))
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
-	connection := session.Connection()
-	var s nethernet.Signaling
-	switch connection.Type {
-	case ConnectionTypeSignalingOverJSONRPC:
-		var d messaging.Dialer
-		conn, err := d.DialContext(context.TODO(), src)
-		if err != nil {
-			panic(fmt.Sprintf("error dialing messaging conn: %s", err))
-		}
-		defer conn.Close()
-		s = conn
-	case ConnectionTypeSignalingOverWebSocket:
-		var d signaling.Dialer
-		conn, err := d.DialContext(context.TODO(), src)
-		if err != nil {
-			panic(fmt.Sprintf("error dialing signaling conn: %s", err))
-		}
-		defer conn.Close()
-		s = conn
-	default:
-		panic(fmt.Sprintf("invalid connection type: %d", connection.Type))
+	target, err := ClientTargetFromSession(session)
+	if err != nil {
+		panic(fmt.Sprintf("error preparing client target: %s", err))
 	}
+	s, err := DialClientSignaling(context.TODO(), target.ConnectionType(), src, ClientSignalingOptions{})
+	if err != nil {
+		panic(fmt.Sprintf("error dialing client signaling: %s", err))
+	}
+	defer func() { _ = s.Close() }()
 
-	address := connection.Address()
+	address := target.DialAddress()
 
 	minecraft.RegisterNetwork("nethernet", func(l *slog.Logger) minecraft.Network {
 		return minecraft.NetherNet{
@@ -106,13 +90,13 @@ func ExampleClient() {
 		}
 	})
 
-	conn, err := minecraft.Dialer{
+	dialer := minecraft.Dialer{
 		XBLClient:     xbl,
 		PlayFabClient: pf,
-		ClientData: login.ClientData{
-			Nonce: session.Nonce(),
-		},
-	}.Dial("nethernet", address)
+		ClientData:    login.ClientData{},
+	}
+	target.ApplyClientData(&dialer.ClientData)
+	conn, err := dialer.Dial("nethernet", address)
 	if err != nil {
 		panic(err)
 	}

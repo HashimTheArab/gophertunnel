@@ -29,6 +29,7 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 	conn.SetActorIDTranslation(swapTranslation())
 
 	var dst packetQueue
+	defer dst.release()
 	conn.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 100})
 	if len(dst.packets) != 1 {
 		t.Fatalf("expected 1 encoded packet, got %d", len(dst.packets))
@@ -52,6 +53,7 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 func TestConnActorIDTranslationDecode(t *testing.T) {
 	plain := testConn()
 	var dst packetQueue
+	defer dst.release()
 	plain.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 200})
 
 	conn := testConn()

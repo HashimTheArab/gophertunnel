@@ -65,6 +65,9 @@ func (r *Reader) Bool(x *bool) {
 // errStringTooLong is an error set if a string decoded using the String method has a length that is too long.
 var errStringTooLong = errors.New("string length overflows a 32-bit integer")
 
+// maxByteSliceLength limits length-prefixed byte slices decoded from untrusted packets.
+const maxByteSliceLength = 16 * 1024 * 1024
+
 // StringUTF ...
 func (r *Reader) StringUTF(x *string) {
 	var length int16
@@ -75,7 +78,7 @@ func (r *Reader) StringUTF(x *string) {
 	}
 	r.checkRemaining(l, "string")
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = *(*string)(unsafe.Pointer(&data))
@@ -91,7 +94,7 @@ func (r *Reader) String(x *string) {
 	}
 	r.checkRemaining(l, "string")
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = *(*string)(unsafe.Pointer(&data))
@@ -105,9 +108,9 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
-	r.checkRemaining(l, "byte slice")
+	r.SliceLength(length, maxByteSliceLength)
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = data
@@ -210,6 +213,18 @@ func (r *Reader) NBT(m *map[string]any, encoding nbt.Encoding) {
 	dec.AllowZero = true
 
 	if err := dec.Decode(m); err != nil {
+		r.panic(err)
+	}
+}
+
+// RawNBT reads and validates an encoded NBT value without materialising it.
+func (r *Reader) RawNBT(message *nbt.RawMessage, encoding nbt.Encoding) {
+	var err error
+	*message, err = nbt.ReadRaw(r.r, encoding, true)
+	if err == nil {
+		err = message.ValidateCompound(true)
+	}
+	if err != nil {
 		r.panic(err)
 	}
 }

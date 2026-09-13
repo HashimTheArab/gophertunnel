@@ -167,7 +167,7 @@ func (r *refreshingKeySet) updateKeys() ([]jose.JSONWebKey, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, NewResponseError(resp)
 	}
 
 	keyset, err := decodeKeySet(resp.Body)

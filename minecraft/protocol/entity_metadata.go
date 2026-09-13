@@ -353,3 +353,12 @@ func (m EntityMetadata) Flag(key uint32, index uint8) bool {
 		return v.(int64)&(1<<int64(index)) != 0
 	}
 }
+
+// PlayerSleeping reports whether player metadata uses either supported sleeping representation.
+func (m EntityMetadata) PlayerSleeping() bool {
+	if flags, ok := m[EntityDataKeyPlayerFlags].(byte); ok && flags&(1<<1) != 0 {
+		return true
+	}
+	flags, ok := m[EntityDataKeyFlagsTwo].(int64)
+	return ok && flags&(1<<int64(EntityDataFlagSleeping&63)) != 0
+}

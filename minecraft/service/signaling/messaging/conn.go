@@ -135,6 +135,13 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
+	if conn.ctx != nil {
+		select {
+		case <-conn.ctx.Done():
+			return nil, context.Cause(conn.ctx)
+		default:
+		}
+	}
 
 	if conn.credentials != nil && time.Now().Before(conn.credentialsExpiry) {
 		return conn.credentials, nil
@@ -144,7 +151,7 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
 		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
 	}
-	if credentials == nil || credentials.ExpirationInSeconds == 0 {
+	if credentials == nil || credentials.ExpirationInSeconds <= 0 {
 		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
 	}
 
@@ -315,11 +322,10 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return fmt.Errorf("decode signal: %w", err)
 		}
 
-		conn.notifiersMu.RLock()
-		notifiers := maps.Clone(conn.notifiers)
-		conn.notifiersMu.RUnlock()
-		for _, n := range notifiers {
-			_ = n.NotifySignal(signal)
+		if !conn.notifySignal(signal) {
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID))
+			return nil
 		}
 
 		if err := conn.send(ctx, uuid.New(), map[string]any{
@@ -346,6 +352,15 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 		}
 		return fmt.Errorf("unknown inner request method: %q", envelope.Message.Method)
 	}
+}
+
+// notifySignal sends a signal to a stable snapshot of the registered
+// notifiers and reports whether at least one accepted it.
+func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
+	conn.notifiersMu.RLock()
+	notifiers := maps.Clone(conn.notifiers)
+	conn.notifiersMu.RUnlock()
+	return internal.NotifySignal(notifiers, signal)
 }
 
 // ping starts calling [MethodSystemPing] at 50 seconds interval.

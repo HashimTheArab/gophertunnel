@@ -123,7 +123,7 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 		}
 		return result.Data, nil
 	default:
-		return nil, internal.Err(resp)
+		return nil, service.NewResponseError(resp)
 	}
 }
 
