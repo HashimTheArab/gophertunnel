@@ -12,8 +12,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 )
 
-const maxPooledEncoderBufferCap = 1 << 20
-
 // BatchEncodeStats describes one encoded packet batch.
 type BatchEncodeStats struct {
 	PacketCount         int
@@ -96,14 +94,11 @@ func (encoder *Encoder) SetBatchEncodeObserver(observer BatchEncodeObserver) {
 // Encode encodes the packets passed. It writes all of them as a single packet which is  compressed and
 // optionally encrypted.
 func (encoder *Encoder) Encode(packets [][]byte) error {
-	buf := internal.BufferPool.Get().(*bytes.Buffer)
+	buf := internal.BufferPool.Get()
 	var compressedBuf *bytes.Buffer
 	defer func() {
-		// Reset the buffer, so we can return it to the buffer pool safely.
-		buf.Reset()
 		internal.BufferPool.Put(buf)
-		if compressedBuf != nil && compressedBuf.Cap() <= maxPooledEncoderBufferCap {
-			compressedBuf.Reset()
+		if compressedBuf != nil {
 			internal.BufferPool.Put(compressedBuf)
 		}
 	}()
@@ -150,7 +145,7 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 			if observer != nil {
 				compressionStart = time.Now()
 			}
-			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
+			compressedBuf = internal.BufferPool.Get()
 			_, _ = compressedBuf.Write(encoder.header)
 			compressionID := compression.EncodeCompression()
 			if observer != nil {
@@ -158,7 +153,10 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 			}
 			_ = compressedBuf.WriteByte(byte(compressionID))
 			var err error
-			if appender, ok := compression.(appendCompression); ok {
+			if writer, ok := compression.(writeCompression); ok {
+				err = writer.compressTo(compressedBuf, batch)
+				data = compressedBuf.Bytes()
+			} else if appender, ok := compression.(appendCompression); ok {
 				if n := appender.MaxCompressedLen(len(batch)); n > 0 {
 					if observer != nil {
 						stats.MaxCompressedLen = n
@@ -180,7 +178,7 @@ func (encoder *Encoder) Encode(packets [][]byte) error {
 				stats.CompressionDuration = time.Since(compressionStart)
 				stats.Compressed = true
 				stats.BufferCap = compressedBuf.Cap()
-				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
+				stats.PooledBuffer = stats.BufferCap <= internal.MaxPooledBufferCap
 			}
 		}
 	} else if observer != nil {

@@ -287,16 +287,21 @@ type Conn struct {
 	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
 
-	// sendMu protects bufferedSend/bufferedSendSpare.
+	// sendMu protects bufferedSend/bufferedSendSpare and packetWriter.
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and network writes (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
 	encMu sync.Mutex
-	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
-	// they are sent each 20th of a second.
-	bufferedSend      [][]byte
-	bufferedSendSpare [][]byte
-	hdr               *packet.Header
+	// directMu protects directSend between packet marshaling and encoder writes.
+	directMu sync.Mutex
+	// bufferedSend contains packets that are 'written'. They are buffered until they are sent each 20th
+	// of a second.
+	bufferedSend      packetQueue
+	bufferedSendSpare packetQueue
+	// directSend is reused by WritePacketDirect while directMu is held.
+	directSend   packetQueue
+	packetWriter *protocol.Writer
+	hdr          *packet.Header
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -595,41 +600,83 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 		return conn.closeErr("write packet")
 	default:
 	}
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
 	conn.encodePacketsTo(&conn.bufferedSend, pk)
 	return nil
 }
 
-// encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
-// accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
-// appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
-	buf := internal.BufferPool.Get().(*bytes.Buffer)
-	defer func() {
-		// Reset the buffer, so we can return it to the buffer pool safely.
-		buf.Reset()
-		internal.BufferPool.Put(buf)
-	}()
-
+// encodePacketsTo marshals the provided packet (including header) into one or more byte slices, accounting
+// for protocol conversions and invoking packetFunc callbacks. Encoded packet buffers appended to dst are
+// owned by dst and must be released after the queue is encoded.
+func (conn *Conn) encodePacketsTo(dst *packetQueue, pks ...packet.Packet) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	switch conn.proto.(type) {
+	case proto, BasicProtocol, *BasicProtocol:
+		for _, pk := range pks {
+			conn.encodePacketTo(dst, pk)
+		}
+		return
+	}
 	for _, pk := range pks {
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-			buf.Reset()
-			conn.hdr.PacketID = converted.ID()
-			_ = conn.hdr.Write(buf)
-			l := buf.Len()
-
-			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
-			if translation := conn.actorIDs.Load(); translation != nil {
-				w = translation.WrapWriter(w)
-			}
-			converted.Marshal(w)
-			if conn.packetFunc != nil {
-				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
-			}
-			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
+			conn.encodePacketTo(dst, converted)
 		}
+	}
+}
+
+// encodePacketTo appends one packet to the queue's shared marshal buffer.
+func (conn *Conn) encodePacketTo(dst *packetQueue, pk packet.Packet) {
+	if dst.buf == nil {
+		dst.buf = internal.BufferPool.Get()
+	}
+	buf := dst.buf
+	start := buf.Len()
+	conn.hdr.PacketID = pk.ID()
+	_ = conn.hdr.Write(buf)
+	payloadStart := buf.Len()
+
+	conn.marshalPacket(buf, pk)
+	if conn.packetFunc != nil {
+		conn.packetFunc(*conn.hdr, buf.Bytes()[payloadStart:], conn.LocalAddr(), conn.RemoteAddr())
+	}
+	dst.packets = append(dst.packets, buf.Bytes()[start:])
+}
+
+// marshalPacket reuses standard writers without retaining their destination between packets.
+func (conn *Conn) marshalPacket(buf *bytes.Buffer, pk packet.Packet) {
+	shieldID := conn.shieldID.Load()
+	var w protocol.IO
+	if conn.packetWriter != nil {
+		conn.packetWriter.Reset(buf, shieldID)
+		w = conn.packetWriter
+	} else {
+		w = conn.proto.NewWriter(buf, shieldID)
+		conn.packetWriter, _ = w.(*protocol.Writer)
+	}
+	if conn.packetWriter != nil {
+		defer conn.packetWriter.Reset(nil, 0)
+	}
+	if translation := conn.actorIDs.Load(); translation != nil {
+		w = translation.WrapWriter(w)
+	}
+	pk.Marshal(w)
+}
+
+// packetQueue owns one marshal buffer and the packet views queued for one batch.
+// Views remain valid if growing buf moves its backing array. Raw Write slices are
+// borrowed separately and are never returned to the buffer pool.
+type packetQueue struct {
+	packets [][]byte
+	buf     *bytes.Buffer
+}
+
+// release drops packet references and returns the owned marshal buffer after encoding.
+func (q *packetQueue) release() {
+	clear(q.packets)
+	q.packets = q.packets[:0]
+	if q.buf != nil {
+		internal.BufferPool.Put(q.buf)
+		q.buf = nil
 	}
 }
 
@@ -643,9 +690,7 @@ func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 	default:
 	}
 
-	conn.sendMu.Lock()
 	conn.encodePacketsTo(&conn.bufferedSend, pks...)
-	conn.sendMu.Unlock()
 
 	return conn.Flush()
 }
@@ -659,21 +704,17 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 		return conn.closeErr("write packet direct")
 	default:
 	}
-	// Use a small stack-allocated buffer for the common case (usually 1 slice),
-	// allowing append to spill to heap only if more capacity is needed.
-	var stackBuf [4][]byte
-	immediate := stackBuf[:0]
+	conn.directMu.Lock()
+	defer conn.directMu.Unlock()
+	defer conn.directSend.release()
+	conn.encodePacketsTo(&conn.directSend, pks...)
 
-	conn.sendMu.Lock()
-	conn.encodePacketsTo(&immediate, pks...)
-	conn.sendMu.Unlock()
-
-	if len(immediate) > 0 {
-		conn.encMu.Lock()
-		defer conn.encMu.Unlock()
-		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
+	if len(conn.directSend.packets) == 0 {
+		return nil
 	}
-	return nil
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	return conn.handleEncodeError(conn.enc.Encode(conn.directSend.packets), "write packet direct")
 }
 
 // ReadPacket reads a packet from the Conn, depending on the packet ID that is found in front of the packet
@@ -799,7 +840,7 @@ func (conn *Conn) Write(b []byte) (n int, err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
-	conn.bufferedSend = append(conn.bufferedSend, b)
+	conn.bufferedSend.packets = append(conn.bufferedSend.packets, b)
 	return len(b), nil
 }
 
@@ -864,7 +905,7 @@ func (conn *Conn) Flush() error {
 	defer conn.encMu.Unlock()
 
 	conn.sendMu.Lock()
-	if len(conn.bufferedSend) == 0 {
+	if len(conn.bufferedSend.packets) == 0 {
 		conn.sendMu.Unlock()
 		return nil
 	}
@@ -872,22 +913,17 @@ func (conn *Conn) Flush() error {
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
-	conn.bufferedSend = conn.bufferedSendSpare[:0]
-	conn.bufferedSendSpare = nil
+	conn.bufferedSend = conn.bufferedSendSpare
+	conn.bufferedSendSpare = packetQueue{}
 	conn.sendMu.Unlock()
 
-	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
-
-	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
-	// to packet payloads alive, causing an 'invisible' memory leak.
-	for i := range toSend {
-		toSend[i] = nil
-	}
-
-	conn.sendMu.Lock()
-	conn.bufferedSendSpare = toSend[:0]
-	conn.sendMu.Unlock()
-	return encodeErr
+	defer func() {
+		toSend.release()
+		conn.sendMu.Lock()
+		conn.bufferedSendSpare = toSend
+		conn.sendMu.Unlock()
+	}()
+	return conn.handleEncodeError(conn.enc.Encode(toSend.packets), "flush")
 }
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
@@ -1354,14 +1390,22 @@ func (conn *Conn) handlePacket(pk packet.Packet) error {
 	return nil
 }
 
+// setProtocol installs the negotiated dialect and discards the previous dialect's cached writer.
+func (conn *Conn) setProtocol(p Protocol) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	conn.proto = p
+	conn.pool = p.Packets(true)
+	conn.packetWriter = nil
+}
+
 // handleRequestNetworkSettings handles an incoming RequestNetworkSettings packet. It returns an error if the protocol
 // version is not supported, otherwise sending back a NetworkSettings packet.
 func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings) error {
 	found := false
 	for _, pro := range conn.acceptedProto {
 		if pro.ID() == pk.ClientProtocol {
-			conn.proto = pro
-			conn.pool = pro.Packets(true)
+			conn.setProtocol(pro)
 			found = true
 			break
 		}
@@ -1370,8 +1414,7 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	if !found && conn.acceptNewerProtocols && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
 		// The client runs a Minecraft version this build predates. Serve it with the newest protocol
 		// known: packets whose layout is unchanged in the client's version still decode correctly.
-		conn.proto = newestAccepted(conn.acceptedProto)
-		conn.pool = conn.proto.Packets(true)
+		conn.setProtocol(newestAccepted(conn.acceptedProto))
 		found = true
 	}
 
@@ -1510,8 +1553,7 @@ func (conn *Conn) selectProtocolByGameVersion() error {
 	if best == nil {
 		return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, id)
 	}
-	conn.proto = best
-	conn.pool = best.Packets(true)
+	conn.setProtocol(best)
 	return nil
 }
 

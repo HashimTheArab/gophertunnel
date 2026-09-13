@@ -28,6 +28,10 @@ type appendCompression interface {
 	MaxCompressedLen(decompressedLen int) int
 }
 
+type writeCompression interface {
+	compressTo(dst io.Writer, decompressed []byte) error
+}
+
 type appendDecompression interface {
 	DecompressAppend(dst, compressed []byte, limit int) ([]byte, error)
 }
@@ -93,25 +97,32 @@ func (flateCompression) EncodeCompression() uint16 {
 }
 
 // Compress ...
-func (flateCompression) Compress(decompressed []byte) ([]byte, error) {
-	compressed := internal.BufferPool.Get().(*bytes.Buffer)
-	w := flateCompressPool.Get().(*flate.Writer)
+func (c flateCompression) Compress(decompressed []byte) ([]byte, error) {
+	compressed := internal.BufferPool.Get()
+	defer internal.BufferPool.Put(compressed)
 
+	if err := c.compressTo(compressed, decompressed); err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), compressed.Bytes()...), nil
+}
+
+// compressTo streams flate output into dst and releases its reference before pooling the writer.
+func (flateCompression) compressTo(dst io.Writer, decompressed []byte) error {
+	w := flateCompressPool.Get().(*flate.Writer)
 	defer func() {
-		// Reset the buffer, so we can return it to the buffer pool safely.
-		compressed.Reset()
-		internal.BufferPool.Put(compressed)
+		w.Reset(io.Discard)
 		flateCompressPool.Put(w)
 	}()
 
-	w.Reset(compressed)
+	w.Reset(dst)
 	if _, err := w.Write(decompressed); err != nil {
-		return nil, fmt.Errorf("compress flate: %w", err)
+		return fmt.Errorf("compress flate: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("close flate writer: %w", err)
+		return fmt.Errorf("close flate writer: %w", err)
 	}
-	return append([]byte(nil), compressed.Bytes()...), nil
+	return nil
 }
 
 // Decompress ...

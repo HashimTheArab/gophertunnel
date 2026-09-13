@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"fmt"
 	"image/color"
 	"io"
@@ -39,7 +38,8 @@ func NewWriter(w interface {
 	return writer
 }
 
-// Reset reuses w with a new underlying destination and shield ID.
+// Reset reuses w with a new underlying destination and shield ID. A nil destination
+// releases the old destination; set a non-nil destination before writing again.
 func (w *Writer) Reset(dst interface {
 	io.Writer
 	io.ByteWriter
@@ -364,12 +364,8 @@ func (w *Writer) itemUserData(x itemUserData, present, shield bool) {
 		return
 	}
 
-	buf := internal.BufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer func() {
-		buf.Reset()
-		internal.BufferPool.Put(buf)
-	}()
+	buf := internal.BufferPool.Get()
+	defer internal.BufferPool.Put(buf)
 	bufWriter := NewWriter(buf, w.shieldID)
 	var length int16
 	if len(x.nbtData) != 0 {
