@@ -1,7 +1,7 @@
 {
   "comment": "Packets whose encoding differs from the BDS-derived schemas and which are reviewed and accepted. Anything NOT listed here fails the check. Every entry must say why the difference is acceptable and what would settle it; 'not investigated' is not a reason to add one.",
-  "minecraft_version": "1.26.40",
-  "protocol_version": 2168,
+  "minecraft_version": "1.26.45",
+  "protocol_version": 2169,
   "packets": [
     {
       "id": 38,
