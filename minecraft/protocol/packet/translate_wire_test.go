@@ -12,6 +12,7 @@ import (
 // IO methods, with fixtures covering every non-canonical encoding variant. The hex was
 // generated with the encoder as of the commit preceding the migration, so a semantic
 // method that delegates to a different primitive than the one it replaced fails here.
+// The PlayerAuthInput fixture omits the six outer presence bytes removed in protocol 2193.
 var wireGolden = map[string]string{
 	"AddVolumeEntity":                 "848688080a000000000000000000000000",
 	"CameraInstruction":               "0000000100080706050403020100000001080706050403020100",
@@ -20,7 +21,7 @@ var wireGolden = map[string]string{
 	"LevelSoundEvent":                 "0000000000000000000000000000000000080706050403020100",
 	"MovePlayer":                      "85888c9010000000000000000000000000000000000000000000000000000085888c90100000",
 	"NPCDialogue":                     "08070605040302010000000000",
-	"PlayerAuthInputPredictedVehicle": "000000000000000000000000000000000000000000000000000000000000000001015a000000000000000000000000000000000000000000000000010001000100010001018a9098a02000000000000000000000000000000000000000000000000000000000",
+	"PlayerAuthInputPredictedVehicle": "0000000000000000000000000000000000000000000000000000000000000000015a00000000000000000000000000000000000000000000000000000000018a9098a02000000000000000000000000000000000000000000000000000000000",
 	"RemoveVolumeEntity":              "8486880800",
 	"UpdateAbilities":                 "0807060504030201000000",
 	"UpdateBlockSynced":               "00000000000085888c901000",

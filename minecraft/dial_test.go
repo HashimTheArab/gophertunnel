@@ -53,7 +53,7 @@ func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
 	if got, want := string(version), "0.0.0"; got != want {
 		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
 	}
-	if got, want := data.GameVersion, "1.26.45"; got != want {
+	if got, want := data.GameVersion, "1.26.50"; got != want {
 		t.Fatalf("game version = %q, want %q", got, want)
 	}
 	if got, want := data.MemoryTier, 4; got != want {

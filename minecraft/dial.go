@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -500,10 +501,24 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
+// serverAddress returns the address in the form clients report it in their login request. For
+// networks addressed by a URL, such as NetherNet, clients repeat the port of the address after
+// it: 'https://<host>:<port>:<port>'.
+func serverAddress(address string) string {
+	if !strings.Contains(address, "://") {
+		return address
+	}
+	u, err := url.Parse(address)
+	if err != nil || u.Port() == "" {
+		return address
+	}
+	return address + ":" + u.Port()
+}
+
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
-		d.ServerAddress = address
+		d.ServerAddress = serverAddress(address)
 	}
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username
