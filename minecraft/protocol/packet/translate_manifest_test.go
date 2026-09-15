@@ -70,10 +70,6 @@ var idFieldFixtures = map[string]func() (Packet, func() int64){
 		pk := &ClientMovementPredictionSync{ActorFlags: protocol.NewBitset(protocol.EntityDataFlagCount), EntityUniqueID: idSentinel}
 		return pk, func() int64 { return pk.EntityUniqueID }
 	},
-	"BossEvent.PlayerUniqueID": func() (Packet, func() int64) {
-		pk := &BossEvent{EventType: BossEventRegisterPlayer, PlayerUniqueID: idSentinel}
-		return pk, func() int64 { return pk.PlayerUniqueID }
-	},
 	"Event.EntityRuntimeID": func() (Packet, func() int64) {
 		pk := &Event{EntityRuntimeID: idSentinel, Event: &protocol.AchievementAwardedEvent{}}
 		return pk, func() int64 { return pk.EntityRuntimeID }
