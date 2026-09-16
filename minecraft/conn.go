@@ -361,8 +361,11 @@ type Conn struct {
 	// connecting.
 	allow func(addr net.Addr, identityData login.IdentityData, clientData login.ClientData) (string, bool)
 
-	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
-	// to this connection will call this function.
+	// loginSchemaObserver receives pre-authentication diagnostics configured by the listener.
+	loginSchemaObserver func(login.SchemaReport)
+	// clientProtocol preserves the requested ID even when AcceptNewerProtocols selects an older codec.
+	clientProtocol int32
+	// packetFunc observes each packet read from or written to this connection.
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
 
 	shieldID atomic.Int32
@@ -1357,6 +1360,7 @@ func (conn *Conn) handlePacket(pk packet.Packet) error {
 // handleRequestNetworkSettings handles an incoming RequestNetworkSettings packet. It returns an error if the protocol
 // version is not supported, otherwise sending back a NetworkSettings packet.
 func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings) error {
+	conn.clientProtocol = pk.ClientProtocol
 	found := false
 	for _, pro := range conn.acceptedProto {
 		if pro.ID() == pk.ClientProtocol {
@@ -1430,6 +1434,13 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
 // and returns an error if it couldn't be done successfully.
 func (conn *Conn) handleLogin(pk *packet.Login) error {
+	if conn.loginSchemaObserver != nil {
+		report := login.InspectClientData(pk.ConnectionRequest)
+		report.ClientProtocol = conn.clientProtocol
+		if len(report.Differences) != 0 || report.DecodeFailure != "" || report.Truncated {
+			conn.loginSchemaObserver(report)
+		}
+	}
 	var (
 		err        error
 		authResult login.AuthResult

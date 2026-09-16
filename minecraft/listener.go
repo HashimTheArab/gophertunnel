@@ -140,6 +140,11 @@ type ListenConfig struct {
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
 
+	// LoginSchemaObserver receives bounded, unverified client-data schema observations before login
+	// parsing, including failed logins. Nil disables inspection. The callback must be concurrency-safe
+	// and return promptly; it must not perform network I/O inline.
+	LoginSchemaObserver func(login.SchemaReport)
+
 	// PacketFunc is called whenever a packet is read from or written to a connection delivered through ConnHandler or
 	// Listener.Accept. It includes packets that are otherwise covered in the connection sequence, such as the Login
 	// packet. The function is called with the header of the packet and its raw payload, the address from which the
@@ -478,6 +483,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.loginSchemaObserver = listener.cfg.LoginSchemaObserver
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
