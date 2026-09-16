@@ -7,9 +7,9 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
-	github.com/df-mc/go-nethernet v1.0.20-0.20260912144515-1248f352d699
+	github.com/df-mc/go-nethernet v1.0.20-0.20260915174748-4ead02dfc551
 	github.com/df-mc/go-playfab/v2 v2.0.3
-	github.com/df-mc/go-xsapi/v2 v2.0.4-0.20260911132654-00ba4fd7f5c0
+	github.com/df-mc/go-xsapi/v2 v2.0.4-0.20260916091843-af826516381a
 	github.com/df-mc/jsonc v1.0.5
 	github.com/go-gl/mathgl v1.1.0
 	github.com/go-jose/go-jose/v4 v4.1.4
@@ -24,6 +24,7 @@ require (
 )
 
 require (
+	github.com/cenkalti/backoff/v7 v7.0.0 // indirect
 	github.com/creachadair/mds v0.26.1 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
@@ -49,4 +50,4 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 )
 
-replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20260823160122-7b23a10585ae
+replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20260908193618-2049463566ca
