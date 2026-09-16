@@ -1843,14 +1843,10 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 	return nil
 }
 
-// startGame sends a StartGame packet using the game data of the connection.
-func (conn *Conn) startGame() error {
-	data := conn.gameData
-	if len(data.Dimensions) > 0 {
-		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
-			return err
-		}
-	}
+// WriteStartGamePrelude writes the protocol-owned packets that a client must receive immediately before
+// StartGame. It is intended for proxies that forward an upstream StartGame packet instead of constructing one
+// through SendStartGame.
+func (conn *Conn) WriteStartGamePrelude() error {
 	if err := conn.WritePacket(&packet.JigsawStructureData{
 		StructureData: map[string]any{
 			"processors":     make([]map[string]any, 0),
@@ -1862,6 +1858,20 @@ func (conn *Conn) startGame() error {
 		return err
 	}
 	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// startGame sends a StartGame packet using the game data of the connection.
+func (conn *Conn) startGame() error {
+	data := conn.gameData
+	if len(data.Dimensions) > 0 {
+		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
+			return err
+		}
+	}
+	if err := conn.WriteStartGamePrelude(); err != nil {
 		return err
 	}
 	pk := StartGameFromGameData(data)
