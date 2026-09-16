@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -450,6 +451,32 @@ func TestStartGameWritesPropertyData(t *testing.T) {
 
 	if got["gophertunnel:test"] != int32(1) {
 		t.Fatalf("StartGame.PropertyData = %#v, want gophertunnel:test=1", got)
+	}
+}
+
+func TestWriteStartGamePrelude(t *testing.T) {
+	t.Parallel()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+
+	var got []uint32
+	conn.packetFunc = func(header packet.Header, _ []byte, _, _ net.Addr) {
+		got = append(got, header.PacketID)
+	}
+	if err := conn.WriteStartGamePrelude(); err != nil {
+		t.Fatalf("WriteStartGamePrelude: %v", err)
+	}
+	want := []uint32{packet.IDJigsawStructureData, packet.IDVoxelShapes}
+	if !slices.Equal(got, want) {
+		t.Fatalf("startup prelude packet IDs = %v, want %v", got, want)
 	}
 }
 
