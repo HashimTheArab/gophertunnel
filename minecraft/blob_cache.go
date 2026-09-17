@@ -510,12 +510,6 @@ func subChunkRetainedBytes(pk *packet.SubChunk) int {
 		if payload, ok := entry.RawPayload.Value(); ok {
 			total += len(payload)
 		}
-		if heightMap, ok := entry.HeightMapData.Value(); ok {
-			total += len(heightMap)
-		}
-		if renderHeightMap, ok := entry.RenderHeightMapData.Value(); ok {
-			total += len(renderHeightMap)
-		}
 	}
 	return total
 }
