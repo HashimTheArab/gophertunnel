@@ -385,7 +385,8 @@ func packetUsesBlobCache(pk packet.Packet) bool {
 	case *packet.LevelChunk:
 		return pk.CacheEnabled
 	case *packet.SubChunk:
-		for _, entry := range pk.SubChunkEntries {
+		for i := range pk.SubChunkEntries {
+			entry := &pk.SubChunkEntries[i]
 			if _, ok := entry.BlobHash.Value(); ok {
 				return true
 			}
@@ -422,7 +423,8 @@ func materialisedPacketSize(pk packet.Packet, blobs map[uint64][]byte, limit int
 		if err := add(subChunkRetainedBytes(pk)); err != nil {
 			return 0, err
 		}
-		for _, entry := range pk.SubChunkEntries {
+		for i := range pk.SubChunkEntries {
+			entry := &pk.SubChunkEntries[i]
 			if hash, ok := entry.BlobHash.Value(); ok {
 				blob, found := blobs[hash]
 				if !found {
@@ -495,7 +497,8 @@ func uniqueBlobHashes(hashes []uint64) []uint64 {
 // subChunkBlobHashes returns the per-entry blob hashes, which may repeat: entries commonly share one blob.
 func subChunkBlobHashes(pk *packet.SubChunk) []uint64 {
 	hashes := make([]uint64, 0, len(pk.SubChunkEntries))
-	for _, entry := range pk.SubChunkEntries {
+	for i := range pk.SubChunkEntries {
+		entry := &pk.SubChunkEntries[i]
 		if hash, ok := entry.BlobHash.Value(); ok {
 			hashes = append(hashes, hash)
 		}
@@ -506,7 +509,8 @@ func subChunkBlobHashes(pk *packet.SubChunk) []uint64 {
 // subChunkRetainedBytes estimates retained variable-size packet data for limit enforcement.
 func subChunkRetainedBytes(pk *packet.SubChunk) int {
 	total := len(pk.SubChunkEntries) * int(unsafe.Sizeof(protocol.SubChunkEntry{}))
-	for _, entry := range pk.SubChunkEntries {
+	for i := range pk.SubChunkEntries {
+		entry := &pk.SubChunkEntries[i]
 		if payload, ok := entry.RawPayload.Value(); ok {
 			total += len(payload)
 		}
