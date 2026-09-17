@@ -145,6 +145,12 @@ type ListenConfig struct {
 	// packet. The function is called with the header of the packet and its raw payload, the address from which the
 	// packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// or internal handling, including login and disconnect handling. Returning false silently drops only
+	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
+	// it must not block and may run concurrently for different connections. The header is passed
+	// by value and cannot be rewritten through this hook.
+	AcceptPacketHeader func(header packet.Header) bool
 	// PacketBatchFunc is called after each outbound packet batch has been encoded.
 	PacketBatchFunc packet.BatchEncodeObserver
 
@@ -478,6 +484,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.acceptPacketHeader = listener.cfg.AcceptPacketHeader
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals

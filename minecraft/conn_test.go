@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -1335,4 +1336,57 @@ func testResourcePackArchive(t *testing.T, id uuid.UUID) []byte {
 		t.Fatalf("close zip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// TestConn_AcceptPacketHeader checks filtering before decoding and internal handling.
+func TestConn_AcceptPacketHeader(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint("ready=", ready), func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			defer conn.Close()
+			conn.pool = conn.proto.Packets(false)
+			conn.batchReading = true
+			conn.disablePacketHandling = true
+			conn.handshakeComplete = ready
+			conn.disconnectOnInvalidPacket = true
+			conn.acceptPacketHeader = func(h packet.Header) bool { return h.PacketID == 777 }
+			observed := 0
+			conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { observed++ }
+			for _, id := range []uint32{packet.IDDisconnect, packet.IDPlayStatus, packet.IDNetworkSettings} {
+				var frame bytes.Buffer
+				if err := (&packet.Header{PacketID: id}).Write(&frame); err != nil {
+					t.Fatal(err)
+				}
+				// These bodies are deliberately missing. Filtering must happen before decoding them.
+				if err := conn.receive(frame.Bytes()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if conn.ctx.Err() != nil || conn.loginSuccessReceived || conn.disablePacketHandlingReady || len(conn.pendingBatch) != 0 || len(conn.batchDeferred) != 0 {
+				t.Fatal("rejected packets changed connection state")
+			}
+			if observed != 3 {
+				t.Fatalf("observed %d packets, want 3", observed)
+			}
+			conn.handshakeComplete = true
+			frame, err := encodePacket(&packet.Unknown{PacketID: 777, Payload: []byte{42}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.receive(frame); err != nil {
+				t.Fatal(err)
+			}
+			conn.flushBatch()
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			batch, err := conn.ReadBatch()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(batch) != 1 || batch[0].ID() != 777 {
+				t.Fatalf("unexpected batch: %v", batch)
+			}
+		})
+	}
 }

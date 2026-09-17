@@ -364,6 +364,8 @@ type Conn struct {
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// acceptPacketHeader optionally filters incoming packets before internal handling.
+	acceptPacketHeader func(packet.Header) bool
 
 	shieldID atomic.Int32
 
@@ -1086,6 +1088,9 @@ func (conn *Conn) receive(data []byte) error {
 	pkData, err := parseData(data, conn)
 	if err != nil {
 		return err
+	}
+	if conn.acceptPacketHeader != nil && !conn.acceptPacketHeader(*pkData.h) {
+		return nil
 	}
 	if pkData.h.PacketID == packet.IDDisconnect {
 		// We always handle disconnect packets and close the connection if one comes in. The payload is
