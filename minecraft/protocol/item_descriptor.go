@@ -5,10 +5,10 @@ package protocol
 type DefaultItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	// Name is the identifier of the item, such as minecraft:stone.
-	Name string
+	FullName string
 	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
 	// other items it is simply an identifier of a variant of the item.
-	MetadataValue int32
+	AuxValue int32
 }
 
 func (*DefaultItemDescriptor) tagItemDescriptor() uint32 { return 1 }
@@ -16,10 +16,10 @@ func (*DefaultItemDescriptor) tagItemDescriptor() uint32 { return 1 }
 // Marshal reads or writes DefaultItemDescriptor using its canonical wire layout.
 func (x *DefaultItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
-	io.StringLimits(&x.Name, 1, 18446744073709551615)
-	io.Varint32(&x.MetadataValue)
-	Minimum(io, &x.MetadataValue, 0)
-	Maximum(io, &x.MetadataValue, 32767)
+	io.StringLimits(&x.FullName, 1, 18446744073709551615)
+	io.Varint32(&x.AuxValue)
+	Minimum(io, &x.AuxValue, 0)
+	Maximum(io, &x.AuxValue, 32767)
 }
 
 // InvalidItemDescriptor represents an invalid item descriptor. This is usually sent by the vanilla server for
@@ -71,7 +71,7 @@ func (x *ItemDescriptorType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 type ItemTagItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	// Tag represents the tag that the item is part of.
-	Tag string
+	ItemTag string
 }
 
 func (*ItemTagItemDescriptor) tagItemDescriptor() uint32 { return 3 }
@@ -79,16 +79,16 @@ func (*ItemTagItemDescriptor) tagItemDescriptor() uint32 { return 3 }
 // Marshal reads or writes ItemTagItemDescriptor using its canonical wire layout.
 func (x *ItemTagItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
-	io.StringLimits(&x.Tag, 1, 18446744073709551615)
+	io.StringLimits(&x.ItemTag, 1, 18446744073709551615)
 }
 
 // MoLangItemDescriptor represents an item descriptor for items that use MoLang (e.g. behaviour packs).
 type MoLangItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	// Expression represents the MoLang expression used to identify the item/it's associated tag.
-	Expression string
+	TagExpression string
 	// Version represents the version of MoLang to use.
-	Version MoLangVersion
+	MoLangVersion MoLangVersion
 }
 
 func (*MoLangItemDescriptor) tagItemDescriptor() uint32 { return 2 }
@@ -96,8 +96,8 @@ func (*MoLangItemDescriptor) tagItemDescriptor() uint32 { return 2 }
 // Marshal reads or writes MoLangItemDescriptor using its canonical wire layout.
 func (x *MoLangItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
-	io.StringLimits(&x.Expression, 1, 18446744073709551615)
-	x.Version.Marshal(io)
+	io.StringLimits(&x.TagExpression, 1, 18446744073709551615)
+	x.MoLangVersion.Marshal(io)
 }
 
 type MobEffectEvent uint8

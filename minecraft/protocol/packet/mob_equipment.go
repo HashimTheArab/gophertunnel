@@ -8,7 +8,9 @@ import (
 // of the new item that an entity is holding. It is used to show the item in the hand of entities such as
 // zombies too.
 type MobEquipment struct {
-	TargetRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID uint64
 	// NewItem is the new item held after sending the MobEquipment packet. The entity will be shown holding that
 	// item to the player it was sent to.
 	NewItem protocol.NetworkItemStackDescriptorSerializedData
@@ -29,7 +31,7 @@ func (*MobEquipment) ID() uint32 {
 }
 
 func (pk *MobEquipment) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	pk.NewItem.Marshal(io)
 	io.Uint8(&pk.InventorySlot)
 	io.Uint8(&pk.HotBarSlot)

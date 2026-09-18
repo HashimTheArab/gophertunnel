@@ -17,8 +17,10 @@ const (
 type Animate struct {
 	// ActionType is the ID of the animation action to execute. It is one of the action type constants that may be
 	// found above.
-	ActionType            protocol.AnimateAction
-	TargetEntityRuntimeID uint64
+	ActionType protocol.AnimateAction
+	// EntityRuntimeID is the runtime ID of the player that the animation should be played upon. The runtime ID is
+	// unique for each world session, and entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID uint64
 	// Data ...
 	Data float32
 	// SwingSource is the source for swing actions. It is one of the action type constants that may be found
@@ -33,7 +35,7 @@ func (*Animate) ID() uint32 {
 
 func (pk *Animate) Marshal(io protocol.IO) {
 	pk.ActionType.Marshal(io)
-	io.ActorRuntimeID(&pk.TargetEntityRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.Float32(&pk.Data)
 	protocol.OptionalFunc(io, &pk.SwingSource, io.String)
 }

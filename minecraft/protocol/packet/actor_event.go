@@ -73,12 +73,14 @@ const (
 // these events are entity-specific, for example a wolf shaking itself dry, but others are used for each
 // entity, such as dying.
 type ActorEvent struct {
-	TargetRuntimeID uint64
 	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID protocol.ActorEventType
+	EntityRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EventType protocol.ActorEventType
 	// EventType is the ID of the event to be called. It is one of the constants that can be found above.
-	EventType int32
+	EventData int32
 	// FireAtPosition is the position in the same world at which the event should fire. If this is not present,
 	// the position entity will be used instead.
 	FireAtPosition protocol.Optional[mgl32.Vec3]
@@ -90,8 +92,8 @@ func (*ActorEvent) ID() uint32 {
 }
 
 func (pk *ActorEvent) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
-	pk.EntityRuntimeID.Marshal(io)
-	io.Varint32(&pk.EventType)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
+	pk.EventType.Marshal(io)
+	io.Varint32(&pk.EventData)
 	protocol.OptionalFunc(io, &pk.FireAtPosition, io.Vec3)
 }

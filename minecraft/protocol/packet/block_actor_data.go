@@ -9,8 +9,8 @@ import (
 type BlockActorData struct {
 	// Position is the position of the block that holds the block entity. If no block entity is at this position,
 	// the packet is ignored by the client.
-	Position      protocol.BlockPos
-	ActorDataTags []byte
+	BlockPosition  protocol.BlockPos
+	EntityDataTags []byte
 }
 
 // ID ...
@@ -19,6 +19,6 @@ func (*BlockActorData) ID() uint32 {
 }
 
 func (pk *BlockActorData) Marshal(io protocol.IO) {
-	pk.Position.Marshal(io)
-	io.NBT(&pk.ActorDataTags, protocol.NBTNetwork)
+	pk.BlockPosition.Marshal(io)
+	io.NBT(&pk.EntityDataTags, protocol.NBTNetwork)
 }

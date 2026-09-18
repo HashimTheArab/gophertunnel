@@ -183,7 +183,7 @@ type TextShape struct {
 	// ShowTextBackface is if the text should render on the back side of the shape. This only has a visible effect
 	// when UseRotation is true since you cannot see the back side of the text otherwise. Use true for default
 	// behaviour.
-	ShowBackfaceText bool
+	ShowTextBackface bool
 }
 
 func (*TextShape) tagShape() uint32 { return 2 }
@@ -195,5 +195,5 @@ func (x *TextShape) Marshal(io IO) {
 	OptionalFunc(io, &x.BackgroundColour, io.RGBA)
 	io.Bool(&x.DepthTest)
 	io.Bool(&x.ShowBackface)
-	io.Bool(&x.ShowBackfaceText)
+	io.Bool(&x.ShowTextBackface)
 }

@@ -22,10 +22,10 @@ type MovePlayer struct {
 	Rotation mgl32.Vec2
 	// Pitch is the vertical rotation of the player. Facing straight forward yields a pitch of 0. Pitch is
 	// measured in degrees.
-	Pitch float32
+	YHeadRotation float32
 	// Mode is the mode of the movement. It specifies the way the player's movement should be shown to other
 	// players. It is one of the constants above.
-	Mode protocol.PlayerPositionModeComponentPositionMode
+	PositionMode protocol.PlayerPositionModeComponentPositionMode
 	// OnGround specifies if the player is considered on the ground. Note that proxies or hacked clients could
 	// fake this to always be true, so it should not be taken for granted.
 	OnGround        bool
@@ -45,8 +45,8 @@ func (pk *MovePlayer) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.PlayerRuntimeID)
 	io.Vec3(&pk.Position)
 	io.Vec2(&pk.Rotation)
-	io.Float32(&pk.Pitch)
-	pk.Mode.Marshal(io)
+	io.Float32(&pk.YHeadRotation)
+	pk.PositionMode.Marshal(io)
 	io.Bool(&pk.OnGround)
 	io.ActorRuntimeID(&pk.RidingRuntimeID)
 	protocol.OptionalMarshaler(io, &pk.TeleportData)

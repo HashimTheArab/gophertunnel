@@ -15,7 +15,7 @@ type AddPlayer struct {
 	UUID uuid.UUID
 	// Username is the name of the player. This username is the username that will be set as the initial name tag
 	// of the player.
-	Username        string
+	PlayerName      string
 	TargetRuntimeID uint64
 	// PlatformChatID is an identifier only set for particular platforms when chatting (presumably only for
 	// Nintendo Switch). It is otherwise an empty string, and is used to decide which players are able to chat
@@ -30,23 +30,23 @@ type AddPlayer struct {
 	Rotation mgl32.Vec2
 	// Pitch is the vertical rotation of the player. Facing straight forward yields a pitch of 0. Pitch is
 	// measured in degrees.
-	Pitch float32
+	YHeadRotation float32
 	// HeldItem is the item that the player is holding. The item is shown to the viewer as soon as the player
 	// itself shows up. Needless to say that this field is rather pointless, as additional packets still must be
 	// sent for armour to show up.
-	HeldItem protocol.NetworkItemStackDescriptorSerializedData
+	CarriedItem protocol.NetworkItemStackDescriptorSerializedData
 	// GameType is the game type of the player. If set to GameTypeSpectator, the player will not be shown to
 	// viewers.
-	GameType protocol.GameType
+	PlayerGameType protocol.GameType
 	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
 	// particular the way the player looks. Flags include ones such as 'on fire' and 'sprinting'. The metadata
 	// values are indexed by their property key.
-	EntityMetadata protocol.SynchedActorDataCopyableDataList
+	EntityData protocol.SynchedActorDataCopyableDataList
 	// EntityProperties is a list of properties that the entity inhibits. These properties define and alter
 	// specific attributes of the entity.
-	EntityProperties protocol.PropertySyncData
+	SynchedProperties protocol.PropertySyncData
 	// AbilityData represents various data about the abilities of a player, such as ability layers or permissions.
-	AbilityData protocol.AbilityData
+	AbilitiesData protocol.AbilityData
 	// EntityLinks is a list of entity links that are currently active on the player. These links alter the way
 	// the player shows up when first spawned in terms of it shown as riding an entity. Setting these links is
 	// important for new viewers to see the player is riding another entity.
@@ -66,18 +66,18 @@ func (*AddPlayer) ID() uint32 {
 
 func (pk *AddPlayer) Marshal(io protocol.IO) {
 	io.UUID(&pk.UUID)
-	io.String(&pk.Username)
+	io.String(&pk.PlayerName)
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
 	io.String(&pk.PlatformChatID)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
 	io.Vec2(&pk.Rotation)
-	io.Float32(&pk.Pitch)
-	pk.HeldItem.Marshal(io)
-	pk.GameType.Marshal(io)
-	pk.EntityMetadata.Marshal(io)
-	pk.EntityProperties.Marshal(io)
-	pk.AbilityData.Marshal(io)
+	io.Float32(&pk.YHeadRotation)
+	pk.CarriedItem.Marshal(io)
+	pk.PlayerGameType.Marshal(io)
+	pk.EntityData.Marshal(io)
+	pk.SynchedProperties.Marshal(io)
+	pk.AbilitiesData.Marshal(io)
 	protocol.Slice(io, &pk.EntityLinks)
 	io.String(&pk.DeviceID)
 	pk.BuildPlatform.Marshal(io)

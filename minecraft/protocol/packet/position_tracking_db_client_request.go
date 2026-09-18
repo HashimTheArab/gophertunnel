@@ -16,8 +16,8 @@ const (
 type PositionTrackingDBClientRequest struct {
 	// RequestAction is the action that should be performed upon the receiving of the packet. It is one of the
 	// constants found above.
-	RequestAction protocol.PositionTrackingDBClientRequestAction
-	IDValue       protocol.PositionTrackingID
+	Action  protocol.PositionTrackingDBClientRequestAction
+	IDValue protocol.PositionTrackingID
 }
 
 // ID ...
@@ -26,6 +26,6 @@ func (*PositionTrackingDBClientRequest) ID() uint32 {
 }
 
 func (pk *PositionTrackingDBClientRequest) Marshal(io protocol.IO) {
-	pk.RequestAction.Marshal(io)
+	pk.Action.Marshal(io)
 	pk.IDValue.Marshal(io)
 }

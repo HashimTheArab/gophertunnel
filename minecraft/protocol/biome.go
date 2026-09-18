@@ -130,7 +130,7 @@ func (x *BiomeCoordinate) Marshal(io IO) {
 // custom biome.
 type BiomeDefinition struct {
 	// NameIndex represents the index of the biome name in the string list.
-	NameIndex uint16
+	ID uint16
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
 	Temperature float32
 	// Downfall is the amount that precipitation affects colours and block changes.
@@ -142,7 +142,7 @@ type BiomeDefinition struct {
 	// Scale is the scale of the biome.
 	Scale float32
 	// BiomeID is the biome ID.
-	BiomeID int32
+	MapWaterColourARGB int32
 	// Rain is true if the biome has rain, false if it is a dry biome.
 	Rain bool
 	// Tags are a list of indices of tags in the string list. These are used to group biomes together for biome
@@ -151,21 +151,21 @@ type BiomeDefinition struct {
 	// ChunkGeneration is optional information to assist in client-side chunk generation. Almost all servers can
 	// and should leave this empty to greatly reduce the size of this packet. Only BDS and servers which *exactly*
 	// match the vanilla chunk generation can benefit from this.
-	ChunkGeneration Optional[BiomeDefinitionChunkGenData]
+	ChunkGenData Optional[BiomeDefinitionChunkGenData]
 }
 
 // Marshal reads or writes BiomeDefinition using its canonical wire layout.
 func (x *BiomeDefinition) Marshal(io IO) {
-	io.Uint16(&x.NameIndex)
+	io.Uint16(&x.ID)
 	io.Float32(&x.Temperature)
 	io.Float32(&x.Downfall)
 	io.Float32(&x.FoliageSnow)
 	io.Float32(&x.Depth)
 	io.Float32(&x.Scale)
-	io.Int32(&x.BiomeID)
+	io.Int32(&x.MapWaterColourARGB)
 	io.Bool(&x.Rain)
 	OptionalMarshaler(io, &x.Tags)
-	OptionalMarshaler(io, &x.ChunkGeneration)
+	OptionalMarshaler(io, &x.ChunkGenData)
 }
 
 type BiomeDefinitionChunkGenData struct {

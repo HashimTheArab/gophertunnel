@@ -56,7 +56,7 @@ type ItemInstance struct {
 	// StackNetworkID is the network ID of the item stack. If the stack is empty, 0 is always written for this
 	// field. If not, the field should be set to 1 if the server authoritative inventories are disabled in the
 	// StartGame packet, or to a unique stack ID if it is enabled.
-	StackNetworkID uint16
+	StackSize      uint16
 	BlockRuntimeID uint32
 	UserDataBuffer []byte
 }
@@ -64,9 +64,9 @@ type ItemInstance struct {
 // Marshal reads or writes ItemInstance using its canonical wire layout.
 func (x *ItemInstance) Marshal(io IO) {
 	MarshalItemDescriptor(io, &x.ItemDescriptor)
-	io.Uint16(&x.StackNetworkID)
-	Minimum(io, &x.StackNetworkID, 1)
-	Maximum(io, &x.StackNetworkID, 64)
+	io.Uint16(&x.StackSize)
+	Minimum(io, &x.StackSize, 1)
+	Maximum(io, &x.StackSize, 64)
 	io.Varuint32(&x.BlockRuntimeID)
 	io.Bytes(&x.UserDataBuffer)
 }

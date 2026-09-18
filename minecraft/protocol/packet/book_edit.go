@@ -9,8 +9,8 @@ import (
 type BookEdit struct {
 	// InventorySlot is the slot in which the book that was edited may be found. Typically, the server should
 	// check if this slot matches the held item slot of the player.
-	InventorySlot int32
-	Operation     protocol.BookEditAction
+	BookSlot  int32
+	Operation protocol.BookEditAction
 }
 
 // ID ...
@@ -19,6 +19,6 @@ func (*BookEdit) ID() uint32 {
 }
 
 func (pk *BookEdit) Marshal(io protocol.IO) {
-	io.Varint32(&pk.InventorySlot)
+	io.Varint32(&pk.BookSlot)
 	protocol.MarshalBookEditAction(io, &pk.Operation)
 }

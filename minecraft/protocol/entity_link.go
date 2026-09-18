@@ -13,8 +13,12 @@ func (x *ActorLinkType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // EntityLink is a link between two entities, typically being one entity riding another.
 type EntityLink struct {
-	TargetA int64
-	TargetB int64
+	// RiddenEntityUniqueID is the entity unique ID of the entity that is being ridden. For a player sitting in a
+	// boat, this is the unique ID of the boat.
+	RiddenEntityUniqueID int64
+	// RiderEntityUniqueID is the entity unique ID of the entity that is riding. For a player sitting in a boat,
+	// this is the unique ID of the player.
+	RiderEntityUniqueID int64
 	// Type is one of the types above. It specifies the way the entity is linked to another entity.
 	Type ActorLinkType
 	// Immediate is set to immediately dismount an entity from another. This should be set when the mount of an
@@ -29,8 +33,8 @@ type EntityLink struct {
 
 // Marshal reads or writes EntityLink using its canonical wire layout.
 func (x *EntityLink) Marshal(io IO) {
-	io.ActorUniqueID(&x.TargetA)
-	io.ActorUniqueID(&x.TargetB)
+	io.ActorUniqueID(&x.RiddenEntityUniqueID)
+	io.ActorUniqueID(&x.RiderEntityUniqueID)
 	x.Type.Marshal(io)
 	io.Bool(&x.Immediate)
 	io.Bool(&x.RiderInitiated)

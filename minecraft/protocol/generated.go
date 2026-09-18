@@ -311,62 +311,62 @@ func MarshalInventoryTransactionValue(io IO, x *InventoryTransactionValue) {
 	})
 }
 
-type ServerBoundPackSettingChangePackSetting interface {
+type ServerBoundPackSettingChangePackSettingValue interface {
 	Marshaler
-	tagServerBoundPackSettingChangePackSetting() uint32
+	tagServerBoundPackSettingChangePackSettingValue() uint32
 }
 
-// MarshalServerBoundPackSettingChangePackSetting reads or writes the ServerBoundPackSettingChangePackSetting union using its canonical wire layout.
-func MarshalServerBoundPackSettingChangePackSetting(io IO, x *ServerBoundPackSettingChangePackSetting) {
-	Union(io, x, io.Varuint32, ServerBoundPackSettingChangePackSetting.tagServerBoundPackSettingChangePackSetting, func(tag uint32) ServerBoundPackSettingChangePackSetting {
+// MarshalServerBoundPackSettingChangePackSettingValue reads or writes the ServerBoundPackSettingChangePackSettingValue union using its canonical wire layout.
+func MarshalServerBoundPackSettingChangePackSettingValue(io IO, x *ServerBoundPackSettingChangePackSettingValue) {
+	Union(io, x, io.Varuint32, ServerBoundPackSettingChangePackSettingValue.tagServerBoundPackSettingChangePackSettingValue, func(tag uint32) ServerBoundPackSettingChangePackSettingValue {
 		switch tag {
 		case 0:
-			return new(ServerBoundPackSettingChangePackSettingFloat)
+			return new(ServerBoundPackSettingChangePackSettingValueFloat)
 		case 1:
-			return new(ServerBoundPackSettingChangePackSettingBool)
+			return new(ServerBoundPackSettingChangePackSettingValueBool)
 		case 2:
-			return new(ServerBoundPackSettingChangePackSettingString)
+			return new(ServerBoundPackSettingChangePackSettingValueString)
 		}
 		return nil
 	})
 }
 
-type ServerBoundPackSettingChangePackSettingBool struct {
+type ServerBoundPackSettingChangePackSettingValueBool struct {
 	Value bool
 }
 
-func (*ServerBoundPackSettingChangePackSettingBool) tagServerBoundPackSettingChangePackSetting() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueBool) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 1
 }
 
-// Marshal reads or writes ServerBoundPackSettingChangePackSettingBool using its canonical wire layout.
-func (x *ServerBoundPackSettingChangePackSettingBool) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueBool using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueBool) Marshal(io IO) {
 	io.Bool(&x.Value)
 }
 
-type ServerBoundPackSettingChangePackSettingFloat struct {
+type ServerBoundPackSettingChangePackSettingValueFloat struct {
 	Value float32
 }
 
-func (*ServerBoundPackSettingChangePackSettingFloat) tagServerBoundPackSettingChangePackSetting() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueFloat) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 0
 }
 
-// Marshal reads or writes ServerBoundPackSettingChangePackSettingFloat using its canonical wire layout.
-func (x *ServerBoundPackSettingChangePackSettingFloat) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueFloat using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueFloat) Marshal(io IO) {
 	io.Float32(&x.Value)
 }
 
-type ServerBoundPackSettingChangePackSettingString struct {
+type ServerBoundPackSettingChangePackSettingValueString struct {
 	Value string
 }
 
-func (*ServerBoundPackSettingChangePackSettingString) tagServerBoundPackSettingChangePackSetting() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueString) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 2
 }
 
-// Marshal reads or writes ServerBoundPackSettingChangePackSettingString using its canonical wire layout.
-func (x *ServerBoundPackSettingChangePackSettingString) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueString using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueString) Marshal(io IO) {
 	io.String(&x.Value)
 }
 

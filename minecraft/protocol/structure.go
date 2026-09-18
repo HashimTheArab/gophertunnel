@@ -78,8 +78,10 @@ type StructureSettings struct {
 	Size BlockPos
 	// Offset is the offset position that was set in the structure block. The area exported is offset by this
 	// position.
-	Offset         BlockPos
-	LastEditPlayer int64
+	Offset BlockPos
+	// LastEditingPlayerUniqueID is the unique ID of the player that last edited the structure block that these
+	// settings concern.
+	LastEditingPlayerUniqueID int64
 	// Rotation is the rotation that the structure block should obtain. See the constants above for available
 	// options.
 	Rotation Rotation
@@ -108,7 +110,7 @@ func (x *StructureSettings) Marshal(io IO) {
 	io.Bool(&x.AllowNonTickingChunks)
 	x.Size.Marshal(io)
 	x.Offset.Marshal(io)
-	io.ActorUniqueID(&x.LastEditPlayer)
+	io.ActorUniqueID(&x.LastEditingPlayerUniqueID)
 	x.Rotation.Marshal(io)
 	x.Mirror.Marshal(io)
 	x.AnimationMode.Marshal(io)

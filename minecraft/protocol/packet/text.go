@@ -10,14 +10,14 @@ type Text struct {
 	Localize bool
 	// TextType is the type of the text sent. When a client sends this to the server, it should always be
 	// TextTypeChat. If the server sends it, it may be one of the other text types above.
-	TextType uint8
-	Body     protocol.TextData
+	MessageCategory uint8
+	Body            protocol.TextData
 	// SourceName is the name of the source of the messages. This source is displayed in text types such as the
 	// TextTypeChat and TextTypeWhisper, where typically the username is shown.
-	SourceName string
+	SenderSXUID string
 	// Message is the message of the packet. This field is set for each TextType and is the main component of the
 	// packet.
-	Message string
+	PlatformID string
 	// FilteredMessage is a filtered version of Message with all the profanity removed. The client will use this
 	// over Message if this field is not empty and they have the "Filter Profanity" setting enabled.
 	FilteredMessage protocol.Optional[string]
@@ -30,10 +30,10 @@ func (*Text) ID() uint32 {
 
 func (pk *Text) Marshal(io protocol.IO) {
 	io.Bool(&pk.Localize)
-	io.Uint8(&pk.TextType)
+	io.Uint8(&pk.MessageCategory)
 	protocol.MarshalTextData(io, &pk.Body)
-	io.StringLimits(&pk.SourceName, 0, 64)
-	io.StringLimits(&pk.Message, 0, 256)
+	io.StringLimits(&pk.SenderSXUID, 0, 64)
+	io.StringLimits(&pk.PlatformID, 0, 256)
 	protocol.OptionalFunc(io, &pk.FilteredMessage, func(value *string) {
 		io.StringLimits(value, 0, 65536)
 	})

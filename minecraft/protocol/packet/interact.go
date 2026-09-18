@@ -18,8 +18,10 @@ const (
 type Interact struct {
 	// Action type is the ID of the action that was executed by the player. It is one of the constants that may be
 	// found above.
-	ActionType      protocol.InteractAction
-	TargetRuntimeID uint64
+	ActionType protocol.InteractAction
+	// TargetEntityRuntimeID is the runtime ID of the entity that the player interacted with. This is empty for
+	// the InteractActionOpenInventory action type.
+	TargetEntityRuntimeID uint64
 	// Position associated with the ActionType above. For the InteractActionMouseOverEntity, this is the position
 	// relative to the entity moused over over which the player hovered with its mouse/touch. For the
 	// InteractActionLeaveVehicle, this is the position that the player spawns at after leaving the vehicle.
@@ -33,6 +35,6 @@ func (*Interact) ID() uint32 {
 
 func (pk *Interact) Marshal(io protocol.IO) {
 	pk.ActionType.Marshal(io)
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
+	io.ActorRuntimeID(&pk.TargetEntityRuntimeID)
 	protocol.OptionalFunc(io, &pk.Position, io.Vec3)
 }

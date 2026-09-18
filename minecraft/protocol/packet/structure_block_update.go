@@ -24,15 +24,15 @@ const (
 // wiki, be added too.
 type StructureBlockUpdate struct {
 	// Position is the position of the structure block that is updated.
-	Position protocol.BlockPos
+	BlockPosition protocol.BlockPos
 	// Settings is a struct of settings that should be used for exporting the structure. These settings are
 	// identical to the last sent in the StructureBlockUpdate packet by the client.
-	Settings protocol.StructureEditorData
+	StructureData protocol.StructureEditorData
 	// ShouldTrigger specifies if the structure block should be triggered immediately after this packet reaches
 	// the server.
-	ShouldTrigger bool
+	Trigger bool
 	// Waterlogged specifies if non-air blocks replace water or combine with water.
-	Waterlogged bool
+	IsWaterlogged bool
 }
 
 // ID ...
@@ -41,8 +41,8 @@ func (*StructureBlockUpdate) ID() uint32 {
 }
 
 func (pk *StructureBlockUpdate) Marshal(io protocol.IO) {
-	pk.Position.Marshal(io)
-	pk.Settings.Marshal(io)
-	io.Bool(&pk.ShouldTrigger)
-	io.Bool(&pk.Waterlogged)
+	pk.BlockPosition.Marshal(io)
+	pk.StructureData.Marshal(io)
+	io.Bool(&pk.Trigger)
+	io.Bool(&pk.IsWaterlogged)
 }

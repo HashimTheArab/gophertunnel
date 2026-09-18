@@ -13,7 +13,7 @@ type MoveActorAbsolute struct {
 	EntityRuntimeID uint64
 	// Flags is a combination of flags that specify details of the movement. It is a combination of the flags
 	// above.
-	Flags uint8
+	Header uint8
 	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot see
 	// it, the entity will still show up if the player moves closer.
 	Position      mgl32.Vec3
@@ -29,7 +29,7 @@ func (*MoveActorAbsolute) ID() uint32 {
 
 func (pk *MoveActorAbsolute) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.Uint8(&pk.Flags)
+	io.Uint8(&pk.Header)
 	io.Vec3(&pk.Position)
 	io.Uint8(&pk.RotationX)
 	io.Uint8(&pk.RotationY)

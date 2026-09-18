@@ -12,7 +12,10 @@ type SpawnParticleEffect struct {
 	// Dimension is the dimension that the particle is spawned in. Its exact usage is not clear, as the dimension
 	// has no direct effect on the particle.
 	Dimension uint8
-	EntityID  int64
+	// EntityUniqueID is the unique ID of the entity that the spawned particle may be attached to. If this ID is
+	// not -1, the Position below will be interpreted as relative to the position of the entity associated with
+	// this unique ID.
+	EntityUniqueID int64
 	// Position is the position that the particle should be spawned at. If the position is too far away from the
 	// player, it will not show up. If EntityUniqueID is not -1, the position will be relative to the position of
 	// the entity.
@@ -32,7 +35,7 @@ func (*SpawnParticleEffect) ID() uint32 {
 
 func (pk *SpawnParticleEffect) Marshal(io protocol.IO) {
 	io.Uint8(&pk.Dimension)
-	io.ActorUniqueID(&pk.EntityID)
+	io.ActorUniqueID(&pk.EntityUniqueID)
 	io.Vec3(&pk.Position)
 	io.String(&pk.ParticleName)
 	protocol.OptionalFunc(io, &pk.MoLangVariables, io.String)

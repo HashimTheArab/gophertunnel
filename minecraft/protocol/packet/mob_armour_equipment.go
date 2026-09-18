@@ -7,7 +7,9 @@ import (
 // MobArmourEquipment is sent by the server to the client to update the armour an entity is wearing. It is
 // sent for both players and other entities, such as zombies.
 type MobArmourEquipment struct {
-	TargetRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID uint64
 	// Helmet is the equipped helmet of the entity. Items that are not wearable on the head will not be rendered
 	// by the client. Unlike in Java Edition, blocks cannot be worn.
 	Helmet protocol.NetworkItemStackDescriptorSerializedData
@@ -28,7 +30,7 @@ func (*MobArmourEquipment) ID() uint32 {
 }
 
 func (pk *MobArmourEquipment) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	pk.Helmet.Marshal(io)
 	pk.Chestplate.Marshal(io)
 	pk.Leggings.Marshal(io)

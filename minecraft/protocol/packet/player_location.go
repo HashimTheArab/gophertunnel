@@ -15,7 +15,7 @@ type PlayerLocation struct {
 	TargetEntityID int64
 	// Position is the position of the player to be used on the locator bar. This is only set when the Type is
 	// PlayerLocationTypeCoordinates.
-	Position protocol.PlayerLocationData
+	Location protocol.PlayerLocationData
 }
 
 // ID ...
@@ -25,5 +25,5 @@ func (*PlayerLocation) ID() uint32 {
 
 func (pk *PlayerLocation) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.TargetEntityID)
-	protocol.MarshalPlayerLocationData(io, &pk.Position)
+	protocol.MarshalPlayerLocationData(io, &pk.Location)
 }

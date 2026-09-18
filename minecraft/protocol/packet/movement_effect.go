@@ -14,12 +14,14 @@ const (
 // to predict its movement. For example, fireworks used during gliding will send this packet to tell the
 // client the exact duration of the boost.
 type MovementEffect struct {
-	TargetRuntimeID uint64
 	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID protocol.MovementEffectType
+	EntityRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	Type protocol.MovementEffectType
 	// Type is the type of movement effect being updated. It is one of the constants found above.
-	Type int32
+	Duration int32
 	// Tick is the server tick at which the packet was sent. It is used in relation to
 	// CorrectPlayerMovePrediction.
 	Tick uint64
@@ -31,8 +33,8 @@ func (*MovementEffect) ID() uint32 {
 }
 
 func (pk *MovementEffect) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
-	pk.EntityRuntimeID.Marshal(io)
-	io.Varint32(&pk.Type)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
+	pk.Type.Marshal(io)
+	io.Varint32(&pk.Duration)
 	io.PlayerInputTick(&pk.Tick)
 }

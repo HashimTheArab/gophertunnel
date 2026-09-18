@@ -20,12 +20,12 @@ type EducationSettings struct {
 	// PostProcessFilter ...
 	PostProcessFilter string
 	// ScreenshotBorderPath ...
-	ScreenshotBorderPath string
+	ScreenshotBorderResourcePath string
 	// CanModifyBlocks ...
-	CanModifyBlocks protocol.Optional[bool]
-	LocalSettings   protocol.EducationLocalLevelSettings
+	AgentCapabilities protocol.Optional[bool]
+	LocalSettings     protocol.EducationLocalLevelSettings
 	// HasQuiz specifies if the world has a quiz connected to it.
-	HasQuiz bool
+	DeprecatedAlwaysFalse bool
 	// ExternalLinkSettings ...
 	ExternalLinkSettings protocol.Optional[protocol.EducationExternalLinkSettings]
 }
@@ -41,9 +41,9 @@ func (pk *EducationSettings) Marshal(io protocol.IO) {
 	io.Bool(&pk.CanResizeCodeBuilder)
 	io.Bool(&pk.DisableLegacyTitleBar)
 	io.String(&pk.PostProcessFilter)
-	io.String(&pk.ScreenshotBorderPath)
-	protocol.OptionalFunc(io, &pk.CanModifyBlocks, io.Bool)
+	io.String(&pk.ScreenshotBorderResourcePath)
+	protocol.OptionalFunc(io, &pk.AgentCapabilities, io.Bool)
 	pk.LocalSettings.Marshal(io)
-	io.Bool(&pk.HasQuiz)
+	io.Bool(&pk.DeprecatedAlwaysFalse)
 	protocol.OptionalMarshaler(io, &pk.ExternalLinkSettings)
 }

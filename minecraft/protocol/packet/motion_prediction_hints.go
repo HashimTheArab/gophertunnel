@@ -10,7 +10,8 @@ import (
 // points. Vanilla sends this packet instead of the SetActorMotion packet when 'spatial optimisations' are
 // enabled.
 type MotionPredictionHints struct {
-	MRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity whose velocity is sent to the client.
+	EntityRuntimeID uint64
 	// Velocity is the server-calculated velocity of the entity at the point of sending the packet.
 	Velocity mgl32.Vec3
 	// OnGround specifies if the server currently thinks the entity is on the ground.
@@ -23,7 +24,7 @@ func (*MotionPredictionHints) ID() uint32 {
 }
 
 func (pk *MotionPredictionHints) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.MRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.Vec3(&pk.Velocity)
 	io.Bool(&pk.OnGround)
 }

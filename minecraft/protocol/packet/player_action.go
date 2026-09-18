@@ -7,10 +7,12 @@ import (
 // PlayerAction is sent by the client when it executes any action, for example starting to sprint, swim,
 // starting the breaking of a block, dropping an item, etc.
 type PlayerAction struct {
-	PlayerRuntimeID uint64
 	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID protocol.PlayerActionType
+	EntityRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	ActionType protocol.PlayerActionType
 	// BlockPosition is the position of the target block, if the action with the ActionType set concerned a block.
 	// If that is not the case, the block position will be zero.
 	BlockPosition protocol.BlockPos
@@ -29,8 +31,8 @@ func (*PlayerAction) ID() uint32 {
 }
 
 func (pk *PlayerAction) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.PlayerRuntimeID)
-	pk.EntityRuntimeID.Marshal(io)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
+	pk.ActionType.Marshal(io)
 	pk.BlockPosition.Marshal(io)
 	pk.ResultPosition.Marshal(io)
 	io.Varint32(&pk.BlockFace)

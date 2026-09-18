@@ -245,18 +245,18 @@ type CameraInstructionFieldOfView struct {
 	// FieldOfView is the field of view of the camera.
 	FieldOfView float32
 	// EaseTime is the time in seconds that the easing function should take.
-	EaseTime    float32
+	FOVEaseTime float32
 	FOVEaseType string
 	// Clear can be set to true to clear the current instruction.
-	Clear bool
+	FieldOfViewClear bool
 }
 
 // Marshal reads or writes CameraInstructionFieldOfView using its canonical wire layout.
 func (x *CameraInstructionFieldOfView) Marshal(io IO) {
 	io.Float32(&x.FieldOfView)
-	io.Float32(&x.EaseTime)
+	io.Float32(&x.FOVEaseTime)
 	io.String(&x.FOVEaseType)
-	io.Bool(&x.Clear)
+	io.Bool(&x.FieldOfViewClear)
 }
 
 // CameraInstructionSet represents a camera instruction that sets the camera to a specified preset and can be
@@ -299,12 +299,12 @@ func (x *CameraInstructionSet) Marshal(io IO) {
 // CameraInstructionTarget represents a camera instruction that targets a specific entity.
 type CameraInstructionTarget struct {
 	// EntityUniqueID is the unique ID of the entity that the camera should target.
-	EntityUniqueID int64
+	EntityEntityID int64
 }
 
 // Marshal reads or writes CameraInstructionTarget using its canonical wire layout.
 func (x *CameraInstructionTarget) Marshal(io IO) {
-	io.ActorUniqueIDInt64(&x.EntityUniqueID)
+	io.Int64(&x.EntityEntityID)
 }
 
 // CameraInstructionTarget represents a camera instruction that targets a specific entity.
@@ -335,7 +335,7 @@ type CameraPreset struct {
 	// Name is the name of the preset. Each preset must have their own unique name.
 	Name string
 	// InheritFrom is the name of the preset that this preset extends upon. This can be left empty.
-	Parent string
+	InheritFrom string
 	// PosX is the default X position of the camera.
 	PosX Optional[float32]
 	// PosY is the default Y position of the camera.
@@ -357,7 +357,7 @@ type CameraPreset struct {
 	// ContinueTargeting determines whether the camera should continue targeting when using aim assist.
 	ContinueTargeting Optional[bool]
 	// BlockListeningRadius is the radius around the camera that the aim assist should track targets.
-	TrackingRadius Optional[float32]
+	BlockListeningRadius Optional[float32]
 	// ViewOffset is only used in a follow_orbit camera and controls an offset based on a pivot point to the
 	// player, causing it to be shifted in a certain direction.
 	ViewOffset Optional[mgl32.Vec2]
@@ -367,12 +367,12 @@ type CameraPreset struct {
 	// rendered.
 	Radius Optional[float32]
 	// YawLimitMin is the minimum yaw limit of the camera.
-	MinYawLimit Optional[float32]
+	YawLimitMin Optional[float32]
 	// YawLimitMax is the maximum yaw limit of the camera.
-	MaxYawLimit Optional[float32]
+	YawLimitMax Optional[float32]
 	// Listener defines where the audio should be played from when using this preset. This is one of the constants
 	// above.
-	AudioListener Optional[CameraPresetAudioListener]
+	Listener Optional[CameraPresetAudioListener]
 	// PlayerEffects is currently unknown.
 	PlayerEffects Optional[bool]
 	// AimAssist defines the aim assist to use when using this preset.
@@ -391,7 +391,7 @@ type CameraPreset struct {
 // Marshal reads or writes CameraPreset using its canonical wire layout.
 func (x *CameraPreset) Marshal(io IO) {
 	io.String(&x.Name)
-	io.String(&x.Parent)
+	io.String(&x.InheritFrom)
 	OptionalFunc(io, &x.PosX, io.Float32)
 	OptionalFunc(io, &x.PosY, io.Float32)
 	OptionalFunc(io, &x.PosZ, io.Float32)
@@ -402,13 +402,13 @@ func (x *CameraPreset) Marshal(io IO) {
 	OptionalFunc(io, &x.HorizontalRotationLimit, io.Vec2)
 	OptionalFunc(io, &x.VerticalRotationLimit, io.Vec2)
 	OptionalFunc(io, &x.ContinueTargeting, io.Bool)
-	OptionalFunc(io, &x.TrackingRadius, io.Float32)
+	OptionalFunc(io, &x.BlockListeningRadius, io.Float32)
 	OptionalFunc(io, &x.ViewOffset, io.Vec2)
 	OptionalFunc(io, &x.EntityOffset, io.Vec3)
 	OptionalFunc(io, &x.Radius, io.Float32)
-	OptionalFunc(io, &x.MinYawLimit, io.Float32)
-	OptionalFunc(io, &x.MaxYawLimit, io.Float32)
-	OptionalMarshaler(io, &x.AudioListener)
+	OptionalFunc(io, &x.YawLimitMin, io.Float32)
+	OptionalFunc(io, &x.YawLimitMax, io.Float32)
+	OptionalMarshaler(io, &x.Listener)
 	OptionalFunc(io, &x.PlayerEffects, io.Bool)
 	OptionalMarshaler(io, &x.AimAssist)
 	OptionalMarshaler(io, &x.ControlScheme)
@@ -427,16 +427,16 @@ func (x *CameraPresetAudioListener) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 // CameraProgressOption represents a progress keyframe option for camera spline instructions.
 type CameraProgressOption struct {
 	// Value is the progress value.
-	Value float32
+	KeyFrameValue float32
 	// Time is the time for this progress option.
-	Time               float32
+	KeyFrameTime       float32
 	KeyFrameEasingFunc string
 }
 
 // Marshal reads or writes CameraProgressOption using its canonical wire layout.
 func (x *CameraProgressOption) Marshal(io IO) {
-	io.Float32(&x.Value)
-	io.Float32(&x.Time)
+	io.Float32(&x.KeyFrameValue)
+	io.Float32(&x.KeyFrameTime)
 	io.String(&x.KeyFrameEasingFunc)
 }
 
@@ -454,16 +454,16 @@ func (x *CameraRotation) Marshal(io IO) {
 // CameraRotationOption represents a rotation option for camera spline instructions.
 type CameraRotationOption struct {
 	// Value is the rotation value.
-	Value mgl32.Vec3
+	KeyFrameValue mgl32.Vec3
 	// Time is the time for this rotation option.
-	Time               float32
+	KeyFrameTime       float32
 	KeyFrameEasingFunc string
 }
 
 // Marshal reads or writes CameraRotationOption using its canonical wire layout.
 func (x *CameraRotationOption) Marshal(io IO) {
-	io.Vec3(&x.Value)
-	io.Float32(&x.Time)
+	io.Vec3(&x.KeyFrameValue)
+	io.Float32(&x.KeyFrameTime)
 	io.String(&x.KeyFrameEasingFunc)
 }
 
@@ -526,7 +526,7 @@ type CameraSplineInstruction struct {
 	// ProgressKeyFrames is a list of progress key frames for the spline.
 	ProgressKeyFrames []CameraProgressOption
 	// RotationOptions is a list of rotation options for the spline.
-	RotationOptions []CameraRotationOption
+	RotationOption []CameraRotationOption
 	// SplineIdentifier is an optional identifier for referencing the spline by name.
 	SplineIdentifier string
 	// LoadFromJSON optionally determines whether the spline should be loaded from a JSON definition.
@@ -539,7 +539,7 @@ func (x *CameraSplineInstruction) Marshal(io IO) {
 	io.Uint8(&x.Type)
 	FuncSlice(io, &x.Curve, io.Varuint32, io.Vec3)
 	Slice(io, &x.ProgressKeyFrames)
-	Slice(io, &x.RotationOptions)
+	Slice(io, &x.RotationOption)
 	io.StringLimits(&x.SplineIdentifier, 0, 1024)
 	io.Bool(&x.LoadFromJson)
 }

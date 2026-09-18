@@ -19,7 +19,9 @@ type ContainerOpen struct {
 	// actually has a container. If that is not the case, the window will not be opened and the packet will be
 	// ignored, if a valid ContainerEntityUniqueID has not also been provided.
 	ContainerPosition protocol.BlockPos
-	TargetEntityID    int64
+	// ContainerEntityUniqueID is the unique ID of the entity container that was opened. It is only used if the
+	// ContainerType is one that points to an entity, for example a horse.
+	ContainerEntityUniqueID int64
 }
 
 // ID ...
@@ -31,5 +33,5 @@ func (pk *ContainerOpen) Marshal(io protocol.IO) {
 	io.Uint8(&pk.WindowID)
 	io.Uint8(&pk.ContainerType)
 	pk.ContainerPosition.Marshal(io)
-	io.ActorUniqueID(&pk.TargetEntityID)
+	io.ActorUniqueID(&pk.ContainerEntityUniqueID)
 }

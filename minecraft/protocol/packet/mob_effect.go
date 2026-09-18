@@ -7,16 +7,18 @@ import (
 // MobEffect is sent by the server to apply an effect to the player, for example an effect like poison. It may
 // also be used to modify existing effects, or removing them completely.
 type MobEffect struct {
-	TargetRuntimeID uint64
 	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID protocol.MobEffectEvent
+	EntityRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	Operation protocol.MobEffectEvent
 	// Operation is the operation of the packet. It is either MobEffectAdd, MobEffectModify or MobEffectRemove and
 	// specifies the result of the packet client-side.
-	Operation int32
+	EffectType int32
 	// EffectType is the ID of the effect to be added, removed or modified. It is one of the constants that may be
 	// found above.
-	EffectType int32
+	Amplifier int32
 	// Particles specifies if viewers of the entity that gets the effect shows particles around it. If set to
 	// false, no particles are emitted around the entity.
 	Particles bool
@@ -36,10 +38,10 @@ func (*MobEffect) ID() uint32 {
 }
 
 func (pk *MobEffect) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
-	pk.EntityRuntimeID.Marshal(io)
-	io.Varint32(&pk.Operation)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
+	pk.Operation.Marshal(io)
 	io.Varint32(&pk.EffectType)
+	io.Varint32(&pk.Amplifier)
 	io.Bool(&pk.Particles)
 	io.Varint32(&pk.Duration)
 	io.PlayerInputTick(&pk.Tick)

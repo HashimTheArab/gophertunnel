@@ -10,9 +10,9 @@ type SubChunk struct {
 	CacheEnabled  bool
 	DimensionType protocol.DimensionType
 	// Position is an absolute sub-chunk center point that every SubChunkRequest uses as a reference.
-	Position protocol.SubChunkPos
+	CenterPos protocol.SubChunkPos
 	// SubChunkEntries contains sub-chunk entries relative to the center point.
-	SubChunkEntries []protocol.SubChunkData
+	SubChunkData []protocol.SubChunkData
 }
 
 // ID ...
@@ -23,6 +23,6 @@ func (*SubChunk) ID() uint32 {
 func (pk *SubChunk) Marshal(io protocol.IO) {
 	io.Bool(&pk.CacheEnabled)
 	pk.DimensionType.Marshal(io)
-	pk.Position.Marshal(io)
-	protocol.SliceLimits(io, &pk.SubChunkEntries, 0, 8192)
+	pk.CenterPos.Marshal(io)
+	protocol.SliceLimits(io, &pk.SubChunkData, 0, 8192)
 }

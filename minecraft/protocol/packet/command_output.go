@@ -13,8 +13,8 @@ type CommandOutput struct {
 	// CommandOrigin is the data specifying the origin of the command. In other words, the source that the command
 	// request was from, such as the player itself or a websocket server. The client forwards the messages in this
 	// packet to the right origin, depending on what is sent here.
-	CommandOrigin protocol.CommandOrigin
-	Output        protocol.CommandOutputData
+	OriginData protocol.CommandOrigin
+	Output     protocol.CommandOutputData
 }
 
 // ID ...
@@ -23,6 +23,6 @@ func (*CommandOutput) ID() uint32 {
 }
 
 func (pk *CommandOutput) Marshal(io protocol.IO) {
-	pk.CommandOrigin.Marshal(io)
+	pk.OriginData.Marshal(io)
 	pk.Output.Marshal(io)
 }

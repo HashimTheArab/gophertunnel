@@ -22,7 +22,7 @@ type PositionTrackingDBServerBroadcast struct {
 	// above, specifying the result of the request with the ID below. The Update action is sent for setting the
 	// position of a lodestone compass, the Destroy and NotFound to indicate that there is not (no longer) a
 	// lodestone at that position.
-	BroadcastAction      protocol.PositionTrackingDBServerBroadcastAction
+	Action               protocol.PositionTrackingDBServerBroadcastAction
 	IDValue              protocol.PositionTrackingID
 	PositionTrackingData []byte
 }
@@ -33,7 +33,7 @@ func (*PositionTrackingDBServerBroadcast) ID() uint32 {
 }
 
 func (pk *PositionTrackingDBServerBroadcast) Marshal(io protocol.IO) {
-	pk.BroadcastAction.Marshal(io)
+	pk.Action.Marshal(io)
 	pk.IDValue.Marshal(io)
 	io.NBT(&pk.PositionTrackingData, protocol.NBTNetwork)
 }

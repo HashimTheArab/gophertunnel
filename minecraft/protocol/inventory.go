@@ -6,21 +6,21 @@ package protocol
 type InventoryAction struct {
 	Source InventorySource
 	// SourceType is the source type of the inventory action. It is one of the constants above.
-	SourceType uint32
+	Slot uint32
 	// OldItem is the item that was present in the slot before the inventory action. It should be checked by the
 	// server to ensure the inventories were not out of sync.
-	OldItem NetworkItemStackDescriptorSerializedData
+	FromItem NetworkItemStackDescriptorSerializedData
 	// NewItem is the new item that was put in the InventorySlot that the OldItem was in. It must be checked in
 	// combination with other inventory actions to ensure that the transaction is balanced.
-	NewItem NetworkItemStackDescriptorSerializedData
+	ToItem NetworkItemStackDescriptorSerializedData
 }
 
 // Marshal reads or writes InventoryAction using its canonical wire layout.
 func (x *InventoryAction) Marshal(io IO) {
 	x.Source.Marshal(io)
-	io.Varuint32(&x.SourceType)
-	x.OldItem.Marshal(io)
-	x.NewItem.Marshal(io)
+	io.Varuint32(&x.Slot)
+	x.FromItem.Marshal(io)
+	x.ToItem.Marshal(io)
 }
 
 type InventoryLayout int32

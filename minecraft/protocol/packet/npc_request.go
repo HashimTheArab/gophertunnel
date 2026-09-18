@@ -17,7 +17,9 @@ const (
 // NPCRequest is sent by the client when it interacts with an NPC. The packet is specifically made for
 // Education Edition, where NPCs are available to use.
 type NPCRequest struct {
-	NPCRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the NPC entity that the player interacted with. It is the same as sent
+	// by the server when spawning the entity.
+	EntityRuntimeID uint64
 	// RequestType is the type of the request, which depends on the permission that the player has. It will be
 	// either a type that indicates that the NPC should show its dialog, or that it should open the editing
 	// window.
@@ -38,7 +40,7 @@ func (*NPCRequest) ID() uint32 {
 }
 
 func (pk *NPCRequest) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.NPCRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	pk.RequestType.Marshal(io)
 	io.String(&pk.CommandString)
 	io.Uint8(&pk.ActionType)
