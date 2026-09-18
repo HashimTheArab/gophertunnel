@@ -11,10 +11,11 @@ type AnvilDamage struct {
 	AnvilPosition protocol.BlockPos
 }
 
-// ID returns the protocol ID for AnvilDamage.
-func (*AnvilDamage) ID() uint32 { return IDAnvilDamage }
+// ID ...
+func (*AnvilDamage) ID() uint32 {
+	return IDAnvilDamage
+}
 
-// Marshal reads or writes AnvilDamage using its canonical wire layout.
 func (pk *AnvilDamage) Marshal(io protocol.IO) {
 	pk.AnvilPosition.Marshal(io)
 }

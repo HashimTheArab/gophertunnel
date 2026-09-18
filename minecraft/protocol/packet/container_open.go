@@ -12,18 +12,19 @@ type ContainerOpen struct {
 	// ContainerType is the type ID of the container that is being opened when opening the container at the
 	// position of the packet. It depends on the block/entity, and could, for example, be the window type of a
 	// chest or a hopper, but also a horse inventory.
-	ContainerType uint8
-	Position      protocol.BlockPos
-	TargetActorID int64
+	ContainerType  uint8
+	Position       protocol.BlockPos
+	TargetEntityID int64
 }
 
-// ID returns the protocol ID for ContainerOpen.
-func (*ContainerOpen) ID() uint32 { return IDContainerOpen }
+// ID ...
+func (*ContainerOpen) ID() uint32 {
+	return IDContainerOpen
+}
 
-// Marshal reads or writes ContainerOpen using its canonical wire layout.
 func (pk *ContainerOpen) Marshal(io protocol.IO) {
 	io.Uint8(&pk.ContainerID)
 	io.Uint8(&pk.ContainerType)
 	pk.Position.Marshal(io)
-	io.ActorUniqueID(&pk.TargetActorID)
+	io.ActorUniqueID(&pk.TargetEntityID)
 }

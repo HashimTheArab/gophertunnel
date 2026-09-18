@@ -5,18 +5,19 @@ import (
 )
 
 type LegacyTelemetryEvent struct {
-	TargetActorID int64
-	EventType     protocol.LegacyTelemetryType
-	UsePlayerID   bool
-	EventData     protocol.EventData
+	TargetEntityID int64
+	EventType      protocol.LegacyTelemetryType
+	UsePlayerID    bool
+	EventData      protocol.EventData
 }
 
-// ID returns the protocol ID for LegacyTelemetryEvent.
-func (*LegacyTelemetryEvent) ID() uint32 { return IDLegacyTelemetryEvent }
+// ID ...
+func (*LegacyTelemetryEvent) ID() uint32 {
+	return IDLegacyTelemetryEvent
+}
 
-// Marshal reads or writes LegacyTelemetryEvent using its canonical wire layout.
 func (pk *LegacyTelemetryEvent) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetActorID)
+	io.ActorUniqueID(&pk.TargetEntityID)
 	pk.EventType.Marshal(io)
 	io.Bool(&pk.UsePlayerID)
 	protocol.MarshalEventData(io, &pk.EventData)

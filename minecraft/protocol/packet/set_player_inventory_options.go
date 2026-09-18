@@ -40,19 +40,20 @@ type SetPlayerInventoryOptions struct {
 	// Filtering is whether the player has enabled the filtering between recipes they have unlocked or not.
 	Filtering bool
 	// InventoryLayout is the layout of the inventory. It is one of the InventoryLayout constants above.
-	LayoutInv protocol.InventoryLayout
+	InventoryLayout protocol.InventoryLayout
 	// CraftingLayout is the layout of the crafting inventory. It is one of the InventoryLayout constants above.
-	LayoutCraft protocol.InventoryLayout
+	CraftingLayout protocol.InventoryLayout
 }
 
-// ID returns the protocol ID for SetPlayerInventoryOptions.
-func (*SetPlayerInventoryOptions) ID() uint32 { return IDSetPlayerInventoryOptions }
+// ID ...
+func (*SetPlayerInventoryOptions) ID() uint32 {
+	return IDSetPlayerInventoryOptions
+}
 
-// Marshal reads or writes SetPlayerInventoryOptions using its canonical wire layout.
 func (pk *SetPlayerInventoryOptions) Marshal(io protocol.IO) {
 	pk.LeftInventoryTab.Marshal(io)
 	pk.RightInventoryTab.Marshal(io)
 	io.Bool(&pk.Filtering)
-	pk.LayoutInv.Marshal(io)
-	pk.LayoutCraft.Marshal(io)
+	pk.InventoryLayout.Marshal(io)
+	pk.CraftingLayout.Marshal(io)
 }

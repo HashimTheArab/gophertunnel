@@ -17,10 +17,11 @@ type SimulationType struct {
 	SimulationType protocol.SimulationTypeEnum
 }
 
-// ID returns the protocol ID for SimulationType.
-func (*SimulationType) ID() uint32 { return IDSimulationType }
+// ID ...
+func (*SimulationType) ID() uint32 {
+	return IDSimulationType
+}
 
-// Marshal reads or writes SimulationType using its canonical wire layout.
 func (pk *SimulationType) Marshal(io protocol.IO) {
 	pk.SimulationType.Marshal(io)
 }

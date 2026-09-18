@@ -15,8 +15,8 @@ const (
 // Animate is sent by the server to send a player animation from one player to all viewers of that player. It
 // is used for a couple of actions, such as arm swimming and critical hits.
 type Animate struct {
-	Action               protocol.AnimateAction
-	TargetActorRuntimeID uint64
+	Action                protocol.AnimateAction
+	TargetEntityRuntimeID uint64
 	// Data ...
 	Data float32
 	// SwingSource is the source for swing actions. It is one of the action type constants that may be found
@@ -24,13 +24,14 @@ type Animate struct {
 	SwingSource protocol.Optional[string]
 }
 
-// ID returns the protocol ID for Animate.
-func (*Animate) ID() uint32 { return IDAnimate }
+// ID ...
+func (*Animate) ID() uint32 {
+	return IDAnimate
+}
 
-// Marshal reads or writes Animate using its canonical wire layout.
 func (pk *Animate) Marshal(io protocol.IO) {
 	pk.Action.Marshal(io)
-	io.ActorRuntimeID(&pk.TargetActorRuntimeID)
+	io.ActorRuntimeID(&pk.TargetEntityRuntimeID)
 	io.Float32(&pk.Data)
 	protocol.OptionalFunc(io, &pk.SwingSource, io.String)
 }

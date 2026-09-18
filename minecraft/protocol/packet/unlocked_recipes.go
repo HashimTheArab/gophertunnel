@@ -21,10 +21,11 @@ type UnlockedRecipes struct {
 	Recipes []string
 }
 
-// ID returns the protocol ID for UnlockedRecipes.
-func (*UnlockedRecipes) ID() uint32 { return IDUnlockedRecipes }
+// ID ...
+func (*UnlockedRecipes) ID() uint32 {
+	return IDUnlockedRecipes
+}
 
-// Marshal reads or writes UnlockedRecipes using its canonical wire layout.
 func (pk *UnlockedRecipes) Marshal(io protocol.IO) {
 	pk.UnlockType.Marshal(io)
 	protocol.FuncSlice(io, &pk.Recipes, io.Varuint32, io.String)

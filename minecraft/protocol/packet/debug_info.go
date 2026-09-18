@@ -7,16 +7,17 @@ import (
 // DebugInfo is a packet sent by the server to the client. It does not seem to do anything when sent to the
 // normal client in 1.16.
 type DebugInfo struct {
-	ActorID int64
+	EntityID int64
 	// Data is the debug data.
 	Data []byte
 }
 
-// ID returns the protocol ID for DebugInfo.
-func (*DebugInfo) ID() uint32 { return IDDebugInfo }
+// ID ...
+func (*DebugInfo) ID() uint32 {
+	return IDDebugInfo
+}
 
-// Marshal reads or writes DebugInfo using its canonical wire layout.
 func (pk *DebugInfo) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.ActorID)
+	io.ActorUniqueID(&pk.EntityID)
 	io.Bytes(&pk.Data)
 }

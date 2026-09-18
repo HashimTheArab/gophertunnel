@@ -21,10 +21,11 @@ type ClientCameraAimAssist struct {
 	AllowAimAssist bool
 }
 
-// ID returns the protocol ID for ClientCameraAimAssist.
-func (*ClientCameraAimAssist) ID() uint32 { return IDClientCameraAimAssist }
+// ID ...
+func (*ClientCameraAimAssist) ID() uint32 {
+	return IDClientCameraAimAssist
+}
 
-// Marshal reads or writes ClientCameraAimAssist using its canonical wire layout.
 func (pk *ClientCameraAimAssist) Marshal(io protocol.IO) {
 	io.String(&pk.PresetID)
 	pk.Action.Marshal(io)

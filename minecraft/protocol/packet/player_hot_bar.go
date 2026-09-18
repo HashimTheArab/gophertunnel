@@ -17,10 +17,11 @@ type PlayerHotbar struct {
 	SelectHotBarSlot bool
 }
 
-// ID returns the protocol ID for PlayerHotbar.
-func (*PlayerHotbar) ID() uint32 { return IDPlayerHotbar }
+// ID ...
+func (*PlayerHotbar) ID() uint32 {
+	return IDPlayerHotbar
+}
 
-// Marshal reads or writes PlayerHotbar using its canonical wire layout.
 func (pk *PlayerHotbar) Marshal(io protocol.IO) {
 	io.Varuint32(&pk.SelectedHotBarSlot)
 	io.Uint8(&pk.WindowID)

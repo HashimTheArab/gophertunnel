@@ -34,10 +34,11 @@ type LevelEvent struct {
 	EventData int32
 }
 
-// ID returns the protocol ID for LevelEvent.
-func (*LevelEvent) ID() uint32 { return IDLevelEvent }
+// ID ...
+func (*LevelEvent) ID() uint32 {
+	return IDLevelEvent
+}
 
-// Marshal reads or writes LevelEvent using its canonical wire layout.
 func (pk *LevelEvent) Marshal(io protocol.IO) {
 	io.Varint32(&pk.EventType)
 	io.Vec3(&pk.Position)

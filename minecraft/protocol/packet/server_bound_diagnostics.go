@@ -42,10 +42,11 @@ type ServerboundDiagnostics struct {
 	WhiskerScopes []protocol.BedrockProfileWhiskerDiagnosticsScopeDataSummary
 }
 
-// ID returns the protocol ID for ServerboundDiagnostics.
-func (*ServerboundDiagnostics) ID() uint32 { return IDServerboundDiagnostics }
+// ID ...
+func (*ServerboundDiagnostics) ID() uint32 {
+	return IDServerboundDiagnostics
+}
 
-// Marshal reads or writes ServerboundDiagnostics using its canonical wire layout.
 func (pk *ServerboundDiagnostics) Marshal(io protocol.IO) {
 	io.Float32(&pk.AverageFramesPerSecond)
 	io.Float32(&pk.AverageServerSimTickTime)

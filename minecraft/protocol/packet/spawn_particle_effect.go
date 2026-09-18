@@ -10,7 +10,7 @@ import (
 // They can be added and changed through behaviour packs to implement custom particles.
 type SpawnParticleEffect struct {
 	DimensionID uint8
-	ActorID     int64
+	EntityID    int64
 	// Position is the position that the particle should be spawned at. If the position is too far away from the
 	// player, it will not show up. If EntityUniqueID is not -1, the position will be relative to the position of
 	// the entity.
@@ -21,13 +21,14 @@ type SpawnParticleEffect struct {
 	MoLangVariables protocol.Optional[string]
 }
 
-// ID returns the protocol ID for SpawnParticleEffect.
-func (*SpawnParticleEffect) ID() uint32 { return IDSpawnParticleEffect }
+// ID ...
+func (*SpawnParticleEffect) ID() uint32 {
+	return IDSpawnParticleEffect
+}
 
-// Marshal reads or writes SpawnParticleEffect using its canonical wire layout.
 func (pk *SpawnParticleEffect) Marshal(io protocol.IO) {
 	io.Uint8(&pk.DimensionID)
-	io.ActorUniqueID(&pk.ActorID)
+	io.ActorUniqueID(&pk.EntityID)
 	io.Vec3(&pk.Position)
 	io.String(&pk.EffectName)
 	protocol.OptionalFunc(io, &pk.MoLangVariables, io.String)

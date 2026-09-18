@@ -12,10 +12,11 @@ type SetLastHurtBy struct {
 	EntityType protocol.ActorType
 }
 
-// ID returns the protocol ID for SetLastHurtBy.
-func (*SetLastHurtBy) ID() uint32 { return IDSetLastHurtBy }
+// ID ...
+func (*SetLastHurtBy) ID() uint32 {
+	return IDSetLastHurtBy
+}
 
-// Marshal reads or writes SetLastHurtBy using its canonical wire layout.
 func (pk *SetLastHurtBy) Marshal(io protocol.IO) {
 	pk.EntityType.Marshal(io)
 }

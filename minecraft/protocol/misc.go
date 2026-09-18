@@ -21,7 +21,7 @@ func (x *Achievement) Marshal(io IO) {
 type AddEntry struct {
 	Action           PlayerListPacketType
 	UUID             uuid.UUID
-	ActorUniqueID    int64
+	EntityUniqueID   int64
 	PlayerName       string
 	XBLXUID          string
 	PlatformOnlineID string
@@ -30,7 +30,7 @@ type AddEntry struct {
 	IsTeacher        bool
 	IsHost           bool
 	IsSubClient      bool
-	PlayerColor      color.RGBA
+	PlayerColour     color.RGBA
 }
 
 func (*AddEntry) tagPlayerListData() uint32 { return 1 }
@@ -39,7 +39,7 @@ func (*AddEntry) tagPlayerListData() uint32 { return 1 }
 func (x *AddEntry) Marshal(io IO) {
 	x.Action.Marshal(io)
 	io.UUID(&x.UUID)
-	io.ActorUniqueID(&x.ActorUniqueID)
+	io.ActorUniqueID(&x.EntityUniqueID)
 	io.String(&x.PlayerName)
 	io.String(&x.XBLXUID)
 	io.String(&x.PlatformOnlineID)
@@ -48,7 +48,7 @@ func (x *AddEntry) Marshal(io IO) {
 	io.Bool(&x.IsTeacher)
 	io.Bool(&x.IsHost)
 	io.Bool(&x.IsSubClient)
-	io.RGBA(&x.PlayerColor)
+	io.RGBA(&x.PlayerColour)
 }
 
 type AddTimeMarkerData struct {
@@ -286,16 +286,16 @@ type BossEventUpdateType uint8
 func (x *BossEventUpdateType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type BossKilled struct {
-	BossActorID int64
-	PartySize   int32
-	BossType    int32
+	BossEntityID int64
+	PartySize    int32
+	BossType     int32
 }
 
 func (*BossKilled) tagEventData() uint32 { return 7 }
 
 // Marshal reads or writes BossKilled using its canonical wire layout.
 func (x *BossKilled) Marshal(io IO) {
-	io.Varint64(&x.BossActorID)
+	io.Varint64(&x.BossEntityID)
 	io.Varint32(&x.PartySize)
 	io.Varint32(&x.BossType)
 }
@@ -323,16 +323,16 @@ func (x *Cancel) Marshal(io IO) {
 }
 
 type CauldronUsed struct {
-	ContentsColor uint32
-	ContentsType  int32
-	FillLevel     int32
+	ContentsColour uint32
+	ContentsType   int32
+	FillLevel      int32
 }
 
 func (*CauldronUsed) tagEventData() uint32 { return 5 }
 
 // Marshal reads or writes CauldronUsed using its canonical wire layout.
 func (x *CauldronUsed) Marshal(io IO) {
-	io.Varuint32(&x.ContentsColor)
+	io.Varuint32(&x.ContentsColour)
 	io.Varint32(&x.ContentsType)
 	io.Varint32(&x.FillLevel)
 }
@@ -342,7 +342,7 @@ type ChangeEntityScore struct {
 	ScoreboardID  ScoreboardID
 	ObjectiveName string
 	ScoreValue    int32
-	ActorID       int64
+	EntityID      int64
 }
 
 func (*ChangeEntityScore) tagSetScoreEntriesItem() uint8 { return 2 }
@@ -353,7 +353,7 @@ func (x *ChangeEntityScore) Marshal(io IO) {
 	x.ScoreboardID.Marshal(io)
 	io.StringLimits(&x.ObjectiveName, 1, 18446744073709551615)
 	io.Int32(&x.ScoreValue)
-	io.ActorUniqueID(&x.ActorID)
+	io.ActorUniqueID(&x.EntityID)
 }
 
 type ChangeFakePlayerScore struct {
@@ -650,7 +650,7 @@ func (x *DataItemVec3) Marshal(io IO) {
 type DebugMarkerData struct {
 	Text     string
 	Position mgl32.Vec3
-	Color    color.RGBA
+	Colour   color.RGBA
 	Duration uint64
 }
 
@@ -658,7 +658,7 @@ type DebugMarkerData struct {
 func (x *DebugMarkerData) Marshal(io IO) {
 	io.StringLimits(&x.Text, 0, 4096)
 	io.Vec3(&x.Position)
-	io.RGBA(&x.Color)
+	io.RGBA(&x.Colour)
 	io.Uint64(&x.Duration)
 }
 
@@ -1037,11 +1037,11 @@ type InteractAction uint8
 func (x *InteractAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type Interaction struct {
-	InteractedEntityID      int64
-	InteractionType         MinecraftEventingInteractionType
-	InteractionActorType    int32
-	InteractionActorVariant int32
-	InteractionActorColor   uint8
+	InteractedEntityID       int64
+	InteractionType          MinecraftEventingInteractionType
+	InteractionEntityType    int32
+	InteractionEntityVariant int32
+	InteractionEntityColour  uint8
 }
 
 func (*Interaction) tagEventData() uint32 { return 1 }
@@ -1050,9 +1050,9 @@ func (*Interaction) tagEventData() uint32 { return 1 }
 func (x *Interaction) Marshal(io IO) {
 	io.Varint64(&x.InteractedEntityID)
 	x.InteractionType.Marshal(io)
-	io.Varint32(&x.InteractionActorType)
-	io.Varint32(&x.InteractionActorVariant)
-	io.Uint8(&x.InteractionActorColor)
+	io.Varint32(&x.InteractionEntityType)
+	io.Varint32(&x.InteractionEntityVariant)
+	io.Uint8(&x.InteractionEntityColour)
 }
 
 type LabTableReactionType uint8
@@ -1126,7 +1126,7 @@ type LevelSettings struct {
 	StartWithMapEnabled                    bool
 	PlayerPermissions                      PlayerPermissionLevel
 	ServerChunkTickRange                   int32
-	HasLockedBehaviorPack                  bool
+	HasLockedBehaviourPack                 bool
 	HasLockedResourcePack                  bool
 	IsFromLockedTemplate                   bool
 	UseMsaGamertagsOnly                    bool
@@ -1180,7 +1180,7 @@ func (x *LevelSettings) Marshal(io IO) {
 	io.Bool(&x.StartWithMapEnabled)
 	x.PlayerPermissions.Marshal(io)
 	io.Int32(&x.ServerChunkTickRange)
-	io.Bool(&x.HasLockedBehaviorPack)
+	io.Bool(&x.HasLockedBehaviourPack)
 	io.Bool(&x.HasLockedResourcePack)
 	io.Bool(&x.IsFromLockedTemplate)
 	io.Bool(&x.UseMsaGamertagsOnly)
@@ -1446,7 +1446,7 @@ func (x *MoLangVersion) Marshal(io IO) { io.Int16((*int16)(x)) }
 type MobBorn struct {
 	BornBabyEntityType    int32
 	BornBabyEntityVariant int32
-	BornBabyColor         uint8
+	BornBabyColour        uint8
 }
 
 func (*MobBorn) tagEventData() uint32 { return 9 }
@@ -1455,25 +1455,25 @@ func (*MobBorn) tagEventData() uint32 { return 9 }
 func (x *MobBorn) Marshal(io IO) {
 	io.Varint32(&x.BornBabyEntityType)
 	io.Varint32(&x.BornBabyEntityVariant)
-	io.Uint8(&x.BornBabyColor)
+	io.Uint8(&x.BornBabyColour)
 }
 
 type MobKilled struct {
-	InstigatorActorID         int64
-	TargetActorID             int64
-	InstigatorSChildActorType ActorType
-	DamageSource              int32
-	TradeTier                 int32
-	TraderName                string
+	InstigatorEntityID         int64
+	TargetEntityID             int64
+	InstigatorSChildEntityType ActorType
+	DamageSource               int32
+	TradeTier                  int32
+	TraderName                 string
 }
 
 func (*MobKilled) tagEventData() uint32 { return 4 }
 
 // Marshal reads or writes MobKilled using its canonical wire layout.
 func (x *MobKilled) Marshal(io IO) {
-	io.Varint64(&x.InstigatorActorID)
-	io.Varint64(&x.TargetActorID)
-	x.InstigatorSChildActorType.Marshal(io)
+	io.Varint64(&x.InstigatorEntityID)
+	io.Varint64(&x.TargetEntityID)
+	x.InstigatorSChildEntityType.Marshal(io)
 	io.Varint32(&x.DamageSource)
 	io.Varint32(&x.TradeTier)
 	io.StringLimits(&x.TraderName, 0, 128)
@@ -1486,13 +1486,13 @@ func (x *ModalFormCancelReason) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type MovePlayerTeleportData struct {
 	TeleportationCause int32
-	SourceActorType    int32
+	SourceEntityType   int32
 }
 
 // Marshal reads or writes MovePlayerTeleportData using its canonical wire layout.
 func (x *MovePlayerTeleportData) Marshal(io IO) {
 	io.Int32(&x.TeleportationCause)
-	io.Int32(&x.SourceActorType)
+	io.Int32(&x.SourceEntityType)
 }
 
 type MovementEffectType int32
@@ -1846,9 +1846,9 @@ type SerializedSkinRef struct {
 	CapeID                       string
 	FullID                       string
 	ArmSize                      PersonaArmSizeType
-	SkinColor                    color.RGBA
+	SkinColour                   color.RGBA
 	PersonaPieces                []SerializedPersonaPieceHandle
-	PieceTintColors              []OrderedEntry[string, TintMapColor]
+	PieceTintColours             []OrderedEntry[string, TintMapColor]
 	IsPremium                    bool
 	IsPersona                    bool
 	IsPersonaCapeOnClassicSkin   bool
@@ -1872,9 +1872,9 @@ func (x *SerializedSkinRef) Marshal(io IO) {
 	io.String(&x.CapeID)
 	io.String(&x.FullID)
 	x.ArmSize.Marshal(io)
-	io.RGBA(&x.SkinColor)
+	io.RGBA(&x.SkinColour)
 	Slice(io, &x.PersonaPieces)
-	OrderedMap(io, &x.PieceTintColors, io.Varuint32, io.String, func(value *TintMapColor) {
+	OrderedMap(io, &x.PieceTintColours, io.Varuint32, io.String, func(value *TintMapColor) {
 		value.Marshal(io)
 	})
 	io.Bool(&x.IsPremium)
@@ -2221,13 +2221,13 @@ func (x *TextDataWhisper) Marshal(io IO) {
 }
 
 type TintMapColor struct {
-	Colors [4]color.RGBA
+	Colours [4]color.RGBA
 }
 
 // Marshal reads or writes TintMapColor using its canonical wire layout.
 func (x *TintMapColor) Marshal(io IO) {
-	for index1 := range x.Colors {
-		io.RGBA(&x.Colors[index1])
+	for index1 := range x.Colours {
+		io.RGBA(&x.Colours[index1])
 	}
 }
 

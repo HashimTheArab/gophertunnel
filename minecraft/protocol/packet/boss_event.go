@@ -38,8 +38,8 @@ const (
 // BossEvent is sent by the server to make a specific 'boss event' occur in the world. It includes features
 // such as showing a boss bar to the player and turning the sky dark.
 type BossEvent struct {
-	TargetActorID int64
-	PlayerID      int64
+	TargetEntityID int64
+	PlayerID       int64
 	// EventType is the type of the event. It is one of the BossEvent constants above.
 	EventType     protocol.BossEventUpdateType
 	Name          string
@@ -53,12 +53,13 @@ type BossEvent struct {
 	Overlay protocol.BossBarOverlay
 }
 
-// ID returns the protocol ID for BossEvent.
-func (*BossEvent) ID() uint32 { return IDBossEvent }
+// ID ...
+func (*BossEvent) ID() uint32 {
+	return IDBossEvent
+}
 
-// Marshal reads or writes BossEvent using its canonical wire layout.
 func (pk *BossEvent) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetActorID)
+	io.ActorUniqueID(&pk.TargetEntityID)
 	io.ActorUniqueID(&pk.PlayerID)
 	pk.EventType.Marshal(io)
 	io.StringLimits(&pk.Name, 0, 256)

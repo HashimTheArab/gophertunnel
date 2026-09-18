@@ -19,10 +19,11 @@ type SimpleEvent struct {
 	EventType protocol.Subtype
 }
 
-// ID returns the protocol ID for SimpleEvent.
-func (*SimpleEvent) ID() uint32 { return IDSimpleEvent }
+// ID ...
+func (*SimpleEvent) ID() uint32 {
+	return IDSimpleEvent
+}
 
-// Marshal reads or writes SimpleEvent using its canonical wire layout.
 func (pk *SimpleEvent) Marshal(io protocol.IO) {
 	pk.EventType.Marshal(io)
 }

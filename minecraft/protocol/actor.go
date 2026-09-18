@@ -1,23 +1,23 @@
 package protocol
 
 type ActorDataBoundingBoxComponent struct {
-	ActorDataBoundingBox [3]float32
+	EntityDataBoundingBox [3]float32
 }
 
 // Marshal reads or writes ActorDataBoundingBoxComponent using its canonical wire layout.
 func (x *ActorDataBoundingBoxComponent) Marshal(io IO) {
-	for index1 := range x.ActorDataBoundingBox {
-		io.Float32(&x.ActorDataBoundingBox[index1])
+	for index1 := range x.EntityDataBoundingBox {
+		io.Float32(&x.EntityDataBoundingBox[index1])
 	}
 }
 
 type ActorDataFlagComponent struct {
-	ActorFlagBitsetData Bitset131
+	EntityFlagBitsetData Bitset131
 }
 
 // Marshal reads or writes ActorDataFlagComponent using its canonical wire layout.
 func (x *ActorDataFlagComponent) Marshal(io IO) {
-	io.Bitset(x.ActorFlagBitsetData[:], 131)
+	io.Bitset(x.EntityFlagBitsetData[:], 131)
 }
 
 type ActorDefinition struct {

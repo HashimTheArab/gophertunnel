@@ -20,10 +20,11 @@ type CameraAimAssistPresets struct {
 	Operation protocol.CameraAimAssistPresetOperation
 }
 
-// ID returns the protocol ID for CameraAimAssistPresets.
-func (*CameraAimAssistPresets) ID() uint32 { return IDCameraAimAssistPresets }
+// ID ...
+func (*CameraAimAssistPresets) ID() uint32 {
+	return IDCameraAimAssistPresets
+}
 
-// Marshal reads or writes CameraAimAssistPresets using its canonical wire layout.
 func (pk *CameraAimAssistPresets) Marshal(io protocol.IO) {
 	protocol.Slice(io, &pk.Categories)
 	protocol.Slice(io, &pk.Presets)

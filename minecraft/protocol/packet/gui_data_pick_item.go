@@ -17,10 +17,11 @@ type GuiDataPickItem struct {
 	HotBarSlot int32
 }
 
-// ID returns the protocol ID for GuiDataPickItem.
-func (*GuiDataPickItem) ID() uint32 { return IDGuiDataPickItem }
+// ID ...
+func (*GuiDataPickItem) ID() uint32 {
+	return IDGuiDataPickItem
+}
 
-// Marshal reads or writes GuiDataPickItem using its canonical wire layout.
 func (pk *GuiDataPickItem) Marshal(io protocol.IO) {
 	io.String(&pk.ItemName)
 	io.String(&pk.ItemEffects)

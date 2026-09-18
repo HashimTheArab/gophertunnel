@@ -15,10 +15,11 @@ type ClientCacheBlobStatus struct {
 	HitHashes []uint64
 }
 
-// ID returns the protocol ID for ClientCacheBlobStatus.
-func (*ClientCacheBlobStatus) ID() uint32 { return IDClientCacheBlobStatus }
+// ID ...
+func (*ClientCacheBlobStatus) ID() uint32 {
+	return IDClientCacheBlobStatus
+}
 
-// Marshal reads or writes ClientCacheBlobStatus using its canonical wire layout.
 func (pk *ClientCacheBlobStatus) Marshal(io protocol.IO) {
 	protocol.FuncSliceLimits(io, &pk.MissHashes, io.Varuint32, 0, 4095, io.Uint64)
 	protocol.FuncSliceLimits(io, &pk.HitHashes, io.Varuint32, 0, 4095, io.Uint64)

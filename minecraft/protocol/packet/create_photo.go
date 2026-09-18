@@ -15,10 +15,11 @@ type CreatePhoto struct {
 	ItemName string
 }
 
-// ID returns the protocol ID for CreatePhoto.
-func (*CreatePhoto) ID() uint32 { return IDCreatePhoto }
+// ID ...
+func (*CreatePhoto) ID() uint32 {
+	return IDCreatePhoto
+}
 
-// Marshal reads or writes CreatePhoto using its canonical wire layout.
 func (pk *CreatePhoto) Marshal(io protocol.IO) {
 	io.Uint64(&pk.EntityUniqueID)
 	io.String(&pk.PhotoName)

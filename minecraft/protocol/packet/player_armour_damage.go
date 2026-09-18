@@ -19,10 +19,11 @@ type PlayerArmorDamage struct {
 	List []protocol.ArmorSlotAndDamagePair
 }
 
-// ID returns the protocol ID for PlayerArmorDamage.
-func (*PlayerArmorDamage) ID() uint32 { return IDPlayerArmorDamage }
+// ID ...
+func (*PlayerArmorDamage) ID() uint32 {
+	return IDPlayerArmorDamage
+}
 
-// Marshal reads or writes PlayerArmorDamage using its canonical wire layout.
 func (pk *PlayerArmorDamage) Marshal(io protocol.IO) {
 	protocol.SliceLimits(io, &pk.List, 0, 5)
 }

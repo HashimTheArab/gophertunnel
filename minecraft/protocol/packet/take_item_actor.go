@@ -7,15 +7,16 @@ import (
 // TakeItemActor is sent by the server when a player picks up an item entity. It makes the item entity
 // disappear to viewers and shows the pick-up animation.
 type TakeItemActor struct {
-	ItemRuntimeID  uint64
-	ActorRuntimeID uint64
+	ItemRuntimeID   uint64
+	EntityRuntimeID uint64
 }
 
-// ID returns the protocol ID for TakeItemActor.
-func (*TakeItemActor) ID() uint32 { return IDTakeItemActor }
+// ID ...
+func (*TakeItemActor) ID() uint32 {
+	return IDTakeItemActor
+}
 
-// Marshal reads or writes TakeItemActor using its canonical wire layout.
 func (pk *TakeItemActor) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.ItemRuntimeID)
-	io.ActorRuntimeID(&pk.ActorRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 }

@@ -28,10 +28,11 @@ type AnimateEntity struct {
 	EntityRuntimeIDs []uint64
 }
 
-// ID returns the protocol ID for AnimateEntity.
-func (*AnimateEntity) ID() uint32 { return IDAnimateEntity }
+// ID ...
+func (*AnimateEntity) ID() uint32 {
+	return IDAnimateEntity
+}
 
-// Marshal reads or writes AnimateEntity using its canonical wire layout.
 func (pk *AnimateEntity) Marshal(io protocol.IO) {
 	io.String(&pk.Animation)
 	io.String(&pk.NextState)

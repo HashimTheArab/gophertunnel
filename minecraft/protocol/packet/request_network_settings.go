@@ -12,10 +12,11 @@ type RequestNetworkSettings struct {
 	ClientProtocol int32
 }
 
-// ID returns the protocol ID for RequestNetworkSettings.
-func (*RequestNetworkSettings) ID() uint32 { return IDRequestNetworkSettings }
+// ID ...
+func (*RequestNetworkSettings) ID() uint32 {
+	return IDRequestNetworkSettings
+}
 
-// Marshal reads or writes RequestNetworkSettings using its canonical wire layout.
 func (pk *RequestNetworkSettings) Marshal(io protocol.IO) {
 	io.BEInt32(&pk.ClientProtocol)
 	protocol.Minimum(io, &pk.ClientProtocol, 2168)

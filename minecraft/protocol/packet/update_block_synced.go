@@ -29,10 +29,11 @@ type UpdateBlockSynced struct {
 	TransitionType uint64
 }
 
-// ID returns the protocol ID for UpdateBlockSynced.
-func (*UpdateBlockSynced) ID() uint32 { return IDUpdateBlockSynced }
+// ID ...
+func (*UpdateBlockSynced) ID() uint32 {
+	return IDUpdateBlockSynced
+}
 
-// Marshal reads or writes UpdateBlockSynced using its canonical wire layout.
 func (pk *UpdateBlockSynced) Marshal(io protocol.IO) {
 	pk.Position.Marshal(io)
 	io.Varuint32(&pk.NewBlockRuntimeID)

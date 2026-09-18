@@ -13,10 +13,11 @@ type ClientCacheMissResponse struct {
 	Blobs []protocol.MissingBlobData
 }
 
-// ID returns the protocol ID for ClientCacheMissResponse.
-func (*ClientCacheMissResponse) ID() uint32 { return IDClientCacheMissResponse }
+// ID ...
+func (*ClientCacheMissResponse) ID() uint32 {
+	return IDClientCacheMissResponse
+}
 
-// Marshal reads or writes ClientCacheMissResponse using its canonical wire layout.
 func (pk *ClientCacheMissResponse) Marshal(io protocol.IO) {
 	protocol.SliceLimits(io, &pk.Blobs, 0, 4095)
 }

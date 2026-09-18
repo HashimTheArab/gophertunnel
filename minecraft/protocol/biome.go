@@ -168,8 +168,8 @@ type BiomeDefinitionData struct {
 	// Depth is the depth of the biome.
 	Depth float32
 	// Scale is the scale of the biome.
-	Scale             float32
-	MapWaterColorARGB int32
+	Scale              float32
+	MapWaterColourARGB int32
 	// Rain is true if the biome has rain, false if it is a dry biome.
 	Rain bool
 	// Tags are a list of indices of tags in the string list. These are used to group biomes together for biome
@@ -186,7 +186,7 @@ func (x *BiomeDefinitionData) Marshal(io IO) {
 	io.Float32(&x.FoliageSnow)
 	io.Float32(&x.Depth)
 	io.Float32(&x.Scale)
-	io.Int32(&x.MapWaterColorARGB)
+	io.Int32(&x.MapWaterColourARGB)
 	io.Bool(&x.Rain)
 	OptionalMarshaler(io, &x.Tags)
 	OptionalMarshaler(io, &x.ChunkGenData)

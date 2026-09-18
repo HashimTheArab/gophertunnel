@@ -10,13 +10,14 @@ import (
 type AutomationClientConnect struct {
 	// ServerURI is the URI to make the client connect to. It can be, for example, 'localhost:8000/ws' to connect
 	// to a websocket server on the localhost at port 8000.
-	WebsocketServerURI string
+	ServerURI string
 }
 
-// ID returns the protocol ID for AutomationClientConnect.
-func (*AutomationClientConnect) ID() uint32 { return IDAutomationClientConnect }
+// ID ...
+func (*AutomationClientConnect) ID() uint32 {
+	return IDAutomationClientConnect
+}
 
-// Marshal reads or writes AutomationClientConnect using its canonical wire layout.
 func (pk *AutomationClientConnect) Marshal(io protocol.IO) {
-	io.String(&pk.WebsocketServerURI)
+	io.String(&pk.ServerURI)
 }

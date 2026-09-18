@@ -8,7 +8,7 @@ import (
 // AddItemActor is sent by the server to the client to make an item entity show up. It is one of the few
 // entities that cannot be sent using the AddActor packet
 type AddItemActor struct {
-	TargetActorID   int64
+	TargetEntityID  int64
 	TargetRuntimeID uint64
 	// Item is the item that is spawned. It must have a valid ID for it to show up client-side. If it is not a
 	// valid item, the client will crash when coming near.
@@ -23,12 +23,13 @@ type AddItemActor struct {
 	IsFromFishing bool
 }
 
-// ID returns the protocol ID for AddItemActor.
-func (*AddItemActor) ID() uint32 { return IDAddItemActor }
+// ID ...
+func (*AddItemActor) ID() uint32 {
+	return IDAddItemActor
+}
 
-// Marshal reads or writes AddItemActor using its canonical wire layout.
 func (pk *AddItemActor) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetActorID)
+	io.ActorUniqueID(&pk.TargetEntityID)
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
 	pk.Item.Marshal(io)
 	io.Vec3(&pk.Position)

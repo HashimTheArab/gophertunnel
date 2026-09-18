@@ -30,10 +30,11 @@ type CraftingData struct {
 	ClearRecipes bool
 }
 
-// ID returns the protocol ID for CraftingData.
-func (*CraftingData) ID() uint32 { return IDCraftingData }
+// ID ...
+func (*CraftingData) ID() uint32 {
+	return IDCraftingData
+}
 
-// Marshal reads or writes CraftingData using its canonical wire layout.
 func (pk *CraftingData) Marshal(io protocol.IO) {
 	protocol.Slice(io, &pk.ShapedRecipes)
 	protocol.Slice(io, &pk.ShapelessRecipes)

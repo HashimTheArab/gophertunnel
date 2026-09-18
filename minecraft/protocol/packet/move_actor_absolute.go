@@ -8,8 +8,10 @@ import (
 // MoveActorAbsolute is sent by the server to move an entity to an absolute position. It is typically used for
 // movements where high accuracy isn't needed, such as for long range teleporting.
 type MoveActorAbsolute struct {
-	ActorRuntimeID uint64
-	Header         uint8
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID uint64
+	Header          uint8
 	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot see
 	// it, the entity will still show up if the player moves closer.
 	Position      mgl32.Vec3
@@ -18,12 +20,13 @@ type MoveActorAbsolute struct {
 	RotationYHead uint8
 }
 
-// ID returns the protocol ID for MoveActorAbsolute.
-func (*MoveActorAbsolute) ID() uint32 { return IDMoveActorAbsolute }
+// ID ...
+func (*MoveActorAbsolute) ID() uint32 {
+	return IDMoveActorAbsolute
+}
 
-// Marshal reads or writes MoveActorAbsolute using its canonical wire layout.
 func (pk *MoveActorAbsolute) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.ActorRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.Uint8(&pk.Header)
 	io.Vec3(&pk.Position)
 	io.Uint8(&pk.RotationX)

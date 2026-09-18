@@ -8,23 +8,25 @@ import (
 // movement corrections from the server, containing information about client-predictions that are relevant to
 // movement.
 type ClientMovementPredictionSync struct {
-	ActorDataFlag      protocol.ActorDataFlagComponent
-	ActorBoundingBox   protocol.ActorDataBoundingBoxComponent
+	EntityDataFlag     protocol.ActorDataFlagComponent
+	EntityBoundingBox  protocol.ActorDataBoundingBoxComponent
 	MovementAttributes [9]float32
-	ActorUniqueID      int64
-	ActorFlyingState   bool
+	// EntityUniqueID is the unique ID of the entity that the prediction data applies to.
+	EntityUniqueID    int64
+	EntityFlyingState bool
 }
 
-// ID returns the protocol ID for ClientMovementPredictionSync.
-func (*ClientMovementPredictionSync) ID() uint32 { return IDClientMovementPredictionSync }
+// ID ...
+func (*ClientMovementPredictionSync) ID() uint32 {
+	return IDClientMovementPredictionSync
+}
 
-// Marshal reads or writes ClientMovementPredictionSync using its canonical wire layout.
 func (pk *ClientMovementPredictionSync) Marshal(io protocol.IO) {
-	pk.ActorDataFlag.Marshal(io)
-	pk.ActorBoundingBox.Marshal(io)
+	pk.EntityDataFlag.Marshal(io)
+	pk.EntityBoundingBox.Marshal(io)
 	for index1 := range pk.MovementAttributes {
 		io.Float32(&pk.MovementAttributes[index1])
 	}
-	io.ActorUniqueID(&pk.ActorUniqueID)
-	io.Bool(&pk.ActorFlyingState)
+	io.ActorUniqueID(&pk.EntityUniqueID)
+	io.Bool(&pk.EntityFlyingState)
 }

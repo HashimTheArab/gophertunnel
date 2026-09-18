@@ -8,7 +8,7 @@ import (
 // AddPainting is sent by the server to the client to make a painting entity show up. It is one of the few
 // entities that cannot be sent using the AddActor packet.
 type AddPainting struct {
-	TargetActorID   int64
+	TargetEntityID  int64
 	TargetRuntimeID uint64
 	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot see
 	// it, the entity will still show up if the player moves closer.
@@ -18,12 +18,13 @@ type AddPainting struct {
 	Motif     string
 }
 
-// ID returns the protocol ID for AddPainting.
-func (*AddPainting) ID() uint32 { return IDAddPainting }
+// ID ...
+func (*AddPainting) ID() uint32 {
+	return IDAddPainting
+}
 
-// Marshal reads or writes AddPainting using its canonical wire layout.
 func (pk *AddPainting) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetActorID)
+	io.ActorUniqueID(&pk.TargetEntityID)
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
 	io.Vec3(&pk.Position)
 	io.Varint32(&pk.Direction)

@@ -44,10 +44,11 @@ type SetTitle struct {
 	FilteredMessage string
 }
 
-// ID returns the protocol ID for SetTitle.
-func (*SetTitle) ID() uint32 { return IDSetTitle }
+// ID ...
+func (*SetTitle) ID() uint32 {
+	return IDSetTitle
+}
 
-// Marshal reads or writes SetTitle using its canonical wire layout.
 func (pk *SetTitle) Marshal(io protocol.IO) {
 	pk.ActionType.Marshal(io)
 	io.String(&pk.Text)

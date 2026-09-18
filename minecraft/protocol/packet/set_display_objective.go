@@ -23,10 +23,11 @@ type SetDisplayObjective struct {
 	SortOrder int32
 }
 
-// ID returns the protocol ID for SetDisplayObjective.
-func (*SetDisplayObjective) ID() uint32 { return IDSetDisplayObjective }
+// ID ...
+func (*SetDisplayObjective) ID() uint32 {
+	return IDSetDisplayObjective
+}
 
-// Marshal reads or writes SetDisplayObjective using its canonical wire layout.
 func (pk *SetDisplayObjective) Marshal(io protocol.IO) {
 	io.String(&pk.DisplaySlot)
 	io.String(&pk.ObjectiveName)

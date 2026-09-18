@@ -19,8 +19,8 @@ type ClientboundMapItemData struct {
 	MapOrigin      protocol.BlockPos
 	CreationMapIDs protocol.Optional[[]int64]
 	// Scale is the scale of the map as it is shown in-game.
-	Scale           protocol.Optional[int8]
-	TrackedActorIDs protocol.Optional[[]protocol.MapItemTrackedActorUniqueID]
+	Scale            protocol.Optional[int8]
+	TrackedEntityIDs protocol.Optional[[]protocol.MapItemTrackedActorUniqueID]
 	// Decorations is a list of fixed decorations located on the map. The decorations will not change client-side,
 	// unless the server updates them.
 	Decorations protocol.Optional[[]protocol.MapDecoration]
@@ -36,10 +36,11 @@ type ClientboundMapItemData struct {
 	Pixels protocol.Optional[[]uint32]
 }
 
-// ID returns the protocol ID for ClientboundMapItemData.
-func (*ClientboundMapItemData) ID() uint32 { return IDClientboundMapItemData }
+// ID ...
+func (*ClientboundMapItemData) ID() uint32 {
+	return IDClientboundMapItemData
+}
 
-// Marshal reads or writes ClientboundMapItemData using its canonical wire layout.
 func (pk *ClientboundMapItemData) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.MapID)
 	io.Uint8(&pk.Dimension)
@@ -49,7 +50,7 @@ func (pk *ClientboundMapItemData) Marshal(io protocol.IO) {
 		protocol.FuncSliceLimits(io, value, io.Varuint32, 0, 65535, io.ActorUniqueID)
 	})
 	protocol.OptionalFunc(io, &pk.Scale, io.Int8)
-	protocol.OptionalFunc(io, &pk.TrackedActorIDs, func(value *[]protocol.MapItemTrackedActorUniqueID) {
+	protocol.OptionalFunc(io, &pk.TrackedEntityIDs, func(value *[]protocol.MapItemTrackedActorUniqueID) {
 		protocol.SliceLimits(io, value, 0, 65535)
 	})
 	protocol.OptionalFunc(io, &pk.Decorations, func(value *[]protocol.MapDecoration) {

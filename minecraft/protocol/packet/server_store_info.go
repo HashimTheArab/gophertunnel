@@ -11,10 +11,11 @@ type ServerStoreInfo struct {
 	StoreInfo protocol.Optional[protocol.ServerConfigurationClientStoreEntryPointConfiguration]
 }
 
-// ID returns the protocol ID for ServerStoreInfo.
-func (*ServerStoreInfo) ID() uint32 { return IDServerStoreInfo }
+// ID ...
+func (*ServerStoreInfo) ID() uint32 {
+	return IDServerStoreInfo
+}
 
-// Marshal reads or writes ServerStoreInfo using its canonical wire layout.
 func (pk *ServerStoreInfo) Marshal(io protocol.IO) {
 	protocol.OptionalMarshaler(io, &pk.StoreInfo)
 }

@@ -18,10 +18,11 @@ type ContainerSetData struct {
 	Value int32
 }
 
-// ID returns the protocol ID for ContainerSetData.
-func (*ContainerSetData) ID() uint32 { return IDContainerSetData }
+// ID ...
+func (*ContainerSetData) ID() uint32 {
+	return IDContainerSetData
+}
 
-// Marshal reads or writes ContainerSetData using its canonical wire layout.
 func (pk *ContainerSetData) Marshal(io protocol.IO) {
 	io.Uint8(&pk.WindowID)
 	io.Varint32(&pk.Key)

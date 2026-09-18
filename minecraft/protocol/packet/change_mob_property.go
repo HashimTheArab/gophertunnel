@@ -7,7 +7,7 @@ import (
 // ChangeMobProperty is a packet sent from the server to the client to change one of the properties of a mob
 // client-side.
 type ChangeMobProperty struct {
-	ActorID              int64
+	EntityID             int64
 	PropertyName         string
 	BoolComponentValue   bool
 	StringComponentValue string
@@ -15,12 +15,13 @@ type ChangeMobProperty struct {
 	FloatComponentValue  float32
 }
 
-// ID returns the protocol ID for ChangeMobProperty.
-func (*ChangeMobProperty) ID() uint32 { return IDChangeMobProperty }
+// ID ...
+func (*ChangeMobProperty) ID() uint32 {
+	return IDChangeMobProperty
+}
 
-// Marshal reads or writes ChangeMobProperty using its canonical wire layout.
 func (pk *ChangeMobProperty) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.ActorID)
+	io.ActorUniqueID(&pk.EntityID)
 	io.String(&pk.PropertyName)
 	io.Bool(&pk.BoolComponentValue)
 	io.String(&pk.StringComponentValue)

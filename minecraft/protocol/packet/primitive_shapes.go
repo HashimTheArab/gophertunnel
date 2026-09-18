@@ -11,10 +11,11 @@ type PrimitiveShapes struct {
 	Shapes []protocol.PrimitiveShape
 }
 
-// ID returns the protocol ID for PrimitiveShapes.
-func (*PrimitiveShapes) ID() uint32 { return IDPrimitiveShapes }
+// ID ...
+func (*PrimitiveShapes) ID() uint32 {
+	return IDPrimitiveShapes
+}
 
-// Marshal reads or writes PrimitiveShapes using its canonical wire layout.
 func (pk *PrimitiveShapes) Marshal(io protocol.IO) {
 	protocol.SliceLimits(io, &pk.Shapes, 0, 1048576)
 }

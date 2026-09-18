@@ -12,10 +12,11 @@ type SetScore struct {
 	Entries []protocol.SetScoreEntriesItem
 }
 
-// ID returns the protocol ID for SetScore.
-func (*SetScore) ID() uint32 { return IDSetScore }
+// ID ...
+func (*SetScore) ID() uint32 {
+	return IDSetScore
+}
 
-// Marshal reads or writes SetScore using its canonical wire layout.
 func (pk *SetScore) Marshal(io protocol.IO) {
 	protocol.FuncSlice(io, &pk.Entries, io.Varuint32, func(value *protocol.SetScoreEntriesItem) {
 		protocol.MarshalSetScoreEntriesItem(io, value)

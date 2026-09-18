@@ -7,7 +7,9 @@ import (
 // Emote is sent by both the server and the client. When the client sends an emote, it sends this packet to
 // the server, after which the server will broadcast the packet to other players online.
 type Emote struct {
-	ActorRuntimeID uint64
+	// EntityRuntimeID is the entity that sent the emote. When a player sends this packet, it has this field set
+	// as its own entity runtime ID.
+	EntityRuntimeID uint64
 	// EmoteID is the ID of the emote to send.
 	EmoteID          string
 	EmoteLengthTicks uint32
@@ -23,12 +25,13 @@ type Emote struct {
 	Flags uint8
 }
 
-// ID returns the protocol ID for Emote.
-func (*Emote) ID() uint32 { return IDEmote }
+// ID ...
+func (*Emote) ID() uint32 {
+	return IDEmote
+}
 
-// Marshal reads or writes Emote using its canonical wire layout.
 func (pk *Emote) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.ActorRuntimeID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.String(&pk.EmoteID)
 	io.Varuint32(&pk.EmoteLengthTicks)
 	io.String(&pk.XUID)
