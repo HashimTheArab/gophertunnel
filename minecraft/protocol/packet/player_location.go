@@ -2,6 +2,10 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PlayerLocationTypeCoordinates protocol.PlayerLocationType = 0
+)
+
 // PlayerLocation is sent by the server to the client to either update a player's position on the
 // locator bar, or remove them completely. The client will determine how to render the player on the
 // locator bar based on their own distance to Position.
@@ -18,7 +22,3 @@ func (x *PlayerLocation) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PlayerLocation.
 func (*PlayerLocation) ID() uint32 { return IDPlayerLocation }
-
-const (
-	PlayerLocationTypeCoordinates protocol.PlayerLocationType = 0
-)

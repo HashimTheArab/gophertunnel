@@ -5,6 +5,11 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	CameraAimAssistActionSet   protocol.CameraAimAssistAction = 0
+	CameraAimAssistActionClear protocol.CameraAimAssistAction = 1
+)
+
 // CameraAimAssist is sent by the server to the client to set up aim assist for the client's camera.
 type CameraAimAssist struct {
 	// PresetID is the ID of the preset that has previously been defined in the CameraAimAssistPresets
@@ -40,8 +45,3 @@ func (x *CameraAimAssist) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for CameraAimAssist.
 func (*CameraAimAssist) ID() uint32 { return IDCameraAimAssist }
-
-const (
-	CameraAimAssistActionSet   protocol.CameraAimAssistAction = 0
-	CameraAimAssistActionClear protocol.CameraAimAssistAction = 1
-)

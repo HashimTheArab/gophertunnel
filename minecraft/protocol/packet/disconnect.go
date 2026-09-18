@@ -2,24 +2,6 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// Disconnect may be sent by the server to disconnect the client using an optional message to send
-// as the disconnect screen.
-type Disconnect struct {
-	// Reason is the reason for the disconnection. This affects the error code displayed on the Ore UI
-	// disconnection screen and is one of the constants above.
-	Reason   protocol.ConnectionDisconnectFailReason
-	Messages protocol.DisconnectMessages
-}
-
-// Marshal reads or writes Disconnect using its canonical wire layout.
-func (x *Disconnect) Marshal(io protocol.IO) {
-	x.Reason.Marshal(io)
-	protocol.MarshalDisconnectMessages(io, &x.Messages)
-}
-
-// ID returns the protocol ID for Disconnect.
-func (*Disconnect) ID() uint32 { return IDDisconnect }
-
 const (
 	DisconnectReasonUnknown                                            protocol.ConnectionDisconnectFailReason = 0
 	DisconnectReasonCantConnectNoInternet                              protocol.ConnectionDisconnectFailReason = 1
@@ -170,3 +152,21 @@ const (
 	DisconnectReasonNotAuthenticatedFastFail                           protocol.ConnectionDisconnectFailReason = 146
 	DisconnectReasonEditorNotAllowed                                   protocol.ConnectionDisconnectFailReason = 147
 )
+
+// Disconnect may be sent by the server to disconnect the client using an optional message to send
+// as the disconnect screen.
+type Disconnect struct {
+	// Reason is the reason for the disconnection. This affects the error code displayed on the Ore UI
+	// disconnection screen and is one of the constants above.
+	Reason   protocol.ConnectionDisconnectFailReason
+	Messages protocol.DisconnectMessages
+}
+
+// Marshal reads or writes Disconnect using its canonical wire layout.
+func (x *Disconnect) Marshal(io protocol.IO) {
+	x.Reason.Marshal(io)
+	protocol.MarshalDisconnectMessages(io, &x.Messages)
+}
+
+// ID returns the protocol ID for Disconnect.
+func (*Disconnect) ID() uint32 { return IDDisconnect }

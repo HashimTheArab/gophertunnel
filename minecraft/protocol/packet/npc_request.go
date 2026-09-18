@@ -2,6 +2,16 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	NPCRequestActionSetActions             protocol.RequestType = 0
+	NPCRequestActionExecuteAction          protocol.RequestType = 1
+	NPCRequestActionExecuteClosingCommands protocol.RequestType = 2
+	NPCRequestActionSetName                protocol.RequestType = 3
+	NPCRequestActionSetSkin                protocol.RequestType = 4
+	NPCRequestActionSetInteractText        protocol.RequestType = 5
+	NPCRequestActionExecuteOpeningCommands protocol.RequestType = 6
+)
+
 type NpcRequest struct {
 	NPCRuntimeID uint64
 	RequestType  protocol.RequestType
@@ -21,13 +31,3 @@ func (x *NpcRequest) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for NpcRequest.
 func (*NpcRequest) ID() uint32 { return IDNpcRequest }
-
-const (
-	NPCRequestActionSetActions             protocol.RequestType = 0
-	NPCRequestActionExecuteAction          protocol.RequestType = 1
-	NPCRequestActionExecuteClosingCommands protocol.RequestType = 2
-	NPCRequestActionSetName                protocol.RequestType = 3
-	NPCRequestActionSetSkin                protocol.RequestType = 4
-	NPCRequestActionSetInteractText        protocol.RequestType = 5
-	NPCRequestActionExecuteOpeningCommands protocol.RequestType = 6
-)

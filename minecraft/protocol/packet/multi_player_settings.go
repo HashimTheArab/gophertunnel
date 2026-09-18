@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	EnableMultiPlayer  protocol.MultiplayerSettingsType = 0
+	DisableMultiPlayer protocol.MultiplayerSettingsType = 1
+	RefreshJoinCode    protocol.MultiplayerSettingsType = 2
+)
+
 type MultiplayerSettings struct {
 	PacketType protocol.MultiplayerSettingsType
 }
@@ -13,9 +19,3 @@ func (x *MultiplayerSettings) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for MultiplayerSettings.
 func (*MultiplayerSettings) ID() uint32 { return IDMultiplayerSettings }
-
-const (
-	EnableMultiPlayer  protocol.MultiplayerSettingsType = 0
-	DisableMultiPlayer protocol.MultiplayerSettingsType = 1
-	RefreshJoinCode    protocol.MultiplayerSettingsType = 2
-)

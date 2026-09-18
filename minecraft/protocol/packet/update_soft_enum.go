@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	SoftEnumActionAdd    protocol.SoftEnumUpdateType = 0
+	SoftEnumActionRemove protocol.SoftEnumUpdateType = 1
+	SoftEnumActionSet    protocol.SoftEnumUpdateType = 2
+)
+
 // UpdateSoftEnum is sent by the server to update a soft enum, also known as a dynamic enum,
 // previously sent in the AvailableCommands packet. It is sent whenever the enum should get new
 // options or when some of its options should be removed. The UpdateSoftEnum packet will apply for
@@ -29,9 +35,3 @@ func (x *UpdateSoftEnum) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for UpdateSoftEnum.
 func (*UpdateSoftEnum) ID() uint32 { return IDUpdateSoftEnum }
-
-const (
-	SoftEnumActionAdd    protocol.SoftEnumUpdateType = 0
-	SoftEnumActionRemove protocol.SoftEnumUpdateType = 1
-	SoftEnumActionSet    protocol.SoftEnumUpdateType = 2
-)

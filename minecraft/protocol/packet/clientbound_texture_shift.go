@@ -2,6 +2,14 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	TextureShiftActionInvalid    protocol.ClientboundTextureShiftAction = 0
+	TextureShiftActionInitialize protocol.ClientboundTextureShiftAction = 1
+	TextureShiftActionStart      protocol.ClientboundTextureShiftAction = 2
+	TextureShiftActionSetEnabled protocol.ClientboundTextureShiftAction = 3
+	TextureShiftActionSync       protocol.ClientboundTextureShiftAction = 4
+)
+
 type ClientboundTextureShift struct {
 	ActionID           protocol.ClientboundTextureShiftAction
 	CollectionName     string
@@ -27,11 +35,3 @@ func (x *ClientboundTextureShift) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ClientboundTextureShift.
 func (*ClientboundTextureShift) ID() uint32 { return IDClientboundTextureShift }
-
-const (
-	TextureShiftActionInvalid    protocol.ClientboundTextureShiftAction = 0
-	TextureShiftActionInitialize protocol.ClientboundTextureShiftAction = 1
-	TextureShiftActionStart      protocol.ClientboundTextureShiftAction = 2
-	TextureShiftActionSetEnabled protocol.ClientboundTextureShiftAction = 3
-	TextureShiftActionSync       protocol.ClientboundTextureShiftAction = 4
-)

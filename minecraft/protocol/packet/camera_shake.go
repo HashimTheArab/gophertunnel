@@ -2,6 +2,16 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	CameraShakeActionAdd  protocol.CameraShakeAction = 0
+	CameraShakeActionStop protocol.CameraShakeAction = 1
+)
+
+const (
+	CameraShakeTypePositional protocol.CameraShakeType = 0
+	CameraShakeTypeRotational protocol.CameraShakeType = 1
+)
+
 // CameraShake is sent by the server to make the camera shake client-side. This feature was added
 // for map- making partners.
 type CameraShake struct {
@@ -23,13 +33,3 @@ func (x *CameraShake) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for CameraShake.
 func (*CameraShake) ID() uint32 { return IDCameraShake }
-
-const (
-	CameraShakeActionAdd  protocol.CameraShakeAction = 0
-	CameraShakeActionStop protocol.CameraShakeAction = 1
-)
-
-const (
-	CameraShakeTypePositional protocol.CameraShakeType = 0
-	CameraShakeTypeRotational protocol.CameraShakeType = 1
-)

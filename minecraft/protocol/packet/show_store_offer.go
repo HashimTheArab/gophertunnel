@@ -5,6 +5,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	StoreOfferTypeMarketplace  protocol.ShowStoreOfferRedirectType = 0
+	StoreOfferTypeDressingRoom protocol.ShowStoreOfferRedirectType = 1
+	StoreOfferTypeServerPage   protocol.ShowStoreOfferRedirectType = 2
+)
+
 // ShowStoreOffer is sent by the server to show a Marketplace store offer to a player. It opens a
 // window client-side that displays the item. The ShowStoreOffer packet only works on the partnered
 // servers: Servers that are not partnered will not have a store buttons show up in the in-game
@@ -25,9 +31,3 @@ func (x *ShowStoreOffer) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ShowStoreOffer.
 func (*ShowStoreOffer) ID() uint32 { return IDShowStoreOffer }
-
-const (
-	StoreOfferTypeMarketplace  protocol.ShowStoreOfferRedirectType = 0
-	StoreOfferTypeDressingRoom protocol.ShowStoreOfferRedirectType = 1
-	StoreOfferTypeServerPage   protocol.ShowStoreOfferRedirectType = 2
-)

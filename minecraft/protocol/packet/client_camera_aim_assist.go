@@ -2,6 +2,11 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	ClientCameraAimAssistActionSet   protocol.ClientCameraAimAssistAction = 0
+	ClientCameraAimAssistActionClear protocol.ClientCameraAimAssistAction = 1
+)
+
 // ClientCameraAimAssist is sent by the server to send a player animation from one player to all
 // viewers of that player. It is used for a couple of actions, such as arm swimming and critical
 // hits.
@@ -24,8 +29,3 @@ func (x *ClientCameraAimAssist) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ClientCameraAimAssist.
 func (*ClientCameraAimAssist) ID() uint32 { return IDClientCameraAimAssist }
-
-const (
-	ClientCameraAimAssistActionSet   protocol.ClientCameraAimAssistAction = 0
-	ClientCameraAimAssistActionClear protocol.ClientCameraAimAssistAction = 1
-)

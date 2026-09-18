@@ -2,20 +2,6 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// SetPlayerInventoryOptions is a bidirectional packet that can be used to update the inventory
-// options of a player.
-type SetPlayerInventoryOptions struct {
-	InventoryOptions protocol.InventoryOptions
-}
-
-// Marshal reads or writes SetPlayerInventoryOptions using its canonical wire layout.
-func (x *SetPlayerInventoryOptions) Marshal(io protocol.IO) {
-	x.InventoryOptions.Marshal(io)
-}
-
-// ID returns the protocol ID for SetPlayerInventoryOptions.
-func (*SetPlayerInventoryOptions) ID() uint32 { return IDSetPlayerInventoryOptions }
-
 const (
 	InventoryLayoutNone           protocol.InventoryLayout = 0
 	InventoryLayoutInventoryOnly  protocol.InventoryLayout = 1
@@ -39,3 +25,17 @@ const (
 	InventoryRightTabCrafting   protocol.InventoryRightTabIndex = 2
 	InventoryRightTabArmour     protocol.InventoryRightTabIndex = 3
 )
+
+// SetPlayerInventoryOptions is a bidirectional packet that can be used to update the inventory
+// options of a player.
+type SetPlayerInventoryOptions struct {
+	InventoryOptions protocol.InventoryOptions
+}
+
+// Marshal reads or writes SetPlayerInventoryOptions using its canonical wire layout.
+func (x *SetPlayerInventoryOptions) Marshal(io protocol.IO) {
+	x.InventoryOptions.Marshal(io)
+}
+
+// ID returns the protocol ID for SetPlayerInventoryOptions.
+func (*SetPlayerInventoryOptions) ID() uint32 { return IDSetPlayerInventoryOptions }

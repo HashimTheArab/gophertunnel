@@ -2,6 +2,10 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PositionTrackingDBRequestActionQuery protocol.PositionTrackingDBClientRequestAction = 0
+)
+
 // PositionTrackingDBClientRequest is a packet sent by the client to request the position and
 // dimension of a 'tracking ID'. These IDs are tracked in a database by the server. In 1.16, this is
 // used for lodestones. The client will send this request to find the position a lodestone compass
@@ -20,7 +24,3 @@ func (x *PositionTrackingDBClientRequest) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PositionTrackingDBClientRequest.
 func (*PositionTrackingDBClientRequest) ID() uint32 { return IDPositionTrackingDBClientRequest }
-
-const (
-	PositionTrackingDBRequestActionQuery protocol.PositionTrackingDBClientRequestAction = 0
-)

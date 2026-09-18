@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PhotoTypePortfolio protocol.PhotoType = 0
+	PhotoTypePhotoItem protocol.PhotoType = 1
+	PhotoTypeBook      protocol.PhotoType = 2
+)
+
 // PhotoTransfer is sent by the server to transfer a photo (image) file to the client. It is
 // typically used to transfer photos so that the client can display it in a portfolio in Education
 // Edition. While previously usable in the default Bedrock Edition, the displaying of photos in
@@ -41,9 +47,3 @@ func (x *PhotoTransfer) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PhotoTransfer.
 func (*PhotoTransfer) ID() uint32 { return IDPhotoTransfer }
-
-const (
-	PhotoTypePortfolio protocol.PhotoType = 0
-	PhotoTypePhotoItem protocol.PhotoType = 1
-	PhotoTypeBook      protocol.PhotoType = 2
-)

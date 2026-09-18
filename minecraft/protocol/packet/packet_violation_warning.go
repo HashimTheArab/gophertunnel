@@ -2,6 +2,13 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PacketViolationSeverityUnknown         protocol.PacketViolationSeverity = -1
+	ViolationSeverityWarning               protocol.PacketViolationSeverity = 0
+	ViolationSeverityFinalWarning          protocol.PacketViolationSeverity = 1
+	ViolationSeverityTerminatingConnection protocol.PacketViolationSeverity = 2
+)
+
 // PacketViolationWarning is sent by the client when it receives an invalid packet from the server.
 // It holds some information on the error that occurred. noinspection GoNameStartsWithPackageName
 type PacketViolationWarning struct {
@@ -22,10 +29,3 @@ func (x *PacketViolationWarning) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PacketViolationWarning.
 func (*PacketViolationWarning) ID() uint32 { return IDPacketViolationWarning }
-
-const (
-	PacketViolationSeverityUnknown         protocol.PacketViolationSeverity = -1
-	ViolationSeverityWarning               protocol.PacketViolationSeverity = 0
-	ViolationSeverityFinalWarning          protocol.PacketViolationSeverity = 1
-	ViolationSeverityTerminatingConnection protocol.PacketViolationSeverity = 2
-)

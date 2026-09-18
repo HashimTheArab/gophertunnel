@@ -5,6 +5,22 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	ParticleTypeUndefined        protocol.LabTableReactionType = 0
+	ParticleTypeBubble           protocol.LabTableReactionType = 1
+	ParticleTypeBubbleManual     protocol.LabTableReactionType = 2
+	ParticleTypeCrit             protocol.LabTableReactionType = 3
+	ParticleTypeBlockForceField  protocol.LabTableReactionType = 4
+	ParticleTypeSmoke            protocol.LabTableReactionType = 5
+	ParticleTypeExplode          protocol.LabTableReactionType = 6
+	ParticleTypeEvaporation      protocol.LabTableReactionType = 7
+	ParticleTypeFlame            protocol.LabTableReactionType = 8
+	ParticleTypeLava             protocol.LabTableReactionType = 9
+	ParticleTypeLargeSmoke       protocol.LabTableReactionType = 10
+	ParticleTypeRedDust          protocol.LabTableReactionType = 11
+	ParticleTypeRisingBorderDust protocol.LabTableReactionType = 12
+)
+
 // LevelEvent is sent by the server to make a certain event in the level occur. It ranges from
 // particles, to sounds, and other events such as starting rain and block breaking.
 type LevelEvent struct {
@@ -28,19 +44,3 @@ func (x *LevelEvent) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for LevelEvent.
 func (*LevelEvent) ID() uint32 { return IDLevelEvent }
-
-const (
-	ParticleTypeUndefined        protocol.LabTableReactionType = 0
-	ParticleTypeBubble           protocol.LabTableReactionType = 1
-	ParticleTypeBubbleManual     protocol.LabTableReactionType = 2
-	ParticleTypeCrit             protocol.LabTableReactionType = 3
-	ParticleTypeBlockForceField  protocol.LabTableReactionType = 4
-	ParticleTypeSmoke            protocol.LabTableReactionType = 5
-	ParticleTypeExplode          protocol.LabTableReactionType = 6
-	ParticleTypeEvaporation      protocol.LabTableReactionType = 7
-	ParticleTypeFlame            protocol.LabTableReactionType = 8
-	ParticleTypeLava             protocol.LabTableReactionType = 9
-	ParticleTypeLargeSmoke       protocol.LabTableReactionType = 10
-	ParticleTypeRedDust          protocol.LabTableReactionType = 11
-	ParticleTypeRisingBorderDust protocol.LabTableReactionType = 12
-)

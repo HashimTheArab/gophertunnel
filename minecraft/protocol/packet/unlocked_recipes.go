@@ -2,6 +2,13 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	UnlockedRecipesTypeEmpty             protocol.ItemDescriptorType = 0
+	UnlockedRecipesTypeInitiallyUnlocked protocol.ItemDescriptorType = 1
+	UnlockedRecipesTypeNewlyUnlocked     protocol.ItemDescriptorType = 2
+	UnlockedRecipesTypeRemoveUnlocked    protocol.ItemDescriptorType = 3
+)
+
 // UnlockedRecipes gives the client a list of recipes that have been unlocked, restricting the
 // recipes that appear in the recipe book.
 type UnlockedRecipes struct {
@@ -17,10 +24,3 @@ func (x *UnlockedRecipes) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for UnlockedRecipes.
 func (*UnlockedRecipes) ID() uint32 { return IDUnlockedRecipes }
-
-const (
-	UnlockedRecipesTypeEmpty             protocol.ItemDescriptorType = 0
-	UnlockedRecipesTypeInitiallyUnlocked protocol.ItemDescriptorType = 1
-	UnlockedRecipesTypeNewlyUnlocked     protocol.ItemDescriptorType = 2
-	UnlockedRecipesTypeRemoveUnlocked    protocol.ItemDescriptorType = 3
-)

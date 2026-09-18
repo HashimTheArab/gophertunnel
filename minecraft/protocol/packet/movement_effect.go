@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	MovementEffectTypeGlideBoost   protocol.MovementEffectType = 0
+	MovementEffectTypeDolphinBoost protocol.MovementEffectType = 1
+	MovementEffectTypeGeyserBoost  protocol.MovementEffectType = 2
+)
+
 // MovementEffect is sent by the server to the client to update specific movement effects to allow
 // the client to predict its movement. For example, fireworks used during gliding will send this
 // packet to tell the client the exact duration of the boost.
@@ -24,9 +30,3 @@ func (x *MovementEffect) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for MovementEffect.
 func (*MovementEffect) ID() uint32 { return IDMovementEffect }
-
-const (
-	MovementEffectTypeGlideBoost   protocol.MovementEffectType = 0
-	MovementEffectTypeDolphinBoost protocol.MovementEffectType = 1
-	MovementEffectTypeGeyserBoost  protocol.MovementEffectType = 2
-)

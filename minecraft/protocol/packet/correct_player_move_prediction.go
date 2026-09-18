@@ -5,6 +5,11 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	PredictionTypePlayer  protocol.RewindType = 0
+	PredictionTypeVehicle protocol.RewindType = 1
+)
+
 // CorrectPlayerMovePrediction is sent by the server if and only if
 // StartGame.ServerAuthoritativeMovementMode is set to AuthoritativeMovementModeServerWithRewind.
 // The packet is used to correct movement at a specific point in time.
@@ -36,8 +41,3 @@ func (x *CorrectPlayerMovePrediction) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for CorrectPlayerMovePrediction.
 func (*CorrectPlayerMovePrediction) ID() uint32 { return IDCorrectPlayerMovePrediction }
-
-const (
-	PredictionTypePlayer  protocol.RewindType = 0
-	PredictionTypeVehicle protocol.RewindType = 1
-)

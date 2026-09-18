@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PositionTrackingDBBroadcastActionUpdate   protocol.PositionTrackingDBServerBroadcastAction = 0
+	PositionTrackingDBBroadcastActionDestroy  protocol.PositionTrackingDBServerBroadcastAction = 1
+	PositionTrackingDBBroadcastActionNotFound protocol.PositionTrackingDBServerBroadcastAction = 2
+)
+
 // PositionTrackingDBServerBroadcast is sent by the server in response to the
 // PositionTrackingDBClientRequest packet. This packet is, as of 1.16, currently only used for
 // lodestones. The server maintains a database with tracking IDs and their position and dimension.
@@ -25,9 +31,3 @@ func (x *PositionTrackingDBServerBroadcast) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PositionTrackingDBServerBroadcast.
 func (*PositionTrackingDBServerBroadcast) ID() uint32 { return IDPositionTrackingDBServerBroadcast }
-
-const (
-	PositionTrackingDBBroadcastActionUpdate   protocol.PositionTrackingDBServerBroadcastAction = 0
-	PositionTrackingDBBroadcastActionDestroy  protocol.PositionTrackingDBServerBroadcastAction = 1
-	PositionTrackingDBBroadcastActionNotFound protocol.PositionTrackingDBServerBroadcastAction = 2
-)

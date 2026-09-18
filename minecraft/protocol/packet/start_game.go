@@ -6,6 +6,32 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	ChatRestrictionLevelNone     protocol.ChatRestrictionLevel = 0
+	ChatRestrictionLevelDropped  protocol.ChatRestrictionLevel = 1
+	ChatRestrictionLevelDisabled protocol.ChatRestrictionLevel = 2
+)
+
+const (
+	EditorWorldTypeNotEditor    protocol.EditorWorldType = 0
+	EditorWorldTypeProject      protocol.EditorWorldType = 1
+	EditorWorldTypeTestLevel    protocol.EditorWorldType = 2
+	EditorWorldTypeRealmsUpload protocol.EditorWorldType = 3
+)
+
+const (
+	XBLBroadcastModeNoMultiPlay      protocol.SocialGamePublishSetting = 0
+	XBLBroadcastModeInviteOnly       protocol.SocialGamePublishSetting = 1
+	XBLBroadcastModeFriendsOnly      protocol.SocialGamePublishSetting = 2
+	XBLBroadcastModeFriendsOfFriends protocol.SocialGamePublishSetting = 3
+	XBLBroadcastModePublic           protocol.SocialGamePublishSetting = 4
+)
+
+const (
+	SpawnBiomeTypeDefault     protocol.SpawnBiomeType = 0
+	SpawnBiomeTypeUserDefined protocol.SpawnBiomeType = 1
+)
+
 // StartGame is sent by the server to send information about the world the player will be spawned
 // in. It contains information about the position the player spawns in, and information about the
 // world in general such as its game rules.
@@ -78,29 +104,3 @@ func (x *StartGame) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for StartGame.
 func (*StartGame) ID() uint32 { return IDStartGame }
-
-const (
-	ChatRestrictionLevelNone     protocol.ChatRestrictionLevel = 0
-	ChatRestrictionLevelDropped  protocol.ChatRestrictionLevel = 1
-	ChatRestrictionLevelDisabled protocol.ChatRestrictionLevel = 2
-)
-
-const (
-	EditorWorldTypeNotEditor    protocol.EditorWorldType = 0
-	EditorWorldTypeProject      protocol.EditorWorldType = 1
-	EditorWorldTypeTestLevel    protocol.EditorWorldType = 2
-	EditorWorldTypeRealmsUpload protocol.EditorWorldType = 3
-)
-
-const (
-	XBLBroadcastModeNoMultiPlay      protocol.SocialGamePublishSetting = 0
-	XBLBroadcastModeInviteOnly       protocol.SocialGamePublishSetting = 1
-	XBLBroadcastModeFriendsOnly      protocol.SocialGamePublishSetting = 2
-	XBLBroadcastModeFriendsOfFriends protocol.SocialGamePublishSetting = 3
-	XBLBroadcastModePublic           protocol.SocialGamePublishSetting = 4
-)
-
-const (
-	SpawnBiomeTypeDefault     protocol.SpawnBiomeType = 0
-	SpawnBiomeTypeUserDefined protocol.SpawnBiomeType = 1
-)

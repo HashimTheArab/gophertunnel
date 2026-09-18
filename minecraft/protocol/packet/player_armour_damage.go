@@ -2,6 +2,14 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	PlayerArmourDamageFlagHelmet     protocol.LegacyArmorSlot = 0
+	PlayerArmourDamageFlagChestplate protocol.LegacyArmorSlot = 1
+	PlayerArmourDamageFlagLeggings   protocol.LegacyArmorSlot = 2
+	PlayerArmourDamageFlagBoots      protocol.LegacyArmorSlot = 3
+	PlayerArmourDamageFlagBody       protocol.LegacyArmorSlot = 4
+)
+
 type PlayerArmorDamage struct {
 	List []protocol.ArmorSlotAndDamagePair
 }
@@ -13,11 +21,3 @@ func (x *PlayerArmorDamage) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for PlayerArmorDamage.
 func (*PlayerArmorDamage) ID() uint32 { return IDPlayerArmorDamage }
-
-const (
-	PlayerArmourDamageFlagHelmet     protocol.LegacyArmorSlot = 0
-	PlayerArmourDamageFlagChestplate protocol.LegacyArmorSlot = 1
-	PlayerArmourDamageFlagLeggings   protocol.LegacyArmorSlot = 2
-	PlayerArmourDamageFlagBoots      protocol.LegacyArmorSlot = 3
-	PlayerArmourDamageFlagBody       protocol.LegacyArmorSlot = 4
-)

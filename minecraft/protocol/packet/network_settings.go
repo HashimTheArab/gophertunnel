@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	CompressionAlgorithmFlate  protocol.PacketCompressionAlgorithm = 0
+	CompressionAlgorithmSnappy protocol.PacketCompressionAlgorithm = 1
+	CompressionAlgorithmNone   protocol.PacketCompressionAlgorithm = 65535
+)
+
 // NetworkSettings is sent by the server to update a variety of network settings. These settings
 // modify the way packets are sent over the network stack.
 type NetworkSettings struct {
@@ -31,9 +37,3 @@ func (x *NetworkSettings) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for NetworkSettings.
 func (*NetworkSettings) ID() uint32 { return IDNetworkSettings }
-
-const (
-	CompressionAlgorithmFlate  protocol.PacketCompressionAlgorithm = 0
-	CompressionAlgorithmSnappy protocol.PacketCompressionAlgorithm = 1
-	CompressionAlgorithmNone   protocol.PacketCompressionAlgorithm = 65535
-)

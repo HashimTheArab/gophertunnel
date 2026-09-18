@@ -2,6 +2,13 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	GraphicsModeSimple    protocol.GraphicsMode = 0
+	GraphicsModeFancy     protocol.GraphicsMode = 1
+	GraphicsModeAdvanced  protocol.GraphicsMode = 2
+	GraphicsModeRayTraced protocol.GraphicsMode = 3
+)
+
 // UpdateClientOptions is sent by the client when some of the client's options are updated, such as
 // the graphics mode.
 type UpdateClientOptions struct {
@@ -20,10 +27,3 @@ func (x *UpdateClientOptions) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for UpdateClientOptions.
 func (*UpdateClientOptions) ID() uint32 { return IDUpdateClientOptions }
-
-const (
-	GraphicsModeSimple    protocol.GraphicsMode = 0
-	GraphicsModeFancy     protocol.GraphicsMode = 1
-	GraphicsModeAdvanced  protocol.GraphicsMode = 2
-	GraphicsModeRayTraced protocol.GraphicsMode = 3
-)

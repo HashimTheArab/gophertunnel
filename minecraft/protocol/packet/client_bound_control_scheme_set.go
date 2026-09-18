@@ -2,6 +2,14 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	ControlSchemeLockedPlayerRelativeStrafe protocol.ControlScheme = 0
+	ControlSchemeCameraRelative             protocol.ControlScheme = 1
+	ControlSchemeCameraRelativeStrafe       protocol.ControlScheme = 2
+	ControlSchemePlayerRelative             protocol.ControlScheme = 3
+	ControlSchemePlayerRelativeStrafe       protocol.ControlScheme = 4
+)
+
 type ClientboundControlSchemeSet struct {
 	ControlScheme protocol.ControlScheme
 }
@@ -13,11 +21,3 @@ func (x *ClientboundControlSchemeSet) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ClientboundControlSchemeSet.
 func (*ClientboundControlSchemeSet) ID() uint32 { return IDClientboundControlSchemeSet }
-
-const (
-	ControlSchemeLockedPlayerRelativeStrafe protocol.ControlScheme = 0
-	ControlSchemeCameraRelative             protocol.ControlScheme = 1
-	ControlSchemeCameraRelativeStrafe       protocol.ControlScheme = 2
-	ControlSchemePlayerRelative             protocol.ControlScheme = 3
-	ControlSchemePlayerRelativeStrafe       protocol.ControlScheme = 4
-)

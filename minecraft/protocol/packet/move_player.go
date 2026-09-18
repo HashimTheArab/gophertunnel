@@ -5,6 +5,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	MoveModeNormal   protocol.PlayerPositionModeComponentPositionMode = 0
+	MoveModeReset    protocol.PlayerPositionModeComponentPositionMode = 1
+	MoveModeTeleport protocol.PlayerPositionModeComponentPositionMode = 2
+	MoveModeRotation protocol.PlayerPositionModeComponentPositionMode = 3
+)
+
 // MovePlayer is sent by players to send their movement to the server, and by the server to update
 // the movement of player entities to other players.
 type MovePlayer struct {
@@ -40,10 +47,3 @@ func (x *MovePlayer) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for MovePlayer.
 func (*MovePlayer) ID() uint32 { return IDMovePlayer }
-
-const (
-	MoveModeNormal   protocol.PlayerPositionModeComponentPositionMode = 0
-	MoveModeReset    protocol.PlayerPositionModeComponentPositionMode = 1
-	MoveModeTeleport protocol.PlayerPositionModeComponentPositionMode = 2
-	MoveModeRotation protocol.PlayerPositionModeComponentPositionMode = 3
-)

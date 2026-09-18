@@ -2,6 +2,14 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	AnimateActionNoAction         protocol.AnimateAction = 0
+	AnimateActionSwingArm         protocol.AnimateAction = 1
+	AnimateActionStopSleep        protocol.AnimateAction = 3
+	AnimateActionCriticalHit      protocol.AnimateAction = 4
+	AnimateActionMagicCriticalHit protocol.AnimateAction = 5
+)
+
 // Animate is sent by the server to send a player animation from one player to all viewers of that
 // player. It is used for a couple of actions, such as arm swimming and critical hits.
 type Animate struct {
@@ -24,11 +32,3 @@ func (x *Animate) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for Animate.
 func (*Animate) ID() uint32 { return IDAnimate }
-
-const (
-	AnimateActionNoAction         protocol.AnimateAction = 0
-	AnimateActionSwingArm         protocol.AnimateAction = 1
-	AnimateActionStopSleep        protocol.AnimateAction = 3
-	AnimateActionCriticalHit      protocol.AnimateAction = 4
-	AnimateActionMagicCriticalHit protocol.AnimateAction = 5
-)

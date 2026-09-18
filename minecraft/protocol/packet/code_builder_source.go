@@ -2,6 +2,28 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	CodeBuilderStatusNone       protocol.CodeBuilderExecutionStateCodeStatus = 0
+	CodeBuilderStatusNotStarted protocol.CodeBuilderExecutionStateCodeStatus = 1
+	CodeBuilderStatusInProgress protocol.CodeBuilderExecutionStateCodeStatus = 2
+	CodeBuilderStatusPaused     protocol.CodeBuilderExecutionStateCodeStatus = 3
+	CodeBuilderStatusError      protocol.CodeBuilderExecutionStateCodeStatus = 4
+	CodeBuilderStatusSucceeded  protocol.CodeBuilderExecutionStateCodeStatus = 5
+)
+
+const (
+	CodeBuilderCategoryNone          protocol.CodeBuilderStorageQueryOptionsCategory = 0
+	CodeBuilderCategoryStatus        protocol.CodeBuilderStorageQueryOptionsCategory = 1
+	CodeBuilderCategoryInstantiation protocol.CodeBuilderStorageQueryOptionsCategory = 2
+)
+
+const (
+	CodeBuilderOperationNone  protocol.CodeBuilderStorageQueryOptionsOperation = 0
+	CodeBuilderOperationGet   protocol.CodeBuilderStorageQueryOptionsOperation = 1
+	CodeBuilderOperationSet   protocol.CodeBuilderStorageQueryOptionsOperation = 2
+	CodeBuilderOperationReset protocol.CodeBuilderStorageQueryOptionsOperation = 3
+)
+
 // CodeBuilderSource is an Education Edition packet sent by the client to the server to run an
 // operation with a code builder.
 type CodeBuilderSource struct {
@@ -24,25 +46,3 @@ func (x *CodeBuilderSource) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for CodeBuilderSource.
 func (*CodeBuilderSource) ID() uint32 { return IDCodeBuilderSource }
-
-const (
-	CodeBuilderStatusNone       protocol.CodeBuilderExecutionStateCodeStatus = 0
-	CodeBuilderStatusNotStarted protocol.CodeBuilderExecutionStateCodeStatus = 1
-	CodeBuilderStatusInProgress protocol.CodeBuilderExecutionStateCodeStatus = 2
-	CodeBuilderStatusPaused     protocol.CodeBuilderExecutionStateCodeStatus = 3
-	CodeBuilderStatusError      protocol.CodeBuilderExecutionStateCodeStatus = 4
-	CodeBuilderStatusSucceeded  protocol.CodeBuilderExecutionStateCodeStatus = 5
-)
-
-const (
-	CodeBuilderCategoryNone          protocol.CodeBuilderStorageQueryOptionsCategory = 0
-	CodeBuilderCategoryStatus        protocol.CodeBuilderStorageQueryOptionsCategory = 1
-	CodeBuilderCategoryInstantiation protocol.CodeBuilderStorageQueryOptionsCategory = 2
-)
-
-const (
-	CodeBuilderOperationNone  protocol.CodeBuilderStorageQueryOptionsOperation = 0
-	CodeBuilderOperationGet   protocol.CodeBuilderStorageQueryOptionsOperation = 1
-	CodeBuilderOperationSet   protocol.CodeBuilderStorageQueryOptionsOperation = 2
-	CodeBuilderOperationReset protocol.CodeBuilderStorageQueryOptionsOperation = 3
-)

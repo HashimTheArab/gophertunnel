@@ -5,6 +5,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	RespawnStateSearchingForSpawn  protocol.PlayerRespawnState = 0
+	RespawnStateReadyToSpawn       protocol.PlayerRespawnState = 1
+	RespawnStateClientReadyToSpawn protocol.PlayerRespawnState = 2
+)
+
 // Respawn is sent by the server to make a player respawn client-side. It is sent in response to a
 // PlayerAction packet with ActionType PlayerActionRespawn. As of 1.13, the server sends two of
 // these packets with different states, and the client sends one of these back in order to complete
@@ -28,9 +34,3 @@ func (x *Respawn) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for Respawn.
 func (*Respawn) ID() uint32 { return IDRespawn }
-
-const (
-	RespawnStateSearchingForSpawn  protocol.PlayerRespawnState = 0
-	RespawnStateReadyToSpawn       protocol.PlayerRespawnState = 1
-	RespawnStateClientReadyToSpawn protocol.PlayerRespawnState = 2
-)

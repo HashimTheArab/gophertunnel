@@ -2,6 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	LabTableActionCombine protocol.LabTableType = 0
+	LabTableActionReact   protocol.LabTableType = 1
+	LabTableActionReset   protocol.LabTableType = 2
+)
+
 // LabTable is sent by the client to let the server know it started a chemical reaction in Education
 // Edition, and is sent by the server to other clients to show the effects. The packet is only
 // functional if Education features are enabled.
@@ -27,9 +33,3 @@ func (x *LabTable) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for LabTable.
 func (*LabTable) ID() uint32 { return IDLabTable }
-
-const (
-	LabTableActionCombine protocol.LabTableType = 0
-	LabTableActionReact   protocol.LabTableType = 1
-	LabTableActionReset   protocol.LabTableType = 2
-)

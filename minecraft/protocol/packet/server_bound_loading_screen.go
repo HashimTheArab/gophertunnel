@@ -2,6 +2,11 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	LoadingScreenTypeStart protocol.ServerboundLoadingScreenType = 1
+	LoadingScreenTypeEnd   protocol.ServerboundLoadingScreenType = 2
+)
+
 type ServerboundLoadingScreen struct {
 	LoadingScreenPacketType protocol.ServerboundLoadingScreenType
 	LoadingScreenID         protocol.Optional[uint32]
@@ -15,8 +20,3 @@ func (x *ServerboundLoadingScreen) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ServerboundLoadingScreen.
 func (*ServerboundLoadingScreen) ID() uint32 { return IDServerboundLoadingScreen }
-
-const (
-	LoadingScreenTypeStart protocol.ServerboundLoadingScreenType = 1
-	LoadingScreenTypeEnd   protocol.ServerboundLoadingScreenType = 2
-)

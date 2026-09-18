@@ -5,6 +5,14 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	InteractActionInvalid         protocol.InteractAction = 0
+	InteractActionLeaveVehicle    protocol.InteractAction = 3
+	InteractActionMouseOverEntity protocol.InteractAction = 4
+	InteractActionNPCOpen         protocol.InteractAction = 5
+	InteractActionOpenInventory   protocol.InteractAction = 6
+)
+
 // Interact is sent by the client when it interacts with another entity in some way. It used to be
 // used for normal entity and block interaction, but this is no longer the case now.
 type Interact struct {
@@ -26,11 +34,3 @@ func (x *Interact) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for Interact.
 func (*Interact) ID() uint32 { return IDInteract }
-
-const (
-	InteractActionInvalid         protocol.InteractAction = 0
-	InteractActionLeaveVehicle    protocol.InteractAction = 3
-	InteractActionMouseOverEntity protocol.InteractAction = 4
-	InteractActionNPCOpen         protocol.InteractAction = 5
-	InteractActionOpenInventory   protocol.InteractAction = 6
-)

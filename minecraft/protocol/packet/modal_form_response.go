@@ -2,6 +2,11 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+const (
+	ModalFormCancelReasonUserClosed protocol.ModalFormCancelReason = 0
+	ModalFormCancelReasonUserBusy   protocol.ModalFormCancelReason = 1
+)
+
 // ModalFormResponse is sent by the client in response to a ModalFormRequest, after the player has
 // submitted the form sent. It contains the options/properties selected by the player, or a JSON
 // encoded 'null' if the form was closed by clicking the X at the top right corner of the form.
@@ -28,8 +33,3 @@ func (x *ModalFormResponse) Marshal(io protocol.IO) {
 
 // ID returns the protocol ID for ModalFormResponse.
 func (*ModalFormResponse) ID() uint32 { return IDModalFormResponse }
-
-const (
-	ModalFormCancelReasonUserClosed protocol.ModalFormCancelReason = 0
-	ModalFormCancelReasonUserBusy   protocol.ModalFormCancelReason = 1
-)
