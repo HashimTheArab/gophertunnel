@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ServerSettingsResponse is optionally sent by the server in response to a ServerSettingsRequest from the
 // client. It is structured the same as a ModalFormRequest packet, and if filled out correctly, will show a
@@ -14,11 +16,11 @@ type ServerSettingsResponse struct {
 	FormUIJSON string
 }
 
-// Marshal reads or writes ServerSettingsResponse using its canonical wire layout.
-func (x *ServerSettingsResponse) Marshal(io protocol.IO) {
-	io.Varuint32(&x.FormID)
-	io.String(&x.FormUIJSON)
-}
-
 // ID returns the protocol ID for ServerSettingsResponse.
 func (*ServerSettingsResponse) ID() uint32 { return IDServerSettingsResponse }
+
+// Marshal reads or writes ServerSettingsResponse using its canonical wire layout.
+func (pk *ServerSettingsResponse) Marshal(io protocol.IO) {
+	io.Varuint32(&pk.FormID)
+	io.String(&pk.FormUIJSON)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // StructureTemplateDataRequest is sent by the client to request data of a structure.
 type StructureTemplateDataRequest struct {
@@ -17,13 +19,13 @@ type StructureTemplateDataRequest struct {
 	RequestType protocol.StructureTemplateRequestOperation
 }
 
-// Marshal reads or writes StructureTemplateDataRequest using its canonical wire layout.
-func (x *StructureTemplateDataRequest) Marshal(io protocol.IO) {
-	io.StringLimits(&x.StructureName, 0, 256)
-	x.Position.Marshal(io)
-	x.Settings.Marshal(io)
-	x.RequestType.Marshal(io)
-}
-
 // ID returns the protocol ID for StructureTemplateDataRequest.
 func (*StructureTemplateDataRequest) ID() uint32 { return IDStructureTemplateDataRequest }
+
+// Marshal reads or writes StructureTemplateDataRequest using its canonical wire layout.
+func (pk *StructureTemplateDataRequest) Marshal(io protocol.IO) {
+	io.StringLimits(&pk.StructureName, 0, 256)
+	pk.Position.Marshal(io)
+	pk.Settings.Marshal(io)
+	pk.RequestType.Marshal(io)
+}

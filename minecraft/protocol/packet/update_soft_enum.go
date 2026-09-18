@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	SoftEnumActionAdd    protocol.SoftEnumUpdateType = 0
@@ -25,12 +27,12 @@ type UpdateSoftEnum struct {
 	ActionType protocol.SoftEnumUpdateType
 }
 
-// Marshal reads or writes UpdateSoftEnum using its canonical wire layout.
-func (x *UpdateSoftEnum) Marshal(io protocol.IO) {
-	io.String(&x.EnumType)
-	protocol.FuncSlice(io, &x.Options, io.Varuint32, io.String)
-	x.ActionType.Marshal(io)
-}
-
 // ID returns the protocol ID for UpdateSoftEnum.
 func (*UpdateSoftEnum) ID() uint32 { return IDUpdateSoftEnum }
+
+// Marshal reads or writes UpdateSoftEnum using its canonical wire layout.
+func (pk *UpdateSoftEnum) Marshal(io protocol.IO) {
+	io.String(&pk.EnumType)
+	protocol.FuncSlice(io, &pk.Options, io.Varuint32, io.String)
+	pk.ActionType.Marshal(io)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // CameraAimAssistActorPriority is sent by the server to define actor-specific aim assist priorities.
 type CameraAimAssistActorPriority struct {
@@ -8,10 +10,10 @@ type CameraAimAssistActorPriority struct {
 	PriorityData []protocol.CameraAimAssistActorPriorityData
 }
 
-// Marshal reads or writes CameraAimAssistActorPriority using its canonical wire layout.
-func (x *CameraAimAssistActorPriority) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.PriorityData)
-}
-
 // ID returns the protocol ID for CameraAimAssistActorPriority.
 func (*CameraAimAssistActorPriority) ID() uint32 { return IDCameraAimAssistActorPriority }
+
+// Marshal reads or writes CameraAimAssistActorPriority using its canonical wire layout.
+func (pk *CameraAimAssistActorPriority) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.PriorityData)
+}

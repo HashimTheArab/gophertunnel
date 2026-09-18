@@ -74,8 +74,11 @@ func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
 	})
 }
 
+// DataItemByte represents the way the noise of an environment attribute transition is aligned.
 type DataItemByte struct {
-	Type  DataItemType
+	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
+	Type DataItemType
+	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
 	Value int8
 }
 

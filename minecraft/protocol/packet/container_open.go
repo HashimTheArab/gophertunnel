@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ContainerOpen is sent by the server to open a container client-side. This container must be physically
 // present in the world, for the packet to have any effect. Unlike Java Edition, Bedrock Edition requires that
@@ -15,13 +17,13 @@ type ContainerOpen struct {
 	TargetActorID int64
 }
 
-// Marshal reads or writes ContainerOpen using its canonical wire layout.
-func (x *ContainerOpen) Marshal(io protocol.IO) {
-	io.Uint8(&x.ContainerID)
-	io.Uint8(&x.ContainerType)
-	x.Position.Marshal(io)
-	io.ActorUniqueID(&x.TargetActorID)
-}
-
 // ID returns the protocol ID for ContainerOpen.
 func (*ContainerOpen) ID() uint32 { return IDContainerOpen }
+
+// Marshal reads or writes ContainerOpen using its canonical wire layout.
+func (pk *ContainerOpen) Marshal(io protocol.IO) {
+	io.Uint8(&pk.ContainerID)
+	io.Uint8(&pk.ContainerType)
+	pk.Position.Marshal(io)
+	io.ActorUniqueID(&pk.TargetActorID)
+}

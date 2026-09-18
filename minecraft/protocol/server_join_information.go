@@ -1,9 +1,14 @@
 package protocol
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
+// ServerConfigurationClientStoreEntryPointConfiguration contains information about the store entry point.
 type ServerConfigurationClientStoreEntryPointConfiguration struct {
-	StoreID   string
+	// StoreID is the store identifier.
+	StoreID string
+	// StoreName is the store name.
 	StoreName string
 }
 
@@ -13,15 +18,25 @@ func (x *ServerConfigurationClientStoreEntryPointConfiguration) Marshal(io IO) {
 	io.String(&x.StoreName)
 }
 
+// ServerConfigurationGatheringsConfigurationJoinInfo contains information about the gathering (experience)
+// the player is joining.
 type ServerConfigurationGatheringsConfigurationJoinInfo struct {
-	ExperienceID        uuid.UUID
-	ExperienceName      string
-	ExperienceWorldID   Optional[uuid.UUID]
+	// ExperienceID is the UUID of the experience.
+	ExperienceID uuid.UUID
+	// ExperienceName is the name of the experience.
+	ExperienceName string
+	// ExperienceWorldID is the UUID of the experience world.
+	ExperienceWorldID Optional[uuid.UUID]
+	// ExperienceWorldName is the world name of the experience.
 	ExperienceWorldName Optional[string]
-	CreatorID           string
-	TargetID            Optional[uuid.UUID]
-	ScenarioID          Optional[string]
-	ServerID            Optional[string]
+	// CreatorID is the ID of the creator.
+	CreatorID string
+	// TargetID is the session ID of the experience.
+	TargetID Optional[uuid.UUID]
+	// ScenarioID is the scenario ID of experience.
+	ScenarioID Optional[string]
+	// ServerID is the server identifier.
+	ServerID Optional[string]
 }
 
 // Marshal reads or writes ServerConfigurationGatheringsConfigurationJoinInfo using its canonical wire layout.

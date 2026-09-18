@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	DisconnectReasonUnknown                                            protocol.ConnectionDisconnectFailReason = 0
@@ -162,11 +164,11 @@ type Disconnect struct {
 	Messages protocol.DisconnectMessages
 }
 
-// Marshal reads or writes Disconnect using its canonical wire layout.
-func (x *Disconnect) Marshal(io protocol.IO) {
-	x.Reason.Marshal(io)
-	protocol.MarshalDisconnectMessages(io, &x.Messages)
-}
-
 // ID returns the protocol ID for Disconnect.
 func (*Disconnect) ID() uint32 { return IDDisconnect }
+
+// Marshal reads or writes Disconnect using its canonical wire layout.
+func (pk *Disconnect) Marshal(io protocol.IO) {
+	pk.Reason.Marshal(io)
+	protocol.MarshalDisconnectMessages(io, &pk.Messages)
+}

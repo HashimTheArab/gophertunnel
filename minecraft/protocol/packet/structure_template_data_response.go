@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // StructureTemplateDataResponse is sent by the server to send data of a structure to the client in response
 // to a StructureTemplateDataRequest packet.
@@ -14,12 +16,12 @@ type StructureTemplateDataResponse struct {
 	ResponseType protocol.StructureTemplateResponseType
 }
 
-// Marshal reads or writes StructureTemplateDataResponse using its canonical wire layout.
-func (x *StructureTemplateDataResponse) Marshal(io protocol.IO) {
-	io.String(&x.StructureName)
-	io.NBT(&x.StructureSNBT, protocol.NBTNetwork)
-	x.ResponseType.Marshal(io)
-}
-
 // ID returns the protocol ID for StructureTemplateDataResponse.
 func (*StructureTemplateDataResponse) ID() uint32 { return IDStructureTemplateDataResponse }
+
+// Marshal reads or writes StructureTemplateDataResponse using its canonical wire layout.
+func (pk *StructureTemplateDataResponse) Marshal(io protocol.IO) {
+	io.String(&pk.StructureName)
+	io.NBT(&pk.StructureSNBT, protocol.NBTNetwork)
+	pk.ResponseType.Marshal(io)
+}

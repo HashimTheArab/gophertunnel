@@ -1,18 +1,22 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SetDefaultGameType is sent by the client when it toggles the default game type in the settings UI, and is
 // sent by the server when it actually changes the default game type, resulting in the toggle being changed in
 // the settings UI.
 type SetDefaultGameType struct {
+	// GameType is the new game type that is set. When sent by the client, this is the requested new default game
+	// type.
 	GameType protocol.GameType
-}
-
-// Marshal reads or writes SetDefaultGameType using its canonical wire layout.
-func (x *SetDefaultGameType) Marshal(io protocol.IO) {
-	x.GameType.Marshal(io)
 }
 
 // ID returns the protocol ID for SetDefaultGameType.
 func (*SetDefaultGameType) ID() uint32 { return IDSetDefaultGameType }
+
+// Marshal reads or writes SetDefaultGameType using its canonical wire layout.
+func (pk *SetDefaultGameType) Marshal(io protocol.IO) {
+	pk.GameType.Marshal(io)
+}

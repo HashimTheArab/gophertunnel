@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	CompressionAlgorithmFlate  protocol.PacketCompressionAlgorithm = 0
@@ -16,7 +18,9 @@ type NetworkSettings struct {
 	CompressionThreshold uint16
 	// CompressionAlgorithm is the algorithm that is used to compress packets.
 	CompressionAlgorithm protocol.PacketCompressionAlgorithm
-	ClientThrottle       bool
+	// ClientThrottle regulates whether the client should throttle players when exceeding of the threshold.
+	// Players outside threshold will not be ticked, improving performance on low-end devices.
+	ClientThrottle bool
 	// ClientThrottleThreshold is the threshold for client throttling. If the number of players exceeds this
 	// value, the client will throttle players.
 	ClientThrottleThreshold uint8
@@ -25,14 +29,14 @@ type NetworkSettings struct {
 	ClientThrottleScalar float32
 }
 
-// Marshal reads or writes NetworkSettings using its canonical wire layout.
-func (x *NetworkSettings) Marshal(io protocol.IO) {
-	io.Uint16(&x.CompressionThreshold)
-	x.CompressionAlgorithm.Marshal(io)
-	io.Bool(&x.ClientThrottle)
-	io.Uint8(&x.ClientThrottleThreshold)
-	io.Float32(&x.ClientThrottleScalar)
-}
-
 // ID returns the protocol ID for NetworkSettings.
 func (*NetworkSettings) ID() uint32 { return IDNetworkSettings }
+
+// Marshal reads or writes NetworkSettings using its canonical wire layout.
+func (pk *NetworkSettings) Marshal(io protocol.IO) {
+	io.Uint16(&pk.CompressionThreshold)
+	pk.CompressionAlgorithm.Marshal(io)
+	io.Bool(&pk.ClientThrottle)
+	io.Uint8(&pk.ClientThrottleThreshold)
+	io.Float32(&pk.ClientThrottleScalar)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	PlayerLocationTypeCoordinates protocol.PlayerLocationType = 0
@@ -14,11 +16,11 @@ type PlayerLocation struct {
 	Location      protocol.PlayerLocationData
 }
 
-// Marshal reads or writes PlayerLocation using its canonical wire layout.
-func (x *PlayerLocation) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&x.TargetActorID)
-	protocol.MarshalPlayerLocationData(io, &x.Location)
-}
-
 // ID returns the protocol ID for PlayerLocation.
 func (*PlayerLocation) ID() uint32 { return IDPlayerLocation }
+
+// Marshal reads or writes PlayerLocation using its canonical wire layout.
+func (pk *PlayerLocation) Marshal(io protocol.IO) {
+	io.ActorUniqueID(&pk.TargetActorID)
+	protocol.MarshalPlayerLocationData(io, &pk.Location)
+}

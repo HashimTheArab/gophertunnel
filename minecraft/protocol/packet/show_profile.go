@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ShowProfile is sent by the server to show the XBOX Live profile of one player to another.
 type ShowProfile struct {
@@ -9,10 +11,10 @@ type ShowProfile struct {
 	XUID string
 }
 
-// Marshal reads or writes ShowProfile using its canonical wire layout.
-func (x *ShowProfile) Marshal(io protocol.IO) {
-	io.String(&x.XUID)
-}
-
 // ID returns the protocol ID for ShowProfile.
 func (*ShowProfile) ID() uint32 { return IDShowProfile }
+
+// Marshal reads or writes ShowProfile using its canonical wire layout.
+func (pk *ShowProfile) Marshal(io protocol.IO) {
+	io.String(&pk.XUID)
+}

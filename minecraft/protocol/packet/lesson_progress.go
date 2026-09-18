@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // LessonProgress is a packet sent by the server to the client to inform the client of updated progress on a
 // lesson. This packet only functions on the Minecraft: Education Edition version of the game.
@@ -11,12 +13,12 @@ type LessonProgress struct {
 	ActivityID string
 }
 
-// Marshal reads or writes LessonProgress using its canonical wire layout.
-func (x *LessonProgress) Marshal(io protocol.IO) {
-	io.Varint32(&x.LessonAction)
-	io.Varint32(&x.Score)
-	io.String(&x.ActivityID)
-}
-
 // ID returns the protocol ID for LessonProgress.
 func (*LessonProgress) ID() uint32 { return IDLessonProgress }
+
+// Marshal reads or writes LessonProgress using its canonical wire layout.
+func (pk *LessonProgress) Marshal(io protocol.IO) {
+	io.Varint32(&pk.LessonAction)
+	io.Varint32(&pk.Score)
+	io.String(&pk.ActivityID)
+}

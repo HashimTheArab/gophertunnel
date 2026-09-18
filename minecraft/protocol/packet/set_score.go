@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SetScore is sent by the server to send the contents of a scoreboard to the player. It may be used to either
 // add, remove or edit entries on the scoreboard.
@@ -10,12 +12,12 @@ type SetScore struct {
 	Entries []protocol.SetScoreEntriesItem
 }
 
+// ID returns the protocol ID for SetScore.
+func (*SetScore) ID() uint32 { return IDSetScore }
+
 // Marshal reads or writes SetScore using its canonical wire layout.
-func (x *SetScore) Marshal(io protocol.IO) {
-	protocol.FuncSlice(io, &x.Entries, io.Varuint32, func(value *protocol.SetScoreEntriesItem) {
+func (pk *SetScore) Marshal(io protocol.IO) {
+	protocol.FuncSlice(io, &pk.Entries, io.Varuint32, func(value *protocol.SetScoreEntriesItem) {
 		protocol.MarshalSetScoreEntriesItem(io, value)
 	})
 }
-
-// ID returns the protocol ID for SetScore.
-func (*SetScore) ID() uint32 { return IDSetScore }

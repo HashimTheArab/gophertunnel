@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // UpdateBlockSynced is sent by the server to synchronise the falling of a falling block entity with the
 // transitioning back and forth from and to a solid block. It is used to prevent the entity from flickering,
@@ -27,15 +29,15 @@ type UpdateBlockSynced struct {
 	TransitionType uint64
 }
 
-// Marshal reads or writes UpdateBlockSynced using its canonical wire layout.
-func (x *UpdateBlockSynced) Marshal(io protocol.IO) {
-	x.Position.Marshal(io)
-	io.Varuint32(&x.NewBlockRuntimeID)
-	io.Varuint32(&x.Flags)
-	io.Varuint32(&x.Layer)
-	io.Varuint64(&x.EntityUniqueID)
-	io.Varuint64(&x.TransitionType)
-}
-
 // ID returns the protocol ID for UpdateBlockSynced.
 func (*UpdateBlockSynced) ID() uint32 { return IDUpdateBlockSynced }
+
+// Marshal reads or writes UpdateBlockSynced using its canonical wire layout.
+func (pk *UpdateBlockSynced) Marshal(io protocol.IO) {
+	pk.Position.Marshal(io)
+	io.Varuint32(&pk.NewBlockRuntimeID)
+	io.Varuint32(&pk.Flags)
+	io.Varuint32(&pk.Layer)
+	io.Varuint64(&pk.EntityUniqueID)
+	io.Varuint64(&pk.TransitionType)
+}

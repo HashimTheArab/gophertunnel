@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // RemoveObjective is sent by the server to remove a scoreboard objective. It is used to stop showing a
 // scoreboard to a player.
@@ -10,10 +12,10 @@ type RemoveObjective struct {
 	ObjectiveName string
 }
 
-// Marshal reads or writes RemoveObjective using its canonical wire layout.
-func (x *RemoveObjective) Marshal(io protocol.IO) {
-	io.String(&x.ObjectiveName)
-}
-
 // ID returns the protocol ID for RemoveObjective.
 func (*RemoveObjective) ID() uint32 { return IDRemoveObjective }
+
+// Marshal reads or writes RemoveObjective using its canonical wire layout.
+func (pk *RemoveObjective) Marshal(io protocol.IO) {
+	io.String(&pk.ObjectiveName)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // BiomeDefinitionList is sent by the server to let the client know all biomes that are available and
 // implemented on the server side. When enabled, it also includes information for the client to accurately
@@ -13,13 +15,13 @@ type BiomeDefinitionList struct {
 	StringList protocol.BiomeStringList
 }
 
-// Marshal reads or writes BiomeDefinitionList using its canonical wire layout.
-func (x *BiomeDefinitionList) Marshal(io protocol.IO) {
-	protocol.OrderedMap(io, &x.MapOfBiomeNamesToData, io.Varuint32, io.Uint16, func(value *protocol.BiomeDefinitionData) {
-		value.Marshal(io)
-	})
-	x.StringList.Marshal(io)
-}
-
 // ID returns the protocol ID for BiomeDefinitionList.
 func (*BiomeDefinitionList) ID() uint32 { return IDBiomeDefinitionList }
+
+// Marshal reads or writes BiomeDefinitionList using its canonical wire layout.
+func (pk *BiomeDefinitionList) Marshal(io protocol.IO) {
+	protocol.OrderedMap(io, &pk.MapOfBiomeNamesToData, io.Varuint32, io.Uint16, func(value *protocol.BiomeDefinitionData) {
+		value.Marshal(io)
+	})
+	pk.StringList.Marshal(io)
+}

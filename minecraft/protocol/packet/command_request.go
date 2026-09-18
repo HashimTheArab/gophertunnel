@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // CommandRequest is sent by the client to request the execution of a server-side command. Although some
 // servers support sending commands using the Text packet, this packet is guaranteed to have the correct
@@ -20,13 +22,13 @@ type CommandRequest struct {
 	Version string
 }
 
-// Marshal reads or writes CommandRequest using its canonical wire layout.
-func (x *CommandRequest) Marshal(io protocol.IO) {
-	io.StringLimits(&x.CommandLine, 0, 1000)
-	x.CommandOrigin.Marshal(io)
-	io.Bool(&x.Internal)
-	io.String(&x.Version)
-}
-
 // ID returns the protocol ID for CommandRequest.
 func (*CommandRequest) ID() uint32 { return IDCommandRequest }
+
+// Marshal reads or writes CommandRequest using its canonical wire layout.
+func (pk *CommandRequest) Marshal(io protocol.IO) {
+	io.StringLimits(&pk.CommandLine, 0, 1000)
+	pk.CommandOrigin.Marshal(io)
+	io.Bool(&pk.Internal)
+	io.String(&pk.Version)
+}

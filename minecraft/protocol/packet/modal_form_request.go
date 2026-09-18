@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ModalFormRequest is sent by the server to make the client open a form. This form may be either a modal form
 // which has two options, a menu form for a selection of options and a custom form for properties.
@@ -11,11 +13,11 @@ type ModalFormRequest struct {
 	FormUIJSON string
 }
 
-// Marshal reads or writes ModalFormRequest using its canonical wire layout.
-func (x *ModalFormRequest) Marshal(io protocol.IO) {
-	io.Varuint32(&x.FormID)
-	io.String(&x.FormUIJSON)
-}
-
 // ID returns the protocol ID for ModalFormRequest.
 func (*ModalFormRequest) ID() uint32 { return IDModalFormRequest }
+
+// Marshal reads or writes ModalFormRequest using its canonical wire layout.
+func (pk *ModalFormRequest) Marshal(io protocol.IO) {
+	io.Varuint32(&pk.FormID)
+	io.String(&pk.FormUIJSON)
+}

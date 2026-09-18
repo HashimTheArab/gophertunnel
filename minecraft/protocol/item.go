@@ -1,6 +1,8 @@
 package protocol
 
-import "github.com/go-gl/mathgl/mgl32"
+import (
+	"github.com/go-gl/mathgl/mgl32"
+)
 
 type ItemData struct {
 	ItemName          string

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	GraphicsModeSimple    protocol.GraphicsMode = 0
@@ -18,11 +20,11 @@ type UpdateClientOptions struct {
 	FilterProfanity protocol.Optional[bool]
 }
 
-// Marshal reads or writes UpdateClientOptions using its canonical wire layout.
-func (x *UpdateClientOptions) Marshal(io protocol.IO) {
-	protocol.OptionalMarshaler(io, &x.GraphicsMode)
-	protocol.OptionalFunc(io, &x.FilterProfanity, io.Bool)
-}
-
 // ID returns the protocol ID for UpdateClientOptions.
 func (*UpdateClientOptions) ID() uint32 { return IDUpdateClientOptions }
+
+// Marshal reads or writes UpdateClientOptions using its canonical wire layout.
+func (pk *UpdateClientOptions) Marshal(io protocol.IO) {
+	protocol.OptionalMarshaler(io, &pk.GraphicsMode)
+	protocol.OptionalFunc(io, &pk.FilterProfanity, io.Bool)
+}

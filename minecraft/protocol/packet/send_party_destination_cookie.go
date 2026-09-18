@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SendPartyDestinationCookie is sent by the server to a client with a party destination cookie.
 type SendPartyDestinationCookie struct {
@@ -12,12 +14,12 @@ type SendPartyDestinationCookie struct {
 	DestinationName string
 }
 
-// Marshal reads or writes SendPartyDestinationCookie using its canonical wire layout.
-func (x *SendPartyDestinationCookie) Marshal(io protocol.IO) {
-	io.StringLimits(&x.Cookie, 0, 2048)
-	io.String(&x.Intent)
-	io.StringLimits(&x.DestinationName, 0, 64)
-}
-
 // ID returns the protocol ID for SendPartyDestinationCookie.
 func (*SendPartyDestinationCookie) ID() uint32 { return IDSendPartyDestinationCookie }
+
+// Marshal reads or writes SendPartyDestinationCookie using its canonical wire layout.
+func (pk *SendPartyDestinationCookie) Marshal(io protocol.IO) {
+	io.StringLimits(&pk.Cookie, 0, 2048)
+	io.String(&pk.Intent)
+	io.StringLimits(&pk.DestinationName, 0, 64)
+}

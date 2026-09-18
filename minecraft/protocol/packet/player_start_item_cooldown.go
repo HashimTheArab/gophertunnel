@@ -1,17 +1,19 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 type PlayerStartItemCooldown struct {
 	ItemCategory  string
 	DurationTicks int32
 }
 
-// Marshal reads or writes PlayerStartItemCooldown using its canonical wire layout.
-func (x *PlayerStartItemCooldown) Marshal(io protocol.IO) {
-	io.String(&x.ItemCategory)
-	io.Varint32(&x.DurationTicks)
-}
-
 // ID returns the protocol ID for PlayerStartItemCooldown.
 func (*PlayerStartItemCooldown) ID() uint32 { return IDPlayerStartItemCooldown }
+
+// Marshal reads or writes PlayerStartItemCooldown using its canonical wire layout.
+func (pk *PlayerStartItemCooldown) Marshal(io protocol.IO) {
+	io.String(&pk.ItemCategory)
+	io.Varint32(&pk.DurationTicks)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // InventorySlot is sent by the server to update a single slot in one of the inventory windows that the client
 // currently has opened. Usually this is the main inventory, but it may also be the off hand or, for example,
@@ -22,14 +24,14 @@ type InventorySlot struct {
 	NewItem protocol.NetworkItemStackDescriptorSerializedData
 }
 
-// Marshal reads or writes InventorySlot using its canonical wire layout.
-func (x *InventorySlot) Marshal(io protocol.IO) {
-	io.Uint8(&x.WindowID)
-	io.Varuint32(&x.Slot)
-	protocol.OptionalMarshaler(io, &x.Container)
-	protocol.OptionalMarshaler(io, &x.StorageItem)
-	x.NewItem.Marshal(io)
-}
-
 // ID returns the protocol ID for InventorySlot.
 func (*InventorySlot) ID() uint32 { return IDInventorySlot }
+
+// Marshal reads or writes InventorySlot using its canonical wire layout.
+func (pk *InventorySlot) Marshal(io protocol.IO) {
+	io.Uint8(&pk.WindowID)
+	io.Varuint32(&pk.Slot)
+	protocol.OptionalMarshaler(io, &pk.Container)
+	protocol.OptionalMarshaler(io, &pk.StorageItem)
+	pk.NewItem.Marshal(io)
+}

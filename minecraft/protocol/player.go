@@ -1,8 +1,11 @@
 package protocol
 
+// ArmorSlotAndDamagePair represents an entry for a single piece of armour that should be damaged.
 type ArmorSlotAndDamagePair struct {
+	// ArmourSlot is the index of the armour slot to damage.
 	ArmourSlot LegacyArmorSlot
-	Damage     int16
+	// Damage is the amount of damage to apply to the armour in the specified slot.
+	Damage int16
 }
 
 // Marshal reads or writes ArmorSlotAndDamagePair using its canonical wire layout.
@@ -62,9 +65,12 @@ func (x *PlayerActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 // PlayerBlockAction ...
 type PlayerBlockActionData struct {
-	Action   PlayerActionType
+	// Action is the action to be performed, and is one of the constants listed above.
+	Action PlayerActionType
+	// BlockPos is the position of the block that was interacted with.
 	BlockPos BlockPos
-	Face     int32
+	// Face is the face of the block that was interacted with.
+	Face int32
 }
 
 // Marshal reads or writes PlayerBlockActionData using its canonical wire layout.
@@ -227,8 +233,13 @@ func (x *PlayerWaxedOrUnwaxedCopper) Marshal(io IO) {
 	io.Varint32(&x.PlayerWaxedOrUnwaxedCopperBlockID)
 }
 
+// SyncedPlayerMovementSettings represents the different server authoritative movement settings. These control
+// how the client will provide input to the server.
 type SyncedPlayerMovementSettings struct {
-	RewindHistorySize                int32
+	// RewindHistorySize is the amount of history to keep at maximum.
+	RewindHistorySize int32
+	// ServerAuthoritativeBlockBreaking specifies if block breaking should be sent through packet.PlayerAuthInput
+	// or not.
 	ServerAuthoritativeBlockBreaking bool
 }
 

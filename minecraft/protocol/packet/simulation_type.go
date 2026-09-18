@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	SimulationTypeGame    protocol.SimulationTypeEnum = 0
@@ -15,10 +17,10 @@ type SimulationType struct {
 	SimulationType protocol.SimulationTypeEnum
 }
 
-// Marshal reads or writes SimulationType using its canonical wire layout.
-func (x *SimulationType) Marshal(io protocol.IO) {
-	x.SimulationType.Marshal(io)
-}
-
 // ID returns the protocol ID for SimulationType.
 func (*SimulationType) ID() uint32 { return IDSimulationType }
+
+// Marshal reads or writes SimulationType using its canonical wire layout.
+func (pk *SimulationType) Marshal(io protocol.IO) {
+	pk.SimulationType.Marshal(io)
+}

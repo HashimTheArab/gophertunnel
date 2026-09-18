@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	PositionTrackingDBBroadcastActionUpdate   protocol.PositionTrackingDBServerBroadcastAction = 0
@@ -21,12 +23,12 @@ type PositionTrackingDBServerBroadcast struct {
 	PositionTrackingData []byte
 }
 
-// Marshal reads or writes PositionTrackingDBServerBroadcast using its canonical wire layout.
-func (x *PositionTrackingDBServerBroadcast) Marshal(io protocol.IO) {
-	x.Action.Marshal(io)
-	x.IDValue.Marshal(io)
-	io.NBT(&x.PositionTrackingData, protocol.NBTNetwork)
-}
-
 // ID returns the protocol ID for PositionTrackingDBServerBroadcast.
 func (*PositionTrackingDBServerBroadcast) ID() uint32 { return IDPositionTrackingDBServerBroadcast }
+
+// Marshal reads or writes PositionTrackingDBServerBroadcast using its canonical wire layout.
+func (pk *PositionTrackingDBServerBroadcast) Marshal(io protocol.IO) {
+	pk.Action.Marshal(io)
+	pk.IDValue.Marshal(io)
+	io.NBT(&pk.PositionTrackingData, protocol.NBTNetwork)
+}

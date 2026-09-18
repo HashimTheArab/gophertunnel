@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // DimensionData is a packet sent from the server to the client containing information about data-driven
 // dimensions that the server may have registered. This packet does not seem to be sent by default, rather
@@ -10,14 +12,14 @@ type DimensionData struct {
 	Definitions []protocol.OrderedEntry[string, protocol.DimensionDefinition]
 }
 
+// ID returns the protocol ID for DimensionData.
+func (*DimensionData) ID() uint32 { return IDDimensionData }
+
 // Marshal reads or writes DimensionData using its canonical wire layout.
-func (x *DimensionData) Marshal(io protocol.IO) {
-	protocol.OrderedMap(io, &x.Definitions, io.Varuint32, func(value *string) {
+func (pk *DimensionData) Marshal(io protocol.IO) {
+	protocol.OrderedMap(io, &pk.Definitions, io.Varuint32, func(value *string) {
 		io.StringLimits(value, 0, 256)
 	}, func(value *protocol.DimensionDefinition) {
 		value.Marshal(io)
 	})
 }
-
-// ID returns the protocol ID for DimensionData.
-func (*DimensionData) ID() uint32 { return IDDimensionData }

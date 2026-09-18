@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	MovementEffectTypeGlideBoost   protocol.MovementEffectType = 0
@@ -20,13 +22,13 @@ type MovementEffect struct {
 	Tick uint64
 }
 
-// Marshal reads or writes MovementEffect using its canonical wire layout.
-func (x *MovementEffect) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&x.TargetRuntimeID)
-	x.EffectID.Marshal(io)
-	io.Varint32(&x.EffectDuration)
-	io.PlayerInputTick(&x.Tick)
-}
-
 // ID returns the protocol ID for MovementEffect.
 func (*MovementEffect) ID() uint32 { return IDMovementEffect }
+
+// Marshal reads or writes MovementEffect using its canonical wire layout.
+func (pk *MovementEffect) Marshal(io protocol.IO) {
+	io.ActorRuntimeID(&pk.TargetRuntimeID)
+	pk.EffectID.Marshal(io)
+	io.Varint32(&pk.EffectDuration)
+	io.PlayerInputTick(&pk.Tick)
+}

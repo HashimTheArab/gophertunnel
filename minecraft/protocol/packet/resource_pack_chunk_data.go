@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ResourcePackChunkData is sent to the client so that the client can download the resource pack. Each packet
 // holds a chunk of the compressed resource pack, of which the size is defined in the ResourcePackDataInfo
@@ -19,13 +21,13 @@ type ResourcePackChunkData struct {
 	Data []byte
 }
 
-// Marshal reads or writes ResourcePackChunkData using its canonical wire layout.
-func (x *ResourcePackChunkData) Marshal(io protocol.IO) {
-	io.String(&x.UUID)
-	io.Uint32(&x.ChunkIndex)
-	io.Uint64(&x.DataOffset)
-	io.Bytes(&x.Data)
-}
-
 // ID returns the protocol ID for ResourcePackChunkData.
 func (*ResourcePackChunkData) ID() uint32 { return IDResourcePackChunkData }
+
+// Marshal reads or writes ResourcePackChunkData using its canonical wire layout.
+func (pk *ResourcePackChunkData) Marshal(io protocol.IO) {
+	io.String(&pk.UUID)
+	io.Uint32(&pk.ChunkIndex)
+	io.Uint64(&pk.DataOffset)
+	io.Bytes(&pk.Data)
+}

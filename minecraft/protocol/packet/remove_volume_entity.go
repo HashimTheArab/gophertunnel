@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // RemoveVolumeEntity indicates a volume entity to be removed from server to client.
 type RemoveVolumeEntity struct {
@@ -8,11 +10,11 @@ type RemoveVolumeEntity struct {
 	DimensionType   protocol.DimensionType
 }
 
-// Marshal reads or writes RemoveVolumeEntity using its canonical wire layout.
-func (x *RemoveVolumeEntity) Marshal(io protocol.IO) {
-	x.EntityNetworkID.Marshal(io)
-	x.DimensionType.Marshal(io)
-}
-
 // ID returns the protocol ID for RemoveVolumeEntity.
 func (*RemoveVolumeEntity) ID() uint32 { return IDRemoveVolumeEntity }
+
+// Marshal reads or writes RemoveVolumeEntity using its canonical wire layout.
+func (pk *RemoveVolumeEntity) Marshal(io protocol.IO) {
+	pk.EntityNetworkID.Marshal(io)
+	pk.DimensionType.Marshal(io)
+}

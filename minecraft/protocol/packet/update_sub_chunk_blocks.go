@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // UpdateSubChunkBlocks is essentially just UpdateBlock packet, however for a set of blocks in a sub-chunk.
 type UpdateSubChunkBlocks struct {
@@ -8,11 +10,11 @@ type UpdateSubChunkBlocks struct {
 	BlocksChanged         protocol.UpdateSubChunkBlocksChangedInfo
 }
 
-// Marshal reads or writes UpdateSubChunkBlocks using its canonical wire layout.
-func (x *UpdateSubChunkBlocks) Marshal(io protocol.IO) {
-	x.SubChunkBlockPosition.Marshal(io)
-	x.BlocksChanged.Marshal(io)
-}
-
 // ID returns the protocol ID for UpdateSubChunkBlocks.
 func (*UpdateSubChunkBlocks) ID() uint32 { return IDUpdateSubChunkBlocks }
+
+// Marshal reads or writes UpdateSubChunkBlocks using its canonical wire layout.
+func (pk *UpdateSubChunkBlocks) Marshal(io protocol.IO) {
+	pk.SubChunkBlockPosition.Marshal(io)
+	pk.BlocksChanged.Marshal(io)
+}

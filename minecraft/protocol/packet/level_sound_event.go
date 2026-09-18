@@ -38,17 +38,17 @@ type LevelSoundEvent struct {
 	FireAtPosition protocol.Optional[mgl32.Vec3]
 }
 
-// Marshal reads or writes LevelSoundEvent using its canonical wire layout.
-func (x *LevelSoundEvent) Marshal(io protocol.IO) {
-	io.String(&x.SoundType)
-	io.Vec3(&x.Position)
-	io.Varint32(&x.ExtraData)
-	io.String(&x.EntityType)
-	io.Bool(&x.BabyMob)
-	io.Bool(&x.DisableRelativeVolume)
-	io.Int64(&x.EntityUniqueID)
-	protocol.OptionalFunc(io, &x.FireAtPosition, io.Vec3)
-}
-
 // ID returns the protocol ID for LevelSoundEvent.
 func (*LevelSoundEvent) ID() uint32 { return IDLevelSoundEvent }
+
+// Marshal reads or writes LevelSoundEvent using its canonical wire layout.
+func (pk *LevelSoundEvent) Marshal(io protocol.IO) {
+	io.String(&pk.SoundType)
+	io.Vec3(&pk.Position)
+	io.Varint32(&pk.ExtraData)
+	io.String(&pk.EntityType)
+	io.Bool(&pk.BabyMob)
+	io.Bool(&pk.DisableRelativeVolume)
+	io.Int64(&pk.EntityUniqueID)
+	protocol.OptionalFunc(io, &pk.FireAtPosition, io.Vec3)
+}

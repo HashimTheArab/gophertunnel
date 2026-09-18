@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ResourcePackClientResponse is sent by the client in response to resource packets sent by the server. It is
 // used to let the server know what action needs to be taken for the client to have all resource packs ready
@@ -10,10 +12,10 @@ type ResourcePackClientResponse struct {
 	Response protocol.ResourcePackClientResponseData
 }
 
-// Marshal reads or writes ResourcePackClientResponse using its canonical wire layout.
-func (x *ResourcePackClientResponse) Marshal(io protocol.IO) {
-	protocol.MarshalResourcePackClientResponseData(io, &x.Response)
-}
-
 // ID returns the protocol ID for ResourcePackClientResponse.
 func (*ResourcePackClientResponse) ID() uint32 { return IDResourcePackClientResponse }
+
+// Marshal reads or writes ResourcePackClientResponse using its canonical wire layout.
+func (pk *ResourcePackClientResponse) Marshal(io protocol.IO) {
+	protocol.MarshalResourcePackClientResponseData(io, &pk.Response)
+}

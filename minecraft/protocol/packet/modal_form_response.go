@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	ModalFormCancelReasonUserClosed protocol.ModalFormCancelReason = 0
@@ -22,12 +24,12 @@ type ModalFormResponse struct {
 	CancelReason protocol.Optional[protocol.ModalFormCancelReason]
 }
 
-// Marshal reads or writes ModalFormResponse using its canonical wire layout.
-func (x *ModalFormResponse) Marshal(io protocol.IO) {
-	io.Varuint32(&x.FormID)
-	protocol.OptionalFunc(io, &x.ResponseData, io.String)
-	protocol.OptionalMarshaler(io, &x.CancelReason)
-}
-
 // ID returns the protocol ID for ModalFormResponse.
 func (*ModalFormResponse) ID() uint32 { return IDModalFormResponse }
+
+// Marshal reads or writes ModalFormResponse using its canonical wire layout.
+func (pk *ModalFormResponse) Marshal(io protocol.IO) {
+	io.Varuint32(&pk.FormID)
+	protocol.OptionalFunc(io, &pk.ResponseData, io.String)
+	protocol.OptionalMarshaler(io, &pk.CancelReason)
+}

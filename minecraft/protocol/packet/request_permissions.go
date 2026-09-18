@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // RequestPermissions is a packet sent from the client to the server to request permissions that the client
 // does not currently have. It can only be sent by operators and host in vanilla Minecraft.
@@ -15,12 +17,12 @@ type RequestPermissions struct {
 	RequestedPermissions uint16
 }
 
-// Marshal reads or writes RequestPermissions using its canonical wire layout.
-func (x *RequestPermissions) Marshal(io protocol.IO) {
-	io.Int64(&x.EntityUniqueID)
-	io.Varint32(&x.PermissionLevel)
-	io.Uint16(&x.RequestedPermissions)
-}
-
 // ID returns the protocol ID for RequestPermissions.
 func (*RequestPermissions) ID() uint32 { return IDRequestPermissions }
+
+// Marshal reads or writes RequestPermissions using its canonical wire layout.
+func (pk *RequestPermissions) Marshal(io protocol.IO) {
+	io.Int64(&pk.EntityUniqueID)
+	io.Varint32(&pk.PermissionLevel)
+	io.Uint16(&pk.RequestedPermissions)
+}

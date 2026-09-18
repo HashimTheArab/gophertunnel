@@ -1,6 +1,8 @@
 package protocol
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 type PersonaAnimatedTextureType uint32
 
@@ -69,11 +71,19 @@ const (
 // Marshal reads or writes PersonaPieceType through its uint32 wire encoding.
 func (x *PersonaPieceType) Marshal(io IO) { io.Uint32((*uint32)(x)) }
 
+// SerializedPersonaPieceHandle represents a piece of a persona skin. All pieces are sent separately.
 type SerializedPersonaPieceHandle struct {
-	PieceID   string
+	// PieceId is a UUID that identifies the piece itself, which is unique for each separate piece.
+	PieceID string
+	// PieceType holds the type of the piece. This is one of the PieceType constants above.
 	PieceType PersonaPieceType
-	PackID    uuid.UUID
-	Default   bool
+	// PackID is a UUID that identifies the pack that the persona piece belongs to.
+	PackID uuid.UUID
+	// Default specifies if the piece is one of the default pieces. This is true when the piece is one of those
+	// that a Steve or Alex skin have.
+	Default bool
+	// ProductID is a UUID that identifies the piece when it comes to purchases. It is empty for pieces that have
+	// the 'Default' field set to true.
 	ProductID string
 }
 

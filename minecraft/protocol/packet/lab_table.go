@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	LabTableActionCombine protocol.LabTableType = 0
@@ -23,12 +25,12 @@ type LabTable struct {
 	ReactionType protocol.LabTableReactionType
 }
 
-// Marshal reads or writes LabTable using its canonical wire layout.
-func (x *LabTable) Marshal(io protocol.IO) {
-	x.ActionType.Marshal(io)
-	x.Position.Marshal(io)
-	x.ReactionType.Marshal(io)
-}
-
 // ID returns the protocol ID for LabTable.
 func (*LabTable) ID() uint32 { return IDLabTable }
+
+// Marshal reads or writes LabTable using its canonical wire layout.
+func (pk *LabTable) Marshal(io protocol.IO) {
+	pk.ActionType.Marshal(io)
+	pk.Position.Marshal(io)
+	pk.ReactionType.Marshal(io)
+}

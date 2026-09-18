@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 type LegacyTelemetryEvent struct {
 	TargetActorID int64
@@ -9,13 +11,13 @@ type LegacyTelemetryEvent struct {
 	EventData     protocol.EventData
 }
 
-// Marshal reads or writes LegacyTelemetryEvent using its canonical wire layout.
-func (x *LegacyTelemetryEvent) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&x.TargetActorID)
-	x.EventType.Marshal(io)
-	io.Bool(&x.UsePlayerID)
-	protocol.MarshalEventData(io, &x.EventData)
-}
-
 // ID returns the protocol ID for LegacyTelemetryEvent.
 func (*LegacyTelemetryEvent) ID() uint32 { return IDLegacyTelemetryEvent }
+
+// Marshal reads or writes LegacyTelemetryEvent using its canonical wire layout.
+func (pk *LegacyTelemetryEvent) Marshal(io protocol.IO) {
+	io.ActorUniqueID(&pk.TargetActorID)
+	pk.EventType.Marshal(io)
+	io.Bool(&pk.UsePlayerID)
+	protocol.MarshalEventData(io, &pk.EventData)
+}

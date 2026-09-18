@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SetScoreboardIdentity is sent by the server to change the identity type of one of the entries on a
 // scoreboard. This is used to change, for example, an entry pointing to a player, to a fake player when it
@@ -16,11 +18,11 @@ type SetScoreboardIdentity struct {
 	Entries []protocol.ScoreboardIdentityPacketInfo
 }
 
-// Marshal reads or writes SetScoreboardIdentity using its canonical wire layout.
-func (x *SetScoreboardIdentity) Marshal(io protocol.IO) {
-	x.ActionType.Marshal(io)
-	protocol.Slice(io, &x.Entries)
-}
-
 // ID returns the protocol ID for SetScoreboardIdentity.
 func (*SetScoreboardIdentity) ID() uint32 { return IDSetScoreboardIdentity }
+
+// Marshal reads or writes SetScoreboardIdentity using its canonical wire layout.
+func (pk *SetScoreboardIdentity) Marshal(io protocol.IO) {
+	pk.ActionType.Marshal(io)
+	protocol.Slice(io, &pk.Entries)
+}

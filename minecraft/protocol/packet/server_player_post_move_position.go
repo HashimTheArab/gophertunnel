@@ -5,14 +5,16 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+// ServerPlayerPostMovePosition is sent by the server with the player's position after movement processing.
 type ServerPlayerPostMovePosition struct {
+	// Position is the player's position after the server has processed movement.
 	Position mgl32.Vec3
-}
-
-// Marshal reads or writes ServerPlayerPostMovePosition using its canonical wire layout.
-func (x *ServerPlayerPostMovePosition) Marshal(io protocol.IO) {
-	io.Vec3(&x.Position)
 }
 
 // ID returns the protocol ID for ServerPlayerPostMovePosition.
 func (*ServerPlayerPostMovePosition) ID() uint32 { return IDServerPlayerPostMovePosition }
+
+// Marshal reads or writes ServerPlayerPostMovePosition using its canonical wire layout.
+func (pk *ServerPlayerPostMovePosition) Marshal(io protocol.IO) {
+	io.Vec3(&pk.Position)
+}

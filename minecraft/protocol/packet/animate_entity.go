@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // AnimateEntity is sent by the server to animate an entity client-side. It may be used to play a single
 // animation, or to activate a controller which can start a sequence of animations based on different
@@ -26,16 +28,16 @@ type AnimateEntity struct {
 	EntityRuntimeIDs []uint64
 }
 
-// Marshal reads or writes AnimateEntity using its canonical wire layout.
-func (x *AnimateEntity) Marshal(io protocol.IO) {
-	io.String(&x.Animation)
-	io.String(&x.NextState)
-	io.String(&x.StopCondition)
-	io.Int32(&x.StopConditionVersion)
-	io.String(&x.Controller)
-	io.Float32(&x.BlendOutTime)
-	protocol.FuncSlice(io, &x.EntityRuntimeIDs, io.Varuint32, io.ActorRuntimeID)
-}
-
 // ID returns the protocol ID for AnimateEntity.
 func (*AnimateEntity) ID() uint32 { return IDAnimateEntity }
+
+// Marshal reads or writes AnimateEntity using its canonical wire layout.
+func (pk *AnimateEntity) Marshal(io protocol.IO) {
+	io.String(&pk.Animation)
+	io.String(&pk.NextState)
+	io.String(&pk.StopCondition)
+	io.Int32(&pk.StopConditionVersion)
+	io.String(&pk.Controller)
+	io.Float32(&pk.BlendOutTime)
+	protocol.FuncSlice(io, &pk.EntityRuntimeIDs, io.Varuint32, io.ActorRuntimeID)
+}

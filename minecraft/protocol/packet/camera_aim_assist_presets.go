@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	CameraAunAssistPresetOperationSet           protocol.CameraAimAssistPresetOperation = 0
@@ -18,12 +20,12 @@ type CameraAimAssistPresets struct {
 	Operation protocol.CameraAimAssistPresetOperation
 }
 
-// Marshal reads or writes CameraAimAssistPresets using its canonical wire layout.
-func (x *CameraAimAssistPresets) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.Categories)
-	protocol.Slice(io, &x.Presets)
-	x.Operation.Marshal(io)
-}
-
 // ID returns the protocol ID for CameraAimAssistPresets.
 func (*CameraAimAssistPresets) ID() uint32 { return IDCameraAimAssistPresets }
+
+// Marshal reads or writes CameraAimAssistPresets using its canonical wire layout.
+func (pk *CameraAimAssistPresets) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.Categories)
+	protocol.Slice(io, &pk.Presets)
+	pk.Operation.Marshal(io)
+}

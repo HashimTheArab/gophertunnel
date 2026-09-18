@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // NetworkChunkPublisherUpdate is sent by the server to change the point around which chunks are and remain
 // loaded. This is useful for mini-game servers, where only one area is ever loaded, in which case the
@@ -20,14 +22,14 @@ type NetworkChunkPublisherUpdate struct {
 	SavedChunks []protocol.ChunkPos
 }
 
+// ID returns the protocol ID for NetworkChunkPublisherUpdate.
+func (*NetworkChunkPublisherUpdate) ID() uint32 { return IDNetworkChunkPublisherUpdate }
+
 // Marshal reads or writes NetworkChunkPublisherUpdate using its canonical wire layout.
-func (x *NetworkChunkPublisherUpdate) Marshal(io protocol.IO) {
-	x.Position.Marshal(io)
-	io.Varuint32(&x.Radius)
-	protocol.FuncSliceLimits(io, &x.SavedChunks, io.Uint32, 0, 9216, func(value *protocol.ChunkPos) {
+func (pk *NetworkChunkPublisherUpdate) Marshal(io protocol.IO) {
+	pk.Position.Marshal(io)
+	io.Varuint32(&pk.Radius)
+	protocol.FuncSliceLimits(io, &pk.SavedChunks, io.Uint32, 0, 9216, func(value *protocol.ChunkPos) {
 		value.Marshal(io)
 	})
 }
-
-// ID returns the protocol ID for NetworkChunkPublisherUpdate.
-func (*NetworkChunkPublisherUpdate) ID() uint32 { return IDNetworkChunkPublisherUpdate }

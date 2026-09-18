@@ -1,22 +1,29 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	LoadingScreenTypeStart protocol.ServerboundLoadingScreenType = 1
 	LoadingScreenTypeEnd   protocol.ServerboundLoadingScreenType = 2
 )
 
+// ServerboundLoadingScreen is sent by the client to tell the server about the state of the loading screen
+// that the client is currently displaying.
 type ServerboundLoadingScreen struct {
-	Type            protocol.ServerboundLoadingScreenType
+	// Type is the type of the loading screen event. It is one of the constants that may be found above.
+	Type protocol.ServerboundLoadingScreenType
+	// LoadingScreenID is the ID of the screen that was previously sent by the server in the ChangeDimension
+	// packet. The server should validate that the ID matches the last one it sent.
 	LoadingScreenID protocol.Optional[uint32]
-}
-
-// Marshal reads or writes ServerboundLoadingScreen using its canonical wire layout.
-func (x *ServerboundLoadingScreen) Marshal(io protocol.IO) {
-	x.Type.Marshal(io)
-	protocol.OptionalFunc(io, &x.LoadingScreenID, io.Uint32)
 }
 
 // ID returns the protocol ID for ServerboundLoadingScreen.
 func (*ServerboundLoadingScreen) ID() uint32 { return IDServerboundLoadingScreen }
+
+// Marshal reads or writes ServerboundLoadingScreen using its canonical wire layout.
+func (pk *ServerboundLoadingScreen) Marshal(io protocol.IO) {
+	pk.Type.Marshal(io)
+	protocol.OptionalFunc(io, &pk.LoadingScreenID, io.Uint32)
+}

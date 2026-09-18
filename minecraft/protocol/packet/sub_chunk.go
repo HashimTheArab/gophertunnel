@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SubChunk sends data about multiple sub-chunks around a center point.
 type SubChunk struct {
@@ -11,13 +13,13 @@ type SubChunk struct {
 	SubChunkData  []protocol.SubChunkData
 }
 
-// Marshal reads or writes SubChunk using its canonical wire layout.
-func (x *SubChunk) Marshal(io protocol.IO) {
-	io.Bool(&x.CacheEnabled)
-	x.DimensionType.Marshal(io)
-	x.CenterPos.Marshal(io)
-	protocol.SliceLimits(io, &x.SubChunkData, 0, 8192)
-}
-
 // ID returns the protocol ID for SubChunk.
 func (*SubChunk) ID() uint32 { return IDSubChunk }
+
+// Marshal reads or writes SubChunk using its canonical wire layout.
+func (pk *SubChunk) Marshal(io protocol.IO) {
+	io.Bool(&pk.CacheEnabled)
+	pk.DimensionType.Marshal(io)
+	pk.CenterPos.Marshal(io)
+	protocol.SliceLimits(io, &pk.SubChunkData, 0, 8192)
+}

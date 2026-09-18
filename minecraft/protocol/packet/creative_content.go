@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // CreativeContent is a packet sent by the server to set the creative inventory's content for a player.
 // Introduced in 1.16, this packet replaces the previous method - sending an InventoryContent packet with
@@ -28,11 +30,11 @@ type CreativeContent struct {
 	Items []protocol.CreativeItemEntry
 }
 
-// Marshal reads or writes CreativeContent using its canonical wire layout.
-func (x *CreativeContent) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.Groups)
-	protocol.Slice(io, &x.Items)
-}
-
 // ID returns the protocol ID for CreativeContent.
 func (*CreativeContent) ID() uint32 { return IDCreativeContent }
+
+// Marshal reads or writes CreativeContent using its canonical wire layout.
+func (pk *CreativeContent) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.Groups)
+	protocol.Slice(io, &pk.Items)
+}

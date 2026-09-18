@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // PurchaseReceipt is sent by the client to the server to notify the server it purchased an item from the
 // Marketplace store that was offered by the server. The packet is only used for partnered servers.
@@ -10,10 +12,10 @@ type PurchaseReceipt struct {
 	Receipts []string
 }
 
-// Marshal reads or writes PurchaseReceipt using its canonical wire layout.
-func (x *PurchaseReceipt) Marshal(io protocol.IO) {
-	protocol.FuncSliceLimits(io, &x.Receipts, io.Varuint32, 0, 10000, io.String)
-}
-
 // ID returns the protocol ID for PurchaseReceipt.
 func (*PurchaseReceipt) ID() uint32 { return IDPurchaseReceipt }
+
+// Marshal reads or writes PurchaseReceipt using its canonical wire layout.
+func (pk *PurchaseReceipt) Marshal(io protocol.IO) {
+	protocol.FuncSliceLimits(io, &pk.Receipts, io.Varuint32, 0, 10000, io.String)
+}

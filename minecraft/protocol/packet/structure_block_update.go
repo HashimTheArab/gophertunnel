@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	StructureBlockData    protocol.StructureBlockType = 0
@@ -27,13 +29,13 @@ type StructureBlockUpdate struct {
 	IsWaterlogged bool
 }
 
-// Marshal reads or writes StructureBlockUpdate using its canonical wire layout.
-func (x *StructureBlockUpdate) Marshal(io protocol.IO) {
-	x.BlockPosition.Marshal(io)
-	x.StructureData.Marshal(io)
-	io.Bool(&x.Trigger)
-	io.Bool(&x.IsWaterlogged)
-}
-
 // ID returns the protocol ID for StructureBlockUpdate.
 func (*StructureBlockUpdate) ID() uint32 { return IDStructureBlockUpdate }
+
+// Marshal reads or writes StructureBlockUpdate using its canonical wire layout.
+func (pk *StructureBlockUpdate) Marshal(io protocol.IO) {
+	pk.BlockPosition.Marshal(io)
+	pk.StructureData.Marshal(io)
+	io.Bool(&pk.Trigger)
+	io.Bool(&pk.IsWaterlogged)
+}

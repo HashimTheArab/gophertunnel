@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // StopSound is sent by the server to stop a sound playing to the player, such as a playing music disk track
 // or other long-lasting sounds.
@@ -15,12 +17,12 @@ type StopSound struct {
 	StopMusicLegacy bool
 }
 
-// Marshal reads or writes StopSound using its canonical wire layout.
-func (x *StopSound) Marshal(io protocol.IO) {
-	io.String(&x.SoundName)
-	io.Bool(&x.StopAll)
-	io.Bool(&x.StopMusicLegacy)
-}
-
 // ID returns the protocol ID for StopSound.
 func (*StopSound) ID() uint32 { return IDStopSound }
+
+// Marshal reads or writes StopSound using its canonical wire layout.
+func (pk *StopSound) Marshal(io protocol.IO) {
+	io.String(&pk.SoundName)
+	io.Bool(&pk.StopAll)
+	io.Bool(&pk.StopMusicLegacy)
+}

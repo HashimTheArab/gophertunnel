@@ -6,11 +6,16 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+// ArrowData represents an arrow debug shape.
 type ArrowData struct {
+	// ArrowEndLocation is the arrow end location of the shape.
 	ArrowEndLocation Optional[mgl32.Vec3]
-	ArrowHeadLength  Optional[float32]
-	ArrowHeadRadius  Optional[float32]
-	Segments         Optional[uint8]
+	// ArrowHeadLength is the arrow head length of the shape.
+	ArrowHeadLength Optional[float32]
+	// ArrowHeadRadius is the arrow head radius of the shape.
+	ArrowHeadRadius Optional[float32]
+	// Segments is the segments that used for the debug arrow's head.
+	Segments Optional[uint8]
 }
 
 func (*ArrowData) tagPrimitiveShapeExtraShapeData() uint32 { return 1 }
@@ -23,9 +28,13 @@ func (x *ArrowData) Marshal(io IO) {
 	OptionalFunc(io, &x.Segments, io.Uint8)
 }
 
+// ConeData represents a cone debug shape.
 type ConeData struct {
-	Radii       mgl32.Vec2
-	Height      float32
+	// Radii are the radii along the X/Z axes of the cone base.
+	Radii mgl32.Vec2
+	// Height is the height of the cone.
+	Height float32
+	// NumSegments is the number of segments used for the cone.
 	NumSegments uint8
 }
 
@@ -38,10 +47,15 @@ func (x *ConeData) Marshal(io IO) {
 	io.Uint8(&x.NumSegments)
 }
 
+// CylinderData represents a cylinder debug shape.
 type CylinderData struct {
-	RadiusX     mgl32.Vec2
-	RadiusZ     mgl32.Vec2
-	Height      float32
+	// RadiusX is the radius of the cylinder along the X axis.
+	RadiusX mgl32.Vec2
+	// RadiusZ is the radius of the cylinder along the Z axis.
+	RadiusZ mgl32.Vec2
+	// Height is the height of the cylinder.
+	Height float32
+	// NumSegments is the number of segments used for the cylinder.
 	NumSegments uint8
 }
 
@@ -55,8 +69,11 @@ func (x *CylinderData) Marshal(io IO) {
 	io.Uint8(&x.NumSegments)
 }
 
+// EllipsoidData represents an ellipsoid debug shape.
 type EllipsoidData struct {
-	Radii           mgl32.Vec3
+	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
+	Radii mgl32.Vec3
+	// SegmentsPerAxis is the number of segments used per axis for the ellipsoid.
 	SegmentsPerAxis uint8
 }
 
@@ -129,8 +146,11 @@ const (
 // Marshal reads or writes ScriptModuleMinecraftScriptPrimitiveShapeType through its uint8 wire encoding.
 func (x *ScriptModuleMinecraftScriptPrimitiveShapeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
+// SkinImage represents a pyramid debug shape.
 type SkinImage struct {
-	Width      uint32
+	// Width is the width along the X axis of the pyramid base.
+	Width uint32
+	// Height is the height of the pyramid.
 	Height     uint32
 	ImageBytes []uint8
 }

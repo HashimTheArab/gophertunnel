@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ItemStackResponse is sent by the server in response to an ItemStackRequest packet from the client. This
 // packet is used to either approve or reject ItemStackRequests from the client. If a request is approved, the
@@ -12,10 +14,10 @@ type ItemStackResponse struct {
 	Responses []protocol.ItemStackResponseInfo
 }
 
-// Marshal reads or writes ItemStackResponse using its canonical wire layout.
-func (x *ItemStackResponse) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.Responses)
-}
-
 // ID returns the protocol ID for ItemStackResponse.
 func (*ItemStackResponse) ID() uint32 { return IDItemStackResponse }
+
+// Marshal reads or writes ItemStackResponse using its canonical wire layout.
+func (pk *ItemStackResponse) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.Responses)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // RequestChunkRadius is sent by the client to the server to update the server on the chunk view radius that
 // it has set in the settings. The server may respond with a ChunkRadiusUpdated packet with either the chunk
@@ -14,11 +16,11 @@ type RequestChunkRadius struct {
 	MaxChunkRadius uint8
 }
 
-// Marshal reads or writes RequestChunkRadius using its canonical wire layout.
-func (x *RequestChunkRadius) Marshal(io protocol.IO) {
-	io.Varint32(&x.ChunkRadius)
-	io.Uint8(&x.MaxChunkRadius)
-}
-
 // ID returns the protocol ID for RequestChunkRadius.
 func (*RequestChunkRadius) ID() uint32 { return IDRequestChunkRadius }
+
+// Marshal reads or writes RequestChunkRadius using its canonical wire layout.
+func (pk *RequestChunkRadius) Marshal(io protocol.IO) {
+	io.Varint32(&pk.ChunkRadius)
+	io.Uint8(&pk.MaxChunkRadius)
+}

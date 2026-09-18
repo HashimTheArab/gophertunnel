@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // CraftingData is sent by the server to let the client know all crafting data that the server maintains. This
 // includes shapeless crafting, crafting table recipes, furnace recipes etc. Each crafting station's recipes
@@ -28,21 +30,21 @@ type CraftingData struct {
 	ClearRecipes bool
 }
 
-// Marshal reads or writes CraftingData using its canonical wire layout.
-func (x *CraftingData) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.ShapedRecipes)
-	protocol.Slice(io, &x.ShapelessRecipes)
-	protocol.Slice(io, &x.MultiRecipes)
-	protocol.Slice(io, &x.UserDataShapelessRecipes)
-	protocol.Slice(io, &x.ShapelessChemistryRecipes)
-	protocol.Slice(io, &x.ShapedChemistryRecipes)
-	protocol.Slice(io, &x.SmithingTransformRecipes)
-	protocol.Slice(io, &x.SmithingTrimRecipes)
-	protocol.Slice(io, &x.PotionRecipes)
-	protocol.Slice(io, &x.PotionContainerChangeRecipes)
-	protocol.Slice(io, &x.MaterialReducers)
-	io.Bool(&x.ClearRecipes)
-}
-
 // ID returns the protocol ID for CraftingData.
 func (*CraftingData) ID() uint32 { return IDCraftingData }
+
+// Marshal reads or writes CraftingData using its canonical wire layout.
+func (pk *CraftingData) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.ShapedRecipes)
+	protocol.Slice(io, &pk.ShapelessRecipes)
+	protocol.Slice(io, &pk.MultiRecipes)
+	protocol.Slice(io, &pk.UserDataShapelessRecipes)
+	protocol.Slice(io, &pk.ShapelessChemistryRecipes)
+	protocol.Slice(io, &pk.ShapedChemistryRecipes)
+	protocol.Slice(io, &pk.SmithingTransformRecipes)
+	protocol.Slice(io, &pk.SmithingTrimRecipes)
+	protocol.Slice(io, &pk.PotionRecipes)
+	protocol.Slice(io, &pk.PotionContainerChangeRecipes)
+	protocol.Slice(io, &pk.MaterialReducers)
+	io.Bool(&pk.ClearRecipes)
+}

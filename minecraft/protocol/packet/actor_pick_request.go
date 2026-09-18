@@ -1,22 +1,28 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ActorPickRequest is sent by the client when it tries to pick an entity, so that it gets a spawn egg which
 // can spawn that entity.
 type ActorPickRequest struct {
+	// EntityUniqueID is the unique ID of the entity that was attempted to be picked. The server must find the
+	// type of that entity and provide the correct spawn egg to the player.
 	EntityUniqueID int64
-	HotBarSlot     uint8
+	// HotBarSlot is the held hot bar slot of the player at the time of trying to pick the entity. If empty, the
+	// resulting spawn egg should be put into this slot.
+	HotBarSlot uint8
 	// WithData is true if the pick request requests the entity metadata.
 	WithData bool
 }
 
-// Marshal reads or writes ActorPickRequest using its canonical wire layout.
-func (x *ActorPickRequest) Marshal(io protocol.IO) {
-	io.Int64(&x.EntityUniqueID)
-	io.Uint8(&x.HotBarSlot)
-	io.Bool(&x.WithData)
-}
-
 // ID returns the protocol ID for ActorPickRequest.
 func (*ActorPickRequest) ID() uint32 { return IDActorPickRequest }
+
+// Marshal reads or writes ActorPickRequest using its canonical wire layout.
+func (pk *ActorPickRequest) Marshal(io protocol.IO) {
+	io.Int64(&pk.EntityUniqueID)
+	io.Uint8(&pk.HotBarSlot)
+	io.Bool(&pk.WithData)
+}

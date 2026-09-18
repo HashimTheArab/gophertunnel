@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // AvailableCommands is sent by the server to send a list of all commands that the player is able to use on
 // the server. This packet holds all the arguments of each commands as well, making it possible for the client
@@ -34,17 +36,17 @@ type AvailableCommands struct {
 	Constraints []protocol.CommandEnumConstraint
 }
 
-// Marshal reads or writes AvailableCommands using its canonical wire layout.
-func (x *AvailableCommands) Marshal(io protocol.IO) {
-	protocol.FuncSlice(io, &x.EnumValues, io.Varuint32, io.String)
-	protocol.FuncSlice(io, &x.ChainedSubcommandValues, io.Varuint32, io.String)
-	protocol.FuncSlice(io, &x.Suffixes, io.Varuint32, io.String)
-	protocol.Slice(io, &x.Enums)
-	protocol.SliceLimits(io, &x.ChainedSubcommands, 0, 16)
-	protocol.Slice(io, &x.Commands)
-	protocol.Slice(io, &x.DynamicEnums)
-	protocol.Slice(io, &x.Constraints)
-}
-
 // ID returns the protocol ID for AvailableCommands.
 func (*AvailableCommands) ID() uint32 { return IDAvailableCommands }
+
+// Marshal reads or writes AvailableCommands using its canonical wire layout.
+func (pk *AvailableCommands) Marshal(io protocol.IO) {
+	protocol.FuncSlice(io, &pk.EnumValues, io.Varuint32, io.String)
+	protocol.FuncSlice(io, &pk.ChainedSubcommandValues, io.Varuint32, io.String)
+	protocol.FuncSlice(io, &pk.Suffixes, io.Varuint32, io.String)
+	protocol.Slice(io, &pk.Enums)
+	protocol.SliceLimits(io, &pk.ChainedSubcommands, 0, 16)
+	protocol.Slice(io, &pk.Commands)
+	protocol.Slice(io, &pk.DynamicEnums)
+	protocol.Slice(io, &pk.Constraints)
+}

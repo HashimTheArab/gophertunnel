@@ -1,6 +1,8 @@
 package protocol
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 // MultiRecipe serves as an 'enable' switch for multi-shape recipes.
 type MultiRecipe struct {

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // UpdateAbilities is a packet sent from the server to the client to update the abilities of the player. It,
 // along with the UpdateAdventureSettings packet, are replacements of the AdventureSettings packet since
@@ -10,10 +12,10 @@ type UpdateAbilities struct {
 	AbilityData protocol.SerializedAbilitiesData
 }
 
-// Marshal reads or writes UpdateAbilities using its canonical wire layout.
-func (x *UpdateAbilities) Marshal(io protocol.IO) {
-	x.AbilityData.Marshal(io)
-}
-
 // ID returns the protocol ID for UpdateAbilities.
 func (*UpdateAbilities) ID() uint32 { return IDUpdateAbilities }
+
+// Marshal reads or writes UpdateAbilities using its canonical wire layout.
+func (pk *UpdateAbilities) Marshal(io protocol.IO) {
+	pk.AbilityData.Marshal(io)
+}

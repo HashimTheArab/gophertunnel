@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // UpdateBlock is sent by the server to update a block client-side, without resending the entire chunk that
 // the block is located in. It is particularly useful for small modifications like block breaking/placing.
@@ -18,13 +20,13 @@ type UpdateBlock struct {
 	Layer uint32
 }
 
-// Marshal reads or writes UpdateBlock using its canonical wire layout.
-func (x *UpdateBlock) Marshal(io protocol.IO) {
-	x.Position.Marshal(io)
-	io.Varuint32(&x.NewBlockRuntimeID)
-	io.Varuint32(&x.Flags)
-	io.Varuint32(&x.Layer)
-}
-
 // ID returns the protocol ID for UpdateBlock.
 func (*UpdateBlock) ID() uint32 { return IDUpdateBlock }
+
+// Marshal reads or writes UpdateBlock using its canonical wire layout.
+func (pk *UpdateBlock) Marshal(io protocol.IO) {
+	pk.Position.Marshal(io)
+	io.Varuint32(&pk.NewBlockRuntimeID)
+	io.Varuint32(&pk.Flags)
+	io.Varuint32(&pk.Layer)
+}

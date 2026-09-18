@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // GameTestRequest ...
 type GameTestRequest struct {
@@ -16,16 +18,16 @@ type GameTestRequest struct {
 	TestName    string
 }
 
-// Marshal reads or writes GameTestRequest using its canonical wire layout.
-func (x *GameTestRequest) Marshal(io protocol.IO) {
-	io.Varint32(&x.MaxTestsPerBatch)
-	io.Varint32(&x.RepeatCount)
-	x.Rotation.Marshal(io)
-	io.Bool(&x.StopOnFailure)
-	x.TestPos.Marshal(io)
-	io.Varint32(&x.TestsPerRow)
-	io.String(&x.TestName)
-}
-
 // ID returns the protocol ID for GameTestRequest.
 func (*GameTestRequest) ID() uint32 { return IDGameTestRequest }
+
+// Marshal reads or writes GameTestRequest using its canonical wire layout.
+func (pk *GameTestRequest) Marshal(io protocol.IO) {
+	io.Varint32(&pk.MaxTestsPerBatch)
+	io.Varint32(&pk.RepeatCount)
+	pk.Rotation.Marshal(io)
+	io.Bool(&pk.StopOnFailure)
+	pk.TestPos.Marshal(io)
+	io.Varint32(&pk.TestsPerRow)
+	io.String(&pk.TestName)
+}

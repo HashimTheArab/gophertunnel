@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	PositionTrackingDBRequestActionQuery protocol.PositionTrackingDBClientRequestAction = 0
@@ -16,11 +18,11 @@ type PositionTrackingDBClientRequest struct {
 	IDValue protocol.PositionTrackingID
 }
 
-// Marshal reads or writes PositionTrackingDBClientRequest using its canonical wire layout.
-func (x *PositionTrackingDBClientRequest) Marshal(io protocol.IO) {
-	x.Action.Marshal(io)
-	x.IDValue.Marshal(io)
-}
-
 // ID returns the protocol ID for PositionTrackingDBClientRequest.
 func (*PositionTrackingDBClientRequest) ID() uint32 { return IDPositionTrackingDBClientRequest }
+
+// Marshal reads or writes PositionTrackingDBClientRequest using its canonical wire layout.
+func (pk *PositionTrackingDBClientRequest) Marshal(io protocol.IO) {
+	pk.Action.Marshal(io)
+	pk.IDValue.Marshal(io)
+}

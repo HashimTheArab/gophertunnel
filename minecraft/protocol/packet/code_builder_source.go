@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	CodeBuilderStatusNone       protocol.CodeBuilderExecutionStateCodeStatus = 0
@@ -36,12 +38,12 @@ type CodeBuilderSource struct {
 	CodeStatus protocol.CodeBuilderExecutionStateCodeStatus
 }
 
-// Marshal reads or writes CodeBuilderSource using its canonical wire layout.
-func (x *CodeBuilderSource) Marshal(io protocol.IO) {
-	x.Operation.Marshal(io)
-	x.Category.Marshal(io)
-	x.CodeStatus.Marshal(io)
-}
-
 // ID returns the protocol ID for CodeBuilderSource.
 func (*CodeBuilderSource) ID() uint32 { return IDCodeBuilderSource }
+
+// Marshal reads or writes CodeBuilderSource using its canonical wire layout.
+func (pk *CodeBuilderSource) Marshal(io protocol.IO) {
+	pk.Operation.Marshal(io)
+	pk.Category.Marshal(io)
+	pk.CodeStatus.Marshal(io)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	UnlockedRecipesTypeEmpty             protocol.ItemDescriptorType = 0
@@ -12,15 +14,18 @@ const (
 // UnlockedRecipes gives the client a list of recipes that have been unlocked, restricting the recipes that
 // appear in the recipe book.
 type UnlockedRecipes struct {
+	// UnlockType is the type of unlock that the packet represents, and can either be adding or removing a list of
+	// recipes. It is one of the constants listed above.
 	UnlockType protocol.PacketType
-	Recipes    []string
-}
-
-// Marshal reads or writes UnlockedRecipes using its canonical wire layout.
-func (x *UnlockedRecipes) Marshal(io protocol.IO) {
-	x.UnlockType.Marshal(io)
-	protocol.FuncSlice(io, &x.Recipes, io.Varuint32, io.String)
+	// Recipes is a list of recipe names that have been unlocked.
+	Recipes []string
 }
 
 // ID returns the protocol ID for UnlockedRecipes.
 func (*UnlockedRecipes) ID() uint32 { return IDUnlockedRecipes }
+
+// Marshal reads or writes UnlockedRecipes using its canonical wire layout.
+func (pk *UnlockedRecipes) Marshal(io protocol.IO) {
+	pk.UnlockType.Marshal(io)
+	protocol.FuncSlice(io, &pk.Recipes, io.Varuint32, io.String)
+}

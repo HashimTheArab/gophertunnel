@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // Transfer is sent by the server to transfer a player from the current server to another. Doing so will fully
 // disconnect the client, bring it back to the main menu and make it connect to the next server.
@@ -15,13 +17,13 @@ type Transfer struct {
 	GatheringJoinInfo protocol.Optional[protocol.ServerConfigurationGatheringsConfigurationJoinInfo]
 }
 
-// Marshal reads or writes Transfer using its canonical wire layout.
-func (x *Transfer) Marshal(io protocol.IO) {
-	io.String(&x.Address)
-	io.Uint16(&x.Port)
-	io.Bool(&x.ReloadWorld)
-	protocol.OptionalMarshaler(io, &x.GatheringJoinInfo)
-}
-
 // ID returns the protocol ID for Transfer.
 func (*Transfer) ID() uint32 { return IDTransfer }
+
+// Marshal reads or writes Transfer using its canonical wire layout.
+func (pk *Transfer) Marshal(io protocol.IO) {
+	io.String(&pk.Address)
+	io.Uint16(&pk.Port)
+	io.Bool(&pk.ReloadWorld)
+	protocol.OptionalMarshaler(io, &pk.GatheringJoinInfo)
+}

@@ -1,41 +1,64 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
+// ServerboundDiagnostics is sent by the client to tell the server about the performance diagnostics of the
+// client. It is sent by the client roughly every 500ms or 10 in-game ticks when the "Creator > Enable Client
+// Diagnostics" setting is enabled.
 type ServerboundDiagnostics struct {
-	AverageFramesPerSecond        float32
-	AverageServerSimTickTime      float32
-	AverageClientSimTickTime      float32
-	AverageBeginFrameTime         float32
-	AverageInputTime              float32
-	AverageRenderTime             float32
-	AverageEndFrameTime           float32
-	AverageRemainderTimePercent   float32
+	// AverageFramesPerSecond is the average amount of frames per second that the client has been running at.
+	AverageFramesPerSecond float32
+	// AverageServerSimTickTime is the average time that the server spends simulating a single tick in
+	// milliseconds.
+	AverageServerSimTickTime float32
+	// AverageClientSimTickTime is the average time that the client spends simulating a single tick in
+	// milliseconds.
+	AverageClientSimTickTime float32
+	// AverageBeginFrameTime is the average time that the client spends beginning a frame in milliseconds.
+	AverageBeginFrameTime float32
+	// AverageInputTime is the average time that the client spends processing input in milliseconds.
+	AverageInputTime float32
+	// AverageRenderTime is the average time that the client spends rendering in milliseconds.
+	AverageRenderTime float32
+	// AverageEndFrameTime is the average time that the client spends ending a frame in milliseconds.
+	AverageEndFrameTime float32
+	// AverageRemainderTimePercent is the average percentage of time that the client spends on tasks that are not
+	// accounted for.
+	AverageRemainderTimePercent float32
+	// AverageUnaccountedTimePercent is the average percentage of time that the client spends on unaccounted
+	// tasks.
 	AverageUnaccountedTimePercent float32
-	MemoryCategoryValues          []protocol.MemoryCategoryCounter
-	EntityDiagnostics             []protocol.ECSProfilingDiagnosticsEntityDiagnosticTimingInfo
-	SystemDiagnostics             []protocol.ECSProfilingDiagnosticsSystemDiagnosticTimingInfo
-	SystemCategories              []protocol.ECSProfilingDiagnosticsSystemCategory
-	WhiskerScopes                 []protocol.BedrockProfileWhiskerDiagnosticsScopeDataSummary
-}
-
-// Marshal reads or writes ServerboundDiagnostics using its canonical wire layout.
-func (x *ServerboundDiagnostics) Marshal(io protocol.IO) {
-	io.Float32(&x.AverageFramesPerSecond)
-	io.Float32(&x.AverageServerSimTickTime)
-	io.Float32(&x.AverageClientSimTickTime)
-	io.Float32(&x.AverageBeginFrameTime)
-	io.Float32(&x.AverageInputTime)
-	io.Float32(&x.AverageRenderTime)
-	io.Float32(&x.AverageEndFrameTime)
-	io.Float32(&x.AverageRemainderTimePercent)
-	io.Float32(&x.AverageUnaccountedTimePercent)
-	protocol.Slice(io, &x.MemoryCategoryValues)
-	protocol.Slice(io, &x.EntityDiagnostics)
-	protocol.Slice(io, &x.SystemDiagnostics)
-	protocol.Slice(io, &x.SystemCategories)
-	protocol.Slice(io, &x.WhiskerScopes)
+	// MemoryCategoryValues is a list of memory category counters sent by the client.
+	MemoryCategoryValues []protocol.MemoryCategoryCounter
+	// EntityDiagnostics is a list of entity timing entries sent by the client.
+	EntityDiagnostics []protocol.ECSProfilingDiagnosticsEntityDiagnosticTimingInfo
+	// SystemDiagnostics is a list of system timing entries sent by the client.
+	SystemDiagnostics []protocol.ECSProfilingDiagnosticsSystemDiagnosticTimingInfo
+	// SystemCategories maps diagnostics category names to system indices.
+	SystemCategories []protocol.ECSProfilingDiagnosticsSystemCategory
+	// WhiskerScopes is a list of whisker profiler scope diagnostic summaries sent by the client.
+	WhiskerScopes []protocol.BedrockProfileWhiskerDiagnosticsScopeDataSummary
 }
 
 // ID returns the protocol ID for ServerboundDiagnostics.
 func (*ServerboundDiagnostics) ID() uint32 { return IDServerboundDiagnostics }
+
+// Marshal reads or writes ServerboundDiagnostics using its canonical wire layout.
+func (pk *ServerboundDiagnostics) Marshal(io protocol.IO) {
+	io.Float32(&pk.AverageFramesPerSecond)
+	io.Float32(&pk.AverageServerSimTickTime)
+	io.Float32(&pk.AverageClientSimTickTime)
+	io.Float32(&pk.AverageBeginFrameTime)
+	io.Float32(&pk.AverageInputTime)
+	io.Float32(&pk.AverageRenderTime)
+	io.Float32(&pk.AverageEndFrameTime)
+	io.Float32(&pk.AverageRemainderTimePercent)
+	io.Float32(&pk.AverageUnaccountedTimePercent)
+	protocol.Slice(io, &pk.MemoryCategoryValues)
+	protocol.Slice(io, &pk.EntityDiagnostics)
+	protocol.Slice(io, &pk.SystemDiagnostics)
+	protocol.Slice(io, &pk.SystemCategories)
+	protocol.Slice(io, &pk.WhiskerScopes)
+}

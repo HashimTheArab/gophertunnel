@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	PhotoTypePortfolio protocol.PhotoType = 0
@@ -33,17 +35,17 @@ type PhotoTransfer struct {
 	NewPhotoName string
 }
 
-// Marshal reads or writes PhotoTransfer using its canonical wire layout.
-func (x *PhotoTransfer) Marshal(io protocol.IO) {
-	io.String(&x.PhotoName)
-	protocol.Pattern(io, &x.PhotoName, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpeg$")
-	io.BytesLimits(&x.PhotoData, 0, 20971520)
-	io.String(&x.BookID)
-	x.PhotoType.Marshal(io)
-	x.SourceType.Marshal(io)
-	io.Int64(&x.OwnerEntityUniqueID)
-	io.String(&x.NewPhotoName)
-}
-
 // ID returns the protocol ID for PhotoTransfer.
 func (*PhotoTransfer) ID() uint32 { return IDPhotoTransfer }
+
+// Marshal reads or writes PhotoTransfer using its canonical wire layout.
+func (pk *PhotoTransfer) Marshal(io protocol.IO) {
+	io.String(&pk.PhotoName)
+	protocol.Pattern(io, &pk.PhotoName, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpeg$")
+	io.BytesLimits(&pk.PhotoData, 0, 20971520)
+	io.String(&pk.BookID)
+	pk.PhotoType.Marshal(io)
+	pk.SourceType.Marshal(io)
+	io.Int64(&pk.OwnerEntityUniqueID)
+	io.String(&pk.NewPhotoName)
+}

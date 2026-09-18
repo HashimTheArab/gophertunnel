@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	HudElementPaperDoll     protocol.HudElement = 0
@@ -25,15 +27,19 @@ const (
 
 // SetHud is sent by the server to set the visibility of individual HUD elements on the client.
 type SetHud struct {
-	Elements   []protocol.HudElement
+	// Elements is a list of HUD elements that are being modified. The values can be any of the HudElement
+	// constants above.
+	Elements []protocol.HudElement
+	// Visibility represents the new visibility of the specified Elements. It can be any of the HudVisibility
+	// constants above.
 	Visibility protocol.HudVisibility
-}
-
-// Marshal reads or writes SetHud using its canonical wire layout.
-func (x *SetHud) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.Elements)
-	x.Visibility.Marshal(io)
 }
 
 // ID returns the protocol ID for SetHud.
 func (*SetHud) ID() uint32 { return IDSetHud }
+
+// Marshal reads or writes SetHud using its canonical wire layout.
+func (pk *SetHud) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.Elements)
+	pk.Visibility.Marshal(io)
+}

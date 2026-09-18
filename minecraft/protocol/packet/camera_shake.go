@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	CameraShakeActionAdd  protocol.CameraShakeAction = 0
@@ -18,18 +20,23 @@ type CameraShake struct {
 	// Intensity is the intensity of the shaking. The client limits this value to 4, so anything higher may not
 	// work.
 	Intensity float32
-	Duration  float32
-	Type      protocol.CameraShakeType
-	Action    protocol.CameraShakeAction
-}
-
-// Marshal reads or writes CameraShake using its canonical wire layout.
-func (x *CameraShake) Marshal(io protocol.IO) {
-	io.Float32(&x.Intensity)
-	io.Float32(&x.Duration)
-	x.Type.Marshal(io)
-	x.Action.Marshal(io)
+	// Duration is the number of seconds the camera will shake for.
+	Duration float32
+	// Type is the type of shake, and is one of the constants listed above. The different type affects how the
+	// shake looks in game.
+	Type protocol.CameraShakeType
+	// Action is the action to be performed, and is one of the constants listed above. Currently the different
+	// actions will either add or stop shaking the client.
+	Action protocol.CameraShakeAction
 }
 
 // ID returns the protocol ID for CameraShake.
 func (*CameraShake) ID() uint32 { return IDCameraShake }
+
+// Marshal reads or writes CameraShake using its canonical wire layout.
+func (pk *CameraShake) Marshal(io protocol.IO) {
+	io.Float32(&pk.Intensity)
+	io.Float32(&pk.Duration)
+	pk.Type.Marshal(io)
+	pk.Action.Marshal(io)
+}

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // SetDisplayObjective is sent by the server to display an object as a scoreboard to the player. Once sent, it
 // should be followed up by a SetScore packet to set the lines of the packet.
@@ -21,14 +23,14 @@ type SetDisplayObjective struct {
 	SortOrder int32
 }
 
-// Marshal reads or writes SetDisplayObjective using its canonical wire layout.
-func (x *SetDisplayObjective) Marshal(io protocol.IO) {
-	io.String(&x.DisplaySlot)
-	io.String(&x.ObjectiveName)
-	io.String(&x.DisplayName)
-	io.String(&x.CriteriaName)
-	io.Varint32(&x.SortOrder)
-}
-
 // ID returns the protocol ID for SetDisplayObjective.
 func (*SetDisplayObjective) ID() uint32 { return IDSetDisplayObjective }
+
+// Marshal reads or writes SetDisplayObjective using its canonical wire layout.
+func (pk *SetDisplayObjective) Marshal(io protocol.IO) {
+	io.String(&pk.DisplaySlot)
+	io.String(&pk.ObjectiveName)
+	io.String(&pk.DisplayName)
+	io.String(&pk.CriteriaName)
+	io.Varint32(&pk.SortOrder)
+}

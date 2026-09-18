@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // ServerPresenceInfo is sent by the server to provide the client with presence info.
 type ServerPresenceInfo struct {
@@ -8,10 +10,10 @@ type ServerPresenceInfo struct {
 	PresenceInfo protocol.Optional[protocol.ServerConfigurationPresenceConfiguration]
 }
 
-// Marshal reads or writes ServerPresenceInfo using its canonical wire layout.
-func (x *ServerPresenceInfo) Marshal(io protocol.IO) {
-	protocol.OptionalMarshaler(io, &x.PresenceInfo)
-}
-
 // ID returns the protocol ID for ServerPresenceInfo.
 func (*ServerPresenceInfo) ID() uint32 { return IDServerPresenceInfo }
+
+// Marshal reads or writes ServerPresenceInfo using its canonical wire layout.
+func (pk *ServerPresenceInfo) Marshal(io protocol.IO) {
+	protocol.OptionalMarshaler(io, &pk.PresenceInfo)
+}

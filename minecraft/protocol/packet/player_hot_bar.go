@@ -1,19 +1,28 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
+// PlayerHotbar is sent by the server to the client. It used to be used to link hot bar slots of the player to
+// actual slots in the inventory, but as of 1.2, this was changed and hot bar slots are no longer a free
+// floating part of the inventory. Since 1.2, the packet has been re-purposed, but its new functionality is
+// not clear.
 type PlayerHotbar struct {
+	// SelectedHotBarSlot ...
 	SelectedHotBarSlot uint32
-	WindowID           uint8
-	SelectHotBarSlot   bool
-}
-
-// Marshal reads or writes PlayerHotbar using its canonical wire layout.
-func (x *PlayerHotbar) Marshal(io protocol.IO) {
-	io.Varuint32(&x.SelectedHotBarSlot)
-	io.Uint8(&x.WindowID)
-	io.Bool(&x.SelectHotBarSlot)
+	// WindowID ...
+	WindowID uint8
+	// SelectHotBarSlot ...
+	SelectHotBarSlot bool
 }
 
 // ID returns the protocol ID for PlayerHotbar.
 func (*PlayerHotbar) ID() uint32 { return IDPlayerHotbar }
+
+// Marshal reads or writes PlayerHotbar using its canonical wire layout.
+func (pk *PlayerHotbar) Marshal(io protocol.IO) {
+	io.Varuint32(&pk.SelectedHotBarSlot)
+	io.Uint8(&pk.WindowID)
+	io.Bool(&pk.SelectHotBarSlot)
+}

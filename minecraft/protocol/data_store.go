@@ -1,10 +1,15 @@
 package protocol
 
+// BedrockDDUIDataStoreChange represents a change to a data store property value.
 type BedrockDDUIDataStoreChange struct {
+	// DataStoreName is the name of the data store.
 	DataStoreName string
-	Property      string
-	UpdateCount   uint32
-	NewValue      DynamicValue
+	// Property is the property that changed.
+	Property string
+	// UpdateCount is the update count.
+	UpdateCount uint32
+	// NewValue is the new property value.
+	NewValue DynamicValue
 }
 
 func (*BedrockDDUIDataStoreChange) tagBedrockDDUI() uint32 { return 1 }

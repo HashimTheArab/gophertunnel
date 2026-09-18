@@ -39,23 +39,6 @@ func (x *InventoryMismatchData) Marshal(io IO) {
 	x.Actions.Marshal(io)
 }
 
-type InventoryOptions struct {
-	LeftInventoryTab  InventoryLeftTabIndex
-	RightInventoryTab InventoryRightTabIndex
-	Filtering         bool
-	LayoutInv         InventoryLayout
-	LayoutCraft       InventoryLayout
-}
-
-// Marshal reads or writes InventoryOptions using its canonical wire layout.
-func (x *InventoryOptions) Marshal(io IO) {
-	x.LeftInventoryTab.Marshal(io)
-	x.RightInventoryTab.Marshal(io)
-	io.Bool(&x.Filtering)
-	x.LayoutInv.Marshal(io)
-	x.LayoutCraft.Marshal(io)
-}
-
 type InventoryRightTabIndex int32
 
 // Marshal reads or writes InventoryRightTabIndex through its int32 wire encoding.

@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	ClientCameraAimAssistActionSet   protocol.ClientCameraAimAssistAction = 0
@@ -19,12 +21,12 @@ type ClientCameraAimAssist struct {
 	AllowAimAssist bool
 }
 
-// Marshal reads or writes ClientCameraAimAssist using its canonical wire layout.
-func (x *ClientCameraAimAssist) Marshal(io protocol.IO) {
-	io.String(&x.PresetID)
-	x.Action.Marshal(io)
-	io.Bool(&x.AllowAimAssist)
-}
-
 // ID returns the protocol ID for ClientCameraAimAssist.
 func (*ClientCameraAimAssist) ID() uint32 { return IDClientCameraAimAssist }
+
+// Marshal reads or writes ClientCameraAimAssist using its canonical wire layout.
+func (pk *ClientCameraAimAssist) Marshal(io protocol.IO) {
+	io.String(&pk.PresetID)
+	pk.Action.Marshal(io)
+	io.Bool(&pk.AllowAimAssist)
+}

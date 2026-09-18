@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // TrimData is sent by the server to the client when they first join the server. It contains a list of all the
 // patterns and materials that can be applied via armour trims.
@@ -13,11 +15,11 @@ type TrimData struct {
 	Materials []protocol.TrimMaterial
 }
 
-// Marshal reads or writes TrimData using its canonical wire layout.
-func (x *TrimData) Marshal(io protocol.IO) {
-	protocol.Slice(io, &x.Patterns)
-	protocol.Slice(io, &x.Materials)
-}
-
 // ID returns the protocol ID for TrimData.
 func (*TrimData) ID() uint32 { return IDTrimData }
+
+// Marshal reads or writes TrimData using its canonical wire layout.
+func (pk *TrimData) Marshal(io protocol.IO) {
+	protocol.Slice(io, &pk.Patterns)
+	protocol.Slice(io, &pk.Materials)
+}

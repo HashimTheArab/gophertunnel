@@ -1,11 +1,17 @@
 package protocol
 
+// BedrockProfileWhiskerDiagnosticsScopeDataSummary represents a whisker profiler scope diagnostic summary.
 type BedrockProfileWhiskerDiagnosticsScopeDataSummary struct {
-	Label           string
-	Indentation     string
+	// Label is the label of the whisker scope.
+	Label string
+	// Indentation is the indentation string of the whisker scope within the profiler hierarchy.
+	Indentation string
+	// TotalHighCostNS is the total time, in nanoseconds, spent in the high-cost portion of the scope.
 	TotalHighCostNS uint64
-	TotalMidCostNS  uint64
-	TotalLowCostNS  uint64
+	// TotalMidCostNS is the total time, in nanoseconds, spent in the mid-cost portion of the scope.
+	TotalMidCostNS uint64
+	// TotalLowCostNS is the total time, in nanoseconds, spent in the low-cost portion of the scope.
+	TotalLowCostNS uint64
 }
 
 // Marshal reads or writes BedrockProfileWhiskerDiagnosticsScopeDataSummary using its canonical wire layout.
@@ -17,6 +23,7 @@ func (x *BedrockProfileWhiskerDiagnosticsScopeDataSummary) Marshal(io IO) {
 	io.Uint64(&x.TotalLowCostNS)
 }
 
+// ECSProfilingDiagnosticsSystemCategory maps a diagnostics category name to a system index.
 type ECSProfilingDiagnosticsSystemCategory struct {
 	CategoryName string
 	SystemIndex  uint64
@@ -28,10 +35,15 @@ func (x *ECSProfilingDiagnosticsSystemCategory) Marshal(io IO) {
 	io.Uint64(&x.SystemIndex)
 }
 
+// ECSProfilingDiagnosticsSystemDiagnosticTimingInfo represents diagnostics for a specific system index.
 type ECSProfilingDiagnosticsSystemDiagnosticTimingInfo struct {
-	DisplayName    string
-	SystemIndex    uint64
-	DurationNanos  uint64
+	// DisplayName is the name to display for this timing entry.
+	DisplayName string
+	// SystemIndex is the index of the system that is being timed.
+	SystemIndex uint64
+	// DurationNanos is whole long the timing entry has lasted, in nanoseconds.
+	DurationNanos uint64
+	// PercentOfTotal is the percentage of time that this timing entry has used compared to others.
 	PercentOfTotal uint8
 }
 
@@ -166,7 +178,8 @@ func (x *MemoryCategory) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 type MemoryCategoryCounter struct {
 	// Category is the memory category. It is one of the MemoryCategory constants above.
 	Category MemoryCategory
-	Bytes    uint64
+	// Bytes is the number of bytes used by this category.
+	Bytes uint64
 }
 
 // Marshal reads or writes MemoryCategoryCounter using its canonical wire layout.

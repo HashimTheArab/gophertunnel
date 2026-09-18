@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 const (
 	AnimateActionNoAction         protocol.AnimateAction = 0
@@ -22,13 +24,13 @@ type Animate struct {
 	SwingSource protocol.Optional[string]
 }
 
-// Marshal reads or writes Animate using its canonical wire layout.
-func (x *Animate) Marshal(io protocol.IO) {
-	x.Action.Marshal(io)
-	io.ActorRuntimeID(&x.TargetActorRuntimeID)
-	io.Float32(&x.Data)
-	protocol.OptionalFunc(io, &x.SwingSource, io.String)
-}
-
 // ID returns the protocol ID for Animate.
 func (*Animate) ID() uint32 { return IDAnimate }
+
+// Marshal reads or writes Animate using its canonical wire layout.
+func (pk *Animate) Marshal(io protocol.IO) {
+	pk.Action.Marshal(io)
+	io.ActorRuntimeID(&pk.TargetActorRuntimeID)
+	io.Float32(&pk.Data)
+	protocol.OptionalFunc(io, &pk.SwingSource, io.String)
+}

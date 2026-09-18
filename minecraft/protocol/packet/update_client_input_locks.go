@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // UpdateClientInputLocks is sent by the server to the client to lock specific player inputs such as camera
 // rotation, movement, jumping, sneaking, mounting or individual directional movement.
@@ -11,10 +13,10 @@ type UpdateClientInputLocks struct {
 	Locks uint32
 }
 
-// Marshal reads or writes UpdateClientInputLocks using its canonical wire layout.
-func (x *UpdateClientInputLocks) Marshal(io protocol.IO) {
-	io.Varuint32(&x.Locks)
-}
-
 // ID returns the protocol ID for UpdateClientInputLocks.
 func (*UpdateClientInputLocks) ID() uint32 { return IDUpdateClientInputLocks }
+
+// Marshal reads or writes UpdateClientInputLocks using its canonical wire layout.
+func (pk *UpdateClientInputLocks) Marshal(io protocol.IO) {
+	io.Varuint32(&pk.Locks)
+}
