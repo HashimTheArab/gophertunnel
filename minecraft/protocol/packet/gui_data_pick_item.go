@@ -6,7 +6,7 @@ import (
 
 // GuiDataPickItem is sent by the server to make the client 'select' a hot bar slot. It currently appears to
 // be broken however, and does not actually set the selected slot to the hot bar slot set in the packet.
-type GuiDataPickItem struct {
+type GUIDataPickItem struct {
 	// ItemName is the name of the item that shows up in the top part of the popup that shows up when selecting an
 	// item. It is shown as if an item was selected by the player itself.
 	ItemName string
@@ -18,11 +18,11 @@ type GuiDataPickItem struct {
 }
 
 // ID ...
-func (*GuiDataPickItem) ID() uint32 {
-	return IDGuiDataPickItem
+func (*GUIDataPickItem) ID() uint32 {
+	return IDGUIDataPickItem
 }
 
-func (pk *GuiDataPickItem) Marshal(io protocol.IO) {
+func (pk *GUIDataPickItem) Marshal(io protocol.IO) {
 	io.String(&pk.ItemName)
 	io.String(&pk.ItemEffects)
 	io.Int32(&pk.HotBarSlot)

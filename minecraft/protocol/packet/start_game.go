@@ -49,7 +49,7 @@ type StartGame struct {
 	// generate the world. Servers should always fill out an empty string for this.
 	TemplateContentIdentity string
 	IsTrial                 bool
-	MovementSettings        protocol.SyncedPlayerMovementSettings
+	MovementSettings        protocol.PlayerMovementSettings
 	LevelCurrentTime        uint64
 	// EnchantmentSeed is the seed used to seed the random used to produce enchantments in the enchantment table.
 	// Note that the exact correct random implementation must be used to produce the correct results both client-

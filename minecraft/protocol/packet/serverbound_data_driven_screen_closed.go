@@ -5,7 +5,7 @@ import (
 )
 
 // ServerboundDataDrivenScreenClosed is sent by the client when a data-driven UI screen is closed.
-type ServerboundDataDrivenScreenClosed struct {
+type ServerBoundDataDrivenScreenClosed struct {
 	// FormID is the unique instance ID of the form that was closed.
 	FormID uint32
 	// CloseReason is the reason the screen was closed. It is one of the DataDrivenScreenCloseReason constants.
@@ -13,11 +13,11 @@ type ServerboundDataDrivenScreenClosed struct {
 }
 
 // ID ...
-func (*ServerboundDataDrivenScreenClosed) ID() uint32 {
-	return IDServerboundDataDrivenScreenClosed
+func (*ServerBoundDataDrivenScreenClosed) ID() uint32 {
+	return IDServerBoundDataDrivenScreenClosed
 }
 
-func (pk *ServerboundDataDrivenScreenClosed) Marshal(io protocol.IO) {
+func (pk *ServerBoundDataDrivenScreenClosed) Marshal(io protocol.IO) {
 	io.Uint32(&pk.FormID)
 	io.String(&pk.CloseReason)
 }

@@ -13,7 +13,7 @@ type CommandRequest struct {
 	CommandLine string
 	// Origin is the data specifying the origin of the command. In other words, the source that the command was
 	// from, such as the player itself or a websocket server.
-	CommandOrigin protocol.CommandOriginData
+	CommandOrigin protocol.CommandOrigin
 	// IsInternal specifies if the command request internal. Setting it to false seems to work and the usage of
 	// this field is not known.
 	Internal bool

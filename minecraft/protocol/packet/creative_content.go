@@ -25,7 +25,7 @@ import (
 // "planks" } }
 type CreativeContent struct {
 	// Groups is a list of the groups that should be added to the creative inventory.
-	Groups []protocol.CreativeGroupInfo
+	Groups []protocol.CreativeGroup
 	// Entries is a list of the items that should be added to the creative inventory.
 	Items []protocol.CreativeItemEntry
 }

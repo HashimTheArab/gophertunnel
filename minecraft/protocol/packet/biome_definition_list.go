@@ -8,7 +8,7 @@ import (
 // implemented on the server side. When enabled, it also includes information for the client to accurately
 // recreate the server-side generation in vanilla worlds/servers for increased performance.
 type BiomeDefinitionList struct {
-	MapOfBiomeNamesToData []protocol.OrderedEntry[uint16, protocol.BiomeDefinitionData]
+	MapOfBiomeNamesToData []protocol.OrderedEntry[uint16, protocol.BiomeDefinition]
 	// StringList is a makeshift dictionary implementation Mojang created to try and reduce the size of the
 	// overall packet. It is a list of common strings that are used in the biome definitions, such as biome names,
 	// float values or query expressions.
@@ -21,7 +21,7 @@ func (*BiomeDefinitionList) ID() uint32 {
 }
 
 func (pk *BiomeDefinitionList) Marshal(io protocol.IO) {
-	protocol.OrderedMap(io, &pk.MapOfBiomeNamesToData, io.Varuint32, io.Uint16, func(value *protocol.BiomeDefinitionData) {
+	protocol.OrderedMap(io, &pk.MapOfBiomeNamesToData, io.Varuint32, io.Uint16, func(value *protocol.BiomeDefinition) {
 		value.Marshal(io)
 	})
 	pk.StringList.Marshal(io)

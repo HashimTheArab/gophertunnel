@@ -1,7 +1,7 @@
 package protocol
 
 // BiomeCappedSurface specifies the materials to use for the capped surface of a biome, such as in the Nether.
-type BiomeCappedSurfaceData struct {
+type BiomeCappedSurface struct {
 	// FloorBlocks is a list of runtime IDs to use for the floor blocks.
 	FloorBlocks []uint32
 	// CeilingBlocks is a list of runtime IDs to use for the ceiling blocks.
@@ -14,8 +14,8 @@ type BiomeCappedSurfaceData struct {
 	BeachBlock Optional[uint32]
 }
 
-// Marshal reads or writes BiomeCappedSurfaceData using its canonical wire layout.
-func (x *BiomeCappedSurfaceData) Marshal(io IO) {
+// Marshal reads or writes BiomeCappedSurface using its canonical wire layout.
+func (x *BiomeCappedSurface) Marshal(io IO) {
 	FuncSlice(io, &x.FloorBlocks, io.Varuint32, io.Uint32)
 	FuncSlice(io, &x.CeilingBlocks, io.Varuint32, io.Uint32)
 	OptionalFunc(io, &x.SeaBlock, io.Uint32)
@@ -24,7 +24,7 @@ func (x *BiomeCappedSurfaceData) Marshal(io IO) {
 }
 
 // BiomeClimate represents the climate of a biome, mainly for ambience but also defines certain behaviours.
-type BiomeClimateData struct {
+type BiomeClimate struct {
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
 	Temperature float32
 	// Downfall is the amount that precipitation affects colours and block changes.
@@ -37,8 +37,8 @@ type BiomeClimateData struct {
 	SnowAccumulationMax float32
 }
 
-// Marshal reads or writes BiomeClimateData using its canonical wire layout.
-func (x *BiomeClimateData) Marshal(io IO) {
+// Marshal reads or writes BiomeClimate using its canonical wire layout.
+func (x *BiomeClimate) Marshal(io IO) {
 	io.Float32(&x.Temperature)
 	io.Float32(&x.Downfall)
 	io.Float32(&x.SnowAccumulationMin)
@@ -46,7 +46,7 @@ func (x *BiomeClimateData) Marshal(io IO) {
 }
 
 // BiomeConditionalTransformation is the legacy method of transforming biomes.
-type BiomeConditionalTransformationData struct {
+type BiomeConditionalTransformation struct {
 	// WeightedBiomes is a list of biomes and their weights.
 	WeightedBiomes []BiomeWeightedData
 	// ConditionJSON is an index of the condition JSON data in the string list.
@@ -56,17 +56,17 @@ type BiomeConditionalTransformationData struct {
 	MinPassingNeighbours uint32
 }
 
-// Marshal reads or writes BiomeConditionalTransformationData using its canonical wire layout.
-func (x *BiomeConditionalTransformationData) Marshal(io IO) {
+// Marshal reads or writes BiomeConditionalTransformation using its canonical wire layout.
+func (x *BiomeConditionalTransformation) Marshal(io IO) {
 	Slice(io, &x.WeightedBiomes)
 	io.Uint16(&x.ConditionJSON)
 	io.Uint32(&x.MinPassingNeighbours)
 }
 
 // BiomeConsolidatedFeature represents a feature that is consolidated into a single feature for the biome.
-type BiomeConsolidatedFeatureData struct {
+type BiomeConsolidatedFeature struct {
 	// Scatter defines how the feature is scattered in the biome.
-	Scatter BiomeScatterParamData
+	Scatter BiomeScatterParameter
 	// Feature is the index of the feature's name in the string list.
 	Feature uint16
 	// Identifier is the index of the feature's identifier in the string list.
@@ -77,8 +77,8 @@ type BiomeConsolidatedFeatureData struct {
 	CanUseInternal bool
 }
 
-// Marshal reads or writes BiomeConsolidatedFeatureData using its canonical wire layout.
-func (x *BiomeConsolidatedFeatureData) Marshal(io IO) {
+// Marshal reads or writes BiomeConsolidatedFeature using its canonical wire layout.
+func (x *BiomeConsolidatedFeature) Marshal(io IO) {
 	x.Scatter.Marshal(io)
 	io.Uint16(&x.Feature)
 	io.Uint16(&x.Identifier)
@@ -87,7 +87,7 @@ func (x *BiomeConsolidatedFeatureData) Marshal(io IO) {
 }
 
 type BiomeConsolidatedFeaturesData struct {
-	Features []BiomeConsolidatedFeatureData
+	Features []BiomeConsolidatedFeature
 }
 
 // Marshal reads or writes BiomeConsolidatedFeaturesData using its canonical wire layout.
@@ -96,7 +96,7 @@ func (x *BiomeConsolidatedFeaturesData) Marshal(io IO) {
 }
 
 // BiomeCoordinate specifies coordinate rules for where features can be scattered in the biome.
-type BiomeCoordinateData struct {
+type BiomeCoordinate struct {
 	// MinValueType is the type of expression operation to use for the minimum value, and is one of the
 	// BiomeExpressionOp constants above.
 	MinValueType int32
@@ -115,8 +115,8 @@ type BiomeCoordinateData struct {
 	Distribution RandomDistributionType
 }
 
-// Marshal reads or writes BiomeCoordinateData using its canonical wire layout.
-func (x *BiomeCoordinateData) Marshal(io IO) {
+// Marshal reads or writes BiomeCoordinate using its canonical wire layout.
+func (x *BiomeCoordinate) Marshal(io IO) {
 	io.Varint32(&x.MinValueType)
 	io.Uint16(&x.MinValue)
 	io.Varint32(&x.MaxValueType)
@@ -126,38 +126,9 @@ func (x *BiomeCoordinateData) Marshal(io IO) {
 	x.Distribution.Marshal(io)
 }
 
-type BiomeDefinitionChunkGenData struct {
-	Climate                    Optional[BiomeClimateData]
-	ConsolidatedFeatures       Optional[BiomeConsolidatedFeaturesData]
-	MountainParams             Optional[BiomeMountainParamsData]
-	SurfaceMaterialAdjustments Optional[BiomeSurfaceMaterialAdjustmentData]
-	OverworldGenRules          Optional[BiomeOverworldGenRulesData]
-	MultinoiseGenRules         Optional[BiomeMultinoiseGenRulesData]
-	LegacyWorldGenRules        Optional[BiomeLegacyWorldGenRulesData]
-	ReplacementBiomes          Optional[BiomeReplacementsData]
-	VillageType                Optional[VillageType]
-	SurfaceBuilderData         Optional[BiomeSurfaceBuilderData]
-	SubsurfaceBuilderData      Optional[BiomeSurfaceBuilderData]
-}
-
-// Marshal reads or writes BiomeDefinitionChunkGenData using its canonical wire layout.
-func (x *BiomeDefinitionChunkGenData) Marshal(io IO) {
-	OptionalMarshaler(io, &x.Climate)
-	OptionalMarshaler(io, &x.ConsolidatedFeatures)
-	OptionalMarshaler(io, &x.MountainParams)
-	OptionalMarshaler(io, &x.SurfaceMaterialAdjustments)
-	OptionalMarshaler(io, &x.OverworldGenRules)
-	OptionalMarshaler(io, &x.MultinoiseGenRules)
-	OptionalMarshaler(io, &x.LegacyWorldGenRules)
-	OptionalMarshaler(io, &x.ReplacementBiomes)
-	OptionalMarshaler(io, &x.VillageType)
-	OptionalMarshaler(io, &x.SurfaceBuilderData)
-	OptionalMarshaler(io, &x.SubsurfaceBuilderData)
-}
-
 // BiomeDefinition represents a biome definition in the game. This can be a vanilla biome or a completely
 // custom biome.
-type BiomeDefinitionData struct {
+type BiomeDefinition struct {
 	ID uint16
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
 	Temperature float32
@@ -178,8 +149,8 @@ type BiomeDefinitionData struct {
 	ChunkGenData Optional[BiomeDefinitionChunkGenData]
 }
 
-// Marshal reads or writes BiomeDefinitionData using its canonical wire layout.
-func (x *BiomeDefinitionData) Marshal(io IO) {
+// Marshal reads or writes BiomeDefinition using its canonical wire layout.
+func (x *BiomeDefinition) Marshal(io IO) {
 	io.Uint16(&x.ID)
 	io.Float32(&x.Temperature)
 	io.Float32(&x.Downfall)
@@ -190,6 +161,35 @@ func (x *BiomeDefinitionData) Marshal(io IO) {
 	io.Bool(&x.Rain)
 	OptionalMarshaler(io, &x.Tags)
 	OptionalMarshaler(io, &x.ChunkGenData)
+}
+
+type BiomeDefinitionChunkGenData struct {
+	Climate                    Optional[BiomeClimate]
+	ConsolidatedFeatures       Optional[BiomeConsolidatedFeaturesData]
+	MountainParams             Optional[BiomeMountainParameters]
+	SurfaceMaterialAdjustments Optional[BiomeSurfaceMaterialAdjustmentData]
+	OverworldGenRules          Optional[BiomeOverworldGenRulesData]
+	MultinoiseGenRules         Optional[BiomeMultiNoiseRules]
+	LegacyWorldGenRules        Optional[BiomeLegacyWorldGenRulesData]
+	ReplacementBiomes          Optional[BiomeReplacementsData]
+	VillageType                Optional[VillageType]
+	SurfaceBuilderData         Optional[BiomeSurfaceBuilder]
+	SubsurfaceBuilderData      Optional[BiomeSurfaceBuilder]
+}
+
+// Marshal reads or writes BiomeDefinitionChunkGenData using its canonical wire layout.
+func (x *BiomeDefinitionChunkGenData) Marshal(io IO) {
+	OptionalMarshaler(io, &x.Climate)
+	OptionalMarshaler(io, &x.ConsolidatedFeatures)
+	OptionalMarshaler(io, &x.MountainParams)
+	OptionalMarshaler(io, &x.SurfaceMaterialAdjustments)
+	OptionalMarshaler(io, &x.OverworldGenRules)
+	OptionalMarshaler(io, &x.MultinoiseGenRules)
+	OptionalMarshaler(io, &x.LegacyWorldGenRules)
+	OptionalMarshaler(io, &x.ReplacementBiomes)
+	OptionalMarshaler(io, &x.VillageType)
+	OptionalMarshaler(io, &x.SurfaceBuilderData)
+	OptionalMarshaler(io, &x.SubsurfaceBuilderData)
 }
 
 // BiomeElementData are set rules to adjust the surface materials of the biome.
@@ -211,7 +211,7 @@ type BiomeElementData struct {
 	// HeightMax is the index of the maximum height expression in the string list.
 	HeightMax uint16
 	// AdjustedMaterials is the materials to use for the surface layers of the biome if selected.
-	AdjustedMaterials BiomeSurfaceMaterialData
+	AdjustedMaterials BiomeSurfaceMaterial
 }
 
 // Marshal reads or writes BiomeElementData using its canonical wire layout.
@@ -227,7 +227,7 @@ func (x *BiomeElementData) Marshal(io IO) {
 }
 
 type BiomeLegacyWorldGenRulesData struct {
-	LegacyPreHillsEdge []BiomeConditionalTransformationData
+	LegacyPreHillsEdge []BiomeConditionalTransformation
 }
 
 // Marshal reads or writes BiomeLegacyWorldGenRulesData using its canonical wire layout.
@@ -236,7 +236,7 @@ func (x *BiomeLegacyWorldGenRulesData) Marshal(io IO) {
 }
 
 // BiomeMesaSurface specifies the materials to use for the mesa biome.
-type BiomeMesaSurfaceData struct {
+type BiomeMesaSurface struct {
 	// ClayMaterial is the runtime ID of the block to use for clay layers.
 	ClayMaterial uint32
 	// HardClayMaterial is the runtime ID of the block to use for hard clay layers.
@@ -247,8 +247,8 @@ type BiomeMesaSurfaceData struct {
 	HasForest bool
 }
 
-// Marshal reads or writes BiomeMesaSurfaceData using its canonical wire layout.
-func (x *BiomeMesaSurfaceData) Marshal(io IO) {
+// Marshal reads or writes BiomeMesaSurface using its canonical wire layout.
+func (x *BiomeMesaSurface) Marshal(io IO) {
 	io.Uint32(&x.ClayMaterial)
 	io.Uint32(&x.HardClayMaterial)
 	io.Bool(&x.BrycePillars)
@@ -256,7 +256,7 @@ func (x *BiomeMesaSurfaceData) Marshal(io IO) {
 }
 
 // BiomeMountainParamsData specifies the parameters for a mountain biome.
-type BiomeMountainParamsData struct {
+type BiomeMountainParameters struct {
 	// SteepBlock is the runtime ID of the block to use for steep slopes.
 	SteepBlock uint32
 	// NorthSlopes is true if the biome has north slopes.
@@ -271,8 +271,8 @@ type BiomeMountainParamsData struct {
 	TopSlideEnabled bool
 }
 
-// Marshal reads or writes BiomeMountainParamsData using its canonical wire layout.
-func (x *BiomeMountainParamsData) Marshal(io IO) {
+// Marshal reads or writes BiomeMountainParameters using its canonical wire layout.
+func (x *BiomeMountainParameters) Marshal(io IO) {
 	io.Uint32(&x.SteepBlock)
 	io.Bool(&x.NorthSlopes)
 	io.Bool(&x.SouthSlopes)
@@ -283,7 +283,7 @@ func (x *BiomeMountainParamsData) Marshal(io IO) {
 
 // BiomeMultinoiseGenRulesData specifies the rules for multi-noise biomes, which are biomes that are defined
 // by multiple noise parameters instead of just temperature and humidity.
-type BiomeMultinoiseGenRulesData struct {
+type BiomeMultiNoiseRules struct {
 	// Temperature is the temperature level of the biome.
 	Temperature float32
 	// Humidity is the humidity level of the biome.
@@ -296,8 +296,8 @@ type BiomeMultinoiseGenRulesData struct {
 	Weight float32
 }
 
-// Marshal reads or writes BiomeMultinoiseGenRulesData using its canonical wire layout.
-func (x *BiomeMultinoiseGenRulesData) Marshal(io IO) {
+// Marshal reads or writes BiomeMultiNoiseRules using its canonical wire layout.
+func (x *BiomeMultiNoiseRules) Marshal(io IO) {
 	io.Float32(&x.Temperature)
 	io.Float32(&x.Humidity)
 	io.Float32(&x.Altitude)
@@ -306,17 +306,17 @@ func (x *BiomeMultinoiseGenRulesData) Marshal(io IO) {
 }
 
 // BiomeNoiseGradientSurface specifies noise-gradient surface block data for a biome.
-type BiomeNoiseGradientSurfaceData struct {
+type BiomeNoiseGradientSurface struct {
 	// NonReplaceableBlocks is a list of block runtime IDs that may not be replaced.
 	NonReplaceableBlocks []uint32
 	// GradientBlocks is a list of noise block specifiers used by the gradient.
-	GradientBlocks []SerializedNoiseBlockSpecifier
+	GradientBlocks []NoiseBlockSpecifier
 	// Noise is the noise descriptor used by the gradient.
 	Noise NoiseDescriptor
 }
 
-// Marshal reads or writes BiomeNoiseGradientSurfaceData using its canonical wire layout.
-func (x *BiomeNoiseGradientSurfaceData) Marshal(io IO) {
+// Marshal reads or writes BiomeNoiseGradientSurface using its canonical wire layout.
+func (x *BiomeNoiseGradientSurface) Marshal(io IO) {
 	FuncSlice(io, &x.NonReplaceableBlocks, io.Varuint32, io.Uint32)
 	Slice(io, &x.GradientBlocks)
 	x.Noise.Marshal(io)
@@ -327,9 +327,9 @@ type BiomeOverworldGenRulesData struct {
 	MutateTransformations []BiomeWeightedData
 	RiverTransformations  []BiomeWeightedData
 	ShoreTransformations  []BiomeWeightedData
-	PreHillsEdge          []BiomeConditionalTransformationData
-	PostShoreEdge         []BiomeConditionalTransformationData
-	Climate               []BiomeWeightedTemperatureData
+	PreHillsEdge          []BiomeConditionalTransformation
+	PostShoreEdge         []BiomeConditionalTransformation
+	Climate               []BiomeTemperatureWeight
 }
 
 // Marshal reads or writes BiomeOverworldGenRulesData using its canonical wire layout.
@@ -378,9 +378,9 @@ func (x *BiomeReplacementsData) Marshal(io IO) {
 	Slice(io, &x.BiomeReplacements)
 }
 
-type BiomeScatterParamData struct {
+type BiomeScatterParameter struct {
 	// Coordinates is a list of coordinate rules to scatter the feature within.
-	Coordinates []BiomeCoordinateData
+	Coordinates []BiomeCoordinate
 	// EvaluationOrder is the order in which the coordinates are evaluated, and is one of the
 	// CoordinateEvaluationOrder constants above.
 	EvaluationOrder CoordinateEvaluationOrder
@@ -400,8 +400,8 @@ type BiomeScatterParamData struct {
 	Iterations uint16
 }
 
-// Marshal reads or writes BiomeScatterParamData using its canonical wire layout.
-func (x *BiomeScatterParamData) Marshal(io IO) {
+// Marshal reads or writes BiomeScatterParameter using its canonical wire layout.
+func (x *BiomeScatterParameter) Marshal(io IO) {
 	Slice(io, &x.Coordinates)
 	x.EvaluationOrder.Marshal(io)
 	io.Varint32(&x.ChancePercentType)
@@ -422,9 +422,9 @@ func (x *BiomeStringList) Marshal(io IO) {
 }
 
 // BiomeSurfaceBuilder specifies the materials and special surface rules to use for a biome surface.
-type BiomeSurfaceBuilderData struct {
+type BiomeSurfaceBuilder struct {
 	// SurfaceMaterials is a set of materials to use for the surface layers of the biome.
-	SurfaceMaterials Optional[BiomeSurfaceMaterialData]
+	SurfaceMaterials Optional[BiomeSurfaceMaterial]
 	// HasDefaultOverworldSurface is true if the biome has a default overworld surface.
 	HasDefaultOverworldSurface bool
 	// HasSwampSurface is true if the biome has a swamp surface.
@@ -434,15 +434,15 @@ type BiomeSurfaceBuilderData struct {
 	// HasTheEndSurface is true if the biome has an end surface.
 	HasEndSurface bool
 	// MesaSurface is optional information to specify the biome's mesa surface.
-	MesaSurface Optional[BiomeMesaSurfaceData]
+	MesaSurface Optional[BiomeMesaSurface]
 	// CappedSurface is optional information to specify the biome's capped surface, i.e. in the Nether.
-	CappedSurface Optional[BiomeCappedSurfaceData]
+	CappedSurface Optional[BiomeCappedSurface]
 	// NoiseGradientSurface is optional information to specify noise-gradient surface data.
-	NoiseGradientSurface Optional[BiomeNoiseGradientSurfaceData]
+	NoiseGradientSurface Optional[BiomeNoiseGradientSurface]
 }
 
-// Marshal reads or writes BiomeSurfaceBuilderData using its canonical wire layout.
-func (x *BiomeSurfaceBuilderData) Marshal(io IO) {
+// Marshal reads or writes BiomeSurfaceBuilder using its canonical wire layout.
+func (x *BiomeSurfaceBuilder) Marshal(io IO) {
 	OptionalMarshaler(io, &x.SurfaceMaterials)
 	io.Bool(&x.HasDefaultOverworldSurface)
 	io.Bool(&x.HasSwampSurface)
@@ -453,17 +453,8 @@ func (x *BiomeSurfaceBuilderData) Marshal(io IO) {
 	OptionalMarshaler(io, &x.NoiseGradientSurface)
 }
 
-type BiomeSurfaceMaterialAdjustmentData struct {
-	Adjustments []BiomeElementData
-}
-
-// Marshal reads or writes BiomeSurfaceMaterialAdjustmentData using its canonical wire layout.
-func (x *BiomeSurfaceMaterialAdjustmentData) Marshal(io IO) {
-	Slice(io, &x.Adjustments)
-}
-
 // BiomeSurfaceMaterial specifies the materials to use for the surface layers of the biome.
-type BiomeSurfaceMaterialData struct {
+type BiomeSurfaceMaterial struct {
 	// TopBlock is the runtime ID of the block to use for the top layer.
 	TopBlock uint32
 	// MidBlock is the runtime ID to use for the middle layers.
@@ -478,14 +469,23 @@ type BiomeSurfaceMaterialData struct {
 	SeaFloorDepth int32
 }
 
-// Marshal reads or writes BiomeSurfaceMaterialData using its canonical wire layout.
-func (x *BiomeSurfaceMaterialData) Marshal(io IO) {
+// Marshal reads or writes BiomeSurfaceMaterial using its canonical wire layout.
+func (x *BiomeSurfaceMaterial) Marshal(io IO) {
 	io.Uint32(&x.TopBlock)
 	io.Uint32(&x.MidBlock)
 	io.Uint32(&x.SeaFloorBlock)
 	io.Uint32(&x.FoundationBlock)
 	io.Uint32(&x.SeaBlock)
 	io.Int32(&x.SeaFloorDepth)
+}
+
+type BiomeSurfaceMaterialAdjustmentData struct {
+	Adjustments []BiomeElementData
+}
+
+// Marshal reads or writes BiomeSurfaceMaterialAdjustmentData using its canonical wire layout.
+func (x *BiomeSurfaceMaterialAdjustmentData) Marshal(io IO) {
+	Slice(io, &x.Adjustments)
 }
 
 type BiomeTagsData struct {
@@ -497,6 +497,20 @@ func (x *BiomeTagsData) Marshal(io IO) {
 	FuncSlice(io, &x.Tags, io.Varuint32, io.Uint16)
 }
 
+// BiomeWeightedTemperatureData defines the weight for a temperature, used for weighted randomness.
+type BiomeTemperatureWeight struct {
+	// Temperature is the temperature that can be selected.
+	Temperature int32
+	// Weight is the weight of the temperature, with a higher weight being more likely to be selected.
+	Weight uint32
+}
+
+// Marshal reads or writes BiomeTemperatureWeight using its canonical wire layout.
+func (x *BiomeTemperatureWeight) Marshal(io IO) {
+	io.Varint32(&x.Temperature)
+	io.Uint32(&x.Weight)
+}
+
 type BiomeWeightedData struct {
 	BiomeIdentifier uint16
 	Weight          uint32
@@ -505,20 +519,6 @@ type BiomeWeightedData struct {
 // Marshal reads or writes BiomeWeightedData using its canonical wire layout.
 func (x *BiomeWeightedData) Marshal(io IO) {
 	io.Uint16(&x.BiomeIdentifier)
-	io.Uint32(&x.Weight)
-}
-
-// BiomeWeightedTemperatureData defines the weight for a temperature, used for weighted randomness.
-type BiomeWeightedTemperatureData struct {
-	// Temperature is the temperature that can be selected.
-	Temperature int32
-	// Weight is the weight of the temperature, with a higher weight being more likely to be selected.
-	Weight uint32
-}
-
-// Marshal reads or writes BiomeWeightedTemperatureData using its canonical wire layout.
-func (x *BiomeWeightedTemperatureData) Marshal(io IO) {
-	io.Varint32(&x.Temperature)
 	io.Uint32(&x.Weight)
 }
 
@@ -547,6 +547,27 @@ const (
 
 // Marshal reads or writes Mirror through its uint8 wire encoding.
 func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+// SerializedNoiseBlockSpecifier specifies a block placed by the gradient noise based on a threshold and
+// range.
+type NoiseBlockSpecifier struct {
+	// Noise is the noise name.
+	Noise string
+	// Threshold is the noise threshold above which the block is placed.
+	Threshold float32
+	// Range is the noise range within which the block is placed.
+	Range FloatRange
+	// Block is the block runtime ID placed by this specifier.
+	Block uint32
+}
+
+// Marshal reads or writes NoiseBlockSpecifier using its canonical wire layout.
+func (x *NoiseBlockSpecifier) Marshal(io IO) {
+	io.String(&x.Noise)
+	io.Float32(&x.Threshold)
+	x.Range.Marshal(io)
+	io.Uint32(&x.Block)
+}
 
 // NoiseDescriptor describes the gradient noise used by a BiomeNoiseGradientSurface.
 type NoiseDescriptor struct {
@@ -589,24 +610,3 @@ const (
 
 // Marshal reads or writes RandomDistributionType through its int32 wire encoding.
 func (x *RandomDistributionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
-
-// SerializedNoiseBlockSpecifier specifies a block placed by the gradient noise based on a threshold and
-// range.
-type SerializedNoiseBlockSpecifier struct {
-	// Noise is the noise name.
-	Noise string
-	// Threshold is the noise threshold above which the block is placed.
-	Threshold float32
-	// Range is the noise range within which the block is placed.
-	Range FloatRange
-	// Block is the block runtime ID placed by this specifier.
-	Block uint32
-}
-
-// Marshal reads or writes SerializedNoiseBlockSpecifier using its canonical wire layout.
-func (x *SerializedNoiseBlockSpecifier) Marshal(io IO) {
-	io.String(&x.Noise)
-	io.Float32(&x.Threshold)
-	x.Range.Marshal(io)
-	io.Uint32(&x.Block)
-}

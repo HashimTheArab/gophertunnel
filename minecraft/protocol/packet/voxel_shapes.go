@@ -7,7 +7,7 @@ import (
 // VoxelShapes is sent by the server to send voxel shape data to the client.
 type VoxelShapes struct {
 	// Shapes is a list of voxel shapes.
-	Shapes []protocol.VoxelShapesSerializableVoxelShape
+	Shapes []protocol.VoxelShape
 	// NameMap is a map of shape names to IDs.
 	NameMap []protocol.OrderedEntry[string, protocol.VoxelShapesRegistryHandle]
 	// CustomShapeCount is the number of custom shapes.

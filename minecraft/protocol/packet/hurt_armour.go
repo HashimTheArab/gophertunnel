@@ -7,7 +7,7 @@ import (
 // HurtArmor is sent by the server to damage the player's armour after being hit. The packet should never be
 // used by servers as it hands the responsibility over to the player completely, while the server can easily
 // reliably update the armour damage of players itself.
-type HurtArmor struct {
+type HurtArmour struct {
 	// Cause is the cause of the damage dealt to the armour.
 	Cause int32
 	// Damage is the amount of damage points that was dealt to the player. The damage to the armour will be
@@ -19,11 +19,11 @@ type HurtArmor struct {
 }
 
 // ID ...
-func (*HurtArmor) ID() uint32 {
-	return IDHurtArmor
+func (*HurtArmour) ID() uint32 {
+	return IDHurtArmour
 }
 
-func (pk *HurtArmor) Marshal(io protocol.IO) {
+func (pk *HurtArmour) Marshal(io protocol.IO) {
 	io.Varint32(&pk.Cause)
 	io.Varint32(&pk.Damage)
 	io.Varuint64(&pk.ArmourSlots)

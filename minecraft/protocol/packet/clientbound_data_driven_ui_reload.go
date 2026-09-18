@@ -5,13 +5,13 @@ import (
 )
 
 // ClientboundDataDrivenUIReload is sent by the server to reload the data-driven UI on the client.
-type ClientboundDataDrivenUIReload struct {
+type ClientBoundDataDrivenUIReload struct {
 }
 
 // ID ...
-func (*ClientboundDataDrivenUIReload) ID() uint32 {
-	return IDClientboundDataDrivenUIReload
+func (*ClientBoundDataDrivenUIReload) ID() uint32 {
+	return IDClientBoundDataDrivenUIReload
 }
 
-func (pk *ClientboundDataDrivenUIReload) Marshal(io protocol.IO) {
+func (pk *ClientBoundDataDrivenUIReload) Marshal(io protocol.IO) {
 }

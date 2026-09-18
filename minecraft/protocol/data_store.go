@@ -1,7 +1,7 @@
 package protocol
 
 // BedrockDDUIDataStoreChange represents a change to a data store property value.
-type BedrockDDUIDataStoreChange struct {
+type DataStoreChange struct {
 	// DataStoreName is the name of the data store.
 	DataStoreName string
 	// Property is the property that changed.
@@ -12,10 +12,10 @@ type BedrockDDUIDataStoreChange struct {
 	NewValue DynamicValue
 }
 
-func (*BedrockDDUIDataStoreChange) tagBedrockDDUI() uint32 { return 1 }
+func (*DataStoreChange) tagBedrockDDUI() uint32 { return 1 }
 
-// Marshal reads or writes BedrockDDUIDataStoreChange using its canonical wire layout.
-func (x *BedrockDDUIDataStoreChange) Marshal(io IO) {
+// Marshal reads or writes DataStoreChange using its canonical wire layout.
+func (x *DataStoreChange) Marshal(io IO) {
 	io.StringLimits(&x.DataStoreName, 1, 1000)
 	io.StringLimits(&x.Property, 1, 1000)
 	io.Uint32(&x.UpdateCount)

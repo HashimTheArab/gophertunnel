@@ -8,7 +8,7 @@ import (
 // ShowStoreOffer packet, this only has an effect on partnered servers.
 type ServerStoreInfo struct {
 	// ClientStoreEntryPointConfiguration is the store info to set, or nothing to fall back to the default.
-	StoreInfo protocol.Optional[protocol.ServerConfigurationClientStoreEntryPointConfiguration]
+	StoreInfo protocol.Optional[protocol.StoreEntryPointInfo]
 }
 
 // ID ...

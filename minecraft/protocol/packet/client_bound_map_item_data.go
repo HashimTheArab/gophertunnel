@@ -8,7 +8,7 @@ import (
 // It is sent with a combination of flags that specify what data is updated. The ClientBoundMapItemData packet
 // may be used to update specific parts of the map only. It is not required to send the entire map each time
 // when updating one part.
-type ClientboundMapItemData struct {
+type ClientBoundMapItemData struct {
 	// MapID is the unique identifier that represents the map that is updated over network. It remains consistent
 	// across sessions.
 	MapID int64
@@ -20,7 +20,7 @@ type ClientboundMapItemData struct {
 	CreationMapIDs protocol.Optional[[]int64]
 	// Scale is the scale of the map as it is shown in-game.
 	Scale            protocol.Optional[int8]
-	TrackedEntityIDs protocol.Optional[[]protocol.MapItemTrackedActorUniqueID]
+	TrackedEntityIDs protocol.Optional[[]protocol.MapTrackedObject]
 	// Decorations is a list of fixed decorations located on the map. The decorations will not change client-side,
 	// unless the server updates them.
 	Decorations protocol.Optional[[]protocol.MapDecoration]
@@ -37,11 +37,11 @@ type ClientboundMapItemData struct {
 }
 
 // ID ...
-func (*ClientboundMapItemData) ID() uint32 {
-	return IDClientboundMapItemData
+func (*ClientBoundMapItemData) ID() uint32 {
+	return IDClientBoundMapItemData
 }
 
-func (pk *ClientboundMapItemData) Marshal(io protocol.IO) {
+func (pk *ClientBoundMapItemData) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.MapID)
 	io.Uint8(&pk.Dimension)
 	io.Bool(&pk.IsLocked)
@@ -50,7 +50,7 @@ func (pk *ClientboundMapItemData) Marshal(io protocol.IO) {
 		protocol.FuncSliceLimits(io, value, io.Varuint32, 0, 65535, io.ActorUniqueID)
 	})
 	protocol.OptionalFunc(io, &pk.Scale, io.Int8)
-	protocol.OptionalFunc(io, &pk.TrackedEntityIDs, func(value *[]protocol.MapItemTrackedActorUniqueID) {
+	protocol.OptionalFunc(io, &pk.TrackedEntityIDs, func(value *[]protocol.MapTrackedObject) {
 		protocol.SliceLimits(io, value, 0, 65535)
 	})
 	protocol.OptionalFunc(io, &pk.Decorations, func(value *[]protocol.MapDecoration) {

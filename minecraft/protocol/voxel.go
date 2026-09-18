@@ -1,16 +1,7 @@
 package protocol
 
-type VoxelShapesRegistryHandle struct {
-	Value uint16
-}
-
-// Marshal reads or writes VoxelShapesRegistryHandle using its canonical wire layout.
-func (x *VoxelShapesRegistryHandle) Marshal(io IO) {
-	io.Uint16(&x.Value)
-}
-
 // VoxelShapesSerializableCells represents a 3D grid of voxel cell data.
-type VoxelShapesSerializableCells struct {
+type VoxelCells struct {
 	// XSize is the size of the grid along the X axis.
 	XSize uint8
 	// YSize is the size of the grid along the Y axis.
@@ -21,8 +12,8 @@ type VoxelShapesSerializableCells struct {
 	Storage []uint8
 }
 
-// Marshal reads or writes VoxelShapesSerializableCells using its canonical wire layout.
-func (x *VoxelShapesSerializableCells) Marshal(io IO) {
+// Marshal reads or writes VoxelCells using its canonical wire layout.
+func (x *VoxelCells) Marshal(io IO) {
 	io.Uint8(&x.XSize)
 	Maximum(io, &x.XSize, 127)
 	io.Uint8(&x.YSize)
@@ -33,9 +24,9 @@ func (x *VoxelShapesSerializableCells) Marshal(io IO) {
 }
 
 // VoxelShapesSerializableVoxelShape represents a voxel shape with cells and coordinate axes.
-type VoxelShapesSerializableVoxelShape struct {
+type VoxelShape struct {
 	// Cells is the grid of cells representing solid and empty regions.
-	Cells VoxelShapesSerializableCells
+	Cells VoxelCells
 	// XCoordinates is a list of X axis coordinates for the shape.
 	XCoordinates []float32
 	// YCoordinates is a list of Y axis coordinates for the shape.
@@ -44,10 +35,19 @@ type VoxelShapesSerializableVoxelShape struct {
 	ZCoordinates []float32
 }
 
-// Marshal reads or writes VoxelShapesSerializableVoxelShape using its canonical wire layout.
-func (x *VoxelShapesSerializableVoxelShape) Marshal(io IO) {
+// Marshal reads or writes VoxelShape using its canonical wire layout.
+func (x *VoxelShape) Marshal(io IO) {
 	x.Cells.Marshal(io)
 	FuncSliceLimits(io, &x.XCoordinates, io.Varuint32, 1, 128, io.Float32)
 	FuncSliceLimits(io, &x.YCoordinates, io.Varuint32, 1, 128, io.Float32)
 	FuncSliceLimits(io, &x.ZCoordinates, io.Varuint32, 1, 128, io.Float32)
+}
+
+type VoxelShapesRegistryHandle struct {
+	Value uint16
+}
+
+// Marshal reads or writes VoxelShapesRegistryHandle using its canonical wire layout.
+func (x *VoxelShapesRegistryHandle) Marshal(io IO) {
+	io.Uint16(&x.Value)
 }

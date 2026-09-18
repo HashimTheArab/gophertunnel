@@ -5,15 +5,15 @@ import (
 )
 
 // ClientboundAttributeLayerSync is sent by the server to synchronise attribute layers with the client.
-type ClientboundAttributeLayerSync struct {
+type ClientBoundAttributeLayerSync struct {
 	Data protocol.AttributeLayerSyncData
 }
 
 // ID ...
-func (*ClientboundAttributeLayerSync) ID() uint32 {
-	return IDClientboundAttributeLayerSync
+func (*ClientBoundAttributeLayerSync) ID() uint32 {
+	return IDClientBoundAttributeLayerSync
 }
 
-func (pk *ClientboundAttributeLayerSync) Marshal(io protocol.IO) {
+func (pk *ClientBoundAttributeLayerSync) Marshal(io protocol.IO) {
 	protocol.MarshalAttributeLayerSyncData(io, &pk.Data)
 }

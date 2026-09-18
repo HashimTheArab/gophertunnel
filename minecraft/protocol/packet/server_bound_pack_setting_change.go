@@ -7,20 +7,20 @@ import (
 
 // ServerboundPackSettingChange is sent by the client to the server when it changes a setting for a specific
 // pack in the pack settings UI.
-type ServerboundPackSettingChange struct {
+type ServerBoundPackSettingChange struct {
 	// PackID is the UUID of the pack.
 	PackID           uuid.UUID
 	PackSettingName  string
-	PackSettingValue protocol.ServerboundPackSettingChangePackSettingValue
+	PackSettingValue protocol.ServerBoundPackSettingChangePackSettingValue
 }
 
 // ID ...
-func (*ServerboundPackSettingChange) ID() uint32 {
-	return IDServerboundPackSettingChange
+func (*ServerBoundPackSettingChange) ID() uint32 {
+	return IDServerBoundPackSettingChange
 }
 
-func (pk *ServerboundPackSettingChange) Marshal(io protocol.IO) {
+func (pk *ServerBoundPackSettingChange) Marshal(io protocol.IO) {
 	io.UUID(&pk.PackID)
 	io.StringLimits(&pk.PackSettingName, 0, 128)
-	protocol.MarshalServerboundPackSettingChangePackSettingValue(io, &pk.PackSettingValue)
+	protocol.MarshalServerBoundPackSettingChangePackSettingValue(io, &pk.PackSettingValue)
 }

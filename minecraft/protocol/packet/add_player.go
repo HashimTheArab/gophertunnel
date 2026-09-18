@@ -31,7 +31,7 @@ type AddPlayer struct {
 	PlayerGameType    protocol.GameType
 	EntityData        protocol.SynchedActorDataCopyableDataList
 	SynchedProperties protocol.PropertySyncData
-	AbilitiesData     protocol.SerializedAbilitiesData
+	AbilitiesData     protocol.AbilityData
 	// EntityLinks is a list of entity links that are currently active on the player. These links alter the way
 	// the player shows up when first spawned in terms of it shown as riding an entity. Setting these links is
 	// important for new viewers to see the player is riding another entity.

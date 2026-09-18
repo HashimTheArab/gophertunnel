@@ -10,7 +10,7 @@ import (
 // will not do what is expected: The message should go to the websocket server, not to the client's chat. The
 // CommandOutput packet will make sure the messages are relayed to the correct origin of the command request.
 type CommandOutput struct {
-	OriginData protocol.CommandOriginData
+	OriginData protocol.CommandOrigin
 	Output     protocol.CommandOutputData
 }
 

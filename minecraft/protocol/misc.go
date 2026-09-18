@@ -85,7 +85,7 @@ type AnimateAction uint8
 func (x *AnimateAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type AnimatedImageData struct {
-	SkinImage           SkinImage
+	SkinImage           PyramidShape
 	AnimatedTextureType PersonaAnimatedTextureType
 	Frames              float32
 	AnimationExpression PersonaAnimationExpression
@@ -124,7 +124,7 @@ func MarshalBedrockDDUI(io IO, x *BedrockDDUI) {
 		case 0:
 			return new(BedrockDDUIDataStoreUpdate)
 		case 1:
-			return new(BedrockDDUIDataStoreChange)
+			return new(DataStoreChange)
 		case 2:
 			return new(BedrockDDUIDataStoreRemoval)
 		}
@@ -304,7 +304,7 @@ type BoxData struct {
 	BoxBound mgl32.Vec3
 }
 
-func (*BoxData) tagPrimitiveShapeExtraShapeData() uint32 { return 3 }
+func (*BoxData) tagShape() uint32 { return 3 }
 
 // Marshal reads or writes BoxData using its canonical wire layout.
 func (x *BoxData) Marshal(io IO) {
@@ -894,13 +894,13 @@ func (x *Empty) Marshal(io IO) {
 }
 
 type Experiments struct {
-	Toggles                []ExperimentToggle
+	Toggles                []ExperimentData
 	ExperimentsEverToggled bool
 }
 
 // Marshal reads or writes Experiments using its canonical wire layout.
 func (x *Experiments) Marshal(io IO) {
-	FuncSlice(io, &x.Toggles, io.Uint32, func(value *ExperimentToggle) {
+	FuncSlice(io, &x.Toggles, io.Uint32, func(value *ExperimentData) {
 		value.Marshal(io)
 	})
 	io.Bool(&x.ExperimentsEverToggled)
@@ -1140,7 +1140,7 @@ type LevelSettings struct {
 	LimitedWorldWidth                      int32
 	LimitedWorldDepth                      int32
 	NetherType                             bool
-	EduSharedURIResource                   EduSharedURIResource
+	EduSharedURIResource                   EducationSharedResourceURI
 	OverrideForceExperimentalGameplay      Optional[bool]
 	ChatRestrictionLevel                   ChatRestrictionLevel
 	DisablePlayerInteractions              bool
@@ -1206,7 +1206,7 @@ type LineData struct {
 	LineEndLocation mgl32.Vec3
 }
 
-func (*LineData) tagPrimitiveShapeExtraShapeData() uint32 { return 4 }
+func (*LineData) tagShape() uint32 { return 4 }
 
 // Marshal reads or writes LineData using its canonical wire layout.
 func (x *LineData) Marshal(io IO) {
@@ -1691,7 +1691,7 @@ type PyramidData struct {
 	Height float32
 }
 
-func (*PyramidData) tagPrimitiveShapeExtraShapeData() uint32 { return 7 }
+func (*PyramidData) tagShape() uint32 { return 7 }
 
 // Marshal reads or writes PyramidData using its canonical wire layout.
 func (x *PyramidData) Marshal(io IO) {
@@ -1837,9 +1837,9 @@ type SerializedSkinRef struct {
 	ID                           string
 	PlayFabID                    string
 	ResourcePatch                string
-	ImageData                    SkinImage
+	ImageData                    PyramidShape
 	AnimatedImageData            []AnimatedImageData
-	CapeImageData                SkinImage
+	CapeImageData                PyramidShape
 	GeometryData                 string
 	GeometryDataMinEngineVersion string
 	AnimationData                string
@@ -1847,7 +1847,7 @@ type SerializedSkinRef struct {
 	FullID                       string
 	ArmSize                      PersonaArmSizeType
 	SkinColour                   color.RGBA
-	PersonaPieces                []SerializedPersonaPieceHandle
+	PersonaPieces                []PersonaPiece
 	PieceTintColours             []OrderedEntry[string, TintMapColor]
 	IsPremium                    bool
 	IsPersona                    bool
@@ -1909,8 +1909,8 @@ func (x *ServerConfigurationPresenceConfiguration) Marshal(io IO) {
 }
 
 type ServerConfigurationServerConfigurationJoinInfo struct {
-	Gathering             Optional[ServerConfigurationGatheringsConfigurationJoinInfo]
-	ClientStoreEntryPoint Optional[ServerConfigurationClientStoreEntryPointConfiguration]
+	Gathering             Optional[GatheringJoinInfo]
+	ClientStoreEntryPoint Optional[StoreEntryPointInfo]
 	Presence              Optional[ServerConfigurationPresenceConfiguration]
 }
 
@@ -2031,7 +2031,7 @@ type SphereData struct {
 	NumSegments uint8
 }
 
-func (*SphereData) tagPrimitiveShapeExtraShapeData() uint32 { return 5 }
+func (*SphereData) tagShape() uint32 { return 5 }
 
 // Marshal reads or writes SphereData using its canonical wire layout.
 func (x *SphereData) Marshal(io IO) {

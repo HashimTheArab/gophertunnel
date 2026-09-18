@@ -11,7 +11,7 @@ const (
 
 // ServerboundLoadingScreen is sent by the client to tell the server about the state of the loading screen
 // that the client is currently displaying.
-type ServerboundLoadingScreen struct {
+type ServerBoundLoadingScreen struct {
 	// Type is the type of the loading screen event. It is one of the constants that may be found above.
 	Type protocol.ServerboundLoadingScreenType
 	// LoadingScreenID is the ID of the screen that was previously sent by the server in the ChangeDimension
@@ -20,11 +20,11 @@ type ServerboundLoadingScreen struct {
 }
 
 // ID ...
-func (*ServerboundLoadingScreen) ID() uint32 {
-	return IDServerboundLoadingScreen
+func (*ServerBoundLoadingScreen) ID() uint32 {
+	return IDServerBoundLoadingScreen
 }
 
-func (pk *ServerboundLoadingScreen) Marshal(io protocol.IO) {
+func (pk *ServerBoundLoadingScreen) Marshal(io protocol.IO) {
 	pk.Type.Marshal(io)
 	protocol.OptionalFunc(io, &pk.LoadingScreenID, io.Uint32)
 }

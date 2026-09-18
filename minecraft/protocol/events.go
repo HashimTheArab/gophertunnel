@@ -1,33 +1,49 @@
 package protocol
 
-// CodeBuilderScoreboard is an event sent by the server when a code builder scoreboard is updated.
-type CodeBuilderScoreboard struct {
-	// ObjectiveName ...
-	ObjectiveName string
-	// Score ...
-	Score int32
-}
-
-func (*CodeBuilderScoreboard) tagEventData() uint32 { return 19 }
-
-// Marshal reads or writes CodeBuilderScoreboard using its canonical wire layout.
-func (x *CodeBuilderScoreboard) Marshal(io IO) {
-	io.StringLimits(&x.ObjectiveName, 0, 256)
-	io.Varint32(&x.Score)
-}
-
-// ComposterUsed is the event data sent when a composter is interacted with.
-type ComposterUsed struct {
+// POICauldronUsed is the event data sent when a cauldron is interacted with.
+type CauldronInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
 	// ItemID ...
 	ItemID int32
 }
 
-func (*ComposterUsed) tagEventData() uint32 { return 11 }
+func (*CauldronInteractEvent) tagEventData() uint32 { return 10 }
 
-// Marshal reads or writes ComposterUsed using its canonical wire layout.
-func (x *ComposterUsed) Marshal(io IO) {
+// Marshal reads or writes CauldronInteractEvent using its canonical wire layout.
+func (x *CauldronInteractEvent) Marshal(io IO) {
+	x.BlockInteractionType.Marshal(io)
+	io.Varint32(&x.ItemID)
+}
+
+// CodeBuilderScoreboard is an event sent by the server when a code builder scoreboard is updated.
+type CodeBuilderScoreboardEvent struct {
+	// ObjectiveName ...
+	ObjectiveName string
+	// Score ...
+	Score int32
+}
+
+func (*CodeBuilderScoreboardEvent) tagEventData() uint32 { return 19 }
+
+// Marshal reads or writes CodeBuilderScoreboardEvent using its canonical wire layout.
+func (x *CodeBuilderScoreboardEvent) Marshal(io IO) {
+	io.StringLimits(&x.ObjectiveName, 0, 256)
+	io.Varint32(&x.Score)
+}
+
+// ComposterUsed is the event data sent when a composter is interacted with.
+type ComposterInteractEvent struct {
+	// BlockInteractionType ...
+	BlockInteractionType MinecraftEventingPOIBlockInteractionType
+	// ItemID ...
+	ItemID int32
+}
+
+func (*ComposterInteractEvent) tagEventData() uint32 { return 11 }
+
+// Marshal reads or writes ComposterInteractEvent using its canonical wire layout.
+func (x *ComposterInteractEvent) Marshal(io IO) {
 	x.BlockInteractionType.Marshal(io)
 	io.Varint32(&x.ItemID)
 }
@@ -63,9 +79,9 @@ func MarshalEventData(io IO, x *EventData) {
 		case 9:
 			return new(MobBorn)
 		case 10:
-			return new(POICauldronUsed)
+			return new(CauldronInteractEvent)
 		case 11:
-			return new(ComposterUsed)
+			return new(ComposterInteractEvent)
 		case 12:
 			return new(BellUsed)
 		case 13:
@@ -75,15 +91,15 @@ func MarshalEventData(io IO, x *EventData) {
 		case 15:
 			return new(TargetBlockHit)
 		case 16:
-			return new(PiglinBarter)
+			return new(PiglinBarterEvent)
 		case 17:
 			return new(PlayerWaxedOrUnwaxedCopper)
 		case 18:
 			return new(CodeBuilderRuntimeAction)
 		case 19:
-			return new(CodeBuilderScoreboard)
+			return new(CodeBuilderScoreboardEvent)
 		case 20:
-			return new(ItemUsed)
+			return new(ItemUsedEvent)
 		case 21:
 			return new(Empty)
 		}
@@ -92,17 +108,17 @@ func MarshalEventData(io IO, x *EventData) {
 }
 
 // ItemUsed is when a player right clicks a item.
-type ItemUsed struct {
+type ItemUsedEvent struct {
 	ItemID    int16
 	ItemAux   int32
 	UseMethod int32
 	UseCount  int32
 }
 
-func (*ItemUsed) tagEventData() uint32 { return 20 }
+func (*ItemUsedEvent) tagEventData() uint32 { return 20 }
 
-// Marshal reads or writes ItemUsed using its canonical wire layout.
-func (x *ItemUsed) Marshal(io IO) {
+// Marshal reads or writes ItemUsedEvent using its canonical wire layout.
+func (x *ItemUsedEvent) Marshal(io IO) {
 	io.Int16(&x.ItemID)
 	io.Int32(&x.ItemAux)
 	io.Int32(&x.UseMethod)
@@ -149,34 +165,18 @@ const (
 // Marshal reads or writes LegacyTelemetryType through its int32 wire encoding.
 func (x *LegacyTelemetryType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-// POICauldronUsed is the event data sent when a cauldron is interacted with.
-type POICauldronUsed struct {
-	// BlockInteractionType ...
-	BlockInteractionType MinecraftEventingPOIBlockInteractionType
-	// ItemID ...
-	ItemID int32
-}
-
-func (*POICauldronUsed) tagEventData() uint32 { return 10 }
-
-// Marshal reads or writes POICauldronUsed using its canonical wire layout.
-func (x *POICauldronUsed) Marshal(io IO) {
-	x.BlockInteractionType.Marshal(io)
-	io.Varint32(&x.ItemID)
-}
-
 // PiglinBarter is called when a player drops gold ingots to a piglin to initiate a trade for an item.
-type PiglinBarter struct {
+type PiglinBarterEvent struct {
 	// ItemID ...
 	ItemID int32
 	// WasTargetingBarteringPlayer ...
 	WasTargetingBarteringPlayer bool
 }
 
-func (*PiglinBarter) tagEventData() uint32 { return 16 }
+func (*PiglinBarterEvent) tagEventData() uint32 { return 16 }
 
-// Marshal reads or writes PiglinBarter using its canonical wire layout.
-func (x *PiglinBarter) Marshal(io IO) {
+// Marshal reads or writes PiglinBarterEvent using its canonical wire layout.
+func (x *PiglinBarterEvent) Marshal(io IO) {
 	io.Varint32(&x.ItemID)
 	io.Bool(&x.WasTargetingBarteringPlayer)
 }

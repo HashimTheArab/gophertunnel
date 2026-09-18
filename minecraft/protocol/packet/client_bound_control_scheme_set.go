@@ -15,7 +15,7 @@ const (
 // ClientboundControlSchemeSet is sent by the server upon the client's request or the usage of the vanilla
 // /controlscheme command. It is used to set the control scheme of the client, often used in combination with
 // custom cameras.
-type ClientboundControlSchemeSet struct {
+type ClientBoundControlSchemeSet struct {
 	// ControlScheme is the control scheme that the client should use. It is one of the following: -
 	// ControlSchemeLockedPlayerRelativeStrafe is the default behaviour, this cannot be set when the client is in
 	// a custom camera. - ControlSchemeCameraRelative makes movement relative to the camera's transform, with the
@@ -28,10 +28,10 @@ type ClientboundControlSchemeSet struct {
 }
 
 // ID ...
-func (*ClientboundControlSchemeSet) ID() uint32 {
-	return IDClientboundControlSchemeSet
+func (*ClientBoundControlSchemeSet) ID() uint32 {
+	return IDClientBoundControlSchemeSet
 }
 
-func (pk *ClientboundControlSchemeSet) Marshal(io protocol.IO) {
+func (pk *ClientBoundControlSchemeSet) Marshal(io protocol.IO) {
 	pk.ControlScheme.Marshal(io)
 }

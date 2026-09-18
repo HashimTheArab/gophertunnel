@@ -24,7 +24,7 @@ type EducationSettings struct {
 	LocalSettings                protocol.EducationLocalLevelSettings
 	DeprecatedAlwaysFalse        bool
 	// ExternalLinkSettings ...
-	ExternalLinkSettings protocol.Optional[protocol.ExternalLinkSettings]
+	ExternalLinkSettings protocol.Optional[protocol.EducationExternalLinkSettings]
 }
 
 // ID ...

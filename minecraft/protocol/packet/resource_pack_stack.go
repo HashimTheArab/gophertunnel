@@ -11,7 +11,7 @@ type ResourcePackStack struct {
 	// the server. If set to true, the client gets the option to either download the resource packs and join, or
 	// quit entirely. Behaviour packs never have to be downloaded.
 	TexturePackRequired bool
-	TexturePackList     []protocol.PackInstanceID
+	TexturePackList     []protocol.StackResourcePack
 	// BaseGameVersion is the vanilla version that the client should set its resource pack stack to.
 	BaseGameVersion string
 	// Experiments holds a list of experiments that are either enabled or disabled in the world that the player

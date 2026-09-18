@@ -14,7 +14,7 @@ type Transfer struct {
 	// ReloadWorld currently has an unknown usage.
 	ReloadWorld bool
 	// GatheringsConfiguration optionally identifies the gathering being joined on the target server.
-	GatheringJoinInfo protocol.Optional[protocol.ServerConfigurationGatheringsConfigurationJoinInfo]
+	GatheringJoinInfo protocol.Optional[protocol.GatheringJoinInfo]
 }
 
 // ID ...

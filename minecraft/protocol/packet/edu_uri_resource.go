@@ -5,7 +5,7 @@ import (
 )
 
 type EduURIResource struct {
-	EduSharedURIResource protocol.EduSharedURIResource
+	EduSharedURIResource protocol.EducationSharedResourceURI
 }
 
 // ID ...

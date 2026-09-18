@@ -5,7 +5,7 @@ import (
 )
 
 // ClientboundDataDrivenUIShowScreen is sent by the server to show a data-driven UI screen on the client.
-type ClientboundDataDrivenUIShowScreen struct {
+type ClientBoundDataDrivenUIShowScreen struct {
 	// ScreenID is the identifier of the screen to show.
 	ScreenID string
 	// FormID is a unique instance ID for the form, used for scripting to identify specific screen instances.
@@ -15,11 +15,11 @@ type ClientboundDataDrivenUIShowScreen struct {
 }
 
 // ID ...
-func (*ClientboundDataDrivenUIShowScreen) ID() uint32 {
-	return IDClientboundDataDrivenUIShowScreen
+func (*ClientBoundDataDrivenUIShowScreen) ID() uint32 {
+	return IDClientBoundDataDrivenUIShowScreen
 }
 
-func (pk *ClientboundDataDrivenUIShowScreen) Marshal(io protocol.IO) {
+func (pk *ClientBoundDataDrivenUIShowScreen) Marshal(io protocol.IO) {
 	io.StringLimits(&pk.ScreenID, 0, 500)
 	io.Uint32(&pk.FormID)
 	protocol.OptionalFunc(io, &pk.DataInstanceID, io.Uint32)

@@ -1,19 +1,5 @@
 package protocol
 
-// ArmorSlotAndDamagePair represents an entry for a single piece of armour that should be damaged.
-type ArmorSlotAndDamagePair struct {
-	// ArmourSlot is the index of the armour slot to damage.
-	ArmourSlot LegacyArmorSlot
-	// Damage is the amount of damage to apply to the armour in the specified slot.
-	Damage int16
-}
-
-// Marshal reads or writes ArmorSlotAndDamagePair using its canonical wire layout.
-func (x *ArmorSlotAndDamagePair) Marshal(io IO) {
-	x.ArmourSlot.Marshal(io)
-	io.Int16(&x.Damage)
-}
-
 type PlayerActionType int32
 
 const (
@@ -63,8 +49,22 @@ const (
 // Marshal reads or writes PlayerActionType through its int32 wire encoding.
 func (x *PlayerActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
+// ArmorSlotAndDamagePair represents an entry for a single piece of armour that should be damaged.
+type PlayerArmourDamageEntry struct {
+	// ArmourSlot is the index of the armour slot to damage.
+	ArmourSlot LegacyArmorSlot
+	// Damage is the amount of damage to apply to the armour in the specified slot.
+	Damage int16
+}
+
+// Marshal reads or writes PlayerArmourDamageEntry using its canonical wire layout.
+func (x *PlayerArmourDamageEntry) Marshal(io IO) {
+	x.ArmourSlot.Marshal(io)
+	io.Int16(&x.Damage)
+}
+
 // PlayerBlockAction ...
-type PlayerBlockActionData struct {
+type PlayerBlockAction struct {
 	// Action is the action to be performed, and is one of the constants listed above.
 	Action PlayerActionType
 	// BlockPos is the position of the block that was interacted with.
@@ -73,8 +73,8 @@ type PlayerBlockActionData struct {
 	Face int32
 }
 
-// Marshal reads or writes PlayerBlockActionData using its canonical wire layout.
-func (x *PlayerBlockActionData) Marshal(io IO) {
+// Marshal reads or writes PlayerBlockAction using its canonical wire layout.
+func (x *PlayerBlockAction) Marshal(io IO) {
 	x.Action.Marshal(io)
 	x.BlockPos.Marshal(io)
 	io.Varint32(&x.Face)
@@ -146,6 +146,22 @@ type PlayerLocationType int32
 
 // Marshal reads or writes PlayerLocationType through its int32 wire encoding.
 func (x *PlayerLocationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+// SyncedPlayerMovementSettings represents the different server authoritative movement settings. These control
+// how the client will provide input to the server.
+type PlayerMovementSettings struct {
+	// RewindHistorySize is the amount of history to keep at maximum.
+	RewindHistorySize int32
+	// ServerAuthoritativeBlockBreaking specifies if block breaking should be sent through packet.PlayerAuthInput
+	// or not.
+	ServerAuthoritativeBlockBreaking bool
+}
+
+// Marshal reads or writes PlayerMovementSettings using its canonical wire layout.
+func (x *PlayerMovementSettings) Marshal(io IO) {
+	io.Varint32(&x.RewindHistorySize)
+	io.Bool(&x.ServerAuthoritativeBlockBreaking)
+}
 
 type PlayerPartyInfo struct {
 	PartyID       string
@@ -231,20 +247,4 @@ func (*PlayerWaxedOrUnwaxedCopper) tagEventData() uint32 { return 17 }
 // Marshal reads or writes PlayerWaxedOrUnwaxedCopper using its canonical wire layout.
 func (x *PlayerWaxedOrUnwaxedCopper) Marshal(io IO) {
 	io.Varint32(&x.PlayerWaxedOrUnwaxedCopperBlockID)
-}
-
-// SyncedPlayerMovementSettings represents the different server authoritative movement settings. These control
-// how the client will provide input to the server.
-type SyncedPlayerMovementSettings struct {
-	// RewindHistorySize is the amount of history to keep at maximum.
-	RewindHistorySize int32
-	// ServerAuthoritativeBlockBreaking specifies if block breaking should be sent through packet.PlayerAuthInput
-	// or not.
-	ServerAuthoritativeBlockBreaking bool
-}
-
-// Marshal reads or writes SyncedPlayerMovementSettings using its canonical wire layout.
-func (x *SyncedPlayerMovementSettings) Marshal(io IO) {
-	io.Varint32(&x.RewindHistorySize)
-	io.Bool(&x.ServerAuthoritativeBlockBreaking)
 }

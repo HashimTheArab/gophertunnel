@@ -10,7 +10,7 @@ const (
 )
 
 // NpcDialogue is a packet that allows the client to display dialog boxes for interacting with NPCs.
-type NpcDialogue struct {
+type NPCDialogue struct {
 	// EntityUniqueID is the unique ID of the NPC being requested.
 	EntityUniqueID uint64
 	// ActionType is the type of action for the packet.
@@ -27,11 +27,11 @@ type NpcDialogue struct {
 }
 
 // ID ...
-func (*NpcDialogue) ID() uint32 {
-	return IDNpcDialogue
+func (*NPCDialogue) ID() uint32 {
+	return IDNPCDialogue
 }
 
-func (pk *NpcDialogue) Marshal(io protocol.IO) {
+func (pk *NPCDialogue) Marshal(io protocol.IO) {
 	io.Uint64(&pk.EntityUniqueID)
 	pk.ActionType.Marshal(io)
 	io.String(&pk.Dialogue)

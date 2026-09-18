@@ -131,7 +131,7 @@ func (x *CommandEnumConstraint) Marshal(io IO) {
 // CommandOrigin holds data that identifies the origin of the requesting of a command. It holds several fields
 // that may be used to get specific information. When sent in a CommandRequest packet, the same CommandOrigin
 // should be sent in a CommandOutput packet.
-type CommandOriginData struct {
+type CommandOrigin struct {
 	Type string
 	// UUID is a unique identifier for every instantiation of a command.
 	UUID uuid.UUID
@@ -143,8 +143,8 @@ type CommandOriginData struct {
 	PlayerID  int64
 }
 
-// Marshal reads or writes CommandOriginData using its canonical wire layout.
-func (x *CommandOriginData) Marshal(io IO) {
+// Marshal reads or writes CommandOrigin using its canonical wire layout.
+func (x *CommandOrigin) Marshal(io IO) {
 	io.String(&x.Type)
 	io.UUID(&x.UUID)
 	io.StringLimits(&x.RequestID, 0, 39)

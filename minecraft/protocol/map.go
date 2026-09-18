@@ -83,7 +83,7 @@ func (x *MapItemTrackedActorType) Marshal(io IO) { io.Int32((*int32)(x)) }
 
 // MapItemTrackedActorUniqueID is an object on a map that is 'tracked' by the client, such as an entity or a
 // block. This object may move, which is handled client-side.
-type MapItemTrackedActorUniqueID struct {
+type MapTrackedObject struct {
 	// Type is the type of the tracked object. It is either MapObjectTypeEntity or MapObjectTypeBlock.
 	Type MapItemTrackedActorType
 	// EntityUniqueID is the optional unique ID of the tracked entity.
@@ -92,8 +92,8 @@ type MapItemTrackedActorUniqueID struct {
 	BlockPosition Optional[BlockPos]
 }
 
-// Marshal reads or writes MapItemTrackedActorUniqueID using its canonical wire layout.
-func (x *MapItemTrackedActorUniqueID) Marshal(io IO) {
+// Marshal reads or writes MapTrackedObject using its canonical wire layout.
+func (x *MapTrackedObject) Marshal(io IO) {
 	x.Type.Marshal(io)
 	OptionalFunc(io, &x.EntityUniqueID, io.ActorUniqueID)
 	OptionalMarshaler(io, &x.BlockPosition)

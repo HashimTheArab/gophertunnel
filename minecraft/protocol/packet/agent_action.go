@@ -27,7 +27,7 @@ const (
 
 // AgentActionEvent is an Education Edition packet sent from the server to the client to return a response to
 // a previously requested action.
-type AgentActionEvent struct {
+type AgentAction struct {
 	// Identifier is a JSON identifier referenced in the initial action.
 	Identifier string
 	// Action represents the action type that was requested. It is one of the constants defined above.
@@ -37,11 +37,11 @@ type AgentActionEvent struct {
 }
 
 // ID ...
-func (*AgentActionEvent) ID() uint32 {
-	return IDAgentActionEvent
+func (*AgentAction) ID() uint32 {
+	return IDAgentAction
 }
 
-func (pk *AgentActionEvent) Marshal(io protocol.IO) {
+func (pk *AgentAction) Marshal(io protocol.IO) {
 	io.String(&pk.Identifier)
 	pk.Action.Marshal(io)
 	io.String(&pk.Response)

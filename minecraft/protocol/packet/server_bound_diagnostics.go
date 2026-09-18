@@ -7,7 +7,7 @@ import (
 // ServerboundDiagnostics is sent by the client to tell the server about the performance diagnostics of the
 // client. It is sent by the client roughly every 500ms or 10 in-game ticks when the "Creator > Enable Client
 // Diagnostics" setting is enabled.
-type ServerboundDiagnostics struct {
+type ServerBoundDiagnostics struct {
 	// AverageFramesPerSecond is the average amount of frames per second that the client has been running at.
 	AverageFramesPerSecond float32
 	// AverageServerSimTickTime is the average time that the server spends simulating a single tick in
@@ -35,19 +35,19 @@ type ServerboundDiagnostics struct {
 	// EntityDiagnostics is a list of entity timing entries sent by the client.
 	EntityDiagnostics []protocol.ECSProfilingDiagnosticsEntityDiagnosticTimingInfo
 	// SystemDiagnostics is a list of system timing entries sent by the client.
-	SystemDiagnostics []protocol.ECSProfilingDiagnosticsSystemDiagnosticTimingInfo
+	SystemDiagnostics []protocol.SystemDiagnosticTimingInfo
 	// SystemCategories maps diagnostics category names to system indices.
-	SystemCategories []protocol.ECSProfilingDiagnosticsSystemCategory
+	SystemCategories []protocol.SystemCategory
 	// WhiskerScopes is a list of whisker profiler scope diagnostic summaries sent by the client.
-	WhiskerScopes []protocol.BedrockProfileWhiskerDiagnosticsScopeDataSummary
+	WhiskerScopes []protocol.WhiskerScopeDataSummary
 }
 
 // ID ...
-func (*ServerboundDiagnostics) ID() uint32 {
-	return IDServerboundDiagnostics
+func (*ServerBoundDiagnostics) ID() uint32 {
+	return IDServerBoundDiagnostics
 }
 
-func (pk *ServerboundDiagnostics) Marshal(io protocol.IO) {
+func (pk *ServerBoundDiagnostics) Marshal(io protocol.IO) {
 	io.Float32(&pk.AverageFramesPerSecond)
 	io.Float32(&pk.AverageServerSimTickTime)
 	io.Float32(&pk.AverageClientSimTickTime)

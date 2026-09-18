@@ -31,69 +31,18 @@ func (x *CameraAimAssistActorPriorityData) Marshal(io IO) {
 
 // CameraAimAssistCategoryDefinition is an aim assist category that defines priorities for specific blocks and
 // entities.
-type CameraAimAssistCategoryDefinition struct {
+type CameraAimAssistCategory struct {
 	// Name is the name of the category which can be used by a CameraAimAssistPreset.
 	Name string
 	// Priorities represents the block and entity specific priorities as well as the default priorities for this
 	// category.
-	Priorities CameraAimAssistCategoryPriorities
+	Priorities CameraAimAssistPriorities
 }
 
-// Marshal reads or writes CameraAimAssistCategoryDefinition using its canonical wire layout.
-func (x *CameraAimAssistCategoryDefinition) Marshal(io IO) {
+// Marshal reads or writes CameraAimAssistCategory using its canonical wire layout.
+func (x *CameraAimAssistCategory) Marshal(io IO) {
 	io.String(&x.Name)
 	x.Priorities.Marshal(io)
-}
-
-// CameraAimAssistCategoryPriorities represents the block and entity specific priorities for targetting. The
-// aim assist will select the block or entity with the highest priority within the specified thresholds.
-type CameraAimAssistCategoryPriorities struct {
-	// Entities is a list of priorities for specific entity identifiers.
-	Entities []OrderedEntry[string, int32]
-	// Blocks is a list of priorities for specific block identifiers.
-	Blocks []OrderedEntry[string, int32]
-	// BlockTags is a list of priorities for specific block tags.
-	BlockTags []OrderedEntry[string, int32]
-	// EntityTypeFamilies is a list of priorities for specific entity type families.
-	EntityTypeFamilies []OrderedEntry[string, int32]
-	// EntityDefault is the default priority for entities.
-	EntityDefault Optional[int32]
-	// BlockDefault is the default priority for blocks.
-	BlockDefault Optional[int32]
-}
-
-// Marshal reads or writes CameraAimAssistCategoryPriorities using its canonical wire layout.
-func (x *CameraAimAssistCategoryPriorities) Marshal(io IO) {
-	OrderedMap(io, &x.Entities, io.Varuint32, io.String, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
-	OrderedMap(io, &x.Blocks, io.Varuint32, io.String, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
-	OrderedMap(io, &x.BlockTags, io.Varuint32, io.String, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
-	OrderedMap(io, &x.EntityTypeFamilies, io.Varuint32, io.String, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
-	OptionalFunc(io, &x.EntityDefault, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
-	OptionalFunc(io, &x.BlockDefault, func(value *int32) {
-		io.Int32(value)
-		Minimum(io, value, 0)
-		Maximum(io, value, 100)
-	})
 }
 
 type CameraAimAssistCommandPresetDefinition struct {
@@ -149,6 +98,57 @@ type CameraAimAssistPresetOperation uint8
 
 // Marshal reads or writes CameraAimAssistPresetOperation through its uint8 wire encoding.
 func (x *CameraAimAssistPresetOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+// CameraAimAssistCategoryPriorities represents the block and entity specific priorities for targetting. The
+// aim assist will select the block or entity with the highest priority within the specified thresholds.
+type CameraAimAssistPriorities struct {
+	// Entities is a list of priorities for specific entity identifiers.
+	Entities []OrderedEntry[string, int32]
+	// Blocks is a list of priorities for specific block identifiers.
+	Blocks []OrderedEntry[string, int32]
+	// BlockTags is a list of priorities for specific block tags.
+	BlockTags []OrderedEntry[string, int32]
+	// EntityTypeFamilies is a list of priorities for specific entity type families.
+	EntityTypeFamilies []OrderedEntry[string, int32]
+	// EntityDefault is the default priority for entities.
+	EntityDefault Optional[int32]
+	// BlockDefault is the default priority for blocks.
+	BlockDefault Optional[int32]
+}
+
+// Marshal reads or writes CameraAimAssistPriorities using its canonical wire layout.
+func (x *CameraAimAssistPriorities) Marshal(io IO) {
+	OrderedMap(io, &x.Entities, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.Blocks, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.BlockTags, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.EntityTypeFamilies, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OptionalFunc(io, &x.EntityDefault, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OptionalFunc(io, &x.BlockDefault, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+}
 
 type CameraAimAssistTargetMode int32
 

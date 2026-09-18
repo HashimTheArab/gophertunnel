@@ -12,7 +12,7 @@ type LocatorBarWaypoint struct {
 	// GroupHandle is the UUID handle for the waypoint group.
 	GroupHandle WaypointGroupWaypointHandle
 	// Waypoint contains the waypoint data.
-	Waypoint ServerWaypoint
+	Waypoint Waypoint
 	// Action determines the action for this waypoint. It is one of the WaypointAction constants.
 	Action ServerWaypointGroupAction
 }
@@ -24,8 +24,20 @@ func (x *LocatorBarWaypoint) Marshal(io IO) {
 	x.Action.Marshal(io)
 }
 
+type ServerWaypointGroupAction uint8
+
+const (
+	WaypointActionNone   ServerWaypointGroupAction = 0
+	WaypointActionAdd    ServerWaypointGroupAction = 1
+	WaypointActionRemove ServerWaypointGroupAction = 2
+	WaypointActionUpdate ServerWaypointGroupAction = 3
+)
+
+// Marshal reads or writes ServerWaypointGroupAction through its uint8 wire encoding.
+func (x *ServerWaypointGroupAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // ServerWaypoint holds optional data for a locator bar waypoint.
-type ServerWaypoint struct {
+type Waypoint struct {
 	// UpdateFlag is a bitmask indicating which optional fields are set.
 	UpdateFlag uint32
 	// Visible determines whether the waypoint is shown.
@@ -44,8 +56,8 @@ type ServerWaypoint struct {
 	ActorUniqueID Optional[int64]
 }
 
-// Marshal reads or writes ServerWaypoint using its canonical wire layout.
-func (x *ServerWaypoint) Marshal(io IO) {
+// Marshal reads or writes Waypoint using its canonical wire layout.
+func (x *Waypoint) Marshal(io IO) {
 	io.Uint32(&x.UpdateFlag)
 	OptionalFunc(io, &x.Visible, io.Bool)
 	OptionalMarshaler(io, &x.WorldPosition)
@@ -55,18 +67,6 @@ func (x *ServerWaypoint) Marshal(io IO) {
 	OptionalFunc(io, &x.ClientPositionAuthority, io.Bool)
 	OptionalFunc(io, &x.ActorUniqueID, io.ActorUniqueID)
 }
-
-type ServerWaypointGroupAction uint8
-
-const (
-	WaypointActionNone   ServerWaypointGroupAction = 0
-	WaypointActionAdd    ServerWaypointGroupAction = 1
-	WaypointActionRemove ServerWaypointGroupAction = 2
-	WaypointActionUpdate ServerWaypointGroupAction = 3
-)
-
-// Marshal reads or writes ServerWaypointGroupAction through its uint8 wire encoding.
-func (x *ServerWaypointGroupAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type WaypointGroupWaypointHandle struct {
 	UUID uuid.UUID

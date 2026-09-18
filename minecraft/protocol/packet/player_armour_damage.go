@@ -14,16 +14,16 @@ const (
 
 // PlayerArmorDamage is sent by the server to damage the armour of a player. It is a very efficient packet,
 // but generally it's much easier to just send a slot update for the damaged armour.
-type PlayerArmorDamage struct {
+type PlayerArmourDamage struct {
 	// List is a list of armour entries indicating which pieces of armour should receive damage.
-	List []protocol.ArmorSlotAndDamagePair
+	List []protocol.PlayerArmourDamageEntry
 }
 
 // ID ...
-func (*PlayerArmorDamage) ID() uint32 {
-	return IDPlayerArmorDamage
+func (*PlayerArmourDamage) ID() uint32 {
+	return IDPlayerArmourDamage
 }
 
-func (pk *PlayerArmorDamage) Marshal(io protocol.IO) {
+func (pk *PlayerArmourDamage) Marshal(io protocol.IO) {
 	protocol.SliceLimits(io, &pk.List, 0, 5)
 }

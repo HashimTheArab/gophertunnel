@@ -9,7 +9,7 @@ import (
 // v1.19.10.
 type UpdateAbilities struct {
 	// Data represents various data about the abilities of a player, such as ability layers or permissions.
-	AbilityData protocol.SerializedAbilitiesData
+	AbilityData protocol.AbilityData
 }
 
 // ID ...

@@ -95,7 +95,7 @@ func MarshalDataItemEntryValue(io IO, x *DataItemEntryValue) {
 	Union(io, x, io.Uint8, DataItemEntryValue.tagDataItemEntryValue, func(tag uint8) DataItemEntryValue {
 		switch tag {
 		case 0:
-			return new(DataItemByte)
+			return new(NoiseAlignment)
 		case 1:
 			return new(DataItemShort)
 		case 2:
@@ -311,105 +311,62 @@ func MarshalInventoryTransactionValue(io IO, x *InventoryTransactionValue) {
 	})
 }
 
-type PrimitiveShapeExtraShapeData interface {
+type ServerBoundPackSettingChangePackSettingValue interface {
 	Marshaler
-	tagPrimitiveShapeExtraShapeData() uint32
+	tagServerBoundPackSettingChangePackSettingValue() uint32
 }
 
-// MarshalPrimitiveShapeExtraShapeData reads or writes the PrimitiveShapeExtraShapeData union using its canonical wire layout.
-func MarshalPrimitiveShapeExtraShapeData(io IO, x *PrimitiveShapeExtraShapeData) {
-	Union(io, x, io.Varuint32, PrimitiveShapeExtraShapeData.tagPrimitiveShapeExtraShapeData, func(tag uint32) PrimitiveShapeExtraShapeData {
+// MarshalServerBoundPackSettingChangePackSettingValue reads or writes the ServerBoundPackSettingChangePackSettingValue union using its canonical wire layout.
+func MarshalServerBoundPackSettingChangePackSettingValue(io IO, x *ServerBoundPackSettingChangePackSettingValue) {
+	Union(io, x, io.Varuint32, ServerBoundPackSettingChangePackSettingValue.tagServerBoundPackSettingChangePackSettingValue, func(tag uint32) ServerBoundPackSettingChangePackSettingValue {
 		switch tag {
 		case 0:
-			return new(PrimitiveShapeExtraShapeDataEmpty)
+			return new(ServerBoundPackSettingChangePackSettingValueFloat)
 		case 1:
-			return new(ArrowData)
+			return new(ServerBoundPackSettingChangePackSettingValueBool)
 		case 2:
-			return new(TextShape)
-		case 3:
-			return new(BoxData)
-		case 4:
-			return new(LineData)
-		case 5:
-			return new(SphereData)
-		case 6:
-			return new(CylinderData)
-		case 7:
-			return new(PyramidData)
-		case 8:
-			return new(EllipsoidData)
-		case 9:
-			return new(ConeData)
+			return new(ServerBoundPackSettingChangePackSettingValueString)
 		}
 		return nil
 	})
 }
 
-type PrimitiveShapeExtraShapeDataEmpty struct {
-}
-
-func (*PrimitiveShapeExtraShapeDataEmpty) tagPrimitiveShapeExtraShapeData() uint32 { return 0 }
-
-// Marshal reads or writes PrimitiveShapeExtraShapeDataEmpty using its canonical wire layout.
-func (x *PrimitiveShapeExtraShapeDataEmpty) Marshal(io IO) {
-}
-
-type ServerboundPackSettingChangePackSettingValue interface {
-	Marshaler
-	tagServerboundPackSettingChangePackSettingValue() uint32
-}
-
-// MarshalServerboundPackSettingChangePackSettingValue reads or writes the ServerboundPackSettingChangePackSettingValue union using its canonical wire layout.
-func MarshalServerboundPackSettingChangePackSettingValue(io IO, x *ServerboundPackSettingChangePackSettingValue) {
-	Union(io, x, io.Varuint32, ServerboundPackSettingChangePackSettingValue.tagServerboundPackSettingChangePackSettingValue, func(tag uint32) ServerboundPackSettingChangePackSettingValue {
-		switch tag {
-		case 0:
-			return new(ServerboundPackSettingChangePackSettingValueFloat)
-		case 1:
-			return new(ServerboundPackSettingChangePackSettingValueBool)
-		case 2:
-			return new(ServerboundPackSettingChangePackSettingValueString)
-		}
-		return nil
-	})
-}
-
-type ServerboundPackSettingChangePackSettingValueBool struct {
+type ServerBoundPackSettingChangePackSettingValueBool struct {
 	Value bool
 }
 
-func (*ServerboundPackSettingChangePackSettingValueBool) tagServerboundPackSettingChangePackSettingValue() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueBool) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 1
 }
 
-// Marshal reads or writes ServerboundPackSettingChangePackSettingValueBool using its canonical wire layout.
-func (x *ServerboundPackSettingChangePackSettingValueBool) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueBool using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueBool) Marshal(io IO) {
 	io.Bool(&x.Value)
 }
 
-type ServerboundPackSettingChangePackSettingValueFloat struct {
+type ServerBoundPackSettingChangePackSettingValueFloat struct {
 	Value float32
 }
 
-func (*ServerboundPackSettingChangePackSettingValueFloat) tagServerboundPackSettingChangePackSettingValue() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueFloat) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 0
 }
 
-// Marshal reads or writes ServerboundPackSettingChangePackSettingValueFloat using its canonical wire layout.
-func (x *ServerboundPackSettingChangePackSettingValueFloat) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueFloat using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueFloat) Marshal(io IO) {
 	io.Float32(&x.Value)
 }
 
-type ServerboundPackSettingChangePackSettingValueString struct {
+type ServerBoundPackSettingChangePackSettingValueString struct {
 	Value string
 }
 
-func (*ServerboundPackSettingChangePackSettingValueString) tagServerboundPackSettingChangePackSettingValue() uint32 {
+func (*ServerBoundPackSettingChangePackSettingValueString) tagServerBoundPackSettingChangePackSettingValue() uint32 {
 	return 2
 }
 
-// Marshal reads or writes ServerboundPackSettingChangePackSettingValueString using its canonical wire layout.
-func (x *ServerboundPackSettingChangePackSettingValueString) Marshal(io IO) {
+// Marshal reads or writes ServerBoundPackSettingChangePackSettingValueString using its canonical wire layout.
+func (x *ServerBoundPackSettingChangePackSettingValueString) Marshal(io IO) {
 	io.String(&x.Value)
 }
 
@@ -433,4 +390,47 @@ func MarshalSetScoreEntriesItem(io IO, x *SetScoreEntriesItem) {
 		}
 		return nil
 	})
+}
+
+type Shape interface {
+	Marshaler
+	tagShape() uint32
+}
+
+// MarshalShape reads or writes the Shape union using its canonical wire layout.
+func MarshalShape(io IO, x *Shape) {
+	Union(io, x, io.Varuint32, Shape.tagShape, func(tag uint32) Shape {
+		switch tag {
+		case 0:
+			return new(ShapeEmpty)
+		case 1:
+			return new(ArrowShape)
+		case 2:
+			return new(TextShape)
+		case 3:
+			return new(BoxData)
+		case 4:
+			return new(LineData)
+		case 5:
+			return new(SphereData)
+		case 6:
+			return new(CylinderShape)
+		case 7:
+			return new(PyramidData)
+		case 8:
+			return new(EllipsoidShape)
+		case 9:
+			return new(ConeShape)
+		}
+		return nil
+	})
+}
+
+type ShapeEmpty struct {
+}
+
+func (*ShapeEmpty) tagShape() uint32 { return 0 }
+
+// Marshal reads or writes ShapeEmpty using its canonical wire layout.
+func (x *ShapeEmpty) Marshal(io IO) {
 }

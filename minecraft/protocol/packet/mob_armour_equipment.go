@@ -6,7 +6,7 @@ import (
 
 // MobArmorEquipment is sent by the server to the client to update the armour an entity is wearing. It is sent
 // for both players and other entities, such as zombies.
-type MobArmorEquipment struct {
+type MobArmourEquipment struct {
 	TargetRuntimeID uint64
 	Head            protocol.NetworkItemStackDescriptorSerializedData
 	Torso           protocol.NetworkItemStackDescriptorSerializedData
@@ -17,11 +17,11 @@ type MobArmorEquipment struct {
 }
 
 // ID ...
-func (*MobArmorEquipment) ID() uint32 {
-	return IDMobArmorEquipment
+func (*MobArmourEquipment) ID() uint32 {
+	return IDMobArmourEquipment
 }
 
-func (pk *MobArmorEquipment) Marshal(io protocol.IO) {
+func (pk *MobArmourEquipment) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
 	pk.Head.Marshal(io)
 	pk.Torso.Marshal(io)

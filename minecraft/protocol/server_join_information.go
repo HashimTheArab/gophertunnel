@@ -4,23 +4,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// ServerConfigurationClientStoreEntryPointConfiguration contains information about the store entry point.
-type ServerConfigurationClientStoreEntryPointConfiguration struct {
-	// StoreID is the store identifier.
-	StoreID string
-	// StoreName is the store name.
-	StoreName string
-}
-
-// Marshal reads or writes ServerConfigurationClientStoreEntryPointConfiguration using its canonical wire layout.
-func (x *ServerConfigurationClientStoreEntryPointConfiguration) Marshal(io IO) {
-	io.String(&x.StoreID)
-	io.String(&x.StoreName)
-}
-
 // ServerConfigurationGatheringsConfigurationJoinInfo contains information about the gathering (experience)
 // the player is joining.
-type ServerConfigurationGatheringsConfigurationJoinInfo struct {
+type GatheringJoinInfo struct {
 	// ExperienceID is the UUID of the experience.
 	ExperienceID uuid.UUID
 	// ExperienceName is the name of the experience.
@@ -39,8 +25,8 @@ type ServerConfigurationGatheringsConfigurationJoinInfo struct {
 	ServerID Optional[string]
 }
 
-// Marshal reads or writes ServerConfigurationGatheringsConfigurationJoinInfo using its canonical wire layout.
-func (x *ServerConfigurationGatheringsConfigurationJoinInfo) Marshal(io IO) {
+// Marshal reads or writes GatheringJoinInfo using its canonical wire layout.
+func (x *GatheringJoinInfo) Marshal(io IO) {
 	io.UUID(&x.ExperienceID)
 	io.StringLimits(&x.ExperienceName, 1, 29)
 	OptionalFunc(io, &x.ExperienceWorldID, io.UUID)
@@ -55,4 +41,18 @@ func (x *ServerConfigurationGatheringsConfigurationJoinInfo) Marshal(io IO) {
 	OptionalFunc(io, &x.ServerID, func(value *string) {
 		io.StringLimits(value, 1, 100)
 	})
+}
+
+// ServerConfigurationClientStoreEntryPointConfiguration contains information about the store entry point.
+type StoreEntryPointInfo struct {
+	// StoreID is the store identifier.
+	StoreID string
+	// StoreName is the store name.
+	StoreName string
+}
+
+// Marshal reads or writes StoreEntryPointInfo using its canonical wire layout.
+func (x *StoreEntryPointInfo) Marshal(io IO) {
+	io.String(&x.StoreID)
+	io.String(&x.StoreName)
 }

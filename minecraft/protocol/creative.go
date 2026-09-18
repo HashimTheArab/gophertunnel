@@ -2,7 +2,7 @@ package protocol
 
 // CreativeGroup represents a group of items in the creative inventory. Each group has a category, name and an
 // icon that represents the group.
-type CreativeGroupInfo struct {
+type CreativeGroup struct {
 	// CreativeCategory is the category the group falls under. It is one of the constants above.
 	Category CreativeItemCategory
 	// Name is the locale name of the group, i.e. "itemGroup.name.planks".
@@ -11,8 +11,8 @@ type CreativeGroupInfo struct {
 	Icon NetworkItemInstanceDescriptorSerializedData
 }
 
-// Marshal reads or writes CreativeGroupInfo using its canonical wire layout.
-func (x *CreativeGroupInfo) Marshal(io IO) {
+// Marshal reads or writes CreativeGroup using its canonical wire layout.
+func (x *CreativeGroup) Marshal(io IO) {
 	x.Category.Marshal(io)
 	io.String(&x.Name)
 	x.Icon.Marshal(io)

@@ -13,7 +13,7 @@ const (
 // can be used when sending a CameraAimAssist packet or a CameraInstruction including aim assist.
 type CameraAimAssistPresets struct {
 	// CameraAimAssistPresets is a list of categories which can be referenced by one of the Presets.
-	Categories []protocol.CameraAimAssistCategoryDefinition
+	Categories []protocol.CameraAimAssistCategory
 	// CameraAimAssistCategories is a list of presets which define a base for how aim assist should behave
 	Presets []protocol.CameraAimAssistPresetDefinition
 	// Operation is the operation to perform with the presets. It is one of the constants above.

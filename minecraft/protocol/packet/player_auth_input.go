@@ -131,7 +131,7 @@ type PlayerAuthInput struct {
 	ItemUseTransaction  protocol.Optional[protocol.PackedItemUseLegacyInventoryTransaction]
 	// ItemStackRequest is sent by the client to change an item in their inventory.
 	ItemStackRequest   protocol.Optional[protocol.ItemStackRequestData]
-	PlayerBlockActions protocol.Optional[[]protocol.PlayerBlockActionData]
+	PlayerBlockActions protocol.Optional[[]protocol.PlayerBlockAction]
 	// VehicleRotation is the rotation of the vehicle that the player is in, if any.
 	VehicleRotation protocol.Optional[mgl32.Vec2]
 	// ClientPredictedVehicle is the unique ID of the vehicle that the client predicts the player to be in.
@@ -170,7 +170,7 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	protocol.DoubleOptionalFunc(io, &pk.ItemStackRequest, func(value *protocol.ItemStackRequestData) {
 		value.Marshal(io)
 	})
-	protocol.DoubleOptionalFunc(io, &pk.PlayerBlockActions, func(value *[]protocol.PlayerBlockActionData) {
+	protocol.DoubleOptionalFunc(io, &pk.PlayerBlockActions, func(value *[]protocol.PlayerBlockAction) {
 		protocol.SliceLimits(io, value, 0, 100)
 	})
 	protocol.DoubleOptionalFunc(io, &pk.VehicleRotation, io.Vec2)

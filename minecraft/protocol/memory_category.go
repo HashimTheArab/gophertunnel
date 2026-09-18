@@ -1,60 +1,5 @@
 package protocol
 
-// BedrockProfileWhiskerDiagnosticsScopeDataSummary represents a whisker profiler scope diagnostic summary.
-type BedrockProfileWhiskerDiagnosticsScopeDataSummary struct {
-	// Label is the label of the whisker scope.
-	Label string
-	// Indentation is the indentation string of the whisker scope within the profiler hierarchy.
-	Indentation string
-	// TotalHighCostNS is the total time, in nanoseconds, spent in the high-cost portion of the scope.
-	TotalHighCostNS uint64
-	// TotalMidCostNS is the total time, in nanoseconds, spent in the mid-cost portion of the scope.
-	TotalMidCostNS uint64
-	// TotalLowCostNS is the total time, in nanoseconds, spent in the low-cost portion of the scope.
-	TotalLowCostNS uint64
-}
-
-// Marshal reads or writes BedrockProfileWhiskerDiagnosticsScopeDataSummary using its canonical wire layout.
-func (x *BedrockProfileWhiskerDiagnosticsScopeDataSummary) Marshal(io IO) {
-	io.String(&x.Label)
-	io.String(&x.Indentation)
-	io.Uint64(&x.TotalHighCostNS)
-	io.Uint64(&x.TotalMidCostNS)
-	io.Uint64(&x.TotalLowCostNS)
-}
-
-// ECSProfilingDiagnosticsSystemCategory maps a diagnostics category name to a system index.
-type ECSProfilingDiagnosticsSystemCategory struct {
-	CategoryName string
-	SystemIndex  uint64
-}
-
-// Marshal reads or writes ECSProfilingDiagnosticsSystemCategory using its canonical wire layout.
-func (x *ECSProfilingDiagnosticsSystemCategory) Marshal(io IO) {
-	io.String(&x.CategoryName)
-	io.Uint64(&x.SystemIndex)
-}
-
-// ECSProfilingDiagnosticsSystemDiagnosticTimingInfo represents diagnostics for a specific system index.
-type ECSProfilingDiagnosticsSystemDiagnosticTimingInfo struct {
-	// DisplayName is the name to display for this timing entry.
-	DisplayName string
-	// SystemIndex is the index of the system that is being timed.
-	SystemIndex uint64
-	// DurationNanos is whole long the timing entry has lasted, in nanoseconds.
-	DurationNanos uint64
-	// PercentOfTotal is the percentage of time that this timing entry has used compared to others.
-	PercentOfTotal uint8
-}
-
-// Marshal reads or writes ECSProfilingDiagnosticsSystemDiagnosticTimingInfo using its canonical wire layout.
-func (x *ECSProfilingDiagnosticsSystemDiagnosticTimingInfo) Marshal(io IO) {
-	io.String(&x.DisplayName)
-	io.Uint64(&x.SystemIndex)
-	io.Uint64(&x.DurationNanos)
-	io.Uint8(&x.PercentOfTotal)
-}
-
 type MemoryCategory uint8
 
 const (
@@ -186,4 +131,59 @@ type MemoryCategoryCounter struct {
 func (x *MemoryCategoryCounter) Marshal(io IO) {
 	x.Category.Marshal(io)
 	io.Uint64(&x.Bytes)
+}
+
+// ECSProfilingDiagnosticsSystemCategory maps a diagnostics category name to a system index.
+type SystemCategory struct {
+	CategoryName string
+	SystemIndex  uint64
+}
+
+// Marshal reads or writes SystemCategory using its canonical wire layout.
+func (x *SystemCategory) Marshal(io IO) {
+	io.String(&x.CategoryName)
+	io.Uint64(&x.SystemIndex)
+}
+
+// ECSProfilingDiagnosticsSystemDiagnosticTimingInfo represents diagnostics for a specific system index.
+type SystemDiagnosticTimingInfo struct {
+	// DisplayName is the name to display for this timing entry.
+	DisplayName string
+	// SystemIndex is the index of the system that is being timed.
+	SystemIndex uint64
+	// DurationNanos is whole long the timing entry has lasted, in nanoseconds.
+	DurationNanos uint64
+	// PercentOfTotal is the percentage of time that this timing entry has used compared to others.
+	PercentOfTotal uint8
+}
+
+// Marshal reads or writes SystemDiagnosticTimingInfo using its canonical wire layout.
+func (x *SystemDiagnosticTimingInfo) Marshal(io IO) {
+	io.String(&x.DisplayName)
+	io.Uint64(&x.SystemIndex)
+	io.Uint64(&x.DurationNanos)
+	io.Uint8(&x.PercentOfTotal)
+}
+
+// BedrockProfileWhiskerDiagnosticsScopeDataSummary represents a whisker profiler scope diagnostic summary.
+type WhiskerScopeDataSummary struct {
+	// Label is the label of the whisker scope.
+	Label string
+	// Indentation is the indentation string of the whisker scope within the profiler hierarchy.
+	Indentation string
+	// TotalHighCostNS is the total time, in nanoseconds, spent in the high-cost portion of the scope.
+	TotalHighCostNS uint64
+	// TotalMidCostNS is the total time, in nanoseconds, spent in the mid-cost portion of the scope.
+	TotalMidCostNS uint64
+	// TotalLowCostNS is the total time, in nanoseconds, spent in the low-cost portion of the scope.
+	TotalLowCostNS uint64
+}
+
+// Marshal reads or writes WhiskerScopeDataSummary using its canonical wire layout.
+func (x *WhiskerScopeDataSummary) Marshal(io IO) {
+	io.String(&x.Label)
+	io.String(&x.Indentation)
+	io.Uint64(&x.TotalHighCostNS)
+	io.Uint64(&x.TotalMidCostNS)
+	io.Uint64(&x.TotalLowCostNS)
 }

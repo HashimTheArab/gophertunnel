@@ -13,7 +13,7 @@ const (
 )
 
 // ClientboundTextureShift is sent by the server to control texture shift animations on the client.
-type ClientboundTextureShift struct {
+type ClientBoundTextureShift struct {
 	// ActionID is the texture shift action to perform. It is one of the constants above.
 	ActionID protocol.ClientboundTextureShiftAction
 	// CollectionName is the name of the texture shift collection.
@@ -33,11 +33,11 @@ type ClientboundTextureShift struct {
 }
 
 // ID ...
-func (*ClientboundTextureShift) ID() uint32 {
-	return IDClientboundTextureShift
+func (*ClientBoundTextureShift) ID() uint32 {
+	return IDClientBoundTextureShift
 }
 
-func (pk *ClientboundTextureShift) Marshal(io protocol.IO) {
+func (pk *ClientBoundTextureShift) Marshal(io protocol.IO) {
 	pk.ActionID.Marshal(io)
 	io.String(&pk.CollectionName)
 	io.String(&pk.FromStep)

@@ -6,13 +6,13 @@ import (
 
 // ClientboundCloseForm is sent by the server to clear the entire form stack of the client. This means that
 // all forms that are currently open will be closed. This does not affect inventories and other containers.
-type ClientboundCloseForm struct {
+type ClientBoundCloseForm struct {
 }
 
 // ID ...
-func (*ClientboundCloseForm) ID() uint32 {
-	return IDClientboundCloseForm
+func (*ClientBoundCloseForm) ID() uint32 {
+	return IDClientBoundCloseForm
 }
 
-func (pk *ClientboundCloseForm) Marshal(io protocol.IO) {
+func (pk *ClientBoundCloseForm) Marshal(io protocol.IO) {
 }

@@ -1,26 +1,5 @@
 package protocol
 
-// PackInstanceID represents a resource pack sent on the stack of the client. When sent, the client will apply
-// them in the order of the stack sent.
-type PackInstanceID struct {
-	// UUID is the UUID of the resource pack. Each resource pack downloaded must have a different UUID in order
-	// for the client to be able to handle them properly.
-	UUID string
-	// Version is the version of the resource pack. The client will cache resource packs sent by the server as
-	// long as they carry the same version. Sending a resource pack with a different version than previously will
-	// force the client to re-download it.
-	Version string
-	// SubPackName ...
-	SubPackName string
-}
-
-// Marshal reads or writes PackInstanceID using its canonical wire layout.
-func (x *PackInstanceID) Marshal(io IO) {
-	io.String(&x.UUID)
-	io.String(&x.Version)
-	io.String(&x.SubPackName)
-}
-
 type RequestAbilityType uint8
 
 const (
@@ -63,4 +42,25 @@ func (*ResourcePackStackFinished) tagResourcePackClientResponseData() uint32 { r
 // Marshal reads or writes ResourcePackStackFinished using its canonical wire layout.
 func (x *ResourcePackStackFinished) Marshal(io IO) {
 	io.String(&x.ResponseType)
+}
+
+// PackInstanceID represents a resource pack sent on the stack of the client. When sent, the client will apply
+// them in the order of the stack sent.
+type StackResourcePack struct {
+	// UUID is the UUID of the resource pack. Each resource pack downloaded must have a different UUID in order
+	// for the client to be able to handle them properly.
+	UUID string
+	// Version is the version of the resource pack. The client will cache resource packs sent by the server as
+	// long as they carry the same version. Sending a resource pack with a different version than previously will
+	// force the client to re-download it.
+	Version string
+	// SubPackName ...
+	SubPackName string
+}
+
+// Marshal reads or writes StackResourcePack using its canonical wire layout.
+func (x *StackResourcePack) Marshal(io IO) {
+	io.String(&x.UUID)
+	io.String(&x.Version)
+	io.String(&x.SubPackName)
 }
