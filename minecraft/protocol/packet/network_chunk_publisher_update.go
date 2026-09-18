@@ -7,20 +7,18 @@ import (
 // NetworkChunkPublisherUpdate is sent by the server to change the point around which chunks are and remain
 // loaded. This is useful for mini-game servers, where only one area is ever loaded, in which case the
 // NetworkChunkPublisherUpdate packet can be sent in the middle of it, so that no chunks ever need to be
-// additionally sent during the course of the game.
-// In reality, the packet is not extraordinarily useful, and most servers just send it constantly at the
-// position of the player.
-// If the packet is not sent at all, no chunks will be shown to the player, regardless of where they are sent.
+// additionally sent during the course of the game. In reality, the packet is not extraordinarily useful, and
+// most servers just send it constantly at the position of the player. If the packet is not sent at all, no
+// chunks will be shown to the player, regardless of where they are sent.
 type NetworkChunkPublisherUpdate struct {
-	// Position is the block position around which chunks loaded will remain shown to the client. Most servers
-	// set this position to the position of the player itself.
+	// NewPositionForView is the block position around which chunks loaded will remain shown to the client. Most
+	// servers set this position to the position of the player itself.
 	Position protocol.BlockPos
-	// Radius is the radius in blocks around Position that chunks sent show up in and will remain loaded in.
-	// Unlike the RequestChunkRadius and ChunkRadiusUpdated packets, this radius is in blocks rather than
+	// NewRadiusForView is the radius in blocks around Position that chunks sent show up in and will remain loaded
+	// in. Unlike the RequestChunkRadius and ChunkRadiusUpdated packets, this radius is in blocks rather than
 	// chunks, so the chunk radius needs to be multiplied by 16. (Or shifted to the left by 4.)
 	Radius uint32
-	// SavedChunks ...
-	// TODO: Figure out what this field is used for.
+	// ServerBuiltChunksList ... TODO: Figure out what this field is used for.
 	SavedChunks []protocol.ChunkPos
 }
 
@@ -30,12 +28,9 @@ func (*NetworkChunkPublisherUpdate) ID() uint32 {
 }
 
 func (pk *NetworkChunkPublisherUpdate) Marshal(io protocol.IO) {
-	io.BlockPos(&pk.Position)
+	pk.Position.Marshal(io)
 	io.Varuint32(&pk.Radius)
-	count := uint32(len(pk.SavedChunks))
-	io.Uint32(&count)
-	if count > 9216 {
-		io.InvalidValue(count, "savedChunks", "saved chunks exceeds maximum length of 9216 chunk positions")
-	}
-	protocol.FuncSliceOfLen(io, count, &pk.SavedChunks, io.ChunkPos)
+	protocol.FuncSliceLimits(io, &pk.SavedChunks, io.Uint32, 0, 9216, func(value *protocol.ChunkPos) {
+		value.Marshal(io)
+	})
 }

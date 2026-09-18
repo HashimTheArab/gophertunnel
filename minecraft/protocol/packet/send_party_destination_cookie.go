@@ -1,11 +1,7 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
-
-const (
-	PartyDestinationCookieIntentNotify = "Notify"
-	PartyDestinationCookieIntentOptIn  = "OptIn"
-	PartyDestinationCookieIntentOptOut = "OptOut"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 // SendPartyDestinationCookie is sent by the server to a client with a party destination cookie.
@@ -24,7 +20,7 @@ func (*SendPartyDestinationCookie) ID() uint32 {
 }
 
 func (pk *SendPartyDestinationCookie) Marshal(io protocol.IO) {
-	io.String(&pk.Cookie)
+	io.StringLimits(&pk.Cookie, 0, 2048)
 	io.String(&pk.Intent)
-	io.String(&pk.DestinationName)
+	io.StringLimits(&pk.DestinationName, 0, 64)
 }

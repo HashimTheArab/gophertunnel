@@ -12,26 +12,15 @@ type VoxelCells struct {
 	Storage []uint8
 }
 
-// Marshal encodes/decodes a VoxelCells.
-func (x *VoxelCells) Marshal(r IO) {
-	r.Uint8(&x.XSize)
-	r.Uint8(&x.YSize)
-	r.Uint8(&x.ZSize)
-	FuncSlice(r, &x.Storage, r.Uint8)
-}
-
-// VoxelShapeNameEntry represents a name-to-ID mapping entry for voxel shapes.
-type VoxelShapeNameEntry struct {
-	// Name is the name of the voxel shape.
-	Name string
-	// ID is the numeric ID of the voxel shape.
-	ID uint16
-}
-
-// Marshal encodes/decodes a VoxelShapeNameEntry.
-func (x *VoxelShapeNameEntry) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Uint16(&x.ID)
+// Marshal reads or writes VoxelCells using its canonical wire layout.
+func (x *VoxelCells) Marshal(io IO) {
+	io.Uint8(&x.XSize)
+	Maximum(io, &x.XSize, 127)
+	io.Uint8(&x.YSize)
+	Maximum(io, &x.YSize, 127)
+	io.Uint8(&x.ZSize)
+	Maximum(io, &x.ZSize, 127)
+	FuncSliceLimits(io, &x.Storage, io.Varuint32, 0, 256048, io.Uint8)
 }
 
 // VoxelShape represents a voxel shape with cells and coordinate axes.
@@ -46,10 +35,19 @@ type VoxelShape struct {
 	ZCoordinates []float32
 }
 
-// Marshal encodes/decodes a VoxelShape.
-func (x *VoxelShape) Marshal(r IO) {
-	Single(r, &x.Cells)
-	FuncSlice(r, &x.XCoordinates, r.Float32)
-	FuncSlice(r, &x.YCoordinates, r.Float32)
-	FuncSlice(r, &x.ZCoordinates, r.Float32)
+// Marshal reads or writes VoxelShape using its canonical wire layout.
+func (x *VoxelShape) Marshal(io IO) {
+	x.Cells.Marshal(io)
+	FuncSliceLimits(io, &x.XCoordinates, io.Varuint32, 1, 128, io.Float32)
+	FuncSliceLimits(io, &x.YCoordinates, io.Varuint32, 1, 128, io.Float32)
+	FuncSliceLimits(io, &x.ZCoordinates, io.Varuint32, 1, 128, io.Float32)
+}
+
+type VoxelShapesRegistryHandle struct {
+	Value uint16
+}
+
+// Marshal reads or writes VoxelShapesRegistryHandle using its canonical wire layout.
+func (x *VoxelShapesRegistryHandle) Marshal(io IO) {
+	io.Uint16(&x.Value)
 }

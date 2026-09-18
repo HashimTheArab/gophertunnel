@@ -1,161 +1,104 @@
 package protocol
 
-const (
-	ContainerAnvilInput = iota
-	ContainerAnvilMaterial
-	ContainerAnvilResultPreview
-	ContainerSmithingTableInput
-	ContainerSmithingTableMaterial
-	ContainerSmithingTableResultPreview
-	ContainerArmor
-	ContainerLevelEntity
-	ContainerBeaconPayment
-	ContainerBrewingStandInput
-	ContainerBrewingStandResult
-	ContainerBrewingStandFuel
-	ContainerCombinedHotBarAndInventory
-	ContainerCraftingInput
-	ContainerCraftingOutputPreview
-	ContainerRecipeConstruction
-	ContainerRecipeNature
-	ContainerRecipeItems
-	ContainerRecipeSearch
-	ContainerRecipeSearchBar
-	ContainerRecipeEquipment
-	ContainerRecipeBook
-	ContainerEnchantingInput
-	ContainerEnchantingMaterial
-	ContainerFurnaceFuel
-	ContainerFurnaceIngredient
-	ContainerFurnaceResult
-	ContainerHorseEquip
-	ContainerHotBar
-	ContainerInventory
-	ContainerShulkerBox
-	ContainerTradeIngredientOne
-	ContainerTradeIngredientTwo
-	ContainerTradeResultPreview
-	ContainerOffhand
-	ContainerCompoundCreatorInput
-	ContainerCompoundCreatorOutputPreview
-	ContainerElementConstructorOutputPreview
-	ContainerMaterialReducerInput
-	ContainerMaterialReducerOutput
-	ContainerLabTableInput
-	ContainerLoomInput
-	ContainerLoomDye
-	ContainerLoomMaterial
-	ContainerLoomResultPreview
-	ContainerBlastFurnaceIngredient
-	ContainerSmokerIngredient
-	ContainerTradeTwoIngredientOne
-	ContainerTradeTwoIngredientTwo
-	ContainerTradeTwoResultPreview
-	ContainerGrindstoneInput
-	ContainerGrindstoneAdditional
-	ContainerGrindstoneResultPreview
-	ContainerStonecutterInput
-	ContainerStonecutterResultPreview
-	ContainerCartographyInput
-	ContainerCartographyAdditional
-	ContainerCartographyResultPreview
-	ContainerBarrel
-	ContainerCursor
-	ContainerCreatedOutput
-	ContainerSmithingTableTemplate
-	ContainerCrafterLevelEntity
-	ContainerDynamic
-	ContainerRecipeFood
-	ContainerRecipeBlocks
-	ContainerRecipeFurnaceItems
-
-	// ContainerCount is the number of valid container IDs.
-	ContainerCount
-)
+type ContainerEnumName uint8
 
 const (
-	ContainerTypeInventory = iota - 1
-	ContainerTypeContainer
-	ContainerTypeWorkbench
-	ContainerTypeFurnace
-	ContainerTypeEnchantment
-	ContainerTypeBrewingStand
-	ContainerTypeAnvil
-	ContainerTypeDispenser
-	ContainerTypeDropper
-	ContainerTypeHopper
-	ContainerTypeCauldron
-	ContainerTypeCartChest
-	ContainerTypeCartHopper
-	ContainerTypeHorse
-	ContainerTypeBeacon
-	ContainerTypeStructureEditor
-	ContainerTypeTrade
-	ContainerTypeCommandBlock
-	ContainerTypeJukebox
-	ContainerTypeArmour
-	ContainerTypeHand
-	ContainerTypeCompoundCreator
-	ContainerTypeElementConstructor
-	ContainerTypeMaterialReducer
-	ContainerTypeLabTable
-	ContainerTypeLoom
-	ContainerTypeLectern
-	ContainerTypeGrindstone
-	ContainerTypeBlastFurnace
-	ContainerTypeSmoker
-	ContainerTypeStonecutter
-	ContainerTypeCartography
-	ContainerTypeHUD
-	ContainerTypeJigsawEditor
-	ContainerTypeSmithingTable
-	ContainerTypeChestBoat
-	ContainerTypeDecoratedPot
-	ContainerTypeCrafter
+	ContainerAnvilInput                      ContainerEnumName = 0
+	ContainerAnvilMaterial                   ContainerEnumName = 1
+	ContainerAnvilResultPreview              ContainerEnumName = 2
+	ContainerSmithingTableInput              ContainerEnumName = 3
+	ContainerSmithingTableMaterial           ContainerEnumName = 4
+	ContainerSmithingTableResultPreview      ContainerEnumName = 5
+	ContainerArmor                           ContainerEnumName = 6
+	ContainerLevelEntity                     ContainerEnumName = 7
+	ContainerBeaconPayment                   ContainerEnumName = 8
+	ContainerBrewingStandInput               ContainerEnumName = 9
+	ContainerBrewingStandResult              ContainerEnumName = 10
+	ContainerBrewingStandFuel                ContainerEnumName = 11
+	ContainerCombinedHotBarAndInventory      ContainerEnumName = 12
+	ContainerCraftingInput                   ContainerEnumName = 13
+	ContainerCraftingOutputPreview           ContainerEnumName = 14
+	ContainerRecipeConstruction              ContainerEnumName = 15
+	ContainerRecipeNature                    ContainerEnumName = 16
+	ContainerRecipeItems                     ContainerEnumName = 17
+	ContainerRecipeSearch                    ContainerEnumName = 18
+	ContainerRecipeSearchBar                 ContainerEnumName = 19
+	ContainerRecipeEquipment                 ContainerEnumName = 20
+	ContainerRecipeBook                      ContainerEnumName = 21
+	ContainerEnchantingInput                 ContainerEnumName = 22
+	ContainerEnchantingMaterial              ContainerEnumName = 23
+	ContainerFurnaceFuel                     ContainerEnumName = 24
+	ContainerFurnaceIngredient               ContainerEnumName = 25
+	ContainerFurnaceResult                   ContainerEnumName = 26
+	ContainerHorseEquip                      ContainerEnumName = 27
+	ContainerHotBar                          ContainerEnumName = 28
+	ContainerInventory                       ContainerEnumName = 29
+	ContainerShulkerBox                      ContainerEnumName = 30
+	ContainerTradeIngredientOne              ContainerEnumName = 31
+	ContainerTradeIngredientTwo              ContainerEnumName = 32
+	ContainerTradeResultPreview              ContainerEnumName = 33
+	ContainerOffhand                         ContainerEnumName = 34
+	ContainerCompoundCreatorInput            ContainerEnumName = 35
+	ContainerCompoundCreatorOutputPreview    ContainerEnumName = 36
+	ContainerElementConstructorOutputPreview ContainerEnumName = 37
+	ContainerMaterialReducerInput            ContainerEnumName = 38
+	ContainerMaterialReducerOutput           ContainerEnumName = 39
+	ContainerLabTableInput                   ContainerEnumName = 40
+	ContainerLoomInput                       ContainerEnumName = 41
+	ContainerLoomDye                         ContainerEnumName = 42
+	ContainerLoomMaterial                    ContainerEnumName = 43
+	ContainerLoomResultPreview               ContainerEnumName = 44
+	ContainerBlastFurnaceIngredient          ContainerEnumName = 45
+	ContainerSmokerIngredient                ContainerEnumName = 46
+	ContainerTradeTwoIngredientOne           ContainerEnumName = 47
+	ContainerTradeTwoIngredientTwo           ContainerEnumName = 48
+	ContainerTradeTwoResultPreview           ContainerEnumName = 49
+	ContainerGrindstoneInput                 ContainerEnumName = 50
+	ContainerGrindstoneAdditional            ContainerEnumName = 51
+	ContainerGrindstoneResultPreview         ContainerEnumName = 52
+	ContainerStonecutterInput                ContainerEnumName = 53
+	ContainerStonecutterResultPreview        ContainerEnumName = 54
+	ContainerCartographyInput                ContainerEnumName = 55
+	ContainerCartographyAdditional           ContainerEnumName = 56
+	ContainerCartographyResultPreview        ContainerEnumName = 57
+	ContainerBarrel                          ContainerEnumName = 58
+	ContainerCursor                          ContainerEnumName = 59
+	ContainerCreatedOutput                   ContainerEnumName = 60
+	ContainerSmithingTableTemplate           ContainerEnumName = 61
+	ContainerCrafterLevelEntity              ContainerEnumName = 62
+	ContainerDynamic                         ContainerEnumName = 63
+	ContainerRecipeFood                      ContainerEnumName = 64
+	ContainerRecipeBlocks                    ContainerEnumName = 65
+	ContainerRecipeFurnaceItems              ContainerEnumName = 66
 )
 
-// ContainerTypeSlotCount returns the fixed number of slots exposed by a
-// container screen type. The bool is false for screens whose capacity depends
-// on runtime block, entity or screen state.
-func ContainerTypeSlotCount(containerType byte) (int, bool) {
-	switch containerType {
-	case ContainerTypeWorkbench:
-		return 10, true
-	case ContainerTypeFurnace, ContainerTypeBlastFurnace, ContainerTypeSmoker:
-		return 3, true
-	case ContainerTypeEnchantment, ContainerTypeStonecutter:
-		return 2, true
-	case ContainerTypeBrewingStand:
-		return 5, true
-	case ContainerTypeAnvil, ContainerTypeGrindstone, ContainerTypeCartography, ContainerTypeTrade:
-		return 3, true
-	case ContainerTypeDispenser, ContainerTypeDropper, ContainerTypeCrafter:
-		return 9, true
-	case ContainerTypeHopper:
-		return 5, true
-	case ContainerTypeCartChest, ContainerTypeChestBoat:
-		return 27, true
-	case ContainerTypeCartHopper:
-		return 5, true
-	case ContainerTypeBeacon, ContainerTypeDecoratedPot:
-		return 1, true
-	case ContainerTypeLoom, ContainerTypeSmithingTable:
-		return 4, true
-	default:
-		return 0, false
-	}
+// Marshal reads or writes ContainerEnumName through its uint8 wire encoding.
+func (x *ContainerEnumName) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ContainerMixDataEntry struct {
+	FromItemID    int32
+	ReagentItemID int32
+	ToItemID      int32
+}
+
+// Marshal reads or writes ContainerMixDataEntry using its canonical wire layout.
+func (x *ContainerMixDataEntry) Marshal(io IO) {
+	io.Varint32(&x.FromItemID)
+	io.Varint32(&x.ReagentItemID)
+	io.Varint32(&x.ToItemID)
 }
 
 // FullContainerName contains information required to identify a container in a StackRequestSlotInfo.
 type FullContainerName struct {
-	// ContainerID is the ID of the container that the slot was in.
-	ContainerID byte
-	// DynamicContainerID is the ID of the container if it is dynamic. If the container is not dynamic, this
-	// field should be left empty. A non-optional value of 0 is assumed to be non-empty.
+	// ContainerName is the ID of the container that the slot was in.
+	ContainerID ContainerEnumName
+	// DynamicID is the ID of the container if it is dynamic. If the container is not dynamic, this field should
+	// be left empty. A non-optional value of 0 is assumed to be non-empty.
 	DynamicContainerID Optional[uint32]
 }
 
-func (x *FullContainerName) Marshal(r IO) {
-	r.Uint8(&x.ContainerID)
-	OptionalFunc(r, &x.DynamicContainerID, r.Uint32)
+// Marshal reads or writes FullContainerName using its canonical wire layout.
+func (x *FullContainerName) Marshal(io IO) {
+	x.ContainerID.Marshal(io)
+	OptionalFunc(io, &x.DynamicContainerID, io.Uint32)
 }

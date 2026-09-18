@@ -5,11 +5,11 @@ import (
 )
 
 const (
-	PlayerArmourDamageFlagHelmet = iota
-	PlayerArmourDamageFlagChestplate
-	PlayerArmourDamageFlagLeggings
-	PlayerArmourDamageFlagBoots
-	PlayerArmourDamageFlagBody
+	PlayerArmourDamageFlagHelmet     protocol.LegacyArmorSlot = 0
+	PlayerArmourDamageFlagChestplate protocol.LegacyArmorSlot = 1
+	PlayerArmourDamageFlagLeggings   protocol.LegacyArmorSlot = 2
+	PlayerArmourDamageFlagBoots      protocol.LegacyArmorSlot = 3
+	PlayerArmourDamageFlagBody       protocol.LegacyArmorSlot = 4
 )
 
 // PlayerArmourDamage is sent by the server to damage the armour of a player. It is a very efficient packet,
@@ -20,10 +20,10 @@ type PlayerArmourDamage struct {
 }
 
 // ID ...
-func (pk *PlayerArmourDamage) ID() uint32 {
+func (*PlayerArmourDamage) ID() uint32 {
 	return IDPlayerArmourDamage
 }
 
 func (pk *PlayerArmourDamage) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.List)
+	protocol.SliceLimits(io, &pk.List, 0, 5)
 }

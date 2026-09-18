@@ -5,19 +5,19 @@ import (
 )
 
 const (
-	CameraAunAssistPresetOperationSet = iota
-	CameraAunAssistPresetOperationAddToExisting
+	CameraAunAssistPresetOperationSet           protocol.CameraAimAssistPresetOperation = 0
+	CameraAunAssistPresetOperationAddToExisting protocol.CameraAimAssistPresetOperation = 1
 )
 
-// CameraAimAssistPresets is sent by the server to the client to provide a list of categories and presets
-// that can be used when sending a CameraAimAssist packet or a CameraInstruction including aim assist.
+// CameraAimAssistPresets is sent by the server to the client to provide a list of categories and presets that
+// can be used when sending a CameraAimAssist packet or a CameraInstruction including aim assist.
 type CameraAimAssistPresets struct {
-	// Categories is a list of categories which can be referenced by one of the Presets.
-	Categories []protocol.CameraAimAssistCategory
-	// Presets is a list of presets which define a base for how aim assist should behave
-	Presets []protocol.CameraAimAssistPreset
+	// CameraAimAssistPresets is a list of categories which can be referenced by one of the Presets.
+	Presets []protocol.CameraAimAssistCategory
+	// CameraAimAssistCategories is a list of presets which define a base for how aim assist should behave
+	Categories []protocol.CameraAimAssistPresetDefinition
 	// Operation is the operation to perform with the presets. It is one of the constants above.
-	Operation byte
+	Operation protocol.CameraAimAssistPresetOperation
 }
 
 // ID ...
@@ -26,7 +26,7 @@ func (*CameraAimAssistPresets) ID() uint32 {
 }
 
 func (pk *CameraAimAssistPresets) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Categories)
 	protocol.Slice(io, &pk.Presets)
-	io.Uint8(&pk.Operation)
+	protocol.Slice(io, &pk.Categories)
+	pk.Operation.Marshal(io)
 }

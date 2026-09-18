@@ -15,21 +15,21 @@ type AddItemActor struct {
 	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
 	EntityRuntimeID uint64
-	// Item is the item that is spawned. It must have a valid ID for it to show up client-side. If it is not
-	// a valid item, the client will crash when coming near.
-	Item protocol.ItemInstance
-	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot
-	// see it, the entity will still show up if the player moves closer.
+	// Item is the item that is spawned. It must have a valid ID for it to show up client-side. If it is not a
+	// valid item, the client will crash when coming near.
+	Item protocol.NetworkItemStackDescriptorSerializedData
+	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot see
+	// it, the entity will still show up if the player moves closer.
 	Position mgl32.Vec3
-	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side
-	// movement of the entity.
+	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side movement
+	// of the entity.
 	Velocity mgl32.Vec3
 	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
-	// particular the way the entity looks. Flags include ones such as 'on fire' and 'sprinting'.
-	// The metadata values are indexed by their property key.
-	EntityMetadata protocol.EntityMetadata
-	// FromFishing specifies if the item was obtained by fishing it up using a fishing rod. It is not clear
-	// why the client needs to know this.
+	// particular the way the entity looks. Flags include ones such as 'on fire' and 'sprinting'. The metadata
+	// values are indexed by their property key.
+	EntityMetadata protocol.SynchedActorDataCopyableDataList
+	// FromFishing specifies if the item was obtained by fishing it up using a fishing rod. It is not clear why
+	// the client needs to know this.
 	FromFishing bool
 }
 
@@ -41,9 +41,9 @@ func (*AddItemActor) ID() uint32 {
 func (pk *AddItemActor) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.EntityUniqueID)
 	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.ItemInstance(&pk.Item)
+	pk.Item.Marshal(io)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
-	io.EntityMetadata(&pk.EntityMetadata)
+	pk.EntityMetadata.Marshal(io)
 	io.Bool(&pk.FromFishing)
 }

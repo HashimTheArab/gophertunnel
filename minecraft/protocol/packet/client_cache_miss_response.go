@@ -8,16 +8,16 @@ import (
 // ClientCacheBlobStatus packet and contains the blob data of all blobs that the client acknowledged not to
 // have yet.
 type ClientCacheMissResponse struct {
-	// Blobs is a list of all blobs that the client sent misses for in the ClientCacheBlobStatus. These blobs
-	// hold the data of the blobs with the hashes they are matched with.
-	Blobs []protocol.CacheBlob
+	// MissingBlobs is a list of all blobs that the client sent misses for in the ClientCacheBlobStatus. These
+	// blobs hold the data of the blobs with the hashes they are matched with.
+	Blobs []protocol.MissingBlobData
 }
 
 // ID ...
-func (pk *ClientCacheMissResponse) ID() uint32 {
+func (*ClientCacheMissResponse) ID() uint32 {
 	return IDClientCacheMissResponse
 }
 
 func (pk *ClientCacheMissResponse) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Blobs)
+	protocol.SliceLimits(io, &pk.Blobs, 0, 4095)
 }

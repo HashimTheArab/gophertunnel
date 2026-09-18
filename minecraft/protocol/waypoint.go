@@ -1,63 +1,40 @@
 package protocol
 
 import (
+	"image/color"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/google/uuid"
-)
-
-const (
-	WaypointActionNone = iota
-	WaypointActionAdd
-	WaypointActionRemove
-	WaypointActionUpdate
-)
-
-const (
-	WaypointUpdateFlagVisible = 1 << iota
-	WaypointUpdateFlagPosition
-	WaypointUpdateFlagTextureID
-	WaypointUpdateFlagColour
-	WaypointUpdateFlagClientPositionAuthority
-	WaypointUpdateFlagActorUniqueID
-)
-
-const (
-	WaypointTextureSquare = iota + 2
-	WaypointTextureCircle
-	WaypointTextureSmallSquare
-	WaypointTextureSmallStar
 )
 
 // LocatorBarWaypoint represents a waypoint entry in the locator bar packet.
 type LocatorBarWaypoint struct {
 	// GroupHandle is the UUID handle for the waypoint group.
-	GroupHandle uuid.UUID
+	GroupHandle WaypointGroupWaypointHandle
 	// Waypoint contains the waypoint data.
 	Waypoint Waypoint
 	// Action determines the action for this waypoint. It is one of the WaypointAction constants.
-	Action uint8
+	Action ServerWaypointGroupAction
 }
 
-// Marshal encodes/decodes a LocatorBarWaypoint.
-func (x *LocatorBarWaypoint) Marshal(r IO) {
-	r.UUID(&x.GroupHandle)
-	Single(r, &x.Waypoint)
-	r.Uint8(&x.Action)
+// Marshal reads or writes LocatorBarWaypoint using its canonical wire layout.
+func (x *LocatorBarWaypoint) Marshal(io IO) {
+	x.GroupHandle.Marshal(io)
+	x.Waypoint.Marshal(io)
+	x.Action.Marshal(io)
 }
 
-// WaypointWorldPosition holds a position and dimension for a waypoint.
-type WaypointWorldPosition struct {
-	// Position is the world position of the waypoint.
-	Position mgl32.Vec3
-	// DimensionID is the dimension the waypoint is in.
-	DimensionID int32
-}
+type ServerWaypointGroupAction uint8
 
-// Marshal encodes/decodes a WaypointWorldPosition.
-func (x *WaypointWorldPosition) Marshal(r IO) {
-	r.Vec3(&x.Position)
-	r.Varint32(&x.DimensionID)
-}
+const (
+	WaypointActionNone   ServerWaypointGroupAction = 0
+	WaypointActionAdd    ServerWaypointGroupAction = 1
+	WaypointActionRemove ServerWaypointGroupAction = 2
+	WaypointActionUpdate ServerWaypointGroupAction = 3
+)
+
+// Marshal reads or writes ServerWaypointGroupAction through its uint8 wire encoding.
+func (x *ServerWaypointGroupAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // Waypoint holds optional data for a locator bar waypoint.
 type Waypoint struct {
@@ -66,27 +43,36 @@ type Waypoint struct {
 	// Visible determines whether the waypoint is shown.
 	Visible Optional[bool]
 	// WorldPosition is the position and dimension of the waypoint.
-	WorldPosition Optional[WaypointWorldPosition]
+	WorldPosition Optional[WorldPosition]
 	// TexturePath is the resource path for the waypoint icon texture.
 	TexturePath Optional[string]
 	// IconSize is the size of the waypoint icon.
 	IconSize Optional[mgl32.Vec2]
 	// Colour is the RGB colour used to tint the waypoint icon.
-	Colour Optional[int32]
+	Colour Optional[color.RGBA]
 	// ClientPositionAuthority determines whether the client has authority over the waypoint position.
 	ClientPositionAuthority Optional[bool]
 	// ActorUniqueID is the unique ID of the entity the waypoint tracks.
 	ActorUniqueID Optional[int64]
 }
 
-// Marshal encodes/decodes a Waypoint.
-func (x *Waypoint) Marshal(r IO) {
-	r.Uint32(&x.UpdateFlag)
-	OptionalFunc(r, &x.Visible, r.Bool)
-	OptionalMarshaler(r, &x.WorldPosition)
-	OptionalFunc(r, &x.TexturePath, r.String)
-	OptionalFunc(r, &x.IconSize, r.Vec2)
-	OptionalFunc(r, &x.Colour, r.Int32)
-	OptionalFunc(r, &x.ClientPositionAuthority, r.Bool)
-	OptionalFunc(r, &x.ActorUniqueID, r.ActorUniqueID)
+// Marshal reads or writes Waypoint using its canonical wire layout.
+func (x *Waypoint) Marshal(io IO) {
+	io.Uint32(&x.UpdateFlag)
+	OptionalFunc(io, &x.Visible, io.Bool)
+	OptionalMarshaler(io, &x.WorldPosition)
+	OptionalFunc(io, &x.TexturePath, io.String)
+	OptionalFunc(io, &x.IconSize, io.Vec2)
+	OptionalFunc(io, &x.Colour, io.RGBA)
+	OptionalFunc(io, &x.ClientPositionAuthority, io.Bool)
+	OptionalFunc(io, &x.ActorUniqueID, io.ActorUniqueID)
+}
+
+type WaypointGroupWaypointHandle struct {
+	UUID uuid.UUID
+}
+
+// Marshal reads or writes WaypointGroupWaypointHandle using its canonical wire layout.
+func (x *WaypointGroupWaypointHandle) Marshal(io IO) {
+	io.UUID(&x.UUID)
 }

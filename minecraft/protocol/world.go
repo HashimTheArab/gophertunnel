@@ -1,59 +1,57 @@
 package protocol
 
-import "github.com/google/uuid"
-
-const (
-	GeneratorLegacy    = 0
-	GeneratorOverworld = 1
-	GeneratorFlat      = 2
-	GeneratorNether    = 3
-	GeneratorEnd       = 4
-	GeneratorVoid      = 5
+import (
+	"github.com/go-gl/mathgl/mgl32"
+	"github.com/google/uuid"
 )
 
-// DimensionDefinition contains information specifying dimension-specific properties, used for data-driven dimensions.
-// These include the range (the height min/max), generator variant, and more.
+// DimensionDefinition contains information specifying dimension-specific properties, used for data-driven
+// dimensions. These include the range (the height min/max), generator variant, and more.
 type DimensionDefinition struct {
-	// Name specifies the name of the dimension.
-	Name string
-	// MinimumY is the lowest Y coordinate that exists in the dimension.
-	MinimumY int32
-	// HeightRange is the number of blocks above MinimumY that exist in the dimension, so that the highest Y
-	// coordinate in the dimension is MinimumY + HeightRange.
-	HeightRange int32
-	// Generator is the variant of generator that exists in the provided dimension. These can be one of the constants
-	// defined above. If this is set to GeneratorLegacy, the legacy horizontal world limits will be enforced.
-	Generator int32
-	// DimensionType is the numeric identifier of the dimension. This cannot override a vanilla dimension (0-2), but
-	// custom dimensions should start from 1000 like vanilla.
-	DimensionType int32
+	HeightMaximum int32
+	HeightMinimum int32
+	// Generator is the variant of generator that exists in the provided dimension. These can be one of the
+	// constants defined above. If this is set to GeneratorLegacy, the legacy horizontal world limits will be
+	// enforced.
+	Generator GeneratorType
+	// DimensionType is the numeric identifier of the dimension. This cannot override a vanilla dimension (0-2),
+	// but custom dimensions should start from 1000 like vanilla.
+	DimensionType DimensionType
 	// PackID is the UUID of the behaviour pack which has added the dimension.
 	PackID uuid.UUID
-	// DefaultBiome is the identifier of the biome that the dimension defaults to.
-	DefaultBiome string
 }
 
-// Marshal encodes/decodes a DimensionDefinition.
-func (x *DimensionDefinition) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Varint32(&x.MinimumY)
-	r.Varint32(&x.HeightRange)
-	r.Varint32(&x.Generator)
-	r.Varint32(&x.DimensionType)
-	r.UUID(&x.PackID)
-	r.String(&x.DefaultBiome)
+// Marshal reads or writes DimensionDefinition using its canonical wire layout.
+func (x *DimensionDefinition) Marshal(io IO) {
+	io.Varint32(&x.HeightMaximum)
+	io.Varint32(&x.HeightMinimum)
+	x.Generator.Marshal(io)
+	x.DimensionType.Marshal(io)
+	io.UUID(&x.PackID)
 }
 
-// GenerationFeature represents a world generation feature, used when encoding the FeatureRegistry to the client.
-type GenerationFeature struct {
-	// Name is the name of the feature.
-	Name string
-	// JSON is the encoded JSON data instructing the client on how to generate the feature.
-	JSON []byte
+type GeneratorType int32
+
+const (
+	GeneratorLegacy    GeneratorType = 0
+	GeneratorOverworld GeneratorType = 1
+	GeneratorFlat      GeneratorType = 2
+	GeneratorNether    GeneratorType = 3
+	GeneratorEnd       GeneratorType = 4
+	GeneratorVoid      GeneratorType = 5
+	GeneratorUndefined GeneratorType = 6
+)
+
+// Marshal reads or writes GeneratorType through its int32 wire encoding.
+func (x *GeneratorType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type WorldPosition struct {
+	Position      mgl32.Vec3
+	DimensionType DimensionType
 }
 
-// Marshal encodes/decodes a GenerationFeature.
-func (x *GenerationFeature) Marshal(r IO) {
-	r.String(&x.Name)
-	r.ByteSlice(&x.JSON)
+// Marshal reads or writes WorldPosition using its canonical wire layout.
+func (x *WorldPosition) Marshal(io IO) {
+	io.Vec3(&x.Position)
+	x.DimensionType.Marshal(io)
 }

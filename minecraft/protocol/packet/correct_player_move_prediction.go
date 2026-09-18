@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	PredictionTypePlayer = iota
-	PredictionTypeVehicle
+	PredictionTypePlayer  protocol.RewindType = 0
+	PredictionTypeVehicle protocol.RewindType = 1
 )
 
 // CorrectPlayerMovePrediction is sent by the server if and only if StartGame.ServerAuthoritativeMovementMode
@@ -15,10 +15,9 @@ const (
 // point in time.
 type CorrectPlayerMovePrediction struct {
 	// PredictionType is the type of prediction that was corrected. It is one of the constants above.
-	PredictionType byte
-	// Position is the position that the player is supposed to be at the tick written in the field below.
-	// The client will change its current position based on movement after that tick starting from the
-	// Position.
+	PredictionType protocol.RewindType
+	// Position is the position that the player is supposed to be at the tick written in the field below. The
+	// client will change its current position based on movement after that tick starting from the Position.
 	Position mgl32.Vec3
 	// Delta is the change in position compared to what the client sent as its position at that specific tick.
 	Delta mgl32.Vec3
@@ -38,7 +37,7 @@ func (*CorrectPlayerMovePrediction) ID() uint32 {
 }
 
 func (pk *CorrectPlayerMovePrediction) Marshal(io protocol.IO) {
-	io.Uint8(&pk.PredictionType)
+	pk.PredictionType.Marshal(io)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Delta)
 	io.Vec2(&pk.Rotation)

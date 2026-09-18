@@ -11,8 +11,8 @@ type HurtArmour struct {
 	// Cause is the cause of the damage dealt to the armour.
 	Cause int32
 	// Damage is the amount of damage points that was dealt to the player. The damage to the armour will be
-	// calculated by the client based upon this damage, and will also be based upon any enchantments like
-	// thorns that the armour may have.
+	// calculated by the client based upon this damage, and will also be based upon any enchantments like thorns
+	// that the armour may have.
 	Damage int32
 	// ArmourSlots is a bitset of all armour slots affected.
 	ArmourSlots uint64

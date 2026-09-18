@@ -8,7 +8,6 @@ import (
 // server. It is the first encrypted packet in the login handshake and serves as a confirmation that
 // encryption is correctly initialised client side.
 type ClientToServerHandshake struct {
-	// ClientToServerHandshake has no fields.
 }
 
 // ID ...
@@ -16,4 +15,5 @@ func (*ClientToServerHandshake) ID() uint32 {
 	return IDClientToServerHandshake
 }
 
-func (*ClientToServerHandshake) Marshal(protocol.IO) {}
+func (pk *ClientToServerHandshake) Marshal(io protocol.IO) {
+}

@@ -13,7 +13,7 @@ type CameraInstruction struct {
 	// Fade is a camera instruction that fades the screen to a specified colour.
 	Fade protocol.Optional[protocol.CameraInstructionFade]
 	// Target is a camera instruction that targets a specific entity.
-	Target protocol.Optional[protocol.CameraInstructionTarget]
+	Target protocol.Optional[protocol.CameraInstructionTargetData]
 	// RemoveTarget can be set to true to remove the current aim assist target.
 	RemoveTarget protocol.Optional[bool]
 	// FieldOfView is a camera instruction that updates the field of view for the camera.
@@ -21,7 +21,7 @@ type CameraInstruction struct {
 	// Spline is a camera instruction that creates a spline path for the camera to follow.
 	Spline protocol.Optional[protocol.CameraSplineInstruction]
 	// AttachToEntity is the entity ID to attach the camera to.
-	AttachToEntity protocol.Optional[int64]
+	AttachToEntity protocol.Optional[protocol.CameraInstructionTarget]
 	// DetachFromEntity can be set to true to detach the camera from the current entity.
 	DetachFromEntity protocol.Optional[bool]
 }
@@ -39,6 +39,6 @@ func (pk *CameraInstruction) Marshal(io protocol.IO) {
 	protocol.OptionalFunc(io, &pk.RemoveTarget, io.Bool)
 	protocol.OptionalMarshaler(io, &pk.FieldOfView)
 	protocol.OptionalMarshaler(io, &pk.Spline)
-	protocol.OptionalFunc(io, &pk.AttachToEntity, io.ActorUniqueIDInt64)
+	protocol.OptionalMarshaler(io, &pk.AttachToEntity)
 	protocol.OptionalFunc(io, &pk.DetachFromEntity, io.Bool)
 }

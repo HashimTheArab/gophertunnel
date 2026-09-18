@@ -5,11 +5,13 @@ import (
 )
 
 // RefreshEntitlements is sent by the client to the server to refresh the entitlements of the player.
-type RefreshEntitlements struct{}
+type RefreshEntitlements struct {
+}
 
 // ID ...
 func (*RefreshEntitlements) ID() uint32 {
 	return IDRefreshEntitlements
 }
 
-func (*RefreshEntitlements) Marshal(protocol.IO) {}
+func (pk *RefreshEntitlements) Marshal(io protocol.IO) {
+}

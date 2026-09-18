@@ -18,37 +18,23 @@ type AddActor struct {
 	// EntityType is the string entity type of the entity, for example 'minecraft:skeleton'. A list of these
 	// entities may be found online.
 	EntityType string
-	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot
-	// see it, the entity will still show up if the player moves closer.
+	// Position is the position to spawn the entity on. If the entity is on a distance that the player cannot see
+	// it, the entity will still show up if the player moves closer.
 	Position mgl32.Vec3
-	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side
-	// movement of the entity.
-	Velocity mgl32.Vec3
-	// Pitch is the vertical rotation of the entity. Facing straight forward yields a pitch of 0. Pitch is
-	// measured in degrees.
-	Pitch float32
-	// Yaw is the horizontal rotation of the entity. Yaw is also measured in degrees.
-	Yaw float32
-	// HeadYaw is the same as Yaw, except that it applies specifically to the head of the entity. A different value for
-	// HeadYaw than Yaw means that the entity will have its head turned.
-	HeadYaw float32
-	// BodyYaw is the same as Yaw, except that it applies specifically to the body of the entity. A different value for
-	// BodyYaw than HeadYaw means that the entity will have its body turned, although it is unclear what the difference
-	// between BodyYaw and Yaw is.
-	BodyYaw float32
+	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side movement
+	// of the entity.
+	Velocity      mgl32.Vec3
+	Rotation      mgl32.Vec2
+	YHeadRotation float32
+	YBodyRotation float32
 	// Attributes is a slice of attributes that the entity has. It includes attributes such as its health,
 	// movement speed, etc.
-	Attributes []protocol.AttributeValue
-	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
-	// particular the way the entity looks. Flags include ones such as 'on fire' and 'sprinting'.
-	// The metadata values are indexed by their property key.
-	EntityMetadata protocol.EntityMetadata
-	// EntityProperties is a list of properties that the entity inhibits. These properties define and alter specific
-	// attributes of the entity.
-	EntityProperties protocol.EntityProperties
-	// EntityLinks is a list of entity links that are currently active on the entity. These links alter the
-	// way the entity shows up when first spawned in terms of it shown as riding an entity. Setting these
-	// links is important for new viewers to see the entity is riding another entity.
+	Attributes        []protocol.SyncedAttribute
+	EntityData        protocol.SynchedActorDataCopyableDataList
+	SynchedProperties protocol.PropertySyncData
+	// EntityLinks is a list of entity links that are currently active on the entity. These links alter the way
+	// the entity shows up when first spawned in terms of it shown as riding an entity. Setting these links is
+	// important for new viewers to see the entity is riding another entity.
 	EntityLinks []protocol.EntityLink
 }
 
@@ -63,12 +49,11 @@ func (pk *AddActor) Marshal(io protocol.IO) {
 	io.String(&pk.EntityType)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
-	io.Float32(&pk.Pitch)
-	io.Float32(&pk.Yaw)
-	io.Float32(&pk.HeadYaw)
-	io.Float32(&pk.BodyYaw)
+	io.Vec2(&pk.Rotation)
+	io.Float32(&pk.YHeadRotation)
+	io.Float32(&pk.YBodyRotation)
 	protocol.Slice(io, &pk.Attributes)
-	io.EntityMetadata(&pk.EntityMetadata)
-	protocol.Single(io, &pk.EntityProperties)
+	pk.EntityData.Marshal(io)
+	pk.SynchedProperties.Marshal(io)
 	protocol.Slice(io, &pk.EntityLinks)
 }

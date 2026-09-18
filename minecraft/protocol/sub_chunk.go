@@ -1,82 +1,66 @@
 package protocol
 
-const (
-	HeightMapDataNone = iota
-	HeightMapDataHasData
-	HeightMapDataTooHigh
-	HeightMapDataTooLow
-	HeightMapDataAllCopied
-)
+type HeightMapDataType uint8
 
 const (
-	SubChunkResultUndefined = iota
-	SubChunkResultSuccess
-	SubChunkResultChunkNotFound
-	SubChunkResultInvalidDimension
-	SubChunkResultPlayerNotFound
-	SubChunkResultIndexOutOfBounds
-	SubChunkResultSuccessAllAir
+	HeightMapDataNone    HeightMapDataType = 0
+	HeightMapDataHasData HeightMapDataType = 1
+	HeightMapDataTooHigh HeightMapDataType = 2
+	HeightMapDataTooLow  HeightMapDataType = 3
 )
 
-// SubChunkEntry contains the data of a sub-chunk entry relative to a center sub chunk position, used for the sub-chunk
-// requesting system introduced in v1.18.10.
-type SubChunkEntry struct {
-	// Offset contains the offset between the sub-chunk position and the center position.
-	Offset SubChunkOffset
-	// Result is always one of the constants defined in the SubChunkResult constants.
-	Result byte
-	// RawPayload contains the serialized sub-chunk data, if present.
-	RawPayload Optional[[]byte]
-	// HeightMapType is always one of the constants defined in the HeightMapData constants.
-	HeightMapType byte
-	// HeightMapData is the data for the height map, if present.
-	HeightMapData Optional[HeightMap]
-	// RenderHeightMapType is always one of the constants defined in the HeightMapData constants.
-	RenderHeightMapType byte
-	// RenderHeightMapData is the data for the render height map, if present.
-	RenderHeightMapData Optional[HeightMap]
-	// BlobHash is the hash of the blob, if present.
-	BlobHash Optional[uint64]
+// Marshal reads or writes HeightMapDataType through its uint8 wire encoding.
+func (x *HeightMapDataType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type SubChunkData struct {
+	SubChunkPosOffset     SubChunkPosOffset
+	SubChunkRequestResult SubChunkRequestResult
+	SerializedSubChunk    Optional[[]byte]
+	HeightMapData         HeightmapData
+	BlobID                Optional[uint64]
 }
 
-// Marshal encodes/decodes a SubChunkEntry.
-func (x *SubChunkEntry) Marshal(r IO) {
-	Single(r, &x.Offset)
-	r.Uint8(&x.Result)
-	OptionalFunc(r, &x.RawPayload, r.ByteSlice)
-	r.Uint8(&x.HeightMapType)
-
-	OptionalMarshaler(r, &x.HeightMapData)
-	r.Uint8(&x.RenderHeightMapType)
-
-	OptionalMarshaler(r, &x.RenderHeightMapData)
-	OptionalFunc(r, &x.BlobHash, r.Uint64)
+// Marshal reads or writes SubChunkData using its canonical wire layout.
+func (x *SubChunkData) Marshal(io IO) {
+	x.SubChunkPosOffset.Marshal(io)
+	x.SubChunkRequestResult.Marshal(io)
+	OptionalFunc(io, &x.SerializedSubChunk, io.ByteSlice)
+	x.HeightMapData.Marshal(io)
+	OptionalFunc(io, &x.BlobID, io.Uint64)
 }
 
-// SubChunkOffset represents an offset from the base position of another sub chunk.
-type SubChunkOffset [3]int8
-
-// Marshal encodes/decodes a SubChunkOffset.
-func (x *SubChunkOffset) Marshal(r IO) {
-	r.Int8(&x[0])
-	r.Int8(&x[1])
-	r.Int8(&x[2])
+type SubChunkMetadata struct {
+	BlobID uint64
 }
 
-// HeightMap holds the height of every column of a sub-chunk, indexed as [z][x].
-type HeightMap [16][16]int8
-
-// Marshal encodes/decodes a HeightMap.
-func (x *HeightMap) Marshal(r IO) {
-	for z := range x {
-		n := uint32(16)
-		r.Varuint32(&n)
-		if n != 16 {
-			r.InvalidValue(n, "height map row", "must hold 16 heights")
-			return
-		}
-		for i := range x[z] {
-			r.Int8(&x[z][i])
-		}
-	}
+// Marshal reads or writes SubChunkMetadata using its canonical wire layout.
+func (x *SubChunkMetadata) Marshal(io IO) {
+	io.Uint64(&x.BlobID)
 }
+
+type SubChunkPosOffset struct {
+	SubchunkOffsetX int8
+	SubchunkOffsetY int8
+	SubchunkOffsetZ int8
+}
+
+// Marshal reads or writes SubChunkPosOffset using its canonical wire layout.
+func (x *SubChunkPosOffset) Marshal(io IO) {
+	io.Int8(&x.SubchunkOffsetX)
+	io.Int8(&x.SubchunkOffsetY)
+	io.Int8(&x.SubchunkOffsetZ)
+}
+
+type SubChunkRequestResult uint8
+
+const (
+	SubChunkResultSuccess          SubChunkRequestResult = 1
+	SubChunkResultChunkNotFound    SubChunkRequestResult = 2
+	SubChunkResultInvalidDimension SubChunkRequestResult = 3
+	SubChunkResultPlayerNotFound   SubChunkRequestResult = 4
+	SubChunkResultIndexOutOfBounds SubChunkRequestResult = 5
+	SubChunkResultSuccessAllAir    SubChunkRequestResult = 6
+)
+
+// Marshal reads or writes SubChunkRequestResult through its uint8 wire encoding.
+func (x *SubChunkRequestResult) Marshal(io IO) { io.Uint8((*uint8)(x)) }

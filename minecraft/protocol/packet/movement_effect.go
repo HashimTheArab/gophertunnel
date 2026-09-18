@@ -5,9 +5,9 @@ import (
 )
 
 const (
-	MovementEffectTypeGlideBoost = iota
-	MovementEffectTypeDolphinBoost
-	MovementEffectTypeGeyserBoost
+	MovementEffectTypeGlideBoost   protocol.MovementEffectType = 0
+	MovementEffectTypeDolphinBoost protocol.MovementEffectType = 1
+	MovementEffectTypeGeyserBoost  protocol.MovementEffectType = 2
 )
 
 // MovementEffect is sent by the server to the client to update specific movement effects to allow the client
@@ -18,10 +18,11 @@ type MovementEffect struct {
 	// entities are generally identified in packets using this runtime ID.
 	EntityRuntimeID uint64
 	// Type is the type of movement effect being updated. It is one of the constants found above.
-	Type int32
+	Type protocol.MovementEffectType
 	// Duration is the duration of the effect, measured in ticks.
 	Duration int32
-	// Tick is the server tick at which the packet was sent. It is used in relation to CorrectPlayerMovePrediction.
+	// Tick is the server tick at which the packet was sent. It is used in relation to
+	// CorrectPlayerMovePrediction.
 	Tick uint64
 }
 
@@ -32,7 +33,7 @@ func (*MovementEffect) ID() uint32 {
 
 func (pk *MovementEffect) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.Varint32(&pk.Type)
+	pk.Type.Marshal(io)
 	io.Varint32(&pk.Duration)
 	io.PlayerInputTick(&pk.Tick)
 }

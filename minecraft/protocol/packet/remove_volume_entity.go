@@ -6,10 +6,8 @@ import (
 
 // RemoveVolumeEntity indicates a volume entity to be removed from server to client.
 type RemoveVolumeEntity struct {
-	// EntityRuntimeID ...
-	EntityRuntimeID uint32
-	// Dimension ...
-	Dimension int32
+	EntityNetworkID protocol.EntityNetID
+	DimensionType   protocol.DimensionType
 }
 
 // ID ...
@@ -18,6 +16,6 @@ func (*RemoveVolumeEntity) ID() uint32 {
 }
 
 func (pk *RemoveVolumeEntity) Marshal(io protocol.IO) {
-	io.ActorRuntimeIDVaruint32(&pk.EntityRuntimeID)
-	io.Varint32(&pk.Dimension)
+	pk.EntityNetworkID.Marshal(io)
+	pk.DimensionType.Marshal(io)
 }

@@ -5,46 +5,46 @@ import (
 )
 
 const (
-	CodeBuilderOperationNone = iota
-	CodeBuilderOperationGet
-	CodeBuilderOperationSet
-	CodeBuilderOperationReset
+	CodeBuilderStatusNone       protocol.CodeBuilderExecutionStateCodeStatus = 0
+	CodeBuilderStatusNotStarted protocol.CodeBuilderExecutionStateCodeStatus = 1
+	CodeBuilderStatusInProgress protocol.CodeBuilderExecutionStateCodeStatus = 2
+	CodeBuilderStatusPaused     protocol.CodeBuilderExecutionStateCodeStatus = 3
+	CodeBuilderStatusError      protocol.CodeBuilderExecutionStateCodeStatus = 4
+	CodeBuilderStatusSucceeded  protocol.CodeBuilderExecutionStateCodeStatus = 5
 )
 
 const (
-	CodeBuilderCategoryNone = iota
-	CodeBuilderCategoryStatus
-	CodeBuilderCategoryInstantiation
+	CodeBuilderCategoryNone          protocol.CodeBuilderStorageQueryOptionsCategory = 0
+	CodeBuilderCategoryStatus        protocol.CodeBuilderStorageQueryOptionsCategory = 1
+	CodeBuilderCategoryInstantiation protocol.CodeBuilderStorageQueryOptionsCategory = 2
 )
 
 const (
-	CodeBuilderStatusNone = iota
-	CodeBuilderStatusNotStarted
-	CodeBuilderStatusInProgress
-	CodeBuilderStatusPaused
-	CodeBuilderStatusError
-	CodeBuilderStatusSucceeded
+	CodeBuilderOperationNone  protocol.CodeBuilderStorageQueryOptionsOperation = 0
+	CodeBuilderOperationGet   protocol.CodeBuilderStorageQueryOptionsOperation = 1
+	CodeBuilderOperationSet   protocol.CodeBuilderStorageQueryOptionsOperation = 2
+	CodeBuilderOperationReset protocol.CodeBuilderStorageQueryOptionsOperation = 3
 )
 
-// CodeBuilderSource is an Education Edition packet sent by the client to the server to run an operation with a
-// code builder.
+// CodeBuilderSource is an Education Edition packet sent by the client to the server to run an operation with
+// a code builder.
 type CodeBuilderSource struct {
 	// Operation is used to distinguish the operation performed. It is always one of the constants listed above.
-	Operation byte
+	Operation protocol.CodeBuilderStorageQueryOptionsOperation
 	// Category is used to distinguish the category of the operation performed. It is always one of the constants
 	// listed above.
-	Category byte
+	Category protocol.CodeBuilderStorageQueryOptionsCategory
 	// CodeStatus is the status of the code builder. It is always one of the constants listed above.
-	CodeStatus byte
+	CodeStatus protocol.CodeBuilderExecutionStateCodeStatus
 }
 
 // ID ...
-func (pk *CodeBuilderSource) ID() uint32 {
+func (*CodeBuilderSource) ID() uint32 {
 	return IDCodeBuilderSource
 }
 
 func (pk *CodeBuilderSource) Marshal(io protocol.IO) {
-	io.Uint8(&pk.Operation)
-	io.Uint8(&pk.Category)
-	io.Uint8(&pk.CodeStatus)
+	pk.Operation.Marshal(io)
+	pk.Category.Marshal(io)
+	pk.CodeStatus.Marshal(io)
 }

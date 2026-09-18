@@ -7,8 +7,8 @@ import (
 // PurchaseReceipt is sent by the client to the server to notify the server it purchased an item from the
 // Marketplace store that was offered by the server. The packet is only used for partnered servers.
 type PurchaseReceipt struct {
-	// Receipts is a list of receipts, or proofs of purchases, for the offers that have been purchased by the
-	// player.
+	// PurchaseReceipts is a list of receipts, or proofs of purchases, for the offers that have been purchased by
+	// the player.
 	Receipts []string
 }
 
@@ -18,5 +18,5 @@ func (*PurchaseReceipt) ID() uint32 {
 }
 
 func (pk *PurchaseReceipt) Marshal(io protocol.IO) {
-	protocol.FuncSlice(io, &pk.Receipts, io.String)
+	protocol.FuncSliceLimits(io, &pk.Receipts, io.Varuint32, 0, 10000, io.String)
 }

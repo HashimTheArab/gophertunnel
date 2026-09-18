@@ -9,8 +9,8 @@ type ExperimentData struct {
 	Enabled bool
 }
 
-// Marshal encodes/decodes an ExperimentData.
-func (x *ExperimentData) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Bool(&x.Enabled)
+// Marshal reads or writes ExperimentData using its canonical wire layout.
+func (x *ExperimentData) Marshal(io IO) {
+	io.String(&x.Name)
+	io.Bool(&x.Enabled)
 }

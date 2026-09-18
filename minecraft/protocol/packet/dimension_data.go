@@ -4,12 +4,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// DimensionData is a packet sent from the server to the client containing information about data-driven dimensions
-// that the server may have registered. This packet does not seem to be sent by default, rather only being sent when
-// any data-driven dimensions are registered.
+// DimensionData is a packet sent from the server to the client containing information about data-driven
+// dimensions that the server may have registered. This packet does not seem to be sent by default, rather
+// only being sent when any data-driven dimensions are registered.
 type DimensionData struct {
 	// Definitions contain a list of data-driven dimension definitions registered on the server.
-	Definitions []protocol.DimensionDefinition
+	Definitions []protocol.OrderedEntry[string, protocol.DimensionDefinition]
 }
 
 // ID ...
@@ -18,5 +18,9 @@ func (*DimensionData) ID() uint32 {
 }
 
 func (pk *DimensionData) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Definitions)
+	protocol.OrderedMap(io, &pk.Definitions, io.Varuint32, func(value *string) {
+		io.StringLimits(value, 0, 256)
+	}, func(value *protocol.DimensionDefinition) {
+		value.Marshal(io)
+	})
 }

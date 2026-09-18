@@ -9,10 +9,8 @@ import (
 type ModalFormRequest struct {
 	// FormID is an ID used to identify the form. The ID is saved by the client and sent back when the player
 	// submits the form, so that the server can identify which form was submitted.
-	FormID uint32
-	// FormData is a JSON encoded object of form data. The content of the object differs, depending on the
-	// type of the form sent, which is also set in the JSON.
-	FormData []byte
+	FormID     uint32
+	FormUIJSON string
 }
 
 // ID ...
@@ -22,5 +20,5 @@ func (*ModalFormRequest) ID() uint32 {
 
 func (pk *ModalFormRequest) Marshal(io protocol.IO) {
 	io.Varuint32(&pk.FormID)
-	io.ByteSlice(&pk.FormData)
+	io.String(&pk.FormUIJSON)
 }

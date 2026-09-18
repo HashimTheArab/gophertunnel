@@ -5,19 +5,18 @@ import (
 )
 
 const (
-	EnableMultiPlayer = iota
-	DisableMultiPlayer
-	RefreshJoinCode
+	EnableMultiPlayer  protocol.MultiplayerSettingsType = 0
+	DisableMultiPlayer protocol.MultiplayerSettingsType = 1
+	RefreshJoinCode    protocol.MultiplayerSettingsType = 2
 )
 
 // MultiPlayerSettings is sent by the client to update multi-player related settings server-side and sent back
-// to online players by the server.
-// The MultiPlayerSettings packet is a Minecraft: Education Edition packet. It has no functionality for the
-// base game.
+// to online players by the server. The MultiPlayerSettings packet is a Minecraft: Education Edition packet.
+// It has no functionality for the base game.
 type MultiPlayerSettings struct {
-	// ActionType is the action that should be done when this packet is sent. It is one of the constants that
-	// may be found above.
-	ActionType int32
+	// ActionType is the action that should be done when this packet is sent. It is one of the constants that may
+	// be found above.
+	ActionType protocol.MultiplayerSettingsType
 }
 
 // ID ...
@@ -26,5 +25,5 @@ func (*MultiPlayerSettings) ID() uint32 {
 }
 
 func (pk *MultiPlayerSettings) Marshal(io protocol.IO) {
-	io.Varint32(&pk.ActionType)
+	pk.ActionType.Marshal(io)
 }

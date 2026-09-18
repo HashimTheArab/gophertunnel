@@ -1,6 +1,8 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
 // PartyDestinationCookieResponse is sent by the client to the server in response to a
 // SendPartyDestinationCookie packet.
@@ -17,6 +19,6 @@ func (*PartyDestinationCookieResponse) ID() uint32 {
 }
 
 func (pk *PartyDestinationCookieResponse) Marshal(io protocol.IO) {
-	io.String(&pk.Cookie)
+	io.StringLimits(&pk.Cookie, 0, 2048)
 	io.Bool(&pk.Accepted)
 }

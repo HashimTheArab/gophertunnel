@@ -8,18 +8,18 @@ import (
 // sent for the main inventory of the player, but also works for other inventories that are currently opened
 // by the player.
 type InventoryContent struct {
-	// WindowID is the ID that identifies one of the windows that the client currently has opened, or one of
+	// ContainerID is the ID that identifies one of the windows that the client currently has opened, or one of
 	// the consistent windows such as the main inventory.
 	WindowID uint32
-	// Content is the new content of the inventory. The length of this slice must be equal to the full size of
-	// the inventory window updated.
-	Content []protocol.ItemInstance
-	// Container is the protocol.FullContainerName that describes the container that the content is for.
+	// Slots is the new content of the inventory. The length of this slice must be equal to the full size of the
+	// inventory window updated.
+	Content []protocol.NetworkItemStackDescriptorSerializedData
+	// FullContainerName is the protocol.FullContainerName that describes the container that the content is for.
 	Container protocol.FullContainerName
-	// StorageItem is the item that is acting as the storage container for the inventory. If the inventory is
-	// not a dynamic container then this field should be left empty. When set, only the item type is used by
-	// the client and none of the other stack info.
-	StorageItem protocol.ItemInstance
+	// StorageItem is the item that is acting as the storage container for the inventory. If the inventory is not
+	// a dynamic container then this field should be left empty. When set, only the item type is used by the
+	// client and none of the other stack info.
+	StorageItem protocol.NetworkItemStackDescriptorSerializedData
 }
 
 // ID ...
@@ -29,7 +29,7 @@ func (*InventoryContent) ID() uint32 {
 
 func (pk *InventoryContent) Marshal(io protocol.IO) {
 	io.Varuint32(&pk.WindowID)
-	protocol.FuncSlice(io, &pk.Content, io.ItemInstance)
-	protocol.Single(io, &pk.Container)
-	io.ItemInstance(&pk.StorageItem)
+	protocol.Slice(io, &pk.Content)
+	pk.Container.Marshal(io)
+	pk.StorageItem.Marshal(io)
 }

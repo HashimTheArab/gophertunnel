@@ -5,18 +5,18 @@ import (
 )
 
 const (
-	GraphicsModeSimple = iota
-	GraphicsModeFancy
-	GraphicsModeAdvanced
-	GraphicsModeRayTraced
+	GraphicsModeSimple    protocol.GraphicsMode = 0
+	GraphicsModeFancy     protocol.GraphicsMode = 1
+	GraphicsModeAdvanced  protocol.GraphicsMode = 2
+	GraphicsModeRayTraced protocol.GraphicsMode = 3
 )
 
 // UpdateClientOptions is sent by the client when some of the client's options are updated, such as the
 // graphics mode.
 type UpdateClientOptions struct {
-	// GraphicsMode is the graphics mode that the client is using. It is one of the constants above.
-	GraphicsMode protocol.Optional[byte]
-	// FilterProfanity is if the client only uses filtered messages or not.
+	// GraphicsModeChange is the graphics mode that the client is using. It is one of the constants above.
+	GraphicsMode protocol.Optional[protocol.GraphicsMode]
+	// FilterProfanityChange is if the client only uses filtered messages or not.
 	FilterProfanity protocol.Optional[bool]
 }
 
@@ -26,6 +26,6 @@ func (*UpdateClientOptions) ID() uint32 {
 }
 
 func (pk *UpdateClientOptions) Marshal(io protocol.IO) {
-	protocol.OptionalFunc(io, &pk.GraphicsMode, io.Uint8)
+	protocol.OptionalMarshaler(io, &pk.GraphicsMode)
 	protocol.OptionalFunc(io, &pk.FilterProfanity, io.Bool)
 }
