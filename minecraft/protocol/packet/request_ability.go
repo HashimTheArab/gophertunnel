@@ -1,48 +1,29 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	AbilityBuild = iota
-	AbilityMine
-	AbilityDoorsAndSwitches
-	AbilityOpenContainers
-	AbilityAttackPlayers
-	AbilityAttackMobs
-	AbilityOperatorCommands
-	AbilityTeleport
-	AbilityInvulnerable
-	AbilityFlying
-	AbilityMayFly
-	AbilityInstantBuild
-	AbilityLightning
-	AbilityFlySpeed
-	AbilityWalkSpeed
-	AbilityMuted
-	AbilityWorldBuilder
-	AbilityNoClip
-	AbilityCount
-)
-
-// RequestAbility is a packet sent by the client to the server to request permission for a specific ability from the
-// server. These abilities are defined above.
+// RequestAbility is a packet sent by the client to the server to request permission for a specific
+// ability from the server. These abilities are defined above.
 type RequestAbility struct {
 	// Ability is the ability that the client is requesting. This is one of the constants defined in the
 	// protocol/ability.go file.
-	Ability int32
-	// Value represents the value of the ability. This can either be a boolean or a float32, otherwise the writer/reader
-	// will panic.
-	Value any
+	Ability   int32
+	ValueType protocol.RequestAbilityType
+	Bool      bool
+	Float     float32
 }
 
-// ID ...
-func (*RequestAbility) ID() uint32 {
-	return IDRequestAbility
+// Marshal reads or writes RequestAbility using its canonical wire layout.
+func (x *RequestAbility) Marshal(io protocol.IO) {
+	io.Varint32(&x.Ability)
+	protocol.Minimum(io, &x.Ability, 0)
+	protocol.Maximum(io, &x.Ability, 19)
+	x.ValueType.Marshal(io)
+	io.Bool(&x.Bool)
+	io.Float32(&x.Float)
 }
 
-func (pk *RequestAbility) Marshal(io protocol.IO) {
-	io.Varint32(&pk.Ability)
-	io.AbilityValue(&pk.Value)
-}
+// ID returns the protocol ID for RequestAbility.
+func (*RequestAbility) ID() uint32 { return IDRequestAbility }

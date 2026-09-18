@@ -1,3 +1,5 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import (
@@ -5,17 +7,14 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ServerPlayerPostMovePosition is sent by the server with the player's position after movement processing.
 type ServerPlayerPostMovePosition struct {
-	// Position is the player's position after the server has processed movement.
 	Position mgl32.Vec3
 }
 
-// ID ...
-func (*ServerPlayerPostMovePosition) ID() uint32 {
-	return IDServerPlayerPostMovePosition
+// Marshal reads or writes ServerPlayerPostMovePosition using its canonical wire layout.
+func (x *ServerPlayerPostMovePosition) Marshal(io protocol.IO) {
+	io.Vec3(&x.Position)
 }
 
-func (pk *ServerPlayerPostMovePosition) Marshal(io protocol.IO) {
-	io.Vec3(&pk.Position)
-}
+// ID returns the protocol ID for ServerPlayerPostMovePosition.
+func (*ServerPlayerPostMovePosition) ID() uint32 { return IDServerPlayerPostMovePosition }

@@ -1,44 +1,33 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	GameTestRequestRotation0 = iota
-	GameTestRequestRotation90
-	GameTestRequestRotation180
-	GameTestRequestRotation270
-	GameTestRequestRotation360
-)
-
 // GameTestRequest ...
 type GameTestRequest struct {
-	// Name represents the name of the test.
-	Name string
-	// Rotation represents the rotation of the test. It is one of the constants above.
-	Rotation uint8
-	// Repetitions represents the amount of times the test will be run.
-	Repetitions int32
-	// Position is the position at which the test will be performed.
-	Position protocol.BlockPos
-	// StopOnError indicates whether the test should immediately stop when an error is encountered.
-	StopOnError bool
-	// TestsPerRow ...
-	TestsPerRow int32
 	// MaxTestsPerBatch ...
 	MaxTestsPerBatch int32
+	RepeatCount      int32
+	// Rotation represents the rotation of the test. It is one of the constants above.
+	Rotation      protocol.Rotation
+	StopOnFailure bool
+	TestPos       protocol.BlockPos
+	// TestsPerRow ...
+	TestsPerRow int32
+	TestName    string
 }
 
-// ID ...
-func (pk *GameTestRequest) ID() uint32 {
-	return IDGameTestRequest
+// Marshal reads or writes GameTestRequest using its canonical wire layout.
+func (x *GameTestRequest) Marshal(io protocol.IO) {
+	io.Varint32(&x.MaxTestsPerBatch)
+	io.Varint32(&x.RepeatCount)
+	x.Rotation.Marshal(io)
+	io.Bool(&x.StopOnFailure)
+	x.TestPos.Marshal(io)
+	io.Varint32(&x.TestsPerRow)
+	io.String(&x.TestName)
 }
 
-func (pk *GameTestRequest) Marshal(io protocol.IO) {
-	io.Varint32(&pk.MaxTestsPerBatch)
-	io.Varint32(&pk.Repetitions)
-	io.Uint8(&pk.Rotation)
-	io.Bool(&pk.StopOnError)
-	io.BlockPos(&pk.Position)
-	io.Varint32(&pk.TestsPerRow)
-	io.String(&pk.Name)
-}
+// ID returns the protocol ID for GameTestRequest.
+func (*GameTestRequest) ID() uint32 { return IDGameTestRequest }

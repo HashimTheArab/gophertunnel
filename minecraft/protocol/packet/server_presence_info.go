@@ -1,20 +1,19 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // ServerPresenceInfo is sent by the server to provide the client with presence info.
 type ServerPresenceInfo struct {
-	// PresenceInfo is the presence info to set, or nothing to fall back to the default.
-	PresenceInfo protocol.Optional[protocol.PresenceInfo]
+	// PresenceConfiguration is the presence info to set, or nothing to fall back to the default.
+	PresenceInfo protocol.Optional[protocol.ServerConfigurationPresenceConfiguration]
 }
 
-// ID ...
-func (*ServerPresenceInfo) ID() uint32 {
-	return IDServerPresenceInfo
+// Marshal reads or writes ServerPresenceInfo using its canonical wire layout.
+func (x *ServerPresenceInfo) Marshal(io protocol.IO) {
+	protocol.OptionalMarshaler(io, &x.PresenceInfo)
 }
 
-func (pk *ServerPresenceInfo) Marshal(io protocol.IO) {
-	protocol.OptionalMarshaler(io, &pk.PresenceInfo)
-}
+// ID returns the protocol ID for ServerPresenceInfo.
+func (*ServerPresenceInfo) ID() uint32 { return IDServerPresenceInfo }

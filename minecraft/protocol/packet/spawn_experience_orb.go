@@ -1,3 +1,5 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import (
@@ -5,24 +7,25 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// SpawnExperienceOrb is sent by the server to spawn an experience orb entity client-side. Much like the
-// AddPainting packet, it is one of the few packets that spawn an entity without using the AddActor packet.
+// SpawnExperienceOrb is sent by the server to spawn an experience orb entity client-side. Much like
+// the AddPainting packet, it is one of the few packets that spawn an entity without using the
+// AddActor packet.
 type SpawnExperienceOrb struct {
-	// Position is the position to spawn the experience orb on. If the entity is on a distance that the player
-	// cannot see it, the entity will still show up if the player moves closer.
+	// Position is the position to spawn the experience orb on. If the entity is on a distance that the
+	// player cannot see it, the entity will still show up if the player moves closer.
 	Position mgl32.Vec3
-	// ExperienceAmount is the amount of experience in experience points that the orb carries. The client-side
-	// size of the orb depends on the amount of experience in the orb: There are 11 possible sizes for the
-	// orb, for 1–2, 3–6, 7–16, 17–36, 37–72, 73–148, 149–306, 307–616, 617–1236, 1237–2476, and 2477 and up.
+	// XPValue is the amount of experience in experience points that the orb carries. The client-side
+	// size of the orb depends on the amount of experience in the orb: There are 11 possible sizes for
+	// the orb, for 1–2, 3–6, 7–16, 17–36, 37–72, 73–148, 149–306, 307–616, 617–1236,
+	// 1237–2476, and 2477 and up.
 	ExperienceAmount int32
 }
 
-// ID ...
-func (*SpawnExperienceOrb) ID() uint32 {
-	return IDSpawnExperienceOrb
+// Marshal reads or writes SpawnExperienceOrb using its canonical wire layout.
+func (x *SpawnExperienceOrb) Marshal(io protocol.IO) {
+	io.Vec3(&x.Position)
+	io.Varint32(&x.ExperienceAmount)
 }
 
-func (pk *SpawnExperienceOrb) Marshal(io protocol.IO) {
-	io.Vec3(&pk.Position)
-	io.Varint32(&pk.ExperienceAmount)
-}
+// ID returns the protocol ID for SpawnExperienceOrb.
+func (*SpawnExperienceOrb) ID() uint32 { return IDSpawnExperienceOrb }

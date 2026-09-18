@@ -1,15 +1,17 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// RefreshEntitlements is sent by the client to the server to refresh the entitlements of the player.
-type RefreshEntitlements struct{}
-
-// ID ...
-func (*RefreshEntitlements) ID() uint32 {
-	return IDRefreshEntitlements
+// RefreshEntitlements is sent by the client to the server to refresh the entitlements of the
+// player.
+type RefreshEntitlements struct {
 }
 
-func (*RefreshEntitlements) Marshal(protocol.IO) {}
+// Marshal reads or writes RefreshEntitlements using its canonical wire layout.
+func (x *RefreshEntitlements) Marshal(io protocol.IO) {
+}
+
+// ID returns the protocol ID for RefreshEntitlements.
+func (*RefreshEntitlements) ID() uint32 { return IDRefreshEntitlements }

@@ -1,25 +1,26 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	SimulationTypeGame byte = iota
-	SimulationTypeEditor
-	SimulationTypeTest
-	SimulationTypeInvalid
-)
-
 // SimulationType is an in-progress packet. We currently do not know the use case.
 type SimulationType struct {
-	// SimulationType is the simulation type selected.
-	SimulationType byte
+	// SimType is the simulation type selected.
+	SimType protocol.SimulationTypeEnum
 }
 
-// ID ...
-func (*SimulationType) ID() uint32 {
-	return IDSimulationType
+// Marshal reads or writes SimulationType using its canonical wire layout.
+func (x *SimulationType) Marshal(io protocol.IO) {
+	x.SimType.Marshal(io)
 }
 
-func (pk *SimulationType) Marshal(io protocol.IO) {
-	io.Uint8(&pk.SimulationType)
-}
+// ID returns the protocol ID for SimulationType.
+func (*SimulationType) ID() uint32 { return IDSimulationType }
+
+const (
+	SimulationTypeGame    protocol.SimulationTypeEnum = 0
+	SimulationTypeEditor  protocol.SimulationTypeEnum = 1
+	SimulationTypeTest    protocol.SimulationTypeEnum = 2
+	SimulationTypeInvalid protocol.SimulationTypeEnum = 3
+)

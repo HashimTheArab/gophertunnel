@@ -1,25 +1,22 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ScriptMessage is used to communicate custom messages from the client to the server, or from the server to the client.
-// While the name may suggest this packet is used for the discontinued scripting API, it is likely instead for the
-// GameTest framework.
+// ScriptMessage is used to communicate custom messages from the client to the server, or from the
+// server to the client. While the name may suggest this packet is used for the discontinued
+// scripting API, it is likely instead for the GameTest framework.
 type ScriptMessage struct {
-	// Identifier is the identifier of the message, used by either party to identify the message data sent.
 	Identifier string
-	// Data contains the data of the message.
-	Data []byte
+	Data       []byte
 }
 
-// ID ...
-func (pk *ScriptMessage) ID() uint32 {
-	return IDScriptMessage
+// Marshal reads or writes ScriptMessage using its canonical wire layout.
+func (x *ScriptMessage) Marshal(io protocol.IO) {
+	io.String(&x.Identifier)
+	io.Bytes(&x.Data)
 }
 
-func (pk *ScriptMessage) Marshal(io protocol.IO) {
-	io.String(&pk.Identifier)
-	io.ByteSlice(&pk.Data)
-}
+// ID returns the protocol ID for ScriptMessage.
+func (*ScriptMessage) ID() uint32 { return IDScriptMessage }

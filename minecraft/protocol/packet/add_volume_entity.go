@@ -1,44 +1,33 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // AddVolumeEntity sends a volume entity's definition and metadata from server to client.
 type AddVolumeEntity struct {
-	// EntityRuntimeID is the runtime ID of the volume. The runtime ID is unique for each world session, and
-	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID uint32
-	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
-	// particular the way the volume functions or looks.
-	EntityMetadata map[string]any
-	// EncodingIdentifier is the unique identifier for the volume. It must be of the form 'namespace:name', where
-	// namespace cannot be 'minecraft'.
-	EncodingIdentifier string
-	// InstanceIdentifier is the identifier of a fog definition.
-	InstanceIdentifier string
-	// Bounds represent the volume's bounds. The first value is the minimum bounds, and the second value is the
-	// maximum bounds.
-	Bounds [2]protocol.BlockPos
-	// Dimension is the dimension in which the volume exists.
-	Dimension int32
+	EntityNetworkID protocol.EntityNetID
+	Components      []byte
+	JSONIdentifier  string
+	InstanceName    string
+	MinBounds       protocol.BlockPos
+	MaxBounds       protocol.BlockPos
+	DimensionType   protocol.DimensionType
 	// EngineVersion is the engine version the entity is using, for example, '1.17.0'.
 	EngineVersion string
 }
 
-// ID ...
-func (*AddVolumeEntity) ID() uint32 {
-	return IDAddVolumeEntity
+// Marshal reads or writes AddVolumeEntity using its canonical wire layout.
+func (x *AddVolumeEntity) Marshal(io protocol.IO) {
+	x.EntityNetworkID.Marshal(io)
+	io.NBT(&x.Components, protocol.NBTNetwork)
+	io.StringLimits(&x.JSONIdentifier, 1, 18446744073709551615)
+	io.StringLimits(&x.InstanceName, 1, 18446744073709551615)
+	x.MinBounds.Marshal(io)
+	x.MaxBounds.Marshal(io)
+	x.DimensionType.Marshal(io)
+	io.String(&x.EngineVersion)
 }
 
-func (pk *AddVolumeEntity) Marshal(io protocol.IO) {
-	io.ActorRuntimeIDVaruint32(&pk.EntityRuntimeID)
-	io.NBT(&pk.EntityMetadata, nbt.NetworkLittleEndian)
-	io.String(&pk.EncodingIdentifier)
-	io.String(&pk.InstanceIdentifier)
-	io.BlockPos(&pk.Bounds[0])
-	io.BlockPos(&pk.Bounds[1])
-	io.Varint32(&pk.Dimension)
-	io.String(&pk.EngineVersion)
-}
+// ID returns the protocol ID for AddVolumeEntity.
+func (*AddVolumeEntity) ID() uint32 { return IDAddVolumeEntity }

@@ -1,44 +1,45 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import (
+	"fmt"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"io"
 )
 
-// Packet represents a packet that may be sent over a Minecraft network connection. The packet needs to hold
-// a method to encode itself to binary and decode itself from binary.
+// Packet is the common runtime contract for every generated Bedrock packet.
+// Marshal reads from or writes to the supplied protocol IO implementation.
 type Packet interface {
-	// ID returns the ID of the packet. All of these identifiers of packets may be found in id.go.
 	ID() uint32
-	// Marshal encodes or decodes a Packet, depending on the protocol.IO
-	// implementation passed. When passing a protocol.Writer, Marshal will
-	// encode the Packet into its binary representation and write it to the
-	// protocol.Writer. On the other hand, when passing a protocol.Reader,
-	// Marshal will decode the bytes from the reader into the Packet.
-	Marshal(io protocol.IO)
+	Marshal(protocol.IO)
 }
 
-// Header is the header of a packet. It exists out of a single varuint32 which is composed of a packet ID and
-// a sender and target sub client ID. These IDs are used for split screen functionality.
-type Header struct {
-	PacketID        uint32
-	SenderSubClient byte
-	TargetSubClient byte
-}
-
-// Write writes the header as a single varuint32 to buf.
-func (header *Header) Write(w io.ByteWriter) error {
-	return protocol.WriteVaruint32(w, header.PacketID|(uint32(header.SenderSubClient)<<10)|(uint32(header.TargetSubClient)<<12))
-}
-
-// Read reads a varuint32 from buf and sets the corresponding values to the Header.
-func (header *Header) Read(r io.ByteReader) error {
-	var value uint32
-	if err := protocol.Varuint32(r, &value); err != nil {
-		return err
+// Decode unmarshals one packet and rejects malformed or trailing input.
+func Decode(data []byte, pk Packet) error {
+	if pk == nil {
+		return fmt.Errorf("decode packet <nil>")
 	}
-	header.PacketID = value & 0x3FF
-	header.SenderSubClient = byte((value >> 10) & 0x3)
-	header.TargetSubClient = byte((value >> 12) & 0x3)
+	reader := protocol.NewReader(data)
+	pk.Marshal(reader)
+	if err := reader.Err(); err != nil {
+		return fmt.Errorf("decode packet %T: %w", pk, err)
+	}
+	if remaining := reader.Remaining(); remaining != 0 {
+		return fmt.Errorf("decode packet %T: %d trailing bytes", pk, remaining)
+	}
 	return nil
+}
+
+// Encode marshals one packet and reports codec errors.
+func Encode(pk Packet) ([]byte, error) {
+	if pk == nil {
+		return nil, fmt.Errorf("encode packet <nil>")
+	}
+	writer := protocol.NewWriter()
+	pk.Marshal(writer)
+	if err := writer.Err(); err != nil {
+		return nil, fmt.Errorf("encode packet %T: %w", pk, err)
+	}
+	return writer.Data(), nil
 }

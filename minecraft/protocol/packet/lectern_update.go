@@ -1,28 +1,23 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// LecternUpdate is sent by the client to update the server on which page was opened in a book on a lectern,
-// or if the book should be removed from it.
+// LecternUpdate is sent by the client to update the server on which page was opened in a book on a
+// lectern, or if the book should be removed from it.
 type LecternUpdate struct {
-	// Page is the page number in the book that was opened by the player on the lectern.
-	Page byte
-	// PageCount is the number of pages that the book opened in the lectern has.
-	PageCount byte
-	// Position is the position of the lectern that was updated. If no lectern is at the block position,
-	// the packet should be ignored.
-	Position protocol.BlockPos
+	Page      uint8
+	PageCount uint8
+	Position  protocol.BlockPos
 }
 
-// ID ...
-func (*LecternUpdate) ID() uint32 {
-	return IDLecternUpdate
+// Marshal reads or writes LecternUpdate using its canonical wire layout.
+func (x *LecternUpdate) Marshal(io protocol.IO) {
+	io.Uint8(&x.Page)
+	io.Uint8(&x.PageCount)
+	x.Position.Marshal(io)
 }
 
-func (pk *LecternUpdate) Marshal(io protocol.IO) {
-	io.Uint8(&pk.Page)
-	io.Uint8(&pk.PageCount)
-	io.BlockPos(&pk.Position)
-}
+// ID returns the protocol ID for LecternUpdate.
+func (*LecternUpdate) ID() uint32 { return IDLecternUpdate }

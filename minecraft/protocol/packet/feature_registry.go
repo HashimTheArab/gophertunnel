@@ -1,22 +1,22 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// FeatureRegistry is a packet used to notify the client about the world generation features the server is currently
-// using. This is used in combination with the client-side world generation system introduced in v1.19.20, allowing the
-// client to completely generate the chunks of the world without having to rely on the server.
+// FeatureRegistry is a packet used to notify the client about the world generation features the
+// server is currently using. This is used in combination with the client-side world generation
+// system introduced in v1.19.20, allowing the client to completely generate the chunks of the world
+// without having to rely on the server.
 type FeatureRegistry struct {
-	// Features is a slice of all registered world generation features.
-	Features []protocol.GenerationFeature
+	// FeaturesDataList is a slice of all registered world generation features.
+	Features []protocol.FeatureRegistryFeatureBinaryJSONFormat
 }
 
-// ID ...
-func (pk *FeatureRegistry) ID() uint32 {
-	return IDFeatureRegistry
+// Marshal reads or writes FeatureRegistry using its canonical wire layout.
+func (x *FeatureRegistry) Marshal(io protocol.IO) {
+	protocol.Slice(io, &x.Features)
 }
 
-func (pk *FeatureRegistry) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Features)
-}
+// ID returns the protocol ID for FeatureRegistry.
+func (*FeatureRegistry) ID() uint32 { return IDFeatureRegistry }

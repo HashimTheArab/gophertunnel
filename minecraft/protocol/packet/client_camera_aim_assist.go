@@ -1,33 +1,33 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	ClientCameraAimAssistActionSet = iota
-	ClientCameraAimAssistActionClear
-)
-
-// ClientCameraAimAssist is sent by the server to send a player animation from one player to all viewers of that player. It
-// is used for a couple of actions, such as arm swimming and critical hits.
+// ClientCameraAimAssist is sent by the server to send a player animation from one player to all
+// viewers of that player. It is used for a couple of actions, such as arm swimming and critical
+// hits.
 type ClientCameraAimAssist struct {
-	// PresetID is the identifier of the preset to use which was previously defined in the CameraAimAssistPresets
-	// packet.
+	// CameraPresetID is the identifier of the preset to use which was previously defined in the
+	// CameraAimAssistPresets packet.
 	PresetID string
 	// Action is the action to perform with the aim assist. It is one of the constants above.
-	Action byte
+	Action protocol.ClientCameraAimAssistAction
 	// AllowAimAssist specifies the client can use aim assist or not.
 	AllowAimAssist bool
 }
 
-// ID ...
-func (*ClientCameraAimAssist) ID() uint32 {
-	return IDClientCameraAimAssist
+// Marshal reads or writes ClientCameraAimAssist using its canonical wire layout.
+func (x *ClientCameraAimAssist) Marshal(io protocol.IO) {
+	io.String(&x.PresetID)
+	x.Action.Marshal(io)
+	io.Bool(&x.AllowAimAssist)
 }
 
-func (pk *ClientCameraAimAssist) Marshal(io protocol.IO) {
-	io.String(&pk.PresetID)
-	io.Uint8(&pk.Action)
-	io.Bool(&pk.AllowAimAssist)
-}
+// ID returns the protocol ID for ClientCameraAimAssist.
+func (*ClientCameraAimAssist) ID() uint32 { return IDClientCameraAimAssist }
+
+const (
+	ClientCameraAimAssistActionSet   protocol.ClientCameraAimAssistAction = 0
+	ClientCameraAimAssistActionClear protocol.ClientCameraAimAssistAction = 1
+)

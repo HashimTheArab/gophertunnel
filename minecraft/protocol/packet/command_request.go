@@ -1,34 +1,34 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// CommandRequest is sent by the client to request the execution of a server-side command. Although some
-// servers support sending commands using the Text packet, this packet is guaranteed to have the correct
-// result.
+// CommandRequest is sent by the client to request the execution of a server-side command. Although
+// some servers support sending commands using the Text packet, this packet is guaranteed to have
+// the correct result.
 type CommandRequest struct {
-	// CommandLine is the raw entered command line. The client does no parsing of the command line by itself
+	// Command is the raw entered command line. The client does no parsing of the command line by itself
 	// (unlike it did in the early stages), but lets the server do that.
 	CommandLine string
-	// CommandOrigin is the data specifying the origin of the command. In other words, the source that the
+	// Origin is the data specifying the origin of the command. In other words, the source that the
 	// command was from, such as the player itself or a websocket server.
-	CommandOrigin protocol.CommandOrigin
-	// Internal specifies if the command request internal. Setting it to false seems to work and the usage of
-	// this field is not known.
+	CommandOrigin protocol.CommandOriginData
+	// IsInternal specifies if the command request internal. Setting it to false seems to work and the
+	// usage of this field is not known.
 	Internal bool
-	// Version is the version of the command that is being executed. This field currently has no purpose or functionality.
+	// Version is the version of the command that is being executed. This field currently has no purpose
+	// or functionality.
 	Version string
 }
 
-// ID ...
-func (*CommandRequest) ID() uint32 {
-	return IDCommandRequest
+// Marshal reads or writes CommandRequest using its canonical wire layout.
+func (x *CommandRequest) Marshal(io protocol.IO) {
+	io.StringLimits(&x.CommandLine, 0, 1000)
+	x.CommandOrigin.Marshal(io)
+	io.Bool(&x.Internal)
+	io.String(&x.Version)
 }
 
-func (pk *CommandRequest) Marshal(io protocol.IO) {
-	io.String(&pk.CommandLine)
-	protocol.CommandOriginData(io, &pk.CommandOrigin)
-	io.Bool(&pk.Internal)
-	io.String(&pk.Version)
-}
+// ID returns the protocol ID for CommandRequest.
+func (*CommandRequest) ID() uint32 { return IDCommandRequest }

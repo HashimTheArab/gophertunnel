@@ -1,20 +1,19 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ClientBoundDataStore is sent by the server to update, change or remove data store entries on the client.
-type ClientBoundDataStore struct {
-	// Updates is an array of data store changes. Each entry has its own change type discriminator.
-	Updates []protocol.DataStoreChangeEntry
+type ClientboundDataStore struct {
+	Updates []protocol.BedrockDDUI
 }
 
-// ID ...
-func (*ClientBoundDataStore) ID() uint32 {
-	return IDClientBoundDataStore
+// Marshal reads or writes ClientboundDataStore using its canonical wire layout.
+func (x *ClientboundDataStore) Marshal(io protocol.IO) {
+	protocol.FuncSliceLimits(io, &x.Updates, io.Varuint32, 0, 500, func(value *protocol.BedrockDDUI) {
+		protocol.MarshalBedrockDDUI(io, value)
+	})
 }
 
-func (pk *ClientBoundDataStore) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Updates)
-}
+// ID returns the protocol ID for ClientboundDataStore.
+func (*ClientboundDataStore) ID() uint32 { return IDClientboundDataStore }

@@ -1,64 +1,30 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ClientMovementPredictionSync is sent by the client to the server periodically if the client has received
-// movement corrections from the server, containing information about client-predictions that are relevant
-// to movement.
+// ClientMovementPredictionSync is sent by the client to the server periodically if the client has
+// received movement corrections from the server, containing information about client-predictions
+// that are relevant to movement.
 type ClientMovementPredictionSync struct {
-	// ActorFlags is a bitset of all the flags that are currently set for the client.
-	ActorFlags protocol.Bitset
-	// BoundingBoxScale is the scale of the client's bounding box.
-	BoundingBoxScale float32
-	// BoundingBoxWidth is the width of the client's bounding box.
-	BoundingBoxWidth float32
-	// BoundingBoxHeight is the height of the client's bounding box.
-	BoundingBoxHeight float32
-	// MovementSpeed is the movement speed attribute or 0 if not set.
-	MovementSpeed float32
-	// UnderwaterMovementSpeed is the underwater movement speed attribute or 0 if not set.
-	UnderwaterMovementSpeed float32
-	// LavaMovementSpeed is the lava movement speed attribute or 0 if not set.
-	LavaMovementSpeed float32
-	// JumpStrength is the jump strength attribute or 0 if not set.
-	JumpStrength float32
-	// Health is the health attribute or 0 if not set.
-	Health float32
-	// Hunger is the hunger attribute or 0 if not set.
-	Hunger float32
-	// FrictionModifier is the friction modifier movement attribute.
-	FrictionModifier float32
-	// Bounciness is the bounciness movement attribute.
-	Bounciness float32
-	// AirDragModifier is the air drag modifier movement attribute.
-	AirDragModifier float32
-	// EntityUniqueID is the unique ID of the entity that the prediction data applies to.
-	EntityUniqueID int64
-	// Flying specifies if the client is currently flying.
-	Flying bool
+	ActorDataFlag      protocol.ActorDataFlagComponent
+	ActorBoundingBox   protocol.ActorDataBoundingBoxComponent
+	MovementAttributes [9]float32
+	ActorUniqueID      int64
+	ActorFlyingState   bool
 }
 
-// ID ...
-func (*ClientMovementPredictionSync) ID() uint32 {
-	return IDClientMovementPredictionSync
+// Marshal reads or writes ClientMovementPredictionSync using its canonical wire layout.
+func (x *ClientMovementPredictionSync) Marshal(io protocol.IO) {
+	x.ActorDataFlag.Marshal(io)
+	x.ActorBoundingBox.Marshal(io)
+	for index1 := range x.MovementAttributes {
+		io.Float32(&x.MovementAttributes[index1])
+	}
+	io.ActorUniqueID(&x.ActorUniqueID)
+	io.Bool(&x.ActorFlyingState)
 }
 
-func (pk *ClientMovementPredictionSync) Marshal(io protocol.IO) {
-	io.Bitset(&pk.ActorFlags, protocol.EntityDataFlagCount)
-	io.Float32(&pk.BoundingBoxScale)
-	io.Float32(&pk.BoundingBoxWidth)
-	io.Float32(&pk.BoundingBoxHeight)
-	io.Float32(&pk.MovementSpeed)
-	io.Float32(&pk.UnderwaterMovementSpeed)
-	io.Float32(&pk.LavaMovementSpeed)
-	io.Float32(&pk.JumpStrength)
-	io.Float32(&pk.Health)
-	io.Float32(&pk.Hunger)
-	io.Float32(&pk.FrictionModifier)
-	io.Float32(&pk.Bounciness)
-	io.Float32(&pk.AirDragModifier)
-	io.ActorUniqueID(&pk.EntityUniqueID)
-	io.Bool(&pk.Flying)
-}
+// ID returns the protocol ID for ClientMovementPredictionSync.
+func (*ClientMovementPredictionSync) ID() uint32 { return IDClientMovementPredictionSync }

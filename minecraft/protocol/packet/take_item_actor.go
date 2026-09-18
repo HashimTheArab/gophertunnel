@@ -1,26 +1,21 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// TakeItemActor is sent by the server when a player picks up an item entity. It makes the item entity
-// disappear to viewers and shows the pick-up animation.
+// TakeItemActor is sent by the server when a player picks up an item entity. It makes the item
+// entity disappear to viewers and shows the pick-up animation.
 type TakeItemActor struct {
-	// ItemEntityRuntimeID is the entity runtime ID of the item that is being taken by another entity. It will
-	// disappear to viewers after showing the pick-up animation.
-	ItemEntityRuntimeID uint64
-	// TakerEntityRuntimeID is the runtime ID of the entity that took the item, which is usually a player, but
-	// could be another entity like a zombie too.
-	TakerEntityRuntimeID uint64
+	ItemRuntimeID  uint64
+	ActorRuntimeID uint64
 }
 
-// ID ...
-func (*TakeItemActor) ID() uint32 {
-	return IDTakeItemActor
+// Marshal reads or writes TakeItemActor using its canonical wire layout.
+func (x *TakeItemActor) Marshal(io protocol.IO) {
+	io.ActorRuntimeID(&x.ItemRuntimeID)
+	io.ActorRuntimeID(&x.ActorRuntimeID)
 }
 
-func (pk *TakeItemActor) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.ItemEntityRuntimeID)
-	io.ActorRuntimeID(&pk.TakerEntityRuntimeID)
-}
+// ID returns the protocol ID for TakeItemActor.
+func (*TakeItemActor) ID() uint32 { return IDTakeItemActor }

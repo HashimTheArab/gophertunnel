@@ -1,28 +1,27 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
-
-const (
-	SimpleEventCommandsEnabled = iota + 1
-	SimpleEventCommandsDisabled
-	SimpleEventUnlockWorldTemplateSettings
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // SimpleEvent is used for enabling or disabling commands and for unlocking world template settings
-// (both unlocking UI buttons on client and the actual setting on the server).
-// This is fired from the client to the server and a SetCommandsEnabled is sent back when enabling commands.
+// (both unlocking UI buttons on client and the actual setting on the server). This is fired from
+// the client to the server and a SetCommandsEnabled is sent back when enabling commands.
 type SimpleEvent struct {
-	// EventType is the type of the event to be called. It is one of the constants that may be found above.
-	EventType uint16
+	Type protocol.Subtype
 }
 
-// ID ...
-func (*SimpleEvent) ID() uint32 {
-	return IDSimpleEvent
+// Marshal reads or writes SimpleEvent using its canonical wire layout.
+func (x *SimpleEvent) Marshal(io protocol.IO) {
+	x.Type.Marshal(io)
 }
 
-func (pk *SimpleEvent) Marshal(io protocol.IO) {
-	io.Uint16(&pk.EventType)
-}
+// ID returns the protocol ID for SimpleEvent.
+func (*SimpleEvent) ID() uint32 { return IDSimpleEvent }
+
+const (
+	SubtypeUninitializedSubtype            protocol.Subtype = 0
+	SimpleEventCommandsEnabled             protocol.Subtype = 1
+	SimpleEventCommandsDisabled            protocol.Subtype = 2
+	SimpleEventUnlockWorldTemplateSettings protocol.Subtype = 3
+)

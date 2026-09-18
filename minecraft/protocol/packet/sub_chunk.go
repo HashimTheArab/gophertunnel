@@ -1,29 +1,25 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // SubChunk sends data about multiple sub-chunks around a center point.
 type SubChunk struct {
 	// CacheEnabled is whether the sub-chunk caching is enabled or not.
-	CacheEnabled bool
-	// Dimension is the dimension the sub-chunks are in.
-	Dimension int32
-	// Position is an absolute sub-chunk center point that every SubChunkRequest uses as a reference.
-	Position protocol.SubChunkPos
-	// SubChunkEntries contains sub-chunk entries relative to the center point.
-	SubChunkEntries []protocol.SubChunkEntry
+	CacheEnabled  bool
+	DimensionType protocol.DimensionType
+	CenterPos     protocol.SubChunkPos
+	SubChunkData  []protocol.SubChunkData
 }
 
-// ID ...
-func (*SubChunk) ID() uint32 {
-	return IDSubChunk
+// Marshal reads or writes SubChunk using its canonical wire layout.
+func (x *SubChunk) Marshal(io protocol.IO) {
+	io.Bool(&x.CacheEnabled)
+	x.DimensionType.Marshal(io)
+	x.CenterPos.Marshal(io)
+	protocol.SliceLimits(io, &x.SubChunkData, 0, 8192)
 }
 
-func (pk *SubChunk) Marshal(io protocol.IO) {
-	io.Bool(&pk.CacheEnabled)
-	io.Varint32(&pk.Dimension)
-	io.SubChunkPos(&pk.Position)
-	protocol.Slice(io, &pk.SubChunkEntries)
-}
+// ID returns the protocol ID for SubChunk.
+func (*SubChunk) ID() uint32 { return IDSubChunk }

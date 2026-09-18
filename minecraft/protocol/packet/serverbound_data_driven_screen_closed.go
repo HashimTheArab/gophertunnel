@@ -1,31 +1,19 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	DataDrivenScreenCloseReasonProgrammaticClose    = "programmaticclose"
-	DataDrivenScreenCloseReasonProgrammaticCloseAll = "programmaticcloseall"
-	DataDrivenScreenCloseReasonClientCanceled       = "clientcanceled"
-	DataDrivenScreenCloseReasonUserBusy             = "userbusy"
-	DataDrivenScreenCloseReasonInvalidForm          = "invalidform"
-)
-
-// ServerBoundDataDrivenScreenClosed is sent by the client when a data-driven UI screen is closed.
-type ServerBoundDataDrivenScreenClosed struct {
-	// FormID is the unique instance ID of the form that was closed.
-	FormID uint32
-	// CloseReason is the reason the screen was closed. It is one of the DataDrivenScreenCloseReason constants.
+type ServerboundDataDrivenScreenClosed struct {
+	FormID      uint32
 	CloseReason string
 }
 
-// ID ...
-func (*ServerBoundDataDrivenScreenClosed) ID() uint32 {
-	return IDServerBoundDataDrivenScreenClosed
+// Marshal reads or writes ServerboundDataDrivenScreenClosed using its canonical wire layout.
+func (x *ServerboundDataDrivenScreenClosed) Marshal(io protocol.IO) {
+	io.Uint32(&x.FormID)
+	io.String(&x.CloseReason)
 }
 
-func (pk *ServerBoundDataDrivenScreenClosed) Marshal(io protocol.IO) {
-	io.Uint32(&pk.FormID)
-	io.String(&pk.CloseReason)
-}
+// ID returns the protocol ID for ServerboundDataDrivenScreenClosed.
+func (*ServerboundDataDrivenScreenClosed) ID() uint32 { return IDServerboundDataDrivenScreenClosed }

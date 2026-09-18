@@ -1,21 +1,20 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // AwardAchievement is sent by the server to award an achievement to a player.
 type AwardAchievement struct {
-	// AchievementID is the ID of the achievement that should be awarded to the player. The values for these
-	// IDs are currently unknown.
+	// AchievementID is the ID of the achievement that should be awarded to the player. The values for
+	// these IDs are currently unknown.
 	AchievementID int32
 }
 
-// ID ...
-func (*AwardAchievement) ID() uint32 {
-	return IDAwardAchievement
+// Marshal reads or writes AwardAchievement using its canonical wire layout.
+func (x *AwardAchievement) Marshal(io protocol.IO) {
+	io.Int32(&x.AchievementID)
 }
 
-func (pk *AwardAchievement) Marshal(io protocol.IO) {
-	io.Int32(&pk.AchievementID)
-}
+// ID returns the protocol ID for AwardAchievement.
+func (*AwardAchievement) ID() uint32 { return IDAwardAchievement }

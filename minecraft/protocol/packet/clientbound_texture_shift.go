@@ -1,49 +1,39 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
+
+type ClientboundTextureShift struct {
+	ActionID           protocol.ClientboundTextureShiftAction
+	CollectionName     string
+	FromStep           string
+	ToStep             string
+	AllSteps           []string
+	CurrentLengthTicks uint64
+	TotalLengthTicks   uint64
+	Enabled            bool
+}
+
+// Marshal reads or writes ClientboundTextureShift using its canonical wire layout.
+func (x *ClientboundTextureShift) Marshal(io protocol.IO) {
+	x.ActionID.Marshal(io)
+	io.String(&x.CollectionName)
+	io.String(&x.FromStep)
+	io.String(&x.ToStep)
+	protocol.FuncSlice(io, &x.AllSteps, io.Varuint32, io.String)
+	io.Varuint64(&x.CurrentLengthTicks)
+	io.Varuint64(&x.TotalLengthTicks)
+	io.Bool(&x.Enabled)
+}
+
+// ID returns the protocol ID for ClientboundTextureShift.
+func (*ClientboundTextureShift) ID() uint32 { return IDClientboundTextureShift }
 
 const (
-	TextureShiftActionInvalid = iota
-	TextureShiftActionInitialize
-	TextureShiftActionStart
-	TextureShiftActionSetEnabled
-	TextureShiftActionSync
+	TextureShiftActionInvalid    protocol.ClientboundTextureShiftAction = 0
+	TextureShiftActionInitialize protocol.ClientboundTextureShiftAction = 1
+	TextureShiftActionStart      protocol.ClientboundTextureShiftAction = 2
+	TextureShiftActionSetEnabled protocol.ClientboundTextureShiftAction = 3
+	TextureShiftActionSync       protocol.ClientboundTextureShiftAction = 4
 )
-
-// ClientBoundTextureShift is sent by the server to control texture shift animations on the client.
-type ClientBoundTextureShift struct {
-	// ActionID is the texture shift action to perform. It is one of the constants above.
-	ActionID uint8
-	// CollectionName is the name of the texture shift collection.
-	CollectionName string
-	// FromStep is the step to shift from.
-	FromStep string
-	// ToStep is the step to shift to.
-	ToStep string
-	// AllSteps is a list of all steps in the texture shift.
-	AllSteps []string
-	// CurrentLengthTicks is the current length of the shift in ticks.
-	CurrentLengthTicks uint64
-	// TotalLengthTicks is the total length of the shift in ticks.
-	TotalLengthTicks uint64
-	// Enabled specifies if the texture shift is enabled.
-	Enabled bool
-}
-
-// ID ...
-func (*ClientBoundTextureShift) ID() uint32 {
-	return IDClientBoundTextureShift
-}
-
-func (pk *ClientBoundTextureShift) Marshal(io protocol.IO) {
-	io.Uint8(&pk.ActionID)
-	io.String(&pk.CollectionName)
-	io.String(&pk.FromStep)
-	io.String(&pk.ToStep)
-	protocol.FuncSlice(io, &pk.AllSteps, io.String)
-	io.Varuint64(&pk.CurrentLengthTicks)
-	io.Varuint64(&pk.TotalLengthTicks)
-	io.Bool(&pk.Enabled)
-}

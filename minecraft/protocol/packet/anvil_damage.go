@@ -1,21 +1,20 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// AnvilDamage is sent by the client to request the dealing damage to an anvil. This packet is completely
-// pointless and the server should never listen to it.
+// AnvilDamage is sent by the client to request the dealing damage to an anvil. This packet is
+// completely pointless and the server should never listen to it.
 type AnvilDamage struct {
-	// AnvilPosition is the position in the world that the anvil can be found at.
+	// BlockPosition is the position in the world that the anvil can be found at.
 	AnvilPosition protocol.BlockPos
 }
 
-// ID ...
-func (*AnvilDamage) ID() uint32 {
-	return IDAnvilDamage
+// Marshal reads or writes AnvilDamage using its canonical wire layout.
+func (x *AnvilDamage) Marshal(io protocol.IO) {
+	x.AnvilPosition.Marshal(io)
 }
 
-func (pk *AnvilDamage) Marshal(io protocol.IO) {
-	io.BlockPos(&pk.AnvilPosition)
-}
+// ID returns the protocol ID for AnvilDamage.
+func (*AnvilDamage) ID() uint32 { return IDAnvilDamage }

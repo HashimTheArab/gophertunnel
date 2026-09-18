@@ -1,21 +1,19 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // SyncActorProperty is an alternative to synced actor data.
 type SyncActorProperty struct {
 	// PropertyData ...
-	PropertyData map[string]any
+	PropertyData []byte
 }
 
-// ID ...
-func (*SyncActorProperty) ID() uint32 {
-	return IDSyncActorProperty
+// Marshal reads or writes SyncActorProperty using its canonical wire layout.
+func (x *SyncActorProperty) Marshal(io protocol.IO) {
+	io.NBT(&x.PropertyData, protocol.NBTNetwork)
 }
 
-func (pk *SyncActorProperty) Marshal(io protocol.IO) {
-	io.NBT(&pk.PropertyData, nbt.NetworkLittleEndian)
-}
+// ID returns the protocol ID for SyncActorProperty.
+func (*SyncActorProperty) ID() uint32 { return IDSyncActorProperty }

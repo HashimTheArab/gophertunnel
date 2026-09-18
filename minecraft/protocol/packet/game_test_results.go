@@ -1,27 +1,25 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// GameTestResults is a packet sent in response to the GameTestRequest packet, with a boolean indicating whether the
-// test was successful or not, and an error string if the test failed.
+// GameTestResults is a packet sent in response to the GameTestRequest packet, with a boolean
+// indicating whether the test was successful or not, and an error string if the test failed.
 type GameTestResults struct {
-	// Name represents the name of the test.
-	Name string
 	// Succeeded indicates whether the test succeeded or not.
 	Succeeded bool
 	// Error is the error that occurred. If Succeeded is true, this field is empty.
-	Error string
+	Error    string
+	TestName string
 }
 
-// ID ...
-func (pk *GameTestResults) ID() uint32 {
-	return IDGameTestResults
+// Marshal reads or writes GameTestResults using its canonical wire layout.
+func (x *GameTestResults) Marshal(io protocol.IO) {
+	io.Bool(&x.Succeeded)
+	io.String(&x.Error)
+	io.String(&x.TestName)
 }
 
-func (pk *GameTestResults) Marshal(io protocol.IO) {
-	io.Bool(&pk.Succeeded)
-	io.String(&pk.Error)
-	io.String(&pk.Name)
-}
+// ID returns the protocol ID for GameTestResults.
+func (*GameTestResults) ID() uint32 { return IDGameTestResults }

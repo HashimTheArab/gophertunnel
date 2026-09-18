@@ -1,27 +1,22 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 // SubChunkRequest requests specific sub-chunks from the server using a center point.
 type SubChunkRequest struct {
-	// Dimension is the dimension of the sub-chunk.
-	Dimension int32
-	// Offsets contains all requested offsets around the center point.
-	Offsets []protocol.SubChunkOffset
-	// Position is an absolute sub-chunk center point used as a base point for all sub-chunks requested. The X and Z
-	// coordinates represent the chunk coordinates, while the Y coordinate is the absolute sub-chunk index.
-	Position protocol.SubChunkPos
+	DimensionType              protocol.DimensionType
+	SubChunkPositionOffsetList []protocol.SubChunkPosOffset
+	CenterPos                  protocol.SubChunkPos
 }
 
-// ID ...
-func (*SubChunkRequest) ID() uint32 {
-	return IDSubChunkRequest
+// Marshal reads or writes SubChunkRequest using its canonical wire layout.
+func (x *SubChunkRequest) Marshal(io protocol.IO) {
+	x.DimensionType.Marshal(io)
+	protocol.SliceLimits(io, &x.SubChunkPositionOffsetList, 0, 8192)
+	x.CenterPos.Marshal(io)
 }
 
-func (pk *SubChunkRequest) Marshal(io protocol.IO) {
-	io.Varint32(&pk.Dimension)
-	protocol.Slice(io, &pk.Offsets)
-	io.SubChunkPos(&pk.Position)
-}
+// ID returns the protocol ID for SubChunkRequest.
+func (*SubChunkRequest) ID() uint32 { return IDSubChunkRequest }

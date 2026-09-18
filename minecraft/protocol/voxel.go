@@ -1,55 +1,45 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-// VoxelCells represents a 3D grid of voxel cell data.
-type VoxelCells struct {
-	// XSize is the size of the grid along the X axis.
-	XSize uint8
-	// YSize is the size of the grid along the Y axis.
-	YSize uint8
-	// ZSize is the size of the grid along the Z axis.
-	ZSize uint8
-	// Storage is the raw cell data stored in the grid.
+type VoxelShapesRegistryHandle struct {
+	Value uint16
+}
+
+// Marshal reads or writes VoxelShapesRegistryHandle using its canonical wire layout.
+func (x *VoxelShapesRegistryHandle) Marshal(io IO) {
+	io.Uint16(&x.Value)
+}
+
+type VoxelShapesSerializableCells struct {
+	XSize   uint8
+	YSize   uint8
+	ZSize   uint8
 	Storage []uint8
 }
 
-// Marshal encodes/decodes a VoxelCells.
-func (x *VoxelCells) Marshal(r IO) {
-	r.Uint8(&x.XSize)
-	r.Uint8(&x.YSize)
-	r.Uint8(&x.ZSize)
-	FuncSlice(r, &x.Storage, r.Uint8)
+// Marshal reads or writes VoxelShapesSerializableCells using its canonical wire layout.
+func (x *VoxelShapesSerializableCells) Marshal(io IO) {
+	io.Uint8(&x.XSize)
+	Maximum(io, &x.XSize, 127)
+	io.Uint8(&x.YSize)
+	Maximum(io, &x.YSize, 127)
+	io.Uint8(&x.ZSize)
+	Maximum(io, &x.ZSize, 127)
+	FuncSliceLimits(io, &x.Storage, io.Varuint32, 0, 256048, io.Uint8)
 }
 
-// VoxelShapeNameEntry represents a name-to-ID mapping entry for voxel shapes.
-type VoxelShapeNameEntry struct {
-	// Name is the name of the voxel shape.
-	Name string
-	// ID is the numeric ID of the voxel shape.
-	ID uint16
-}
-
-// Marshal encodes/decodes a VoxelShapeNameEntry.
-func (x *VoxelShapeNameEntry) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Uint16(&x.ID)
-}
-
-// VoxelShape represents a voxel shape with cells and coordinate axes.
-type VoxelShape struct {
-	// Cells is the grid of cells representing solid and empty regions.
-	Cells VoxelCells
-	// XCoordinates is a list of X axis coordinates for the shape.
+type VoxelShapesSerializableVoxelShape struct {
+	Cells        VoxelShapesSerializableCells
 	XCoordinates []float32
-	// YCoordinates is a list of Y axis coordinates for the shape.
 	YCoordinates []float32
-	// ZCoordinates is a list of Z axis coordinates for the shape.
 	ZCoordinates []float32
 }
 
-// Marshal encodes/decodes a VoxelShape.
-func (x *VoxelShape) Marshal(r IO) {
-	Single(r, &x.Cells)
-	FuncSlice(r, &x.XCoordinates, r.Float32)
-	FuncSlice(r, &x.YCoordinates, r.Float32)
-	FuncSlice(r, &x.ZCoordinates, r.Float32)
+// Marshal reads or writes VoxelShapesSerializableVoxelShape using its canonical wire layout.
+func (x *VoxelShapesSerializableVoxelShape) Marshal(io IO) {
+	x.Cells.Marshal(io)
+	FuncSliceLimits(io, &x.XCoordinates, io.Varuint32, 1, 128, io.Float32)
+	FuncSliceLimits(io, &x.YCoordinates, io.Varuint32, 1, 128, io.Float32)
+	FuncSliceLimits(io, &x.ZCoordinates, io.Varuint32, 1, 128, io.Float32)
 }

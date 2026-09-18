@@ -1,23 +1,22 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ClientCacheMissResponse is part of the blob cache protocol. It is sent by the server in response to a
-// ClientCacheBlobStatus packet and contains the blob data of all blobs that the client acknowledged not to
-// have yet.
+// ClientCacheMissResponse is part of the blob cache protocol. It is sent by the server in response
+// to a ClientCacheBlobStatus packet and contains the blob data of all blobs that the client
+// acknowledged not to have yet.
 type ClientCacheMissResponse struct {
-	// Blobs is a list of all blobs that the client sent misses for in the ClientCacheBlobStatus. These blobs
-	// hold the data of the blobs with the hashes they are matched with.
-	Blobs []protocol.CacheBlob
+	// MissingBlobs is a list of all blobs that the client sent misses for in the ClientCacheBlobStatus.
+	// These blobs hold the data of the blobs with the hashes they are matched with.
+	Blobs []protocol.MissingBlobData
 }
 
-// ID ...
-func (pk *ClientCacheMissResponse) ID() uint32 {
-	return IDClientCacheMissResponse
+// Marshal reads or writes ClientCacheMissResponse using its canonical wire layout.
+func (x *ClientCacheMissResponse) Marshal(io protocol.IO) {
+	protocol.SliceLimits(io, &x.Blobs, 0, 4095)
 }
 
-func (pk *ClientCacheMissResponse) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Blobs)
-}
+// ID returns the protocol ID for ClientCacheMissResponse.
+func (*ClientCacheMissResponse) ID() uint32 { return IDClientCacheMissResponse }

@@ -1,30 +1,50 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-// EducationSharedResourceURI is an education edition feature that is used for transmitting
-// education resource settings to clients. It contains a button name and a link URL.
-type EducationSharedResourceURI struct {
-	// ButtonName is the button name of the resource URI.
-	ButtonName string
-	// LinkURI is the link URI for the resource URI.
-	LinkURI string
+type EducationEditionOffer uint32
+
+const (
+	DataStorePropertyTypeNone  EducationEditionOffer = 0
+	DataStorePropertyTypeBool  EducationEditionOffer = 1
+	DataStorePropertyTypeInt64 EducationEditionOffer = 2
+)
+
+// Marshal reads or writes EducationEditionOffer through its uint32 wire encoding.
+func (x *EducationEditionOffer) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+
+type EducationLevelSettings struct {
+	CodeBuilderDefaultURI        string
+	CodeBuilderTitle             string
+	CanResizeCodeBuilder         bool
+	DisableLegacyTitleBar        bool
+	PostProcessFilter            string
+	ScreenshotBorderResourcePath string
+	AgentCapabilities            Optional[bool]
+	LocalSettings                EducationLocalLevelSettings
+	DeprecatedAlwaysFalse        bool
+	ExternalLinkSettings         Optional[ExternalLinkSettings]
 }
 
-// Marshal reads/writes an EducationSharedResourceURI to an IO.
-func (x *EducationSharedResourceURI) Marshal(r IO) {
-	r.String(&x.ButtonName)
-	r.String(&x.LinkURI)
+// Marshal reads or writes EducationLevelSettings using its canonical wire layout.
+func (x *EducationLevelSettings) Marshal(io IO) {
+	io.String(&x.CodeBuilderDefaultURI)
+	io.String(&x.CodeBuilderTitle)
+	io.Bool(&x.CanResizeCodeBuilder)
+	io.Bool(&x.DisableLegacyTitleBar)
+	io.String(&x.PostProcessFilter)
+	io.String(&x.ScreenshotBorderResourcePath)
+	OptionalFunc(io, &x.AgentCapabilities, io.Bool)
+	x.LocalSettings.Marshal(io)
+	io.Bool(&x.DeprecatedAlwaysFalse)
+	OptionalMarshaler(io, &x.ExternalLinkSettings)
 }
 
-// EducationExternalLinkSettings ...
-type EducationExternalLinkSettings struct {
-	// URL is the external link URL.
-	URL string
-	// DisplayName is the display name in game.
-	DisplayName string
+type EducationLocalLevelSettings struct {
+	CodeBuilderOverrideURI Optional[string]
 }
 
-// Marshal encodes/decodes an EducationExternalLinkSettings.
-func (x *EducationExternalLinkSettings) Marshal(r IO) {
-	r.String(&x.URL)
-	r.String(&x.DisplayName)
+// Marshal reads or writes EducationLocalLevelSettings using its canonical wire layout.
+func (x *EducationLocalLevelSettings) Marshal(io IO) {
+	OptionalFunc(io, &x.CodeBuilderOverrideURI, io.String)
 }

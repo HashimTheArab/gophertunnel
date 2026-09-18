@@ -1,48 +1,56 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-const (
-	CreativeCategoryAll = iota
-	CreativeCategoryConstruction
-	CreativeCategoryNature
-	CreativeCategoryEquipment
-	CreativeCategoryItems
-	CreativeCategoryItemCommandOnly
-	CreativeCategoryUndefined
-)
-
-// CreativeGroup represents a group of items in the creative inventory. Each group has a category, name and an
-// icon that represents the group.
-type CreativeGroup struct {
-	// Category is the category the group falls under. It is one of the constants above.
-	Category byte
+// CreativeGroup represents a group of items in the creative inventory. Each group has a category,
+// name and an icon that represents the group.
+type CreativeGroupInfo struct {
+	// CreativeCategory is the category the group falls under. It is one of the constants above.
+	CreativeCategory CreativeItemCategory
 	// Name is the locale name of the group, i.e. "itemGroup.name.planks".
 	Name string
-	// Icon is the item that represents the group in the creative inventory.
-	Icon ItemStack
+	// GroupIconItem is the item that represents the group in the creative inventory.
+	GroupIconItem NetworkItemInstanceDescriptorSerializedData
 }
 
-// Marshal encodes/decodes a CreativeGroup.
-func (x *CreativeGroup) Marshal(r IO) {
-	r.Uint8(&x.Category)
-	r.String(&x.Name)
-	r.Item(&x.Icon)
+// Marshal reads or writes CreativeGroupInfo using its canonical wire layout.
+func (x *CreativeGroupInfo) Marshal(io IO) {
+	x.CreativeCategory.Marshal(io)
+	io.String(&x.Name)
+	x.GroupIconItem.Marshal(io)
 }
 
-// CreativeItem represents a creative item present in the creative inventory.
-type CreativeItem struct {
-	// CreativeItemNetworkID is a unique ID for the creative item. It has to be unique for each creative item
-	// sent to the client. An incrementing ID per creative item does the job.
-	CreativeItemNetworkID uint32
-	// Item is the item that should be added to the creative inventory.
-	Item ItemStack
-	// GroupIndex is the index of the group that the item should be placed in. It is the index of the group in
-	// the CreativeContent packet previously sent to the client.
-	GroupIndex uint32
+type CreativeItemCategory uint8
+
+const (
+	CreativeCategoryConstruction    CreativeItemCategory = 1
+	CreativeCategoryNature          CreativeItemCategory = 2
+	CreativeCategoryEquipment       CreativeItemCategory = 3
+	CreativeCategoryItems           CreativeItemCategory = 4
+	CreativeCategoryItemCommandOnly CreativeItemCategory = 5
+)
+
+// Marshal reads or writes CreativeItemCategory through its uint8 wire encoding.
+func (x *CreativeItemCategory) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type CreativeItemEntry struct {
+	CreativeNetID CreativeItemNetID
+	ItemInstance  NetworkItemInstanceDescriptorSerializedData
+	GroupIndex    uint32
 }
 
-// Marshal encodes/decodes a CreativeItem.
-func (x *CreativeItem) Marshal(r IO) {
-	r.Varuint32(&x.CreativeItemNetworkID)
-	r.Item(&x.Item)
-	r.Varuint32(&x.GroupIndex)
+// Marshal reads or writes CreativeItemEntry using its canonical wire layout.
+func (x *CreativeItemEntry) Marshal(io IO) {
+	x.CreativeNetID.Marshal(io)
+	x.ItemInstance.Marshal(io)
+	io.Varuint32(&x.GroupIndex)
+}
+
+type CreativeItemNetID struct {
+	ID uint32
+}
+
+// Marshal reads or writes CreativeItemNetID using its canonical wire layout.
+func (x *CreativeItemNetID) Marshal(io IO) {
+	io.Varuint32(&x.ID)
 }

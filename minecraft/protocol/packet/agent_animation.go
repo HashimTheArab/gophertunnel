@@ -1,25 +1,21 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// AgentAnimation is an Education Edition packet sent from the server to the client to make an agent perform an animation.
+// AgentAnimation is an Education Edition packet sent from the server to the client to make an agent
+// perform an animation.
 type AgentAnimation struct {
-	// Animation is the ID of the animation that the agent should perform. As of its implementation, there are no IDs
-	// that can be used in the regular client.
-	Animation byte
-	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
-	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID uint64
+	AgentAnimation protocol.AgentAnimationType
+	RuntimeID      uint64
 }
 
-// ID ...
-func (*AgentAnimation) ID() uint32 {
-	return IDAgentAnimation
+// Marshal reads or writes AgentAnimation using its canonical wire layout.
+func (x *AgentAnimation) Marshal(io protocol.IO) {
+	x.AgentAnimation.Marshal(io)
+	io.ActorRuntimeID(&x.RuntimeID)
 }
 
-func (pk *AgentAnimation) Marshal(io protocol.IO) {
-	io.Uint8(&pk.Animation)
-	io.ActorRuntimeID(&pk.EntityRuntimeID)
-}
+// ID returns the protocol ID for AgentAnimation.
+func (*AgentAnimation) ID() uint32 { return IDAgentAnimation }

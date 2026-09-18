@@ -1,12 +1,8 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
-
-const (
-	PartyDestinationCookieIntentNotify = "Notify"
-	PartyDestinationCookieIntentOptIn  = "OptIn"
-	PartyDestinationCookieIntentOptOut = "OptOut"
-)
 
 // SendPartyDestinationCookie is sent by the server to a client with a party destination cookie.
 type SendPartyDestinationCookie struct {
@@ -18,13 +14,12 @@ type SendPartyDestinationCookie struct {
 	DestinationName string
 }
 
-// ID ...
-func (*SendPartyDestinationCookie) ID() uint32 {
-	return IDSendPartyDestinationCookie
+// Marshal reads or writes SendPartyDestinationCookie using its canonical wire layout.
+func (x *SendPartyDestinationCookie) Marshal(io protocol.IO) {
+	io.StringLimits(&x.Cookie, 0, 2048)
+	io.String(&x.Intent)
+	io.StringLimits(&x.DestinationName, 0, 64)
 }
 
-func (pk *SendPartyDestinationCookie) Marshal(io protocol.IO) {
-	io.String(&pk.Cookie)
-	io.String(&pk.Intent)
-	io.String(&pk.DestinationName)
-}
+// ID returns the protocol ID for SendPartyDestinationCookie.
+func (*SendPartyDestinationCookie) ID() uint32 { return IDSendPartyDestinationCookie }

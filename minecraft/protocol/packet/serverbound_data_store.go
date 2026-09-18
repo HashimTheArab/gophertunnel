@@ -1,20 +1,17 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ServerBoundDataStore is sent by the client to update a data store property on the server.
-type ServerBoundDataStore struct {
-	// Update contains the data store update.
-	Update protocol.DataStoreUpdate
+type ServerboundDataStore struct {
+	Update protocol.BedrockDDUIDataStoreUpdate
 }
 
-// ID ...
-func (*ServerBoundDataStore) ID() uint32 {
-	return IDServerBoundDataStore
+// Marshal reads or writes ServerboundDataStore using its canonical wire layout.
+func (x *ServerboundDataStore) Marshal(io protocol.IO) {
+	x.Update.Marshal(io)
 }
 
-func (pk *ServerBoundDataStore) Marshal(io protocol.IO) {
-	protocol.Single(io, &pk.Update)
-}
+// ID returns the protocol ID for ServerboundDataStore.
+func (*ServerboundDataStore) ID() uint32 { return IDServerboundDataStore }

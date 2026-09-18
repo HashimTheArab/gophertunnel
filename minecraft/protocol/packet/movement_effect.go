@@ -1,38 +1,34 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	MovementEffectTypeGlideBoost = iota
-	MovementEffectTypeDolphinBoost
-	MovementEffectTypeGeyserBoost
-)
-
-// MovementEffect is sent by the server to the client to update specific movement effects to allow the client
-// to predict its movement. For example, fireworks used during gliding will send this packet to tell the
-// client the exact duration of the boost.
+// MovementEffect is sent by the server to the client to update specific movement effects to allow
+// the client to predict its movement. For example, fireworks used during gliding will send this
+// packet to tell the client the exact duration of the boost.
 type MovementEffect struct {
-	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
-	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID uint64
-	// Type is the type of movement effect being updated. It is one of the constants found above.
-	Type int32
-	// Duration is the duration of the effect, measured in ticks.
-	Duration int32
-	// Tick is the server tick at which the packet was sent. It is used in relation to CorrectPlayerMovePrediction.
+	TargetRuntimeID uint64
+	EffectID        protocol.MovementEffectType
+	EffectDuration  int32
+	// Tick is the server tick at which the packet was sent. It is used in relation to
+	// CorrectPlayerMovePrediction.
 	Tick uint64
 }
 
-// ID ...
-func (*MovementEffect) ID() uint32 {
-	return IDMovementEffect
+// Marshal reads or writes MovementEffect using its canonical wire layout.
+func (x *MovementEffect) Marshal(io protocol.IO) {
+	io.ActorRuntimeID(&x.TargetRuntimeID)
+	x.EffectID.Marshal(io)
+	io.Varint32(&x.EffectDuration)
+	io.PlayerInputTick(&x.Tick)
 }
 
-func (pk *MovementEffect) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.Varint32(&pk.Type)
-	io.Varint32(&pk.Duration)
-	io.PlayerInputTick(&pk.Tick)
-}
+// ID returns the protocol ID for MovementEffect.
+func (*MovementEffect) ID() uint32 { return IDMovementEffect }
+
+const (
+	MovementEffectTypeGlideBoost   protocol.MovementEffectType = 0
+	MovementEffectTypeDolphinBoost protocol.MovementEffectType = 1
+	MovementEffectTypeGeyserBoost  protocol.MovementEffectType = 2
+)

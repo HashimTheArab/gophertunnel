@@ -1,31 +1,23 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	ShowCreditsStatusStart = iota
-	ShowCreditsStatusEnd
-)
-
-// ShowCredits is sent by the server to show the Minecraft credits screen to the client. It is typically sent
-// when the player beats the ender dragon and leaves the End.
+// ShowCredits is sent by the server to show the Minecraft credits screen to the client. It is
+// typically sent when the player beats the ender dragon and leaves the End.
 type ShowCredits struct {
-	// PlayerRuntimeID is the entity runtime ID of the player to show the credits to. It's not clear why this
-	// field is actually here in the first place.
+	// PlayerRuntimeID is the entity runtime ID of the player to show the credits to. It's not clear why
+	// this field is actually here in the first place.
 	PlayerRuntimeID uint64
-	// StatusType is the status type of the credits. It is one of the constants above, and either starts or
-	// stops the credits.
-	StatusType int32
+	StatusType      int32
 }
 
-// ID ...
-func (*ShowCredits) ID() uint32 {
-	return IDShowCredits
+// Marshal reads or writes ShowCredits using its canonical wire layout.
+func (x *ShowCredits) Marshal(io protocol.IO) {
+	io.ActorRuntimeID(&x.PlayerRuntimeID)
+	io.Varint32(&x.StatusType)
 }
 
-func (pk *ShowCredits) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.PlayerRuntimeID)
-	io.Varint32(&pk.StatusType)
-}
+// ID returns the protocol ID for ShowCredits.
+func (*ShowCredits) ID() uint32 { return IDShowCredits }

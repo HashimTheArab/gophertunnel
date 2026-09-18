@@ -1,51 +1,51 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-const (
-	PhotoTypePortfolio uint8 = iota
-	PhotoTypePhotoItem
-	PhotoTypeBook
-)
-
-// PhotoTransfer is sent by the server to transfer a photo (image) file to the client. It is typically used
-// to transfer photos so that the client can display it in a portfolio in Education Edition.
-// While previously usable in the default Bedrock Edition, the displaying of photos in books was disabled and
-// the packet now has little use anymore.
+// PhotoTransfer is sent by the server to transfer a photo (image) file to the client. It is
+// typically used to transfer photos so that the client can display it in a portfolio in Education
+// Edition. While previously usable in the default Bedrock Edition, the displaying of photos in
+// books was disabled and the packet now has little use anymore.
 type PhotoTransfer struct {
-	// PhotoName is the name of the photo to transfer. It is the exact file name that the client will download
-	// the photo as, including the extension of the file.
+	// PhotoName is the name of the photo to transfer. It is the exact file name that the client will
+	// download the photo as, including the extension of the file.
 	PhotoName string
-	// PhotoData is the raw data of the photo image. The format of this data may vary: Formats such as JPEG or
-	// PNG work, as long as PhotoName has the correct extension.
+	// PhotoData is the raw data of the photo image. The format of this data may vary: Formats such as
+	// JPEG or PNG work, as long as PhotoName has the correct extension.
 	PhotoData []byte
-	// BookID is the ID of the book that the photo is associated with. If the PhotoName in a book with this ID
-	// is set to PhotoName, it will display the photo (provided Education Edition is used).
-	// The photo image is downloaded to a sub-folder with this book ID.
+	// BookID is the ID of the book that the photo is associated with. If the PhotoName in a book with
+	// this ID is set to PhotoName, it will display the photo (provided Education Edition is used). The
+	// photo image is downloaded to a sub-folder with this book ID.
 	BookID string
-	// PhotoType is one of the three photo types above.
-	PhotoType byte
+	// Type is one of the three photo types above.
+	Type protocol.PhotoType
 	// SourceType is the source photo type. It is one of the three photo types above.
-	SourceType byte
-	// OwnerEntityUniqueID is the entity unique ID of the photo's owner.
-	OwnerEntityUniqueID int64
+	SourceType protocol.PhotoType
+	// OwnerID is the entity unique ID of the photo's owner.
+	OwnerID int64
 	// NewPhotoName is the new name of the photo.
 	NewPhotoName string
 }
 
-// ID ...
-func (*PhotoTransfer) ID() uint32 {
-	return IDPhotoTransfer
+// Marshal reads or writes PhotoTransfer using its canonical wire layout.
+func (x *PhotoTransfer) Marshal(io protocol.IO) {
+	io.String(&x.PhotoName)
+	protocol.Pattern(io, &x.PhotoName, "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.jpeg$")
+	io.BytesLimits(&x.PhotoData, 0, 20971520)
+	io.String(&x.BookID)
+	x.Type.Marshal(io)
+	x.SourceType.Marshal(io)
+	io.Int64(&x.OwnerID)
+	io.String(&x.NewPhotoName)
 }
 
-func (pk *PhotoTransfer) Marshal(io protocol.IO) {
-	io.String(&pk.PhotoName)
-	io.ByteSlice(&pk.PhotoData)
-	io.String(&pk.BookID)
-	io.Uint8(&pk.PhotoType)
-	io.Uint8(&pk.SourceType)
-	io.ActorUniqueIDInt64(&pk.OwnerEntityUniqueID)
-	io.String(&pk.NewPhotoName)
-}
+// ID returns the protocol ID for PhotoTransfer.
+func (*PhotoTransfer) ID() uint32 { return IDPhotoTransfer }
+
+const (
+	PhotoTypePortfolio protocol.PhotoType = 0
+	PhotoTypePhotoItem protocol.PhotoType = 1
+	PhotoTypeBook      protocol.PhotoType = 2
+)

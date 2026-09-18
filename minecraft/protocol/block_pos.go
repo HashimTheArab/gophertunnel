@@ -1,20 +1,18 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-// BlockPos is the position of a block. It is composed of three integers, and is typically written as either
-// 3 varint32s or a varint32, varuint32 and varint32.
-type BlockPos [3]int32
-
-// X returns the X coordinate of the block position. It is equivalent to BlockPos[0].
-func (pos BlockPos) X() int32 {
-	return pos[0]
+// BlockPos is the position of a block. It is composed of three integers, and is typically written
+// as either 3 varint32s or a varint32, varuint32 and varint32.
+type BlockPos struct {
+	X int32
+	Y int32
+	Z int32
 }
 
-// Y returns the Y coordinate of the block position. It is equivalent to BlockPos[1].
-func (pos BlockPos) Y() int32 {
-	return pos[1]
-}
-
-// Z returns the Z coordinate of the block position. It is equivalent to BlockPos[2].
-func (pos BlockPos) Z() int32 {
-	return pos[2]
+// Marshal reads or writes BlockPos using its canonical wire layout.
+func (x *BlockPos) Marshal(io IO) {
+	io.Varint32(&x.X)
+	io.Varint32(&x.Y)
+	io.Varint32(&x.Z)
 }

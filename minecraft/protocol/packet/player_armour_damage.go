@@ -1,29 +1,13 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
 const (
-	PlayerArmourDamageFlagHelmet = iota
-	PlayerArmourDamageFlagChestplate
-	PlayerArmourDamageFlagLeggings
-	PlayerArmourDamageFlagBoots
-	PlayerArmourDamageFlagBody
+	PlayerArmourDamageFlagHelmet     protocol.LegacyArmorSlot = 0
+	PlayerArmourDamageFlagChestplate protocol.LegacyArmorSlot = 1
+	PlayerArmourDamageFlagLeggings   protocol.LegacyArmorSlot = 2
+	PlayerArmourDamageFlagBoots      protocol.LegacyArmorSlot = 3
+	PlayerArmourDamageFlagBody       protocol.LegacyArmorSlot = 4
 )
-
-// PlayerArmourDamage is sent by the server to damage the armour of a player. It is a very efficient packet,
-// but generally it's much easier to just send a slot update for the damaged armour.
-type PlayerArmourDamage struct {
-	// List is a list of armour entries indicating which pieces of armour should receive damage.
-	List []protocol.PlayerArmourDamageEntry
-}
-
-// ID ...
-func (pk *PlayerArmourDamage) ID() uint32 {
-	return IDPlayerArmourDamage
-}
-
-func (pk *PlayerArmourDamage) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.List)
-}

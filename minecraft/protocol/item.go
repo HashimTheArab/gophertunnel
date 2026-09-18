@@ -1,222 +1,236 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-import "github.com/sandertv/gophertunnel/minecraft/nbt"
+import "github.com/go-gl/mathgl/mgl32"
+
+type ItemData struct {
+	ItemName          string
+	ItemID            int16
+	IsComponentBased  bool
+	ItemVersion       ItemVersion
+	ItemComponentData []byte
+}
+
+// Marshal reads or writes ItemData using its canonical wire layout.
+func (x *ItemData) Marshal(io IO) {
+	io.String(&x.ItemName)
+	io.Int16(&x.ItemID)
+	io.Bool(&x.IsComponentBased)
+	x.ItemVersion.Marshal(io)
+	io.NBT(&x.ItemComponentData, NBTNetwork)
+}
+
+type ItemEnchantOption struct {
+	Cost         uint8
+	Enchants     ItemEnchants
+	EnchantName  string
+	EnchantNetID RecipeNetID
+}
+
+// Marshal reads or writes ItemEnchantOption using its canonical wire layout.
+func (x *ItemEnchantOption) Marshal(io IO) {
+	io.Uint8(&x.Cost)
+	x.Enchants.Marshal(io)
+	io.StringLimits(&x.EnchantName, 1, 256)
+	x.EnchantNetID.Marshal(io)
+}
+
+type ItemEnchants struct {
+	Slot         int32
+	ItemEnchants [3][]EnchantmentInstance
+}
+
+// Marshal reads or writes ItemEnchants using its canonical wire layout.
+func (x *ItemEnchants) Marshal(io IO) {
+	io.Int32(&x.Slot)
+	for index1 := range x.ItemEnchants {
+		Slice(io, &x.ItemEnchants[index1])
+	}
+}
+
+// ItemInstance represents a unique instance of an item stack. These instances carry a specific
+// network ID that is persistent for the stack.
+type ItemInstance struct {
+	ItemDescriptor ItemDescriptor
+	StackSize      uint16
+	BlockRuntimeID uint32
+	UserDataBuffer []byte
+}
+
+// Marshal reads or writes ItemInstance using its canonical wire layout.
+func (x *ItemInstance) Marshal(io IO) {
+	MarshalItemDescriptor(io, &x.ItemDescriptor)
+	io.Uint16(&x.StackSize)
+	Minimum(io, &x.StackSize, 1)
+	Maximum(io, &x.StackSize, 64)
+	io.Varuint32(&x.BlockRuntimeID)
+	io.Bytes(&x.UserDataBuffer)
+}
+
+type ItemReleaseInventoryTransaction struct {
+	Actions      InventoryTransactionData
+	ActionType   ItemReleaseInventoryTransactionActionType
+	Slot         int32
+	Item         NetworkItemStackDescriptorSerializedData
+	FromPosition mgl32.Vec3
+}
+
+func (*ItemReleaseInventoryTransaction) tagInventoryTransactionValue() uint32 { return 4 }
+
+// Marshal reads or writes ItemReleaseInventoryTransaction using its canonical wire layout.
+func (x *ItemReleaseInventoryTransaction) Marshal(io IO) {
+	x.Actions.Marshal(io)
+	x.ActionType.Marshal(io)
+	io.Varint32(&x.Slot)
+	x.Item.Marshal(io)
+	io.Vec3(&x.FromPosition)
+}
+
+type ItemReleaseInventoryTransactionActionType int32
 
 const (
-	ItemEntryVersionLegacy = iota
-	ItemEntryVersionDataDriven
-	ItemEntryVersionNone
+	ReleaseItemActionRelease ItemReleaseInventoryTransactionActionType = 0
+	ReleaseItemActionConsume ItemReleaseInventoryTransactionActionType = 1
 )
 
-// ItemInstance represents a unique instance of an item stack. These instances carry a specific network ID
-// that is persistent for the stack.
-type ItemInstance struct {
-	// StackNetworkID is the network ID of the item stack. If the stack is empty, 0 is always written for this
-	// field. If not, the field should be set to 1 if the server authoritative inventories are disabled in the
-	// StartGame packet, or to a unique stack ID if it is enabled.
-	StackNetworkID int32
-	// Stack is the actual item stack of the item instance.
-	Stack ItemStack
+// Marshal reads or writes ItemReleaseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemReleaseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransaction struct {
+	Actions                  InventoryTransactionData
+	ActionType               ItemUseInventoryTransactionActionType
+	TriggerType              ItemUseInventoryTransactionTriggerType
+	Position                 BlockPos
+	Face                     uint8
+	Slot                     int32
+	Item                     NetworkItemStackDescriptorSerializedData
+	FromPosition             mgl32.Vec3
+	ClickPosition            mgl32.Vec3
+	TargetBlockID            uint32
+	ClientInteractPrediction ItemUseInventoryTransactionPredictedResult
+	ClientCooldownState      ItemUseInventoryTransactionClientCooldownState
 }
 
-// ItemStack represents an item instance/stack over network. It has a network ID and a metadata value that
-// define its type.
-type ItemStack struct {
-	ItemType
-	// BlockRuntimeID ...
-	BlockRuntimeID int32
-	// Count is the count of items that the item stack holds.
-	Count uint16
-	// NBTData is a map that is serialised to its NBT representation when sent in a packet.
-	NBTData map[string]any
-	// CanBePlacedOn is a list of block identifiers like 'minecraft:stone' which the item, if it is an item
-	// that can be placed, can be placed on top of.
-	CanBePlacedOn []string
-	// CanBreak is a list of block identifiers like 'minecraft:dirt' that the item is able to break.
-	CanBreak []string
-	// BlockingTick is the tick at which a shield started blocking. It is only used for shield items.
-	BlockingTick int64
+func (*ItemUseInventoryTransaction) tagInventoryTransactionValue() uint32 { return 2 }
+
+// Marshal reads or writes ItemUseInventoryTransaction using its canonical wire layout.
+func (x *ItemUseInventoryTransaction) Marshal(io IO) {
+	x.Actions.Marshal(io)
+	x.ActionType.Marshal(io)
+	x.TriggerType.Marshal(io)
+	x.Position.Marshal(io)
+	io.Uint8(&x.Face)
+	io.Varint32(&x.Slot)
+	x.Item.Marshal(io)
+	io.Vec3(&x.FromPosition)
+	io.Vec3(&x.ClickPosition)
+	io.Varuint32(&x.TargetBlockID)
+	x.ClientInteractPrediction.Marshal(io)
+	x.ClientCooldownState.Marshal(io)
 }
 
-// StackRequestItem is the descriptor-backed item format used by deprecated craft-result stack request actions.
-// Unlike ordinary item stacks, it identifies the item by name instead of a numeric network ID.
-type StackRequestItem struct {
-	// Identifier is the namespaced item identifier, such as minecraft:stone.
-	Identifier string
-	// MetadataValue is the metadata value or damage value of the item.
-	MetadataValue uint32
-	// BlockRuntimeID is the runtime ID of the block represented by the item, if any.
-	BlockRuntimeID int32
-	// Count is the number of items in the stack.
-	Count uint16
-	// NBTData is the item's compound tag.
-	NBTData map[string]any
-	// CanBePlacedOn contains the block identifiers this item may be placed on.
-	CanBePlacedOn []string
-	// CanBreak contains the block identifiers this item may break.
-	CanBreak []string
-	// BlockingTick is the tick at which a shield started blocking.
-	BlockingTick int64
+type ItemUseInventoryTransactionActionType int32
+
+const (
+	UseItemActionClickBlock  ItemUseInventoryTransactionActionType = 0
+	UseItemActionClickAir    ItemUseInventoryTransactionActionType = 1
+	UseItemActionBreakBlock  ItemUseInventoryTransactionActionType = 2
+	UseItemActionUseAsAttack ItemUseInventoryTransactionActionType = 3
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransactionClientCooldownState uint8
+
+const (
+	ClientCooldownStateOff ItemUseInventoryTransactionClientCooldownState = 0
+	ClientCooldownStateOn  ItemUseInventoryTransactionClientCooldownState = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionClientCooldownState through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionClientCooldownState) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionPredictedResult uint8
+
+const (
+	ClientPredictionFailure ItemUseInventoryTransactionPredictedResult = 0
+	ClientPredictionSuccess ItemUseInventoryTransactionPredictedResult = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionPredictedResult through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionPredictedResult) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionTriggerType uint8
+
+const (
+	TriggerTypeUnknown        ItemUseInventoryTransactionTriggerType = 0
+	TriggerTypePlayerInput    ItemUseInventoryTransactionTriggerType = 1
+	TriggerTypeSimulationTick ItemUseInventoryTransactionTriggerType = 2
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionTriggerType through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionTriggerType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseOnActorInventoryTransaction struct {
+	Actions      InventoryTransactionData
+	RuntimeID    uint64
+	ActionType   ItemUseOnActorInventoryTransactionActionType
+	Slot         int32
+	Item         NetworkItemStackDescriptorSerializedData
+	FromPosition mgl32.Vec3
+	HitPosition  mgl32.Vec3
 }
 
-type itemUserData struct {
-	nbtData       map[string]any
-	canBePlacedOn []string
-	canBreak      []string
-	blockingTick  int64
+func (*ItemUseOnActorInventoryTransaction) tagInventoryTransactionValue() uint32 { return 3 }
+
+// Marshal reads or writes ItemUseOnActorInventoryTransaction using its canonical wire layout.
+func (x *ItemUseOnActorInventoryTransaction) Marshal(io IO) {
+	x.Actions.Marshal(io)
+	io.ActorRuntimeID(&x.RuntimeID)
+	x.ActionType.Marshal(io)
+	io.Varint32(&x.Slot)
+	x.Item.Marshal(io)
+	io.Vec3(&x.FromPosition)
+	io.Vec3(&x.HitPosition)
 }
 
-func itemStackUserData(x *ItemStack) itemUserData {
-	return itemUserData{
-		nbtData:       x.NBTData,
-		canBePlacedOn: x.CanBePlacedOn,
-		canBreak:      x.CanBreak,
-		blockingTick:  x.BlockingTick,
-	}
+type ItemUseOnActorInventoryTransactionActionType int32
+
+const (
+	UseItemOnEntityActionInteract                            ItemUseOnActorInventoryTransactionActionType = 0
+	UseItemOnEntityActionAttack                              ItemUseOnActorInventoryTransactionActionType = 1
+	ItemUseOnActorInventoryTransactionActionTypeItemInteract ItemUseOnActorInventoryTransactionActionType = 2
+)
+
+// Marshal reads or writes ItemUseOnActorInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseOnActorInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUsed struct {
+	ItemID    int16
+	ItemAux   int32
+	UseMethod int32
+	UseCount  int32
 }
 
-func stackRequestItemUserData(x *StackRequestItem) itemUserData {
-	return itemUserData{
-		nbtData:       x.NBTData,
-		canBePlacedOn: x.CanBePlacedOn,
-		canBreak:      x.CanBreak,
-		blockingTick:  x.BlockingTick,
-	}
+func (*ItemUsed) tagEventData() uint32 { return 20 }
+
+// Marshal reads or writes ItemUsed using its canonical wire layout.
+func (x *ItemUsed) Marshal(io IO) {
+	io.Int16(&x.ItemID)
+	io.Int32(&x.ItemAux)
+	io.Int32(&x.UseMethod)
+	io.Int32(&x.UseCount)
 }
 
-// ItemType represents a consistent combination of network ID and metadata value of an item. It cannot usually
-// be changed unless a new item is obtained.
-type ItemType struct {
-	// NetworkID is the numerical network ID of the item. This is sometimes a positive ID, and sometimes a
-	// negative ID, depending on what item it concerns.
-	NetworkID int32
-	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
-	// other items it is simply an identifier of a variant of the item.
-	MetadataValue uint32
-}
+type ItemVersion int32
 
-// ItemEntry is an item sent in the StartGame item table. It holds a name and a legacy ID, which is used to
-// point back to that name.
-type ItemEntry struct {
-	// Name if the name of the item, which is a name like 'minecraft:stick'.
-	Name string
-	// RuntimeID is the ID that is used to identify the item over network. After sending all items in the
-	// StartGame packet, items will then be identified using these numerical IDs.
-	RuntimeID int16
-	// ComponentBased specifies if the item was created using components, meaning the item is a custom item.
-	ComponentBased bool
-	// Version is the version of the item entry which is used by the client to determine how to handle the
-	// item entry. It is one of the constants above.
-	Version int32
-	// Data is a map containing the components and properties of the item, if the item is component based.
-	Data map[string]any
-}
+const (
+	ItemEntryVersionLegacy     ItemVersion = 0
+	ItemEntryVersionDataDriven ItemVersion = 1
+	ItemEntryVersionNone       ItemVersion = 2
+)
 
-// ItemSlotCapabilities contains the item-definition properties used by inventory container validation. ArmorSlot is
-// absent when the item is not wearable and otherwise uses the player armor-container indexes head=0, chest=1,
-// legs=2, feet=3 and body=4.
-type ItemSlotCapabilities struct {
-	AllowOffHand Optional[bool]
-	ArmorSlot    Optional[uint8]
-}
-
-// SlotCapabilities returns the inventory slot capabilities explicitly declared by the item entry's component data.
-// An absent field means the entry did not declare that capability.
-func (x ItemEntry) SlotCapabilities() ItemSlotCapabilities {
-	caps := ItemSlotCapabilities{}
-	components, _ := x.Data["components"].(map[string]any)
-	if properties, ok := components["item_properties"].(map[string]any); ok {
-		if allow, ok := itemComponentBool(properties["allow_off_hand"]); ok {
-			caps.AllowOffHand = Option(allow)
-		}
-	}
-	if allow, ok := itemComponentBool(components["minecraft:allow_off_hand"]); ok {
-		caps.AllowOffHand = Option(allow)
-	} else if component, ok := components["minecraft:allow_off_hand"].(map[string]any); ok {
-		if allow, ok := itemComponentBool(component["value"]); ok {
-			caps.AllowOffHand = Option(allow)
-		}
-	}
-	if wearable, ok := components["minecraft:wearable"].(map[string]any); ok {
-		if slot, ok := wearableItemArmorSlot(wearable["slot"]); ok {
-			caps.ArmorSlot = Option(slot)
-		}
-	}
-	return caps
-}
-
-func itemComponentBool(value any) (bool, bool) {
-	switch value := value.(type) {
-	case bool:
-		return value, true
-	case uint8:
-		return value != 0, true
-	case int8:
-		return value != 0, true
-	case int32:
-		return value != 0, true
-	default:
-		return false, false
-	}
-}
-
-func wearableItemArmorSlot(value any) (uint8, bool) {
-	if slot, ok := value.(string); ok {
-		switch slot {
-		case "slot.armor.head":
-			return 0, true
-		case "slot.armor.chest":
-			return 1, true
-		case "slot.armor.legs":
-			return 2, true
-		case "slot.armor.feet":
-			return 3, true
-		case "slot.armor.body":
-			return 4, true
-		}
-	}
-	var equipmentSlot int32
-	switch value := value.(type) {
-	case int32:
-		equipmentSlot = value
-	case uint32:
-		equipmentSlot = int32(value)
-	default:
-		return 0, false
-	}
-	if equipmentSlot < 2 || equipmentSlot > 6 {
-		return 0, false
-	}
-	return uint8(equipmentSlot - 2), true
-}
-
-// Marshal encodes/decodes an ItemEntry.
-func (x *ItemEntry) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Int16(&x.RuntimeID)
-	r.Bool(&x.ComponentBased)
-	r.Varint32(&x.Version)
-	r.NBT(&x.Data, nbt.NetworkLittleEndian)
-}
-
-// MaterialReducerOutput is an output from a material reducer.
-type MaterialReducerOutput struct {
-	// NetworkID is the network ID of the output.
-	NetworkID int32
-	// Count is the quantity of the output.
-	Count int32
-}
-
-// Marshal encodes/decodes a MaterialReducerOutput.
-func (x *MaterialReducerOutput) Marshal(r IO) {
-	r.Varint32(&x.NetworkID)
-	r.Varint32(&x.Count)
-}
-
-// MaterialReducer is a craft in a material reducer block in education edition.
-type MaterialReducer struct {
-	// InputItem is the starting item.
-	InputItem ItemType
-	// Outputs contain all outputting items.
-	Outputs []MaterialReducerOutput
-}
+// Marshal reads or writes ItemVersion through its int32 wire encoding.
+func (x *ItemVersion) Marshal(io IO) { io.Varint32((*int32)(x)) }

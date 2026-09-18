@@ -1,3 +1,5 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import (
@@ -5,66 +7,45 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-const (
-	MoveModeNormal = iota
-	MoveModeReset
-	MoveModeTeleport
-	MoveModeRotation
-)
-
-const (
-	TeleportCauseUnknown = iota
-	TeleportCauseProjectile
-	TeleportCauseChorusFruit
-	TeleportCauseCommand
-	TeleportCauseBehaviour
-)
-
-// MovePlayer is sent by players to send their movement to the server, and by the server to update the
-// movement of player entities to other players.
+// MovePlayer is sent by players to send their movement to the server, and by the server to update
+// the movement of player entities to other players.
 type MovePlayer struct {
-	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
-	// entities are generally identified in packets using this runtime ID.
-	EntityRuntimeID uint64
-	// Position is the position to spawn the player on. If the player is on a distance that the viewer cannot
-	// see it, the player will still show up if the viewer moves closer.
-	Position mgl32.Vec3
-	// Pitch is the vertical rotation of the player. Facing straight forward yields a pitch of 0. Pitch is
-	// measured in degrees.
-	Pitch float32
-	// Yaw is the horizontal rotation of the player. Yaw is also measured in degrees.
-	Yaw float32
-	// HeadYaw is the same as Yaw, except that it applies specifically to the head of the player. A different
-	// value for HeadYaw than Yaw means that the player will have its head turned.
-	HeadYaw float32
-	// Mode is the mode of the movement. It specifies the way the player's movement should be shown to other
-	// players. It is one of the constants above.
-	Mode byte
-	// OnGround specifies if the player is considered on the ground. Note that proxies or hacked clients could
-	// fake this to always be true, so it should not be taken for granted.
-	OnGround bool
-	// RiddenEntityRuntimeID is the runtime ID of the entity that the player might currently be riding. If not
-	// riding, this should be left 0.
-	RiddenEntityRuntimeID uint64
-	TeleportData          protocol.Optional[protocol.TeleportData]
-	// Tick is the server tick at which the packet was sent. It is used in relation to CorrectPlayerMovePrediction.
+	PlayerRuntimeID uint64
+	// Position is the position to spawn the player on. If the player is on a distance that the viewer
+	// cannot see it, the player will still show up if the viewer moves closer.
+	Position      mgl32.Vec3
+	Rotation      mgl32.Vec2
+	YHeadRotation float32
+	PositionMode  protocol.PlayerPositionModeComponentPositionMode
+	// OnGround specifies if the player is considered on the ground. Note that proxies or hacked clients
+	// could fake this to always be true, so it should not be taken for granted.
+	OnGround        bool
+	RidingRuntimeID uint64
+	TeleportData    protocol.Optional[protocol.MovePlayerTeleportData]
+	// Tick is the server tick at which the packet was sent. It is used in relation to
+	// CorrectPlayerMovePrediction.
 	Tick uint64
 }
 
-// ID ...
-func (*MovePlayer) ID() uint32 {
-	return IDMovePlayer
+// Marshal reads or writes MovePlayer using its canonical wire layout.
+func (x *MovePlayer) Marshal(io protocol.IO) {
+	io.ActorRuntimeID(&x.PlayerRuntimeID)
+	io.Vec3(&x.Position)
+	io.Vec2(&x.Rotation)
+	io.Float32(&x.YHeadRotation)
+	x.PositionMode.Marshal(io)
+	io.Bool(&x.OnGround)
+	io.ActorRuntimeID(&x.RidingRuntimeID)
+	protocol.OptionalMarshaler(io, &x.TeleportData)
+	io.PlayerInputTick(&x.Tick)
 }
 
-func (pk *MovePlayer) Marshal(io protocol.IO) {
-	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.Vec3(&pk.Position)
-	io.Float32(&pk.Pitch)
-	io.Float32(&pk.Yaw)
-	io.Float32(&pk.HeadYaw)
-	io.Uint8(&pk.Mode)
-	io.Bool(&pk.OnGround)
-	io.ActorRuntimeID(&pk.RiddenEntityRuntimeID)
-	protocol.OptionalMarshaler(io, &pk.TeleportData)
-	io.PlayerInputTick(&pk.Tick)
-}
+// ID returns the protocol ID for MovePlayer.
+func (*MovePlayer) ID() uint32 { return IDMovePlayer }
+
+const (
+	MoveModeNormal   protocol.PlayerPositionModeComponentPositionMode = 0
+	MoveModeReset    protocol.PlayerPositionModeComponentPositionMode = 1
+	MoveModeTeleport protocol.PlayerPositionModeComponentPositionMode = 2
+	MoveModeRotation protocol.PlayerPositionModeComponentPositionMode = 3
+)

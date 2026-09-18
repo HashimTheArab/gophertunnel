@@ -1,22 +1,23 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// SetScore is sent by the server to send the contents of a scoreboard to the player. It may be used to either
-// add, remove or edit entries on the scoreboard.
+// SetScore is sent by the server to send the contents of a scoreboard to the player. It may be used
+// to either add, remove or edit entries on the scoreboard.
 type SetScore struct {
-	// Entries is a list of all entries that the client should operate on. Each entry's IdentityType specifies
-	// whether it is added, modified or removed.
-	Entries []protocol.ScoreboardEntry
+	// ScoreInfo is a list of all entries that the client should operate on. Each entry's IdentityType
+	// specifies whether it is added, modified or removed.
+	Entries []protocol.SetScoreEntriesItem
 }
 
-// ID ...
-func (*SetScore) ID() uint32 {
-	return IDSetScore
+// Marshal reads or writes SetScore using its canonical wire layout.
+func (x *SetScore) Marshal(io protocol.IO) {
+	protocol.FuncSlice(io, &x.Entries, io.Varuint32, func(value *protocol.SetScoreEntriesItem) {
+		protocol.MarshalSetScoreEntriesItem(io, value)
+	})
 }
 
-func (pk *SetScore) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Entries)
-}
+// ID returns the protocol ID for SetScore.
+func (*SetScore) ID() uint32 { return IDSetScore }

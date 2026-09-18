@@ -1,11 +1,6 @@
-package protocol
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
 
-const (
-	ClockPayloadTypeSyncState = iota
-	ClockPayloadTypeInitializeRegistry
-	ClockPayloadTypeAddTimeMarker
-	ClockPayloadTypeRemoveTimeMarker
-)
+package protocol
 
 // SyncWorldClockStateData represents the state data for synchronising a world clock.
 type SyncWorldClockStateData struct {
@@ -13,15 +8,15 @@ type SyncWorldClockStateData struct {
 	ClockID uint64
 	// Time is the current time of the clock.
 	Time int32
-	// Paused indicates if the clock is paused.
+	// IsPaused indicates if the clock is paused.
 	Paused bool
 }
 
-// Marshal encodes/decodes a SyncWorldClockStateData.
-func (x *SyncWorldClockStateData) Marshal(r IO) {
-	r.Varuint64(&x.ClockID)
-	r.Varint32(&x.Time)
-	r.Bool(&x.Paused)
+// Marshal reads or writes SyncWorldClockStateData using its canonical wire layout.
+func (x *SyncWorldClockStateData) Marshal(io IO) {
+	io.Varuint64(&x.ClockID)
+	io.Varint32(&x.Time)
+	io.Bool(&x.Paused)
 }
 
 // TimeMarkerData represents a time marker within a world clock.
@@ -36,12 +31,12 @@ type TimeMarkerData struct {
 	Period Optional[int32]
 }
 
-// Marshal encodes/decodes a TimeMarkerData.
-func (x *TimeMarkerData) Marshal(r IO) {
-	r.Varuint64(&x.ID)
-	r.String(&x.Name)
-	r.Varint32(&x.Time)
-	OptionalFunc(r, &x.Period, r.Int32)
+// Marshal reads or writes TimeMarkerData using its canonical wire layout.
+func (x *TimeMarkerData) Marshal(io IO) {
+	io.Varuint64(&x.ID)
+	io.StringLimits(&x.Name, 0, 128)
+	io.Varint32(&x.Time)
+	OptionalFunc(io, &x.Period, io.Int32)
 }
 
 // WorldClockData represents a complete world clock with its time markers.
@@ -52,17 +47,17 @@ type WorldClockData struct {
 	Name string
 	// Time is the current time of the clock.
 	Time int32
-	// Paused indicates if the clock is paused.
+	// IsPaused indicates if the clock is paused.
 	Paused bool
 	// TimeMarkers is a list of time markers for this clock.
 	TimeMarkers []TimeMarkerData
 }
 
-// Marshal encodes/decodes a WorldClockData.
-func (x *WorldClockData) Marshal(r IO) {
-	r.Varuint64(&x.ID)
-	r.String(&x.Name)
-	r.Varint32(&x.Time)
-	r.Bool(&x.Paused)
-	Slice(r, &x.TimeMarkers)
+// Marshal reads or writes WorldClockData using its canonical wire layout.
+func (x *WorldClockData) Marshal(io IO) {
+	io.Varuint64(&x.ID)
+	io.StringLimits(&x.Name, 0, 128)
+	io.Varint32(&x.Time)
+	io.Bool(&x.Paused)
+	SliceLimits(io, &x.TimeMarkers, 0, 256)
 }

@@ -1,22 +1,19 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// JigsawStructureData is sent by the server to let the client know all the rules for jigsaw structures.
+// JigsawStructureData is sent by the server to let the client know all the rules for jigsaw
+// structures.
 type JigsawStructureData struct {
-	// StructureData is a network NBT serialised compound of all the jigsaw structure rules defined
-	// on the server.
-	StructureData map[string]any
+	JigsawStructureDataTag []byte
 }
 
-// ID ...
-func (*JigsawStructureData) ID() uint32 {
-	return IDJigsawStructureData
+// Marshal reads or writes JigsawStructureData using its canonical wire layout.
+func (x *JigsawStructureData) Marshal(io protocol.IO) {
+	io.NBT(&x.JigsawStructureDataTag, protocol.NBTNetwork)
 }
 
-func (pk *JigsawStructureData) Marshal(io protocol.IO) {
-	io.NBT(&pk.StructureData, nbt.NetworkLittleEndian)
-}
+// ID returns the protocol ID for JigsawStructureData.
+func (*JigsawStructureData) ID() uint32 { return IDJigsawStructureData }

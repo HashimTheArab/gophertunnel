@@ -1,335 +1,353 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-import (
-	"image/color"
+import "github.com/go-gl/mathgl/mgl32"
 
-	"github.com/go-gl/mathgl/mgl32"
-)
+type CameraAimAssistAction uint8
 
-const (
-	AimAssistTargetModeAngle = iota
-	AimAssistTargetModeDistance
-)
+// Marshal reads or writes CameraAimAssistAction through its uint8 wire encoding.
+func (x *CameraAimAssistAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-const (
-	AudioListenerCamera = iota
-	AudioListenerPlayer
-)
-
-const (
-	EasingTypeLinear = iota
-	EasingTypeSpring
-	EasingTypeInQuad
-	EasingTypeOutQuad
-	EasingTypeInOutQuad
-	EasingTypeInCubic
-	EasingTypeOutCubic
-	EasingTypeInOutCubic
-	EasingTypeInQuart
-	EasingTypeOutQuart
-	EasingTypeInOutQuart
-	EasingTypeInQuint
-	EasingTypeOutQuint
-	EasingTypeInOutQuint
-	EasingTypeInSine
-	EasingTypeOutSine
-	EasingTypeInOutSine
-	EasingTypeInExpo
-	EasingTypeOutExpo
-	EasingTypeInOutExpo
-	EasingTypeInCirc
-	EasingTypeOutCirc
-	EasingTypeInOutCirc
-	EasingTypeInBounce
-	EasingTypeOutBounce
-	EasingTypeInOutBounce
-	EasingTypeInBack
-	EasingTypeOutBack
-	EasingTypeInOutBack
-	EasingTypeInElastic
-	EasingTypeOutElastic
-	EasingTypeInOutElastic
-	EasingTypeInverseLerp
-)
-
-// easingTypeFromString looks up an easing type from a string and writes the result to x.
-func easingTypeFromString(io IO, x *int32, s string) {
-	switch s {
-	case "linear":
-		*x = EasingTypeLinear
-	case "spring":
-		*x = EasingTypeSpring
-	case "in_quad":
-		*x = EasingTypeInQuad
-	case "out_quad":
-		*x = EasingTypeOutQuad
-	case "in_out_quad":
-		*x = EasingTypeInOutQuad
-	case "in_cubic":
-		*x = EasingTypeInCubic
-	case "out_cubic":
-		*x = EasingTypeOutCubic
-	case "in_out_cubic":
-		*x = EasingTypeInOutCubic
-	case "in_quart":
-		*x = EasingTypeInQuart
-	case "out_quart":
-		*x = EasingTypeOutQuart
-	case "in_out_quart":
-		*x = EasingTypeInOutQuart
-	case "in_quint":
-		*x = EasingTypeInQuint
-	case "out_quint":
-		*x = EasingTypeOutQuint
-	case "in_out_quint":
-		*x = EasingTypeInOutQuint
-	case "in_sine":
-		*x = EasingTypeInSine
-	case "out_sine":
-		*x = EasingTypeOutSine
-	case "in_out_sine":
-		*x = EasingTypeInOutSine
-	case "in_expo":
-		*x = EasingTypeInExpo
-	case "out_expo":
-		*x = EasingTypeOutExpo
-	case "in_out_expo":
-		*x = EasingTypeInOutExpo
-	case "in_circ":
-		*x = EasingTypeInCirc
-	case "out_circ":
-		*x = EasingTypeOutCirc
-	case "in_out_circ":
-		*x = EasingTypeInOutCirc
-	case "in_back":
-		*x = EasingTypeInBack
-	case "out_back":
-		*x = EasingTypeOutBack
-	case "in_out_back":
-		*x = EasingTypeInOutBack
-	case "in_elastic":
-		*x = EasingTypeInElastic
-	case "out_elastic":
-		*x = EasingTypeOutElastic
-	case "in_out_elastic":
-		*x = EasingTypeInOutElastic
-	case "in_bounce":
-		*x = EasingTypeInBounce
-	case "out_bounce":
-		*x = EasingTypeOutBounce
-	case "in_out_bounce":
-		*x = EasingTypeInOutBounce
-	case "inverse_lerp":
-		*x = EasingTypeInverseLerp
-	default:
-		io.InvalidValue(s, "easingType", "unknown easing type")
-	}
+// CameraAimAssistActorPriorityData represents priority data for aim assist actor targeting.
+type CameraAimAssistActorPriorityData struct {
+	// PresetIndex is the index of the aim assist preset.
+	PresetIndex int32
+	// CategoryIndex is the index of the aim assist category.
+	CategoryIndex int32
+	// ActorIndex is the index of the actor.
+	ActorIndex int32
+	// PriorityValue is the priority value for this actor.
+	Priority int32
 }
 
-// easingTypeToString looks up an easing type constant and returns the string representation.
-func easingTypeToString(x int32) string {
-	switch x {
-	case EasingTypeLinear:
-		return "linear"
-	case EasingTypeSpring:
-		return "spring"
-	case EasingTypeInQuad:
-		return "in_quad"
-	case EasingTypeOutQuad:
-		return "out_quad"
-	case EasingTypeInOutQuad:
-		return "in_out_quad"
-	case EasingTypeInCubic:
-		return "in_cubic"
-	case EasingTypeOutCubic:
-		return "out_cubic"
-	case EasingTypeInOutCubic:
-		return "in_out_cubic"
-	case EasingTypeInQuart:
-		return "in_quart"
-	case EasingTypeOutQuart:
-		return "out_quart"
-	case EasingTypeInOutQuart:
-		return "in_out_quart"
-	case EasingTypeInQuint:
-		return "in_quint"
-	case EasingTypeOutQuint:
-		return "out_quint"
-	case EasingTypeInOutQuint:
-		return "in_out_quint"
-	case EasingTypeInSine:
-		return "in_sine"
-	case EasingTypeOutSine:
-		return "out_sine"
-	case EasingTypeInOutSine:
-		return "in_out_sine"
-	case EasingTypeInExpo:
-		return "in_expo"
-	case EasingTypeOutExpo:
-		return "out_expo"
-	case EasingTypeInOutExpo:
-		return "in_out_expo"
-	case EasingTypeInCirc:
-		return "in_circ"
-	case EasingTypeOutCirc:
-		return "out_circ"
-	case EasingTypeInOutCirc:
-		return "in_out_circ"
-	case EasingTypeInBack:
-		return "in_back"
-	case EasingTypeOutBack:
-		return "out_back"
-	case EasingTypeInOutBack:
-		return "in_out_back"
-	case EasingTypeInElastic:
-		return "in_elastic"
-	case EasingTypeOutElastic:
-		return "out_elastic"
-	case EasingTypeInOutElastic:
-		return "in_out_elastic"
-	case EasingTypeInBounce:
-		return "in_bounce"
-	case EasingTypeOutBounce:
-		return "out_bounce"
-	case EasingTypeInOutBounce:
-		return "in_out_bounce"
-	case EasingTypeInverseLerp:
-		return "inverse_lerp"
-	default:
-		return "unknown"
-	}
+// Marshal reads or writes CameraAimAssistActorPriorityData using its canonical wire layout.
+func (x *CameraAimAssistActorPriorityData) Marshal(io IO) {
+	io.Int32(&x.PresetIndex)
+	io.Int32(&x.CategoryIndex)
+	io.Int32(&x.ActorIndex)
+	io.Int32(&x.Priority)
 }
 
+type CameraAimAssistCategoryDefinition struct {
+	Name       string
+	Priorities CameraAimAssistCategoryPriorities
+}
+
+// Marshal reads or writes CameraAimAssistCategoryDefinition using its canonical wire layout.
+func (x *CameraAimAssistCategoryDefinition) Marshal(io IO) {
+	io.String(&x.Name)
+	x.Priorities.Marshal(io)
+}
+
+type CameraAimAssistCategoryPriorities struct {
+	Entities           []OrderedEntry[string, int32]
+	Blocks             []OrderedEntry[string, int32]
+	BlockTags          []OrderedEntry[string, int32]
+	EntityTypeFamilies []OrderedEntry[string, int32]
+	EntityDefault      Optional[int32]
+	BlockDefault       Optional[int32]
+}
+
+// Marshal reads or writes CameraAimAssistCategoryPriorities using its canonical wire layout.
+func (x *CameraAimAssistCategoryPriorities) Marshal(io IO) {
+	OrderedMap(io, &x.Entities, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.Blocks, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.BlockTags, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OrderedMap(io, &x.EntityTypeFamilies, io.Varuint32, io.String, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OptionalFunc(io, &x.EntityDefault, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+	OptionalFunc(io, &x.BlockDefault, func(value *int32) {
+		io.Int32(value)
+		Minimum(io, value, 0)
+		Maximum(io, value, 100)
+	})
+}
+
+type CameraAimAssistCommandPresetDefinition struct {
+	PresetID   Optional[string]
+	TargetMode Optional[CameraAimAssistTargetMode]
+	ViewAngle  Optional[mgl32.Vec2]
+	Distance   Optional[float32]
+}
+
+// Marshal reads or writes CameraAimAssistCommandPresetDefinition using its canonical wire layout.
+func (x *CameraAimAssistCommandPresetDefinition) Marshal(io IO) {
+	OptionalFunc(io, &x.PresetID, io.String)
+	OptionalMarshaler(io, &x.TargetMode)
+	OptionalFunc(io, &x.ViewAngle, io.Vec2)
+	OptionalFunc(io, &x.Distance, io.Float32)
+}
+
+type CameraAimAssistPresetDefinition struct {
+	Identifier          string
+	ExclusionSettings   CameraAimAssistPresetExclusionDefinition
+	LiquidTargetingList []string
+	ItemSettings        []OrderedEntry[string, string]
+	DefaultItemSettings Optional[string]
+	HandSettings        Optional[string]
+}
+
+// Marshal reads or writes CameraAimAssistPresetDefinition using its canonical wire layout.
+func (x *CameraAimAssistPresetDefinition) Marshal(io IO) {
+	io.String(&x.Identifier)
+	x.ExclusionSettings.Marshal(io)
+	FuncSlice(io, &x.LiquidTargetingList, io.Varuint32, io.String)
+	OrderedMap(io, &x.ItemSettings, io.Varuint32, io.String, io.String)
+	OptionalFunc(io, &x.DefaultItemSettings, io.String)
+	OptionalFunc(io, &x.HandSettings, io.String)
+}
+
+type CameraAimAssistPresetExclusionDefinition struct {
+	Blocks             []string
+	Entities           []string
+	BlockTags          []string
+	EntityTypeFamilies []string
+}
+
+// Marshal reads or writes CameraAimAssistPresetExclusionDefinition using its canonical wire layout.
+func (x *CameraAimAssistPresetExclusionDefinition) Marshal(io IO) {
+	FuncSlice(io, &x.Blocks, io.Varuint32, io.String)
+	FuncSlice(io, &x.Entities, io.Varuint32, io.String)
+	FuncSlice(io, &x.BlockTags, io.Varuint32, io.String)
+	FuncSlice(io, &x.EntityTypeFamilies, io.Varuint32, io.String)
+}
+
+type CameraAimAssistPresetOperation uint8
+
+// Marshal reads or writes CameraAimAssistPresetOperation through its uint8 wire encoding.
+func (x *CameraAimAssistPresetOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type CameraAimAssistTargetMode int32
+
 const (
-	SplineTypeCatmullRom = "catmullrom"
-	SplineTypeLinear     = "linear"
+	AimAssistTargetModeAngle    CameraAimAssistTargetMode = 0
+	AimAssistTargetModeDistance CameraAimAssistTargetMode = 1
 )
+
+// Marshal reads or writes CameraAimAssistTargetMode through its int32 wire encoding.
+func (x *CameraAimAssistTargetMode) Marshal(io IO) { io.Int32((*int32)(x)) }
 
 // CameraEase represents an easing function that can be used by a CameraInstructionSet.
 type CameraEase struct {
 	// Type is the type of easing function used. This is one of the constants above.
 	Type uint8
-	// Duration is the time in seconds that the easing function should take.
+	// Time is the time in seconds that the easing function should take.
 	Duration float32
 }
 
-// Marshal encodes/decodes a CameraEase.
-func (x *CameraEase) Marshal(r IO) {
-	r.Uint8(&x.Type)
-	r.Float32(&x.Duration)
+// Marshal reads or writes CameraEase using its canonical wire layout.
+func (x *CameraEase) Marshal(io IO) {
+	io.Uint8(&x.Type)
+	io.Float32(&x.Duration)
 }
 
-// CameraInstructionSet represents a camera instruction that sets the camera to a specified preset and can be extended
-// with easing functions and translations to the camera's position and rotation.
-type CameraInstructionSet struct {
-	// Preset is the index of the preset in the CameraPresets packet sent to the player.
-	Preset uint32
-	// Ease represents the easing function that is used by the instruction.
-	Ease Optional[CameraEase]
-	// Position represents the position of the camera.
-	Position Optional[mgl32.Vec3]
-	// Rotation represents the rotation of the camera.
-	Rotation Optional[mgl32.Vec2]
-	// Facing is a vector that the camera will always face towards during the duration of the instruction.
-	Facing Optional[mgl32.Vec3]
-	// ViewOffset is an offset based on a pivot point to the player, causing the camera to be shifted in a
-	// certain direction.
-	ViewOffset Optional[mgl32.Vec2]
-	// EntityOffset is an offset from the entity that the camera should be rendered at.
-	EntityOffset Optional[mgl32.Vec3]
-	// Default determines whether the camera is a default camera or not.
-	Default Optional[bool]
-	// IgnoreStartingValuesComponent behavior is currently unknown.
-	IgnoreStartingValuesComponent bool
+type CameraEntityOffset struct {
+	EntityOffsetX float32
+	EntityOffsetY float32
+	EntityOffsetZ float32
 }
 
-// Marshal encodes/decodes a CameraInstructionSet.
-func (x *CameraInstructionSet) Marshal(r IO) {
-	r.Uint32(&x.Preset)
-	OptionalMarshaler(r, &x.Ease)
-	OptionalFunc(r, &x.Position, r.Vec3)
-	OptionalFunc(r, &x.Rotation, r.Vec2)
-	OptionalFunc(r, &x.Facing, r.Vec3)
-	OptionalFunc(r, &x.ViewOffset, r.Vec2)
-	OptionalFunc(r, &x.EntityOffset, r.Vec3)
-	OptionalFunc(r, &x.Default, r.Bool)
-	r.Bool(&x.IgnoreStartingValuesComponent)
+// Marshal reads or writes CameraEntityOffset using its canonical wire layout.
+func (x *CameraEntityOffset) Marshal(io IO) {
+	io.Float32(&x.EntityOffsetX)
+	io.Float32(&x.EntityOffsetY)
+	io.Float32(&x.EntityOffsetZ)
+}
+
+type CameraFacing struct {
+	Pos mgl32.Vec3
+}
+
+// Marshal reads or writes CameraFacing using its canonical wire layout.
+func (x *CameraFacing) Marshal(io IO) {
+	io.Vec3(&x.Pos)
+}
+
+type CameraFadeColor struct {
+	Red   float32
+	Green float32
+	Blue  float32
+}
+
+// Marshal reads or writes CameraFadeColor using its canonical wire layout.
+func (x *CameraFadeColor) Marshal(io IO) {
+	io.Float32(&x.Red)
+	io.Float32(&x.Green)
+	io.Float32(&x.Blue)
 }
 
 // CameraFadeTimeData represents the time data for a CameraInstructionFade.
 type CameraFadeTimeData struct {
-	// FadeInDuration is the time in seconds for the screen to fully fade in.
+	// FadeInTime is the time in seconds for the screen to fully fade in.
 	FadeInDuration float32
-	// WaitDuration is time in seconds to wait before fading out.
+	// HoldTime is time in seconds to wait before fading out.
 	WaitDuration float32
-	// FadeOutDuration is the time in seconds for the screen to fully fade out.
+	// FadeOutTime is the time in seconds for the screen to fully fade out.
 	FadeOutDuration float32
 }
 
-// Marshal encodes/decodes a CameraFadeTimeData.
-func (x *CameraFadeTimeData) Marshal(r IO) {
-	r.Float32(&x.FadeInDuration)
-	r.Float32(&x.WaitDuration)
-	r.Float32(&x.FadeOutDuration)
+// Marshal reads or writes CameraFadeTimeData using its canonical wire layout.
+func (x *CameraFadeTimeData) Marshal(io IO) {
+	io.Float32(&x.FadeInDuration)
+	io.Float32(&x.WaitDuration)
+	io.Float32(&x.FadeOutDuration)
 }
 
-// CameraInstructionFade represents a camera instruction that fades the screen to a specified colour.
+type CameraInstructionData struct {
+	Set              Optional[CameraInstructionSet]
+	Clear            Optional[bool]
+	Fade             Optional[CameraInstructionFade]
+	Target           Optional[CameraInstructionTargetData]
+	RemoveTarget     Optional[bool]
+	FieldOfView      Optional[CameraInstructionFieldOfView]
+	Spline           Optional[CameraSplineInstruction]
+	AttachToEntity   Optional[CameraInstructionTarget]
+	DetachFromEntity Optional[bool]
+}
+
+// Marshal reads or writes CameraInstructionData using its canonical wire layout.
+func (x *CameraInstructionData) Marshal(io IO) {
+	OptionalMarshaler(io, &x.Set)
+	OptionalFunc(io, &x.Clear, io.Bool)
+	OptionalMarshaler(io, &x.Fade)
+	OptionalMarshaler(io, &x.Target)
+	OptionalFunc(io, &x.RemoveTarget, io.Bool)
+	OptionalMarshaler(io, &x.FieldOfView)
+	OptionalMarshaler(io, &x.Spline)
+	OptionalMarshaler(io, &x.AttachToEntity)
+	OptionalFunc(io, &x.DetachFromEntity, io.Bool)
+}
+
+// CameraInstructionFade represents a camera instruction that fades the screen to a specified
+// colour.
 type CameraInstructionFade struct {
-	// TimeData is the time data for the fade, which includes the fade in duration, wait duration and fade out
-	// duration.
+	// Time is the time data for the fade, which includes the fade in duration, wait duration and fade
+	// out duration.
 	TimeData Optional[CameraFadeTimeData]
-	// Colour is the colour of the screen to fade to. This only uses the red, green and blue components.
-	Colour Optional[color.RGBA]
+	// Color is the colour of the screen to fade to. This only uses the red, green and blue components.
+	Colour Optional[CameraFadeColor]
 }
 
-// Marshal encodes/decodes a CameraInstructionFade.
-func (x *CameraInstructionFade) Marshal(r IO) {
-	OptionalMarshaler(r, &x.TimeData)
-	OptionalFunc(r, &x.Colour, r.RGB)
-}
-
-// CameraInstructionTarget represents a camera instruction that targets a specific entity.
-type CameraInstructionTarget struct {
-	// CenterOffset is the offset from the center of the entity that the camera should target.
-	CenterOffset Optional[mgl32.Vec3]
-	// EntityUniqueID is the unique ID of the entity that the camera should target.
-	EntityUniqueID int64
-}
-
-// Marshal encodes/decodes a CameraInstructionTarget.
-func (x *CameraInstructionTarget) Marshal(r IO) {
-	OptionalFunc(r, &x.CenterOffset, r.Vec3)
-	r.ActorUniqueIDInt64(&x.EntityUniqueID)
+// Marshal reads or writes CameraInstructionFade using its canonical wire layout.
+func (x *CameraInstructionFade) Marshal(io IO) {
+	OptionalMarshaler(io, &x.TimeData)
+	OptionalMarshaler(io, &x.Colour)
 }
 
 // CameraInstructionFieldOfView represents a camera instruction that updates the field of view.
 type CameraInstructionFieldOfView struct {
 	// FieldOfView is the field of view of the camera.
-	FieldOfView float32
-	// EaseTime is the time in seconds that the easing function should take.
-	EaseTime float32
-	// EaseType is the type of easing function used. This is one of the constants above.
-	EaseType int32
-	// Clear can be set to true to clear the current instruction.
-	Clear bool
+	FieldOfView      float32
+	FOVEaseTime      float32
+	FOVEaseType      string
+	FieldOfViewClear bool
 }
 
-// Marshal encodes/decodes a CameraInstructionFieldOfView.
-func (x *CameraInstructionFieldOfView) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
-	r.Float32(&x.FieldOfView)
-	r.Float32(&x.EaseTime)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
-	r.Bool(&x.Clear)
+// Marshal reads or writes CameraInstructionFieldOfView using its canonical wire layout.
+func (x *CameraInstructionFieldOfView) Marshal(io IO) {
+	io.Float32(&x.FieldOfView)
+	io.Float32(&x.FOVEaseTime)
+	io.String(&x.FOVEaseType)
+	io.Bool(&x.FieldOfViewClear)
+}
+
+// CameraInstructionSet represents a camera instruction that sets the camera to a specified preset
+// and can be extended with easing functions and translations to the camera's position and rotation.
+type CameraInstructionSet struct {
+	// Preset is the index of the preset in the CameraPresets packet sent to the player.
+	Preset uint32
+	// Ease represents the easing function that is used by the instruction.
+	Ease Optional[CameraEase]
+	// Pos represents the position of the camera.
+	Position Optional[CameraPosition]
+	// Rot represents the rotation of the camera.
+	Rotation Optional[CameraRotation]
+	// Facing is a vector that the camera will always face towards during the duration of the
+	// instruction.
+	Facing Optional[CameraFacing]
+	// ViewOffset is an offset based on a pivot point to the player, causing the camera to be shifted in
+	// a certain direction.
+	ViewOffset Optional[CameraViewOffset]
+	// EntityOffset is an offset from the entity that the camera should be rendered at.
+	EntityOffset Optional[CameraEntityOffset]
+	// Default determines whether the camera is a default camera or not.
+	Default Optional[bool]
+	// RemoveIgnoreStartingValuesComponent behavior is currently unknown.
+	IgnoreStartingValuesComponent bool
+}
+
+// Marshal reads or writes CameraInstructionSet using its canonical wire layout.
+func (x *CameraInstructionSet) Marshal(io IO) {
+	io.Uint32(&x.Preset)
+	OptionalMarshaler(io, &x.Ease)
+	OptionalMarshaler(io, &x.Position)
+	OptionalMarshaler(io, &x.Rotation)
+	OptionalMarshaler(io, &x.Facing)
+	OptionalMarshaler(io, &x.ViewOffset)
+	OptionalMarshaler(io, &x.EntityOffset)
+	OptionalFunc(io, &x.Default, io.Bool)
+	io.Bool(&x.IgnoreStartingValuesComponent)
+}
+
+// CameraInstructionTarget represents a camera instruction that targets a specific entity.
+type CameraInstructionTarget struct {
+	EntityActorID int64
+}
+
+// Marshal reads or writes CameraInstructionTarget using its canonical wire layout.
+func (x *CameraInstructionTarget) Marshal(io IO) {
+	io.Int64(&x.EntityActorID)
+}
+
+// CameraInstructionTarget represents a camera instruction that targets a specific entity.
+type CameraInstructionTargetData struct {
+	// TargetCenterOffset is the offset from the center of the entity that the camera should target.
+	CenterOffset Optional[mgl32.Vec3]
+	// TargetActorID is the unique ID of the entity that the camera should target.
+	EntityUniqueID int64
+}
+
+// Marshal reads or writes CameraInstructionTargetData using its canonical wire layout.
+func (x *CameraInstructionTargetData) Marshal(io IO) {
+	OptionalFunc(io, &x.CenterOffset, io.Vec3)
+	io.Int64(&x.EntityUniqueID)
+}
+
+type CameraPosition struct {
+	Pos mgl32.Vec3
+}
+
+// Marshal reads or writes CameraPosition using its canonical wire layout.
+func (x *CameraPosition) Marshal(io IO) {
+	io.Vec3(&x.Pos)
 }
 
 // CameraPreset represents a basic preset that can be extended upon by more complex instructions.
 type CameraPreset struct {
 	// Name is the name of the preset. Each preset must have their own unique name.
 	Name string
-	// Parent is the name of the preset that this preset extends upon. This can be left empty.
-	Parent string
+	// InheritFrom is the name of the preset that this preset extends upon. This can be left empty.
+	InheritFrom string
 	// PosX is the default X position of the camera.
 	PosX Optional[float32]
 	// PosY is the default Y position of the camera.
@@ -350,272 +368,140 @@ type CameraPreset struct {
 	VerticalRotationLimit Optional[mgl32.Vec2]
 	// ContinueTargeting determines whether the camera should continue targeting when using aim assist.
 	ContinueTargeting Optional[bool]
-	// TrackingRadius is the radius around the camera that the aim assist should track targets.
-	TrackingRadius Optional[float32]
-	// ViewOffset is only used in a follow_orbit camera and controls an offset based on a pivot point to the
-	// player, causing it to be shifted in a certain direction.
+	// BlockListeningRadius is the radius around the camera that the aim assist should track targets.
+	BlockListeningRadius Optional[float32]
+	// ViewOffset is only used in a follow_orbit camera and controls an offset based on a pivot point to
+	// the player, causing it to be shifted in a certain direction.
 	ViewOffset Optional[mgl32.Vec2]
 	// EntityOffset controls the offset from the entity that the camera should be rendered at.
 	EntityOffset Optional[mgl32.Vec3]
-	// Radius is only used in a follow_orbit camera and controls how far away from the player the camera should
-	// be rendered.
+	// Radius is only used in a follow_orbit camera and controls how far away from the player the camera
+	// should be rendered.
 	Radius Optional[float32]
-	// MinYawLimit is the minimum yaw limit of the camera.
-	MinYawLimit Optional[float32]
-	// MaxYawLimit is the maximum yaw limit of the camera.
-	MaxYawLimit Optional[float32]
-	// AudioListener defines where the audio should be played from when using this preset. This is one of the
+	// YawLimitMin is the minimum yaw limit of the camera.
+	YawLimitMin Optional[float32]
+	// YawLimitMax is the maximum yaw limit of the camera.
+	YawLimitMax Optional[float32]
+	// Listener defines where the audio should be played from when using this preset. This is one of the
 	// constants above.
-	AudioListener Optional[byte]
+	Listener Optional[CameraPresetAudioListener]
 	// PlayerEffects is currently unknown.
 	PlayerEffects Optional[bool]
 	// AimAssist defines the aim assist to use when using this preset.
-	AimAssist Optional[CameraPresetAimAssist]
-	// ControlScheme is the control scheme that the client should use in this camera. It is one of the following:
-	//  - ControlSchemeLockedPlayerRelativeStrafe is the default behaviour, this cannot be set when the client
-	//    is in a custom camera.
-	//  - ControlSchemeCameraRelative makes movement relative to the camera's transform, with the client's
-	//    rotation being relative to the client's movement.
-	//  - ControlSchemeCameraRelativeStrafe makes movement relative to the camera's transform, with the
-	//    client's rotation being locked.
-	//  - ControlSchemePlayerRelative makes movement relative to the player's transform, meaning holding
-	//    left/right will make the player turn in a circle.
-	//  - ControlSchemePlayerRelativeStrafe makes movement the same as the default behaviour, but can be
-	//    used in a custom camera.
-	ControlScheme Optional[byte]
-	// ApplyInheritedStartingRotation specifies if the camera should start at the rotation of the preset it
-	// inherits from, rather than at StartingRotation.
-	ApplyInheritedStartingRotation bool
-	// StartingRotation is the rotation that the camera starts at when the preset is applied.
-	StartingRotation Optional[mgl32.Vec2]
+	AimAssist Optional[CameraAimAssistCommandPresetDefinition]
+	// ControlScheme is the control scheme that the client should use in this camera. It is one of the
+	// following: - ControlSchemeLockedPlayerRelativeStrafe is the default behaviour, this cannot be set
+	// when the client is in a custom camera. - ControlSchemeCameraRelative makes movement relative to
+	// the camera's transform, with the client's rotation being relative to the client's movement. -
+	// ControlSchemeCameraRelativeStrafe makes movement relative to the camera's transform, with the
+	// client's rotation being locked. - ControlSchemePlayerRelative makes movement relative to the
+	// player's transform, meaning holding left/right will make the player turn in a circle. -
+	// ControlSchemePlayerRelativeStrafe makes movement the same as the default behaviour, but can be
+	// used in a custom camera.
+	ControlScheme Optional[ControlScheme]
 }
 
-// Marshal encodes/decodes a CameraPreset.
-func (x *CameraPreset) Marshal(r IO) {
-	r.String(&x.Name)
-	r.String(&x.Parent)
-	OptionalFunc(r, &x.PosX, r.Float32)
-	OptionalFunc(r, &x.PosY, r.Float32)
-	OptionalFunc(r, &x.PosZ, r.Float32)
-	OptionalFunc(r, &x.RotX, r.Float32)
-	OptionalFunc(r, &x.RotY, r.Float32)
-	OptionalFunc(r, &x.RotationSpeed, r.Float32)
-	OptionalFunc(r, &x.SnapToTarget, r.Bool)
-	OptionalFunc(r, &x.HorizontalRotationLimit, r.Vec2)
-	OptionalFunc(r, &x.VerticalRotationLimit, r.Vec2)
-	OptionalFunc(r, &x.ContinueTargeting, r.Bool)
-	OptionalFunc(r, &x.TrackingRadius, r.Float32)
-	OptionalFunc(r, &x.ViewOffset, r.Vec2)
-	OptionalFunc(r, &x.EntityOffset, r.Vec3)
-	OptionalFunc(r, &x.Radius, r.Float32)
-	OptionalFunc(r, &x.MinYawLimit, r.Float32)
-	OptionalFunc(r, &x.MaxYawLimit, r.Float32)
-	OptionalFunc(r, &x.AudioListener, r.Uint8)
-	OptionalFunc(r, &x.PlayerEffects, r.Bool)
-	OptionalMarshaler(r, &x.AimAssist)
-	OptionalFunc(r, &x.ControlScheme, r.Uint8)
-	r.Bool(&x.ApplyInheritedStartingRotation)
-	OptionalFunc(r, &x.StartingRotation, r.Vec2)
+// Marshal reads or writes CameraPreset using its canonical wire layout.
+func (x *CameraPreset) Marshal(io IO) {
+	io.String(&x.Name)
+	io.String(&x.InheritFrom)
+	OptionalFunc(io, &x.PosX, io.Float32)
+	OptionalFunc(io, &x.PosY, io.Float32)
+	OptionalFunc(io, &x.PosZ, io.Float32)
+	OptionalFunc(io, &x.RotX, io.Float32)
+	OptionalFunc(io, &x.RotY, io.Float32)
+	OptionalFunc(io, &x.RotationSpeed, io.Float32)
+	OptionalFunc(io, &x.SnapToTarget, io.Bool)
+	OptionalFunc(io, &x.HorizontalRotationLimit, io.Vec2)
+	OptionalFunc(io, &x.VerticalRotationLimit, io.Vec2)
+	OptionalFunc(io, &x.ContinueTargeting, io.Bool)
+	OptionalFunc(io, &x.BlockListeningRadius, io.Float32)
+	OptionalFunc(io, &x.ViewOffset, io.Vec2)
+	OptionalFunc(io, &x.EntityOffset, io.Vec3)
+	OptionalFunc(io, &x.Radius, io.Float32)
+	OptionalFunc(io, &x.YawLimitMin, io.Float32)
+	OptionalFunc(io, &x.YawLimitMax, io.Float32)
+	OptionalMarshaler(io, &x.Listener)
+	OptionalFunc(io, &x.PlayerEffects, io.Bool)
+	OptionalMarshaler(io, &x.AimAssist)
+	OptionalMarshaler(io, &x.ControlScheme)
 }
 
-// CameraPresetAimAssist represents a preset for aim assist settings.
-type CameraPresetAimAssist struct {
-	// Preset is the ID of the preset that has previously been defined in the CameraAimAssistPresets packet.
-	Preset Optional[string]
-	// TargetMode is the mode that the camera should use for detecting targets. This is one of the constants
-	// above.
-	TargetMode Optional[int32]
-	// Angle is the maximum angle around the playes's cursor that the aim assist should check for a target,
-	// if TargetMode is set to protocol.AimAssistTargetModeAngle.
-	Angle Optional[mgl32.Vec2]
-	// Distance is the maximum distance from the player's cursor should check for a target, if TargetMode is
-	// set to protocol.AimAssistTargetModeDistance.
-	Distance Optional[float32]
+type CameraPresetAudioListener uint8
+
+const (
+	AudioListenerCamera CameraPresetAudioListener = 0
+	AudioListenerPlayer CameraPresetAudioListener = 1
+)
+
+// Marshal reads or writes CameraPresetAudioListener through its uint8 wire encoding.
+func (x *CameraPresetAudioListener) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type CameraPresetList struct {
+	Presets []CameraPreset
 }
 
-// Marshal encodes/decodes a CameraPresetAimAssist.
-func (x *CameraPresetAimAssist) Marshal(r IO) {
-	OptionalFunc(r, &x.Preset, r.String)
-	OptionalFunc(r, &x.TargetMode, r.Int32)
-	OptionalFunc(r, &x.Angle, r.Vec2)
-	OptionalFunc(r, &x.Distance, r.Float32)
-}
-
-// CameraAimAssistCategory is an aim assist category that defines priorities for specific blocks and entities.
-type CameraAimAssistCategory struct {
-	// Name is the name of the category which can be used by a CameraAimAssistPreset.
-	Name string
-	// Priorities represents the block and entity specific priorities as well as the default priorities for
-	// this category.
-	Priorities CameraAimAssistPriorities
-}
-
-// Marshal encodes/decodes a CameraAimAssistCategory.
-func (x *CameraAimAssistCategory) Marshal(r IO) {
-	r.String(&x.Name)
-	Single(r, &x.Priorities)
-}
-
-// CameraAimAssistPriorities represents the block and entity specific priorities for targetting. The aim
-// assist will select the block or entity with the highest priority within the specified thresholds.
-type CameraAimAssistPriorities struct {
-	// Entities is a list of priorities for specific entity identifiers.
-	Entities []CameraAimAssistPriority
-	// Blocks is a list of priorities for specific block identifiers.
-	Blocks []CameraAimAssistPriority
-	// BlockTags is a list of priorities for specific block tags.
-	BlockTags []CameraAimAssistPriority
-	// EntityTypeFamilies is a list of priorities for specific entity type families.
-	EntityTypeFamilies []CameraAimAssistPriority
-	// EntityDefault is the default priority for entities.
-	EntityDefault Optional[int32]
-	// BlockDefault is the default priority for blocks.
-	BlockDefault Optional[int32]
-}
-
-// Marshal encodes/decodes a CameraAimAssistPriorities.
-func (x *CameraAimAssistPriorities) Marshal(r IO) {
-	Slice(r, &x.Entities)
-	Slice(r, &x.Blocks)
-	Slice(r, &x.BlockTags)
-	Slice(r, &x.EntityTypeFamilies)
-	OptionalFunc(r, &x.EntityDefault, r.Int32)
-	OptionalFunc(r, &x.BlockDefault, r.Int32)
-}
-
-// CameraAimAssistPriority represents a non-default priority for a specific target.
-type CameraAimAssistPriority struct {
-	// Identifier is the identifier of a target to define the priority for.
-	Identifier string
-	// Priority is the priority for this specific target.
-	Priority int32
-}
-
-// Marshal encodes/decodes a CameraAimAssistPriority.
-func (x *CameraAimAssistPriority) Marshal(r IO) {
-	r.String(&x.Identifier)
-	r.Int32(&x.Priority)
-}
-
-// CameraAimAssistPreset defines a base preset that can be extended upon when sending an aim assist.
-type CameraAimAssistPreset struct {
-	// Identifier represents the identifier of this preset.
-	Identifier string
-	// BlockExclusions is a list of block identifiers that should be ignored by the aim assist.
-	BlockExclusions []string
-	// EntityExclusions is a list of entity identifiers that should be ignored by the aim assist.
-	EntityExclusions []string
-	// BlockTagExclusions is a list of block tags that should be ignored by the aim assist.
-	BlockTagExclusions []string
-	// EntityTypeFamilyExclusions is a list of entity type families that should be ignored by the aim assist.
-	EntityTypeFamilyExclusions []string
-	// LiquidTargets is a list of entity identifiers that should be targetted when inside of a liquid.
-	LiquidTargets []string
-	// ItemSettings is a list of settings for specific item identifiers. If an item is not listed here, it
-	// will fallback to DefaultItemSettings or HandSettings if no item is held.
-	ItemSettings []CameraAimAssistItemSettings
-	// DefaultItemSettings is the identifier of a category to use when the player is not holding an item
-	// listed in ItemSettings. This must be the identifier of a category within the Categories slice.
-	DefaultItemSettings Optional[string]
-	// HandSettings is the identifier of a category to use when the player is not holding an item. This must
-	// be the identifier of a category within Categories slice.
-	HandSettings Optional[string]
-}
-
-// Marshal encodes/decodes a CameraAimAssistPreset.
-func (x *CameraAimAssistPreset) Marshal(r IO) {
-	r.String(&x.Identifier)
-	FuncSlice(r, &x.BlockExclusions, r.String)
-	FuncSlice(r, &x.EntityExclusions, r.String)
-	FuncSlice(r, &x.BlockTagExclusions, r.String)
-	FuncSlice(r, &x.EntityTypeFamilyExclusions, r.String)
-	FuncSlice(r, &x.LiquidTargets, r.String)
-	Slice(r, &x.ItemSettings)
-	OptionalFunc(r, &x.DefaultItemSettings, r.String)
-	OptionalFunc(r, &x.HandSettings, r.String)
-}
-
-// CameraAimAssistItemSettings defines settings for how specific items should behave when using aim assist.
-type CameraAimAssistItemSettings struct {
-	// Item is the identifier of the item to apply the settings to.
-	Item string
-	// Category is the identifier of a category to use which has been defined by a CameraAimAssistCategory.
-	// Only categories defined in the Categories slice used by the CameraAimAssistPreset can be
-	// used here.
-	Category string
-}
-
-// Marshal encodes/decodes a CameraAimAssistItemSettings.
-func (x *CameraAimAssistItemSettings) Marshal(r IO) {
-	r.String(&x.Item)
-	r.String(&x.Category)
-}
-
-// CameraRotationOption represents a rotation option for camera spline instructions.
-type CameraRotationOption struct {
-	// Value is the rotation value.
-	Value mgl32.Vec3
-	// Time is the time for this rotation option.
-	Time float32
-	// EaseType is the optional easing function name used to interpolate towards this rotation key frame.
-	EaseType int32
-}
-
-// Marshal encodes/decodes a CameraRotationOption.
-func (x *CameraRotationOption) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
-	r.Vec3(&x.Value)
-	r.Float32(&x.Time)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
+// Marshal reads or writes CameraPresetList using its canonical wire layout.
+func (x *CameraPresetList) Marshal(io IO) {
+	Slice(io, &x.Presets)
 }
 
 // CameraProgressOption represents a progress keyframe option for camera spline instructions.
 type CameraProgressOption struct {
-	// Value is the progress value.
-	Value float32
-	// Time is the time for this progress option.
-	Time float32
-	// EaseType is the optional easing function name used to interpolate towards this progress key frame.
-	EaseType int32
+	KeyFrameValue      float32
+	KeyFrameTime       float32
+	KeyFrameEasingFunc string
 }
 
-// Marshal encodes/decodes a CameraProgressOption.
-func (x *CameraProgressOption) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
-	r.Float32(&x.Value)
-	r.Float32(&x.Time)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
+// Marshal reads or writes CameraProgressOption using its canonical wire layout.
+func (x *CameraProgressOption) Marshal(io IO) {
+	io.Float32(&x.KeyFrameValue)
+	io.Float32(&x.KeyFrameTime)
+	io.String(&x.KeyFrameEasingFunc)
 }
 
-// CameraSplineInstruction represents a camera instruction that creates a spline path for the camera to follow.
-type CameraSplineInstruction struct {
-	// TotalTime is the total time for the spline animation.
-	TotalTime float32
-	// SplineType is the optional spline interpolation type.
-	SplineType Optional[uint8]
-	// Curve is a list of points that define the spline curve.
-	Curve []mgl32.Vec3
-	// ProgressKeyFrames is a list of progress key frames for the spline.
-	ProgressKeyFrames []CameraProgressOption
-	// RotationOptions is a list of rotation options for the spline.
-	RotationOptions []CameraRotationOption
-	// SplineIdentifier is an optional identifier for referencing the spline by name.
-	SplineIdentifier Optional[string]
-	// LoadFromJson optionally determines whether the spline should be loaded from a JSON definition.
-	LoadFromJson Optional[bool]
+type CameraRotation struct {
+	X float32
+	Y float32
 }
 
-// Marshal encodes/decodes a CameraSplineInstruction.
-func (x *CameraSplineInstruction) Marshal(r IO) {
-	r.Float32(&x.TotalTime)
-	OptionalFunc(r, &x.SplineType, r.Uint8)
-	FuncSlice(r, &x.Curve, r.Vec3)
-	Slice(r, &x.ProgressKeyFrames)
-	Slice(r, &x.RotationOptions)
-	OptionalFunc(r, &x.SplineIdentifier, r.String)
-	OptionalFunc(r, &x.LoadFromJson, r.Bool)
+// Marshal reads or writes CameraRotation using its canonical wire layout.
+func (x *CameraRotation) Marshal(io IO) {
+	io.Float32(&x.X)
+	io.Float32(&x.Y)
+}
+
+// CameraRotationOption represents a rotation option for camera spline instructions.
+type CameraRotationOption struct {
+	KeyFrameValue      mgl32.Vec3
+	KeyFrameTime       float32
+	KeyFrameEasingFunc string
+}
+
+// Marshal reads or writes CameraRotationOption using its canonical wire layout.
+func (x *CameraRotationOption) Marshal(io IO) {
+	io.Vec3(&x.KeyFrameValue)
+	io.Float32(&x.KeyFrameTime)
+	io.String(&x.KeyFrameEasingFunc)
+}
+
+type CameraShakeAction uint8
+
+// Marshal reads or writes CameraShakeAction through its uint8 wire encoding.
+func (x *CameraShakeAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type CameraShakeType uint8
+
+// Marshal reads or writes CameraShakeType through its uint8 wire encoding.
+func (x *CameraShakeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type CameraSplineControlPoint struct {
+	Position mgl32.Vec3
+}
+
+// Marshal reads or writes CameraSplineControlPoint using its canonical wire layout.
+func (x *CameraSplineControlPoint) Marshal(io IO) {
+	io.Vec3(&x.Position)
 }
 
 // CameraSplineDefinition represents a named camera spline definition.
@@ -625,41 +511,93 @@ type CameraSplineDefinition struct {
 	// TotalTime is the total time for the spline animation.
 	TotalTime float32
 	// SplineType is the optional spline interpolation type.
-	SplineType Optional[string]
+	SplineType string
 	// ControlPoints is a list of points that define the spline curve.
-	ControlPoints []mgl32.Vec3
+	ControlPoints []CameraSplineControlPoint
+	// ProgressKeyFrames is a list of progress key frames for the spline.
+	ProgressKeyFrames []CameraSplineProgressKeyFrame
+	// RotationKeyFrames is a list of rotation key frames for the spline.
+	RotationKeyFrames []CameraSplineRotationKeyFrame
+}
+
+// Marshal reads or writes CameraSplineDefinition using its canonical wire layout.
+func (x *CameraSplineDefinition) Marshal(io IO) {
+	io.String(&x.Name)
+	Pattern(io, &x.Name, "^\\w+:\\w+$")
+	io.Float32(&x.TotalTime)
+	Minimum(io, &x.TotalTime, 0)
+	io.String(&x.SplineType)
+	Pattern(io, &x.SplineType, "^(?:catmullrom|linear)$")
+	Slice(io, &x.ControlPoints)
+	Slice(io, &x.ProgressKeyFrames)
+	Slice(io, &x.RotationKeyFrames)
+}
+
+// CameraSplineInstruction represents a camera instruction that creates a spline path for the camera
+// to follow.
+type CameraSplineInstruction struct {
+	// TotalTime is the total time for the spline animation.
+	TotalTime float32
+	Type      uint8
+	// Curve is a list of points that define the spline curve.
+	Curve []mgl32.Vec3
 	// ProgressKeyFrames is a list of progress key frames for the spline.
 	ProgressKeyFrames []CameraProgressOption
-	// RotationKeyFrames is a list of rotation key frames for the spline.
-	RotationKeyFrames []CameraRotationOption
+	RotationOption    []CameraRotationOption
+	// SplineIdentifier is an optional identifier for referencing the spline by name.
+	SplineIdentifier string
+	// LoadFromJSON optionally determines whether the spline should be loaded from a JSON definition.
+	LoadFromJson bool
 }
 
-// Marshal encodes/decodes a CameraSplineDefinition.
-func (x *CameraSplineDefinition) Marshal(r IO) {
-	r.String(&x.Name)
-	r.Float32(&x.TotalTime)
-	OptionalFunc(r, &x.SplineType, r.String)
-	FuncSlice(r, &x.ControlPoints, r.Vec3)
-	Slice(r, &x.ProgressKeyFrames)
-	Slice(r, &x.RotationKeyFrames)
+// Marshal reads or writes CameraSplineInstruction using its canonical wire layout.
+func (x *CameraSplineInstruction) Marshal(io IO) {
+	io.Float32(&x.TotalTime)
+	io.Uint8(&x.Type)
+	FuncSlice(io, &x.Curve, io.Varuint32, io.Vec3)
+	Slice(io, &x.ProgressKeyFrames)
+	Slice(io, &x.RotationOption)
+	io.StringLimits(&x.SplineIdentifier, 0, 1024)
+	io.Bool(&x.LoadFromJson)
 }
 
-// CameraAimAssistActorPriorityData represents priority data for aim assist actor targeting.
-type CameraAimAssistActorPriorityData struct {
-	// PresetIndex is the index of the aim assist preset.
-	PresetIndex int32
-	// CategoryIndex is the index of the aim assist category.
-	CategoryIndex int32
-	// ActorIndex is the index of the actor.
-	ActorIndex int32
-	// Priority is the priority value for this actor.
-	Priority int32
+type CameraSplineProgressKeyFrame struct {
+	Progress float32
+	Time     float32
+	Easing   Optional[string]
 }
 
-// Marshal encodes/decodes a CameraAimAssistActorPriorityData.
-func (x *CameraAimAssistActorPriorityData) Marshal(r IO) {
-	r.Int32(&x.PresetIndex)
-	r.Int32(&x.CategoryIndex)
-	r.Int32(&x.ActorIndex)
-	r.Int32(&x.Priority)
+// Marshal reads or writes CameraSplineProgressKeyFrame using its canonical wire layout.
+func (x *CameraSplineProgressKeyFrame) Marshal(io IO) {
+	io.Float32(&x.Progress)
+	Minimum(io, &x.Progress, 0)
+	Maximum(io, &x.Progress, 1)
+	io.Float32(&x.Time)
+	Minimum(io, &x.Time, 0)
+	OptionalFunc(io, &x.Easing, io.String)
+}
+
+type CameraSplineRotationKeyFrame struct {
+	Rotation mgl32.Vec3
+	Time     float32
+	Easing   Optional[string]
+}
+
+// Marshal reads or writes CameraSplineRotationKeyFrame using its canonical wire layout.
+func (x *CameraSplineRotationKeyFrame) Marshal(io IO) {
+	io.Vec3(&x.Rotation)
+	io.Float32(&x.Time)
+	Minimum(io, &x.Time, 0)
+	OptionalFunc(io, &x.Easing, io.String)
+}
+
+type CameraViewOffset struct {
+	X float32
+	Y float32
+}
+
+// Marshal reads or writes CameraViewOffset using its canonical wire layout.
+func (x *CameraViewOffset) Marshal(io IO) {
+	io.Float32(&x.X)
+	io.Float32(&x.Y)
 }

@@ -1,23 +1,20 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ServerToClientHandshake is sent by the server to the client to complete the key exchange in order to
-// initialise encryption on client and server side. It is followed up by a ClientToServerHandshake packet
-// from the client.
+// ServerToClientHandshake is sent by the server to the client to complete the key exchange in order
+// to initialise encryption on client and server side. It is followed up by a
+// ClientToServerHandshake packet from the client.
 type ServerToClientHandshake struct {
-	// JWT is a raw JWT token containing data such as the public key from the server, the algorithm used and
-	// the server's token. It is used for the client to produce a shared secret.
-	JWT []byte
+	HandshakeWebToken string
 }
 
-// ID ...
-func (*ServerToClientHandshake) ID() uint32 {
-	return IDServerToClientHandshake
+// Marshal reads or writes ServerToClientHandshake using its canonical wire layout.
+func (x *ServerToClientHandshake) Marshal(io protocol.IO) {
+	io.String(&x.HandshakeWebToken)
 }
 
-func (pk *ServerToClientHandshake) Marshal(io protocol.IO) {
-	io.ByteSlice(&pk.JWT)
-}
+// ID returns the protocol ID for ServerToClientHandshake.
+func (*ServerToClientHandshake) ID() uint32 { return IDServerToClientHandshake }
