@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // BiomeCappedSurface specifies the materials to use for the capped surface of a biome, such as in

@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // BlockPos is the position of a block. It is composed of three integers, and is typically written

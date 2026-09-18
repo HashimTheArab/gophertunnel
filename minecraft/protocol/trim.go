@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // TrimMaterial represents a material that can be used when applying an armour trim.

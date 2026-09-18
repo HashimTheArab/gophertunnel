@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // DefaultItemDescriptor represents an item descriptor for regular items. This is used for the

@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // ChunkPos is the position of a chunk. It is composed of two integers and is written as two

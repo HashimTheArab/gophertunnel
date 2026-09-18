@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // SyncWorldClockStateData represents the state data for synchronising a world clock.

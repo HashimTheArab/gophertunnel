@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // AutoCraftRecipeStackRequestAction is sent by the client similarly to the

@@ -1,5 +1,3 @@
-// Code generated from canonical protocol manifest v2. DO NOT EDIT.
-
 package protocol
 
 // AttributeModifier temporarily buffs/debuffs a given attribute until the modifier is used. In
