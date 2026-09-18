@@ -9,7 +9,7 @@ const (
 	NPCDialogueActionClose protocol.NpcDialogueActionType = 1
 )
 
-// NpcDialogue is a packet that allows the client to display dialog boxes for interacting with NPCs.
+// NPCDialogue is a packet that allows the client to display dialog boxes for interacting with NPCs.
 type NPCDialogue struct {
 	// EntityUniqueID is the unique ID of the NPC being requested.
 	EntityUniqueID uint64

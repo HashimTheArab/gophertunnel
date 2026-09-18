@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ServerboundDataStore is sent by the client to update a data store property on the server.
+// ServerBoundDataStore is sent by the client to update a data store property on the server.
 type ServerBoundDataStore struct {
 	// Update contains the data store update.
 	Update protocol.BedrockDDUIDataStoreUpdate

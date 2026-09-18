@@ -255,7 +255,7 @@ func (x *BiomeMesaSurface) Marshal(io IO) {
 	io.Bool(&x.HasForest)
 }
 
-// BiomeMountainParamsData specifies the parameters for a mountain biome.
+// BiomeMountainParameters specifies the parameters for a mountain biome.
 type BiomeMountainParameters struct {
 	// SteepBlock is the runtime ID of the block to use for steep slopes.
 	SteepBlock uint32
@@ -281,8 +281,8 @@ func (x *BiomeMountainParameters) Marshal(io IO) {
 	io.Bool(&x.TopSlideEnabled)
 }
 
-// BiomeMultinoiseGenRulesData specifies the rules for multi-noise biomes, which are biomes that are defined
-// by multiple noise parameters instead of just temperature and humidity.
+// BiomeMultiNoiseRules specifies the rules for multi-noise biomes, which are biomes that are defined by
+// multiple noise parameters instead of just temperature and humidity.
 type BiomeMultiNoiseRules struct {
 	// Temperature is the temperature level of the biome.
 	Temperature float32
@@ -497,7 +497,7 @@ func (x *BiomeTagsData) Marshal(io IO) {
 	FuncSlice(io, &x.Tags, io.Varuint32, io.Uint16)
 }
 
-// BiomeWeightedTemperatureData defines the weight for a temperature, used for weighted randomness.
+// BiomeTemperatureWeight defines the weight for a temperature, used for weighted randomness.
 type BiomeTemperatureWeight struct {
 	// Temperature is the temperature that can be selected.
 	Temperature int32
@@ -548,8 +548,7 @@ const (
 // Marshal reads or writes Mirror through its uint8 wire encoding.
 func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// SerializedNoiseBlockSpecifier specifies a block placed by the gradient noise based on a threshold and
-// range.
+// NoiseBlockSpecifier specifies a block placed by the gradient noise based on a threshold and range.
 type NoiseBlockSpecifier struct {
 	// Noise is the noise name.
 	Noise string

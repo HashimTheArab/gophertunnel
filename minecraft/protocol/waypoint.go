@@ -36,7 +36,7 @@ const (
 // Marshal reads or writes ServerWaypointGroupAction through its uint8 wire encoding.
 func (x *ServerWaypointGroupAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// ServerWaypoint holds optional data for a locator bar waypoint.
+// Waypoint holds optional data for a locator bar waypoint.
 type Waypoint struct {
 	// UpdateFlag is a bitmask indicating which optional fields are set.
 	UpdateFlag uint32

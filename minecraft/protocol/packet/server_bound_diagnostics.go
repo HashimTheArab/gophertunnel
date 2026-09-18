@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ServerboundDiagnostics is sent by the client to tell the server about the performance diagnostics of the
+// ServerBoundDiagnostics is sent by the client to tell the server about the performance diagnostics of the
 // client. It is sent by the client roughly every 500ms or 10 in-game ticks when the "Creator > Enable Client
 // Diagnostics" setting is enabled.
 type ServerBoundDiagnostics struct {

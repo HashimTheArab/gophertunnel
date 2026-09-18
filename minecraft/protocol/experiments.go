@@ -1,6 +1,6 @@
 package protocol
 
-// ExperimentToggle holds data on an experiment that is either enabled or disabled.
+// ExperimentData holds data on an experiment that is either enabled or disabled.
 type ExperimentData struct {
 	// Name is the name of the experiment.
 	Name string

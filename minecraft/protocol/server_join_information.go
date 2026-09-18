@@ -4,8 +4,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// ServerConfigurationGatheringsConfigurationJoinInfo contains information about the gathering (experience)
-// the player is joining.
+// GatheringJoinInfo contains information about the gathering (experience) the player is joining.
 type GatheringJoinInfo struct {
 	// ExperienceID is the UUID of the experience.
 	ExperienceID uuid.UUID
@@ -43,7 +42,7 @@ func (x *GatheringJoinInfo) Marshal(io IO) {
 	})
 }
 
-// ServerConfigurationClientStoreEntryPointConfiguration contains information about the store entry point.
+// StoreEntryPointInfo contains information about the store entry point.
 type StoreEntryPointInfo struct {
 	// StoreID is the store identifier.
 	StoreID string

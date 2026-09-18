@@ -133,7 +133,7 @@ func (x *MemoryCategoryCounter) Marshal(io IO) {
 	io.Uint64(&x.Bytes)
 }
 
-// ECSProfilingDiagnosticsSystemCategory maps a diagnostics category name to a system index.
+// SystemCategory maps a diagnostics category name to a system index.
 type SystemCategory struct {
 	CategoryName string
 	SystemIndex  uint64
@@ -145,7 +145,7 @@ func (x *SystemCategory) Marshal(io IO) {
 	io.Uint64(&x.SystemIndex)
 }
 
-// ECSProfilingDiagnosticsSystemDiagnosticTimingInfo represents diagnostics for a specific system index.
+// SystemDiagnosticTimingInfo represents diagnostics for a specific system index.
 type SystemDiagnosticTimingInfo struct {
 	// DisplayName is the name to display for this timing entry.
 	DisplayName string
@@ -165,7 +165,7 @@ func (x *SystemDiagnosticTimingInfo) Marshal(io IO) {
 	io.Uint8(&x.PercentOfTotal)
 }
 
-// BedrockProfileWhiskerDiagnosticsScopeDataSummary represents a whisker profiler scope diagnostic summary.
+// WhiskerScopeDataSummary represents a whisker profiler scope diagnostic summary.
 type WhiskerScopeDataSummary struct {
 	// Label is the label of the whisker scope.
 	Label string

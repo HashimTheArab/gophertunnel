@@ -90,7 +90,7 @@ func (x *EnvironmentAttributeData) Marshal(io IO) {
 	SliceLimits(io, &x.Attributes, 0, 1024)
 }
 
-// DataItemByte represents the way the noise of an environment attribute transition is aligned.
+// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
 type NoiseAlignment struct {
 	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
 	Type DataItemType

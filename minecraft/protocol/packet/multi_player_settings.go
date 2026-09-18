@@ -10,7 +10,7 @@ const (
 	RefreshJoinCode    protocol.MultiplayerSettingsType = 2
 )
 
-// MultiplayerSettings is sent by the client to update multi-player related settings server-side and sent back
+// MultiPlayerSettings is sent by the client to update multi-player related settings server-side and sent back
 // to online players by the server. The MultiPlayerSettings packet is a Minecraft: Education Edition packet.
 // It has no functionality for the base game.
 type MultiPlayerSettings struct {

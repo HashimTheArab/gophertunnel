@@ -9,7 +9,7 @@ const (
 	LoadingScreenTypeEnd   protocol.ServerboundLoadingScreenType = 2
 )
 
-// ServerboundLoadingScreen is sent by the client to tell the server about the state of the loading screen
+// ServerBoundLoadingScreen is sent by the client to tell the server about the state of the loading screen
 // that the client is currently displaying.
 type ServerBoundLoadingScreen struct {
 	// Type is the type of the loading screen event. It is one of the constants that may be found above.

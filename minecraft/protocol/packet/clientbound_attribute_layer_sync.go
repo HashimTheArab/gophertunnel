@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ClientboundAttributeLayerSync is sent by the server to synchronise attribute layers with the client.
+// ClientBoundAttributeLayerSync is sent by the server to synchronise attribute layers with the client.
 type ClientBoundAttributeLayerSync struct {
 	Data protocol.AttributeLayerSyncData
 }

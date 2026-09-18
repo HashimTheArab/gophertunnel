@@ -1,6 +1,6 @@
 package protocol
 
-// BedrockDDUIDataStoreChange represents a change to a data store property value.
+// DataStoreChange represents a change to a data store property value.
 type DataStoreChange struct {
 	// DataStoreName is the name of the data store.
 	DataStoreName string

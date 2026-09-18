@@ -1,6 +1,6 @@
 package protocol
 
-// ExternalLinkSettings ...
+// EducationExternalLinkSettings ...
 type EducationExternalLinkSettings struct {
 	// URL is the external link URL.
 	URL string
@@ -23,7 +23,7 @@ func (x *EducationLocalLevelSettings) Marshal(io IO) {
 	OptionalFunc(io, &x.CodeBuilderOverrideURI, io.String)
 }
 
-// EduSharedURIResource is an education edition feature that is used for transmitting education resource
+// EducationSharedResourceURI is an education edition feature that is used for transmitting education resource
 // settings to clients. It contains a button name and a link URL.
 type EducationSharedResourceURI struct {
 	// ButtonName is the button name of the resource URI.

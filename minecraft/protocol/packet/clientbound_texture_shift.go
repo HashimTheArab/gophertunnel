@@ -12,7 +12,7 @@ const (
 	TextureShiftActionSync       protocol.ClientboundTextureShiftAction = 4
 )
 
-// ClientboundTextureShift is sent by the server to control texture shift animations on the client.
+// ClientBoundTextureShift is sent by the server to control texture shift animations on the client.
 type ClientBoundTextureShift struct {
 	// ActionID is the texture shift action to perform. It is one of the constants above.
 	ActionID protocol.ClientboundTextureShiftAction

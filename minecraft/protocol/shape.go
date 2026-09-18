@@ -6,7 +6,7 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// ArrowData represents an arrow debug shape.
+// ArrowShape represents an arrow debug shape.
 type ArrowShape struct {
 	// ArrowEndLocation is the arrow end location of the shape.
 	ArrowEndLocation Optional[mgl32.Vec3]
@@ -28,7 +28,7 @@ func (x *ArrowShape) Marshal(io IO) {
 	OptionalFunc(io, &x.Segments, io.Uint8)
 }
 
-// ConeData represents a cone debug shape.
+// ConeShape represents a cone debug shape.
 type ConeShape struct {
 	// Radii are the radii along the X/Z axes of the cone base.
 	Radii mgl32.Vec2
@@ -47,7 +47,7 @@ func (x *ConeShape) Marshal(io IO) {
 	io.Uint8(&x.NumSegments)
 }
 
-// CylinderData represents a cylinder debug shape.
+// CylinderShape represents a cylinder debug shape.
 type CylinderShape struct {
 	// RadiusX is the radius of the cylinder along the X axis.
 	RadiusX mgl32.Vec2
@@ -69,7 +69,7 @@ func (x *CylinderShape) Marshal(io IO) {
 	io.Uint8(&x.NumSegments)
 }
 
-// EllipsoidData represents an ellipsoid debug shape.
+// EllipsoidShape represents an ellipsoid debug shape.
 type EllipsoidShape struct {
 	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
 	Radii mgl32.Vec3
@@ -128,7 +128,7 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	MarshalShape(io, &x.ExtraShapeData)
 }
 
-// SkinImage represents a pyramid debug shape.
+// PyramidShape represents a pyramid debug shape.
 type PyramidShape struct {
 	// Width is the width along the X axis of the pyramid base.
 	Width uint32

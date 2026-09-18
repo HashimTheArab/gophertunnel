@@ -1,7 +1,6 @@
 package protocol
 
-// SerializedAbilitiesData represents various data about the abilities of a player, such as ability layers or
-// permissions.
+// AbilityData represents various data about the abilities of a player, such as ability layers or permissions.
 type AbilityData struct {
 	// EntityUniqueID is a unique identifier of the player. It appears it is not required to fill this field out
 	// with a correct value. Simply writing 0 seems to work.

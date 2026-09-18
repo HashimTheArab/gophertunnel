@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// GuiDataPickItem is sent by the server to make the client 'select' a hot bar slot. It currently appears to
+// GUIDataPickItem is sent by the server to make the client 'select' a hot bar slot. It currently appears to
 // be broken however, and does not actually set the selected slot to the hot bar slot set in the packet.
 type GUIDataPickItem struct {
 	// ItemName is the name of the item that shows up in the top part of the popup that shows up when selecting an

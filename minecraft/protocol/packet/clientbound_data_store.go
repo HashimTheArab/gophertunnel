@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ClientboundDataStore is sent by the server to update, change or remove data store entries on the client.
+// ClientBoundDataStore is sent by the server to update, change or remove data store entries on the client.
 type ClientBoundDataStore struct {
 	// Updates is an array of data store changes. Each entry has its own change type discriminator.
 	Updates []protocol.BedrockDDUI

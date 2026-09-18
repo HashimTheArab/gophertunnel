@@ -49,7 +49,7 @@ const (
 // Marshal reads or writes PlayerActionType through its int32 wire encoding.
 func (x *PlayerActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-// ArmorSlotAndDamagePair represents an entry for a single piece of armour that should be damaged.
+// PlayerArmourDamageEntry represents an entry for a single piece of armour that should be damaged.
 type PlayerArmourDamageEntry struct {
 	// ArmourSlot is the index of the armour slot to damage.
 	ArmourSlot LegacyArmorSlot
@@ -147,8 +147,8 @@ type PlayerLocationType int32
 // Marshal reads or writes PlayerLocationType through its int32 wire encoding.
 func (x *PlayerLocationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-// SyncedPlayerMovementSettings represents the different server authoritative movement settings. These control
-// how the client will provide input to the server.
+// PlayerMovementSettings represents the different server authoritative movement settings. These control how
+// the client will provide input to the server.
 type PlayerMovementSettings struct {
 	// RewindHistorySize is the amount of history to keep at maximum.
 	RewindHistorySize int32

@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ServerboundDataDrivenScreenClosed is sent by the client when a data-driven UI screen is closed.
+// ServerBoundDataDrivenScreenClosed is sent by the client when a data-driven UI screen is closed.
 type ServerBoundDataDrivenScreenClosed struct {
 	// FormID is the unique instance ID of the form that was closed.
 	FormID uint32

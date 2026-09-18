@@ -35,7 +35,7 @@ const (
 // Marshal reads or writes PersonaArmSizeType through its uint8 wire encoding.
 func (x *PersonaArmSizeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// SerializedPersonaPieceHandle represents a piece of a persona skin. All pieces are sent separately.
+// PersonaPiece represents a piece of a persona skin. All pieces are sent separately.
 type PersonaPiece struct {
 	// PieceId is a UUID that identifies the piece itself, which is unique for each separate piece.
 	PieceID string

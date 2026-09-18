@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ClientboundDataDrivenUIShowScreen is sent by the server to show a data-driven UI screen on the client.
+// ClientBoundDataDrivenUIShowScreen is sent by the server to show a data-driven UI screen on the client.
 type ClientBoundDataDrivenUIShowScreen struct {
 	// ScreenID is the identifier of the screen to show.
 	ScreenID string

@@ -4,7 +4,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ClientboundDataDrivenUIReload is sent by the server to reload the data-driven UI on the client.
+// ClientBoundDataDrivenUIReload is sent by the server to reload the data-driven UI on the client.
 type ClientBoundDataDrivenUIReload struct {
 }
 

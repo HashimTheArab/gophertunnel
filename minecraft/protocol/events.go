@@ -1,6 +1,6 @@
 package protocol
 
-// POICauldronUsed is the event data sent when a cauldron is interacted with.
+// CauldronInteractEvent is the event data sent when a cauldron is interacted with.
 type CauldronInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
@@ -16,7 +16,7 @@ func (x *CauldronInteractEvent) Marshal(io IO) {
 	io.Varint32(&x.ItemID)
 }
 
-// CodeBuilderScoreboard is an event sent by the server when a code builder scoreboard is updated.
+// CodeBuilderScoreboardEvent is an event sent by the server when a code builder scoreboard is updated.
 type CodeBuilderScoreboardEvent struct {
 	// ObjectiveName ...
 	ObjectiveName string
@@ -32,7 +32,7 @@ func (x *CodeBuilderScoreboardEvent) Marshal(io IO) {
 	io.Varint32(&x.Score)
 }
 
-// ComposterUsed is the event data sent when a composter is interacted with.
+// ComposterInteractEvent is the event data sent when a composter is interacted with.
 type ComposterInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
@@ -107,7 +107,7 @@ func MarshalEventData(io IO, x *EventData) {
 	})
 }
 
-// ItemUsed is when a player right clicks a item.
+// ItemUsedEvent is when a player right clicks a item.
 type ItemUsedEvent struct {
 	ItemID    int16
 	ItemAux   int32
@@ -165,7 +165,7 @@ const (
 // Marshal reads or writes LegacyTelemetryType through its int32 wire encoding.
 func (x *LegacyTelemetryType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-// PiglinBarter is called when a player drops gold ingots to a piglin to initiate a trade for an item.
+// PiglinBarterEvent is called when a player drops gold ingots to a piglin to initiate a trade for an item.
 type PiglinBarterEvent struct {
 	// ItemID ...
 	ItemID int32
