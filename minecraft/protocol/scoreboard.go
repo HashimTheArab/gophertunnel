@@ -21,13 +21,3 @@ func (x *ScoreboardIdentityPacketInfo) Marshal(io IO) {
 	x.ScoreboardID.Marshal(io)
 	OptionalFunc(io, &x.PlayerUniqueID, io.Varint64)
 }
-
-type ScoreboardIdentityPacketType uint8
-
-const (
-	DataStoreChangeTypeUpdate ScoreboardIdentityPacketType = 0
-	DataStoreChangeTypeChange ScoreboardIdentityPacketType = 1
-)
-
-// Marshal reads or writes ScoreboardIdentityPacketType through its uint8 wire encoding.
-func (x *ScoreboardIdentityPacketType) Marshal(io IO) { io.Uint8((*uint8)(x)) }

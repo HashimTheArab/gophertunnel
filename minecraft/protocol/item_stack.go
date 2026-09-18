@@ -557,3 +557,28 @@ func (x *TakeStackRequestAction) Marshal(io IO) {
 	x.Source.Marshal(io)
 	x.Destination.Marshal(io)
 }
+
+type TextProcessingEventOrigin int32
+
+const (
+	TextProcessingEventOriginUnknown      TextProcessingEventOrigin = -1
+	FilterCauseServerChatPublic           TextProcessingEventOrigin = 0
+	FilterCauseServerChatWhisper          TextProcessingEventOrigin = 1
+	FilterCauseSignText                   TextProcessingEventOrigin = 2
+	FilterCauseAnvilText                  TextProcessingEventOrigin = 3
+	FilterCauseBookAndQuillText           TextProcessingEventOrigin = 4
+	FilterCauseCommandBlockText           TextProcessingEventOrigin = 5
+	FilterCauseBlockActorDataText         TextProcessingEventOrigin = 6
+	FilterCauseJoinEventText              TextProcessingEventOrigin = 7
+	FilterCauseLeaveEventText             TextProcessingEventOrigin = 8
+	FilterCauseSlashCommandChat           TextProcessingEventOrigin = 9
+	FilterCauseCartographyText            TextProcessingEventOrigin = 10
+	FilterCauseKickCommand                TextProcessingEventOrigin = 11
+	FilterCauseTitleCommand               TextProcessingEventOrigin = 12
+	FilterCauseSummonCommand              TextProcessingEventOrigin = 13
+	TextProcessingEventOriginServerForm   TextProcessingEventOrigin = 14
+	TextProcessingEventOriginDataDrivenUI TextProcessingEventOrigin = 15
+)
+
+// Marshal reads or writes TextProcessingEventOrigin through its int32 wire encoding.
+func (x *TextProcessingEventOrigin) Marshal(io IO) { io.Int32((*int32)(x)) }

@@ -118,45 +118,6 @@ func (x *AnimatedImageData) Marshal(io IO) {
 	x.AnimationExpression.Marshal(io)
 }
 
-type AnimationMode uint8
-
-const (
-	AnimationModeNone   AnimationMode = 0
-	AnimationModeLayers AnimationMode = 1
-	AnimationModeBlocks AnimationMode = 2
-)
-
-// Marshal reads or writes AnimationMode through its uint8 wire encoding.
-func (x *AnimationMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type ArmorSlotAndDamagePair struct {
-	ArmourSlot LegacyArmorSlot
-	Damage     int16
-}
-
-// Marshal reads or writes ArmorSlotAndDamagePair using its canonical wire layout.
-func (x *ArmorSlotAndDamagePair) Marshal(io IO) {
-	x.ArmourSlot.Marshal(io)
-	io.Int16(&x.Damage)
-}
-
-type ArrowData struct {
-	ArrowEndLocation Optional[mgl32.Vec3]
-	ArrowHeadLength  Optional[float32]
-	ArrowHeadRadius  Optional[float32]
-	Segments         Optional[uint8]
-}
-
-func (*ArrowData) tagPrimitiveShapeExtraShapeData() uint32 { return 1 }
-
-// Marshal reads or writes ArrowData using its canonical wire layout.
-func (x *ArrowData) Marshal(io IO) {
-	OptionalFunc(io, &x.ArrowEndLocation, io.Vec3)
-	OptionalFunc(io, &x.ArrowHeadLength, io.Float32)
-	OptionalFunc(io, &x.ArrowHeadRadius, io.Float32)
-	OptionalFunc(io, &x.Segments, io.Uint8)
-}
-
 type AuthorAndMessage struct {
 	PlayerName string
 	Message    string
@@ -188,24 +149,6 @@ func MarshalBedrockDDUI(io IO, x *BedrockDDUI) {
 		}
 		return nil
 	})
-}
-
-type BedrockDDUIDataStoreChange struct {
-	DataStoreName string
-	Property      string
-	UpdateCount   uint32
-	NewValue      DynamicValue
-}
-
-func (*BedrockDDUIDataStoreChange) tagBedrockDDUI() uint32 { return 1 }
-
-// Marshal reads or writes BedrockDDUIDataStoreChange using its canonical wire layout.
-func (x *BedrockDDUIDataStoreChange) Marshal(io IO) {
-	io.StringLimits(&x.DataStoreName, 1, 1000)
-	io.StringLimits(&x.Property, 1, 1000)
-	io.Uint32(&x.UpdateCount)
-	Maximum(io, &x.UpdateCount, 4.294967294e+09)
-	MarshalDynamicValue(io, &x.NewValue)
 }
 
 type BedrockDDUIDataStoreRemoval struct {
@@ -387,29 +330,6 @@ func (x *BoxData) Marshal(io IO) {
 	io.Vec3(&x.BoxBound)
 }
 
-type BuildPlatform int32
-
-const (
-	BuildPlatformUnknown BuildPlatform = -1
-	DeviceAndroid        BuildPlatform = 1
-	DeviceIOS            BuildPlatform = 2
-	DeviceOSX            BuildPlatform = 3
-	DeviceFireOS         BuildPlatform = 4
-	DeviceGearVR         BuildPlatform = 5
-	DeviceWin10          BuildPlatform = 7
-	DeviceWin32          BuildPlatform = 8
-	DeviceDedicated      BuildPlatform = 9
-	DeviceTVOS           BuildPlatform = 10
-	DeviceOrbis          BuildPlatform = 11
-	DeviceNX             BuildPlatform = 12
-	DeviceXBOX           BuildPlatform = 13
-	DeviceWP             BuildPlatform = 14
-	DeviceLinux          BuildPlatform = 15
-)
-
-// Marshal reads or writes BuildPlatform through its int32 wire encoding.
-func (x *BuildPlatform) Marshal(io IO) { io.Int32((*int32)(x)) }
-
 type Cancel struct {
 	ResponseType string
 }
@@ -540,19 +460,6 @@ func (x *CodeBuilderRuntimeAction) Marshal(io IO) {
 	io.StringLimits(&x.CodeBuilderRuntimeAction, 0, 16)
 }
 
-type CodeBuilderScoreboard struct {
-	ObjectiveName string
-	Score         int32
-}
-
-func (*CodeBuilderScoreboard) tagEventData() uint32 { return 19 }
-
-// Marshal reads or writes CodeBuilderScoreboard using its canonical wire layout.
-func (x *CodeBuilderScoreboard) Marshal(io IO) {
-	io.StringLimits(&x.ObjectiveName, 0, 256)
-	io.Varint32(&x.Score)
-}
-
 type CodeBuilderStorageQueryOptionsCategory uint8
 
 // Marshal reads or writes CodeBuilderStorageQueryOptionsCategory through its uint8 wire encoding.
@@ -562,34 +469,6 @@ type CodeBuilderStorageQueryOptionsOperation uint8
 
 // Marshal reads or writes CodeBuilderStorageQueryOptionsOperation through its uint8 wire encoding.
 func (x *CodeBuilderStorageQueryOptionsOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type ComposterUsed struct {
-	BlockInteractionType MinecraftEventingPOIBlockInteractionType
-	ItemID               int32
-}
-
-func (*ComposterUsed) tagEventData() uint32 { return 11 }
-
-// Marshal reads or writes ComposterUsed using its canonical wire layout.
-func (x *ComposterUsed) Marshal(io IO) {
-	x.BlockInteractionType.Marshal(io)
-	io.Varint32(&x.ItemID)
-}
-
-type ConeData struct {
-	Radii       mgl32.Vec2
-	Height      float32
-	NumSegments uint8
-}
-
-func (*ConeData) tagPrimitiveShapeExtraShapeData() uint32 { return 9 }
-
-// Marshal reads or writes ConeData using its canonical wire layout.
-func (x *ConeData) Marshal(io IO) {
-	io.Vec2(&x.Radii)
-	io.Float32(&x.Height)
-	io.Uint8(&x.NumSegments)
-}
 
 type ConnectionDisconnectFailReason int32
 
@@ -670,36 +549,6 @@ func (x *CraftRepairAndDisenchantStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.NumberOfRequestedCrafts, 1)
 	io.Varint32(&x.RepairCost)
 	Minimum(io, &x.RepairCost, 0)
-}
-
-type CylinderData struct {
-	RadiusX     mgl32.Vec2
-	RadiusZ     mgl32.Vec2
-	Height      float32
-	NumSegments uint8
-}
-
-func (*CylinderData) tagPrimitiveShapeExtraShapeData() uint32 { return 6 }
-
-// Marshal reads or writes CylinderData using its canonical wire layout.
-func (x *CylinderData) Marshal(io IO) {
-	io.Vec2(&x.RadiusX)
-	io.Vec2(&x.RadiusZ)
-	io.Float32(&x.Height)
-	io.Uint8(&x.NumSegments)
-}
-
-type DataItemByte struct {
-	Type  DataItemType
-	Value int8
-}
-
-func (*DataItemByte) tagDataItemEntryValue() uint8 { return 0 }
-
-// Marshal reads or writes DataItemByte using its canonical wire layout.
-func (x *DataItemByte) Marshal(io IO) {
-	x.Type.Marshal(io)
-	io.Int8(&x.Value)
 }
 
 type DataItemCompoundTag struct {
@@ -803,23 +652,6 @@ func (x *DataItemString) Marshal(io IO) {
 	x.Type.Marshal(io)
 	io.String(&x.Value)
 }
-
-type DataItemType uint8
-
-const (
-	EntityDataTypeByte        DataItemType = 0
-	EntityDataTypeInt16       DataItemType = 1
-	EntityDataTypeInt32       DataItemType = 2
-	EntityDataTypeFloat32     DataItemType = 3
-	EntityDataTypeString      DataItemType = 4
-	EntityDataTypeCompoundTag DataItemType = 5
-	EntityDataTypeBlockPos    DataItemType = 6
-	EntityDataTypeInt64       DataItemType = 7
-	EntityDataTypeVec3        DataItemType = 8
-)
-
-// Marshal reads or writes DataItemType through its uint8 wire encoding.
-func (x *DataItemType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type DataItemVec3 struct {
 	Type  DataItemType
@@ -1066,60 +898,10 @@ func (x *ECSProfilingDiagnosticsEntityDiagnosticTimingInfo) Marshal(io IO) {
 	io.Uint8(&x.PercentOfTotal)
 }
 
-type ECSProfilingDiagnosticsSystemCategory struct {
-	CategoryName string
-	SystemIndex  uint64
-}
-
-// Marshal reads or writes ECSProfilingDiagnosticsSystemCategory using its canonical wire layout.
-func (x *ECSProfilingDiagnosticsSystemCategory) Marshal(io IO) {
-	io.String(&x.CategoryName)
-	io.Uint64(&x.SystemIndex)
-}
-
-type ECSProfilingDiagnosticsSystemDiagnosticTimingInfo struct {
-	DisplayName    string
-	SystemIndex    uint64
-	DurationNanos  uint64
-	PercentOfTotal uint8
-}
-
-// Marshal reads or writes ECSProfilingDiagnosticsSystemDiagnosticTimingInfo using its canonical wire layout.
-func (x *ECSProfilingDiagnosticsSystemDiagnosticTimingInfo) Marshal(io IO) {
-	io.String(&x.DisplayName)
-	io.Uint64(&x.SystemIndex)
-	io.Uint64(&x.DurationNanos)
-	io.Uint8(&x.PercentOfTotal)
-}
-
 type EditorWorldType int32
 
 // Marshal reads or writes EditorWorldType through its int32 wire encoding.
 func (x *EditorWorldType) Marshal(io IO) { io.Varint32((*int32)(x)) }
-
-type EduSharedURIResource struct {
-	ButtonName string
-	LinkURI    string
-}
-
-// Marshal reads or writes EduSharedURIResource using its canonical wire layout.
-func (x *EduSharedURIResource) Marshal(io IO) {
-	io.String(&x.ButtonName)
-	io.String(&x.LinkURI)
-}
-
-type EllipsoidData struct {
-	Radii           mgl32.Vec3
-	SegmentsPerAxis uint8
-}
-
-func (*EllipsoidData) tagPrimitiveShapeExtraShapeData() uint32 { return 8 }
-
-// Marshal reads or writes EllipsoidData using its canonical wire layout.
-func (x *EllipsoidData) Marshal(io IO) {
-	io.Vec3(&x.Radii)
-	io.Uint8(&x.SegmentsPerAxis)
-}
 
 type Empty struct {
 }
@@ -1141,17 +923,6 @@ func (x *Experiments) Marshal(io IO) {
 		value.Marshal(io)
 	})
 	io.Bool(&x.ExperimentsEverToggled)
-}
-
-type ExternalLinkSettings struct {
-	URL         string
-	DisplayName string
-}
-
-// Marshal reads or writes ExternalLinkSettings using its canonical wire layout.
-func (x *ExternalLinkSettings) Marshal(io IO) {
-	io.String(&x.URL)
-	io.String(&x.DisplayName)
 }
 
 type FeatureRegistryFeatureBinaryJSONFormat struct {
@@ -1192,97 +963,10 @@ type GameType int32
 // Marshal reads or writes GameType through its int32 wire encoding.
 func (x *GameType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-type GeneratorType int32
-
-const (
-	GeneratorLegacy        GeneratorType = 0
-	GeneratorOverworld     GeneratorType = 1
-	GeneratorFlat          GeneratorType = 2
-	GeneratorNether        GeneratorType = 3
-	GeneratorEnd           GeneratorType = 4
-	GeneratorVoid          GeneratorType = 5
-	GeneratorTypeUndefined GeneratorType = 6
-)
-
-// Marshal reads or writes GeneratorType through its int32 wire encoding.
-func (x *GeneratorType) Marshal(io IO) { io.Varint32((*int32)(x)) }
-
 type GraphicsMode uint8
 
 // Marshal reads or writes GraphicsMode through its uint8 wire encoding.
 func (x *GraphicsMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type GraphicsOverrideParameterType uint8
-
-const (
-	GraphicsOverrideParameterTypeSkyZenithColor          GraphicsOverrideParameterType = 0
-	GraphicsOverrideParameterTypeSkyHorizonColor         GraphicsOverrideParameterType = 1
-	GraphicsOverrideParameterTypeHorizonBlendMin         GraphicsOverrideParameterType = 2
-	GraphicsOverrideParameterTypeHorizonBlendMax         GraphicsOverrideParameterType = 3
-	GraphicsOverrideParameterTypeHorizonBlendStart       GraphicsOverrideParameterType = 4
-	GraphicsOverrideParameterTypeHorizonBlendMieStart    GraphicsOverrideParameterType = 5
-	GraphicsOverrideParameterTypeRayleighStrength        GraphicsOverrideParameterType = 6
-	GraphicsOverrideParameterTypeSunMieStrength          GraphicsOverrideParameterType = 7
-	GraphicsOverrideParameterTypeMoonMieStrength         GraphicsOverrideParameterType = 8
-	GraphicsOverrideParameterTypeSunGlareShape           GraphicsOverrideParameterType = 9
-	GraphicsOverrideParameterTypeChlorophyll             GraphicsOverrideParameterType = 10
-	GraphicsOverrideParameterTypeCDOM                    GraphicsOverrideParameterType = 11
-	GraphicsOverrideParameterTypeSuspendedSediment       GraphicsOverrideParameterType = 12
-	GraphicsOverrideParameterTypeWavesDepth              GraphicsOverrideParameterType = 13
-	GraphicsOverrideParameterTypeWavesFrequency          GraphicsOverrideParameterType = 14
-	GraphicsOverrideParameterTypeWavesFrequencyScaling   GraphicsOverrideParameterType = 15
-	GraphicsOverrideParameterTypeWavesSpeed              GraphicsOverrideParameterType = 16
-	GraphicsOverrideParameterTypeWavesSpeedScaling       GraphicsOverrideParameterType = 17
-	GraphicsOverrideParameterTypeWavesShape              GraphicsOverrideParameterType = 18
-	GraphicsOverrideParameterTypeWavesOctaves            GraphicsOverrideParameterType = 19
-	GraphicsOverrideParameterTypeWavesMix                GraphicsOverrideParameterType = 20
-	GraphicsOverrideParameterTypeWavesPull               GraphicsOverrideParameterType = 21
-	GraphicsOverrideParameterTypeWavesDirectionIncrement GraphicsOverrideParameterType = 22
-	GraphicsOverrideParameterTypeMidtonesContrast        GraphicsOverrideParameterType = 23
-	GraphicsOverrideParameterTypeHighlightsContrast      GraphicsOverrideParameterType = 24
-	GraphicsOverrideParameterTypeShadowsContrast         GraphicsOverrideParameterType = 25
-	GraphicsOverrideParameterTypeHighlightsGain          GraphicsOverrideParameterType = 26
-	GraphicsOverrideParameterTypeHighlightsGamma         GraphicsOverrideParameterType = 27
-	GraphicsOverrideParameterTypeHighlightsOffset        GraphicsOverrideParameterType = 28
-	GraphicsOverrideParameterTypeHighlightsSaturation    GraphicsOverrideParameterType = 29
-	GraphicsOverrideParameterTypeMidtonesGain            GraphicsOverrideParameterType = 30
-	GraphicsOverrideParameterTypeMidtonesGamma           GraphicsOverrideParameterType = 31
-	GraphicsOverrideParameterTypeMidtonesOffset          GraphicsOverrideParameterType = 32
-	GraphicsOverrideParameterTypeMidtonesSaturation      GraphicsOverrideParameterType = 33
-	GraphicsOverrideParameterTypeShadowsGain             GraphicsOverrideParameterType = 34
-	GraphicsOverrideParameterTypeShadowsGamma            GraphicsOverrideParameterType = 35
-	GraphicsOverrideParameterTypeShadowsOffset           GraphicsOverrideParameterType = 36
-	GraphicsOverrideParameterTypeShadowsSaturation       GraphicsOverrideParameterType = 37
-	GraphicsOverrideParameterTypeHighlightsMin           GraphicsOverrideParameterType = 38
-	GraphicsOverrideParameterTypeShadowsMax              GraphicsOverrideParameterType = 39
-	GraphicsOverrideParameterTypeTemperature             GraphicsOverrideParameterType = 40
-	GraphicsOverrideParameterTypeSunColor                GraphicsOverrideParameterType = 41
-	GraphicsOverrideParameterTypeSunIlluminance          GraphicsOverrideParameterType = 42
-	GraphicsOverrideParameterTypeMoonColor               GraphicsOverrideParameterType = 43
-	GraphicsOverrideParameterTypeMoonIlluminance         GraphicsOverrideParameterType = 44
-	GraphicsOverrideParameterTypeFlashColor              GraphicsOverrideParameterType = 45
-	GraphicsOverrideParameterTypeFlashIlluminance        GraphicsOverrideParameterType = 46
-	GraphicsOverrideParameterTypeAmbientColor            GraphicsOverrideParameterType = 47
-	GraphicsOverrideParameterTypeAmbientIlluminance      GraphicsOverrideParameterType = 48
-	GraphicsOverrideParameterTypeEmissiveDesaturation    GraphicsOverrideParameterType = 49
-	GraphicsOverrideParameterTypeSkyIntensity            GraphicsOverrideParameterType = 50
-	GraphicsOverrideParameterTypeOrbitalOffsetDegrees    GraphicsOverrideParameterType = 51
-)
-
-// Marshal reads or writes GraphicsOverrideParameterType through its uint8 wire encoding.
-func (x *GraphicsOverrideParameterType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type HeightMapDataType uint8
-
-const (
-	HeightMapDataNone    HeightMapDataType = 0
-	HeightMapDataHasData HeightMapDataType = 1
-	HeightMapDataTooHigh HeightMapDataType = 2
-	HeightMapDataTooLow  HeightMapDataType = 3
-)
-
-// Marshal reads or writes HeightMapDataType through its uint8 wire encoding.
-func (x *HeightMapDataType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type HeightmapData struct {
 	HeightMapType           HeightMapDataType
@@ -1743,18 +1427,6 @@ const (
 // Marshal reads or writes MinecraftEventingPOIBlockInteractionType through its uint8 wire encoding.
 func (x *MinecraftEventingPOIBlockInteractionType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-type Mirror uint8
-
-const (
-	BiomeCoordinateEvaluationOrderXYZ Mirror = 0
-	BiomeCoordinateEvaluationOrderXZY Mirror = 1
-	BiomeCoordinateEvaluationOrderYXZ Mirror = 2
-	BiomeCoordinateEvaluationOrderYZX Mirror = 3
-)
-
-// Marshal reads or writes Mirror through its uint8 wire encoding.
-func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
 type MissingBlobData struct {
 	BlobID   uint64
 	BlobData []byte
@@ -1804,18 +1476,6 @@ func (x *MobBorn) Marshal(io IO) {
 	io.Varint32(&x.BornBabyEntityVariant)
 	io.Uint8(&x.BornBabyColor)
 }
-
-type MobEffectEvent uint8
-
-const (
-	ItemDescriptorInvalid MobEffectEvent = 0
-	ItemDescriptorDefault MobEffectEvent = 1
-	ItemDescriptorMoLang  MobEffectEvent = 2
-	ItemDescriptorItemTag MobEffectEvent = 3
-)
-
-// Marshal reads or writes MobEffectEvent through its uint8 wire encoding.
-func (x *MobEffectEvent) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type MobKilled struct {
 	InstigatorActorID         int64
@@ -1968,19 +1628,6 @@ type NewInteractionModel int32
 // Marshal reads or writes NewInteractionModel through its int32 wire encoding.
 func (x *NewInteractionModel) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-type POICauldronUsed struct {
-	BlockInteractionType MinecraftEventingPOIBlockInteractionType
-	ItemID               int32
-}
-
-func (*POICauldronUsed) tagEventData() uint32 { return 10 }
-
-// Marshal reads or writes POICauldronUsed using its canonical wire layout.
-func (x *POICauldronUsed) Marshal(io IO) {
-	x.BlockInteractionType.Marshal(io)
-	io.Varint32(&x.ItemID)
-}
-
 type PackedItemUseLegacyInventoryTransaction struct {
 	LegacyRequestID    ItemStackLegacyRequestID
 	LegacySetItemSlots Optional[[]LegacySetSlot]
@@ -2019,64 +1666,10 @@ type PacketViolationSeverity int32
 // Marshal reads or writes PacketViolationSeverity through its int32 wire encoding.
 func (x *PacketViolationSeverity) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
-type PacketViolationType int32
-
-const (
-	BiomeExpressionOpUnknown   PacketViolationType = -1
-	BiomeExpressionOpLeftBrace PacketViolationType = 0
-)
-
-// Marshal reads or writes PacketViolationType through its int32 wire encoding.
-func (x *PacketViolationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
-
-type PersonaAnimatedTextureType uint32
-
-const (
-	SkinAnimationHead        PersonaAnimatedTextureType = 1
-	SkinAnimationBody32x32   PersonaAnimatedTextureType = 2
-	SkinAnimationBody128x128 PersonaAnimatedTextureType = 3
-)
-
-// Marshal reads or writes PersonaAnimatedTextureType through its uint32 wire encoding.
-func (x *PersonaAnimatedTextureType) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
-
-type PersonaAnimationExpression uint32
-
-const (
-	ExpressionTypeLinear   PersonaAnimationExpression = 0
-	ExpressionTypeBlinking PersonaAnimationExpression = 1
-)
-
-// Marshal reads or writes PersonaAnimationExpression through its uint32 wire encoding.
-func (x *PersonaAnimationExpression) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
-
-type PersonaArmSizeType uint8
-
-const (
-	ArmSizeSlim PersonaArmSizeType = 0
-	ArmSizeWide PersonaArmSizeType = 1
-)
-
-// Marshal reads or writes PersonaArmSizeType through its uint8 wire encoding.
-func (x *PersonaArmSizeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
 type PhotoType uint8
 
 // Marshal reads or writes PhotoType through its uint8 wire encoding.
 func (x *PhotoType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type PiglinBarter struct {
-	ItemID                      int32
-	WasTargetingBarteringPlayer bool
-}
-
-func (*PiglinBarter) tagEventData() uint32 { return 16 }
-
-// Marshal reads or writes PiglinBarter using its canonical wire layout.
-func (x *PiglinBarter) Marshal(io IO) {
-	io.Varint32(&x.ItemID)
-	io.Bool(&x.WasTargetingBarteringPlayer)
-}
 
 type PlayStatusType int32
 
@@ -2189,21 +1782,6 @@ func (x *RaidUpdate) Marshal(io IO) {
 	io.Bool(&x.Success)
 }
 
-type RandomDistributionType int32
-
-const (
-	BiomeRandomDistributionTypeSingleValued    RandomDistributionType = 0
-	BiomeRandomDistributionTypeUniform         RandomDistributionType = 1
-	BiomeRandomDistributionTypeGaussian        RandomDistributionType = 2
-	BiomeRandomDistributionTypeInverseGaussian RandomDistributionType = 3
-	BiomeRandomDistributionTypeFixedGrid       RandomDistributionType = 4
-	BiomeRandomDistributionTypeJitteredGrid    RandomDistributionType = 5
-	BiomeRandomDistributionTypeTriangle        RandomDistributionType = 6
-)
-
-// Marshal reads or writes RandomDistributionType through its int32 wire encoding.
-func (x *RandomDistributionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
-
 type RemoveEntry struct {
 	Action PlayerListPacketType
 	UUID   uuid.UUID
@@ -2275,17 +1853,6 @@ func (x *RemoveTimeMarkerData) Marshal(io IO) {
 	FuncSliceLimits(io, &x.TimeMarkerIds, io.Varuint32, 0, 256, io.Varuint64)
 }
 
-type RequestAbilityType uint8
-
-const (
-	PackSettingTypeFloat  RequestAbilityType = 0
-	PackSettingTypeBool   RequestAbilityType = 1
-	PackSettingTypeString RequestAbilityType = 2
-)
-
-// Marshal reads or writes RequestAbilityType through its uint8 wire encoding.
-func (x *RequestAbilityType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
 type RequestType uint8
 
 // Marshal reads or writes RequestType through its uint8 wire encoding.
@@ -2295,36 +1862,6 @@ type RewindType uint8
 
 // Marshal reads or writes RewindType through its uint8 wire encoding.
 func (x *RewindType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type Rotation uint8
-
-const (
-	StructureRotationNone      Rotation = 0
-	StructureRotationRotate90  Rotation = 1
-	StructureRotationRotate180 Rotation = 2
-	StructureRotationRotate270 Rotation = 3
-)
-
-// Marshal reads or writes Rotation through its uint8 wire encoding.
-func (x *Rotation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type ScriptModuleMinecraftScriptPrimitiveShapeType uint8
-
-const (
-	PrimitiveShapeLine      ScriptModuleMinecraftScriptPrimitiveShapeType = 0
-	PrimitiveShapeBox       ScriptModuleMinecraftScriptPrimitiveShapeType = 1
-	PrimitiveShapeSphere    ScriptModuleMinecraftScriptPrimitiveShapeType = 2
-	PrimitiveShapeCircle    ScriptModuleMinecraftScriptPrimitiveShapeType = 3
-	PrimitiveShapeText      ScriptModuleMinecraftScriptPrimitiveShapeType = 4
-	PrimitiveShapeArrow     ScriptModuleMinecraftScriptPrimitiveShapeType = 5
-	PrimitiveShapeCylinder  ScriptModuleMinecraftScriptPrimitiveShapeType = 6
-	PrimitiveShapePyramid   ScriptModuleMinecraftScriptPrimitiveShapeType = 7
-	PrimitiveShapeEllipsoid ScriptModuleMinecraftScriptPrimitiveShapeType = 8
-	PrimitiveShapeCone      ScriptModuleMinecraftScriptPrimitiveShapeType = 9
-)
-
-// Marshal reads or writes ScriptModuleMinecraftScriptPrimitiveShapeType through its uint8 wire encoding.
-func (x *ScriptModuleMinecraftScriptPrimitiveShapeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type SemVersion struct {
 	Version string
@@ -2344,21 +1881,6 @@ func (x *SemVersionData) Marshal(io IO) {
 	io.String(&x.Version)
 }
 
-type SerializedAbilitiesData struct {
-	EntityUniqueID     int64
-	PlayerPermissions  PlayerPermissionLevel
-	CommandPermissions CommandPermissionLevel
-	Layers             []SerializedAbilitiesDataSerializedLayer
-}
-
-// Marshal reads or writes SerializedAbilitiesData using its canonical wire layout.
-func (x *SerializedAbilitiesData) Marshal(io IO) {
-	io.Int64(&x.EntityUniqueID)
-	x.PlayerPermissions.Marshal(io)
-	x.CommandPermissions.Marshal(io)
-	Slice(io, &x.Layers)
-}
-
 type SerializedAbilitiesDataSerializedLayer struct {
 	SerializedLayer  uint16
 	AbilitiesSet     uint32
@@ -2376,38 +1898,6 @@ func (x *SerializedAbilitiesDataSerializedLayer) Marshal(io IO) {
 	io.Float32(&x.FlySpeed)
 	io.Float32(&x.VerticalFlySpeed)
 	io.Float32(&x.WalkSpeed)
-}
-
-type SerializedNoiseBlockSpecifier struct {
-	Noise     string
-	Threshold float32
-	Range     FloatRange
-	Block     uint32
-}
-
-// Marshal reads or writes SerializedNoiseBlockSpecifier using its canonical wire layout.
-func (x *SerializedNoiseBlockSpecifier) Marshal(io IO) {
-	io.String(&x.Noise)
-	io.Float32(&x.Threshold)
-	x.Range.Marshal(io)
-	io.Uint32(&x.Block)
-}
-
-type SerializedPersonaPieceHandle struct {
-	PieceID   string
-	PieceType PersonaPieceType
-	PackID    uuid.UUID
-	Default   bool
-	ProductID string
-}
-
-// Marshal reads or writes SerializedPersonaPieceHandle using its canonical wire layout.
-func (x *SerializedPersonaPieceHandle) Marshal(io IO) {
-	io.String(&x.PieceID)
-	x.PieceType.Marshal(io)
-	io.UUID(&x.PackID)
-	io.Bool(&x.Default)
-	io.String(&x.ProductID)
 }
 
 type SerializedSkinRef struct {
@@ -2474,46 +1964,6 @@ func (x *ServerBlockProperty) Marshal(io IO) {
 	io.NBT(&x.BlockDefinition, NBTNetwork)
 }
 
-type ServerConfigurationClientStoreEntryPointConfiguration struct {
-	StoreID   string
-	StoreName string
-}
-
-// Marshal reads or writes ServerConfigurationClientStoreEntryPointConfiguration using its canonical wire layout.
-func (x *ServerConfigurationClientStoreEntryPointConfiguration) Marshal(io IO) {
-	io.String(&x.StoreID)
-	io.String(&x.StoreName)
-}
-
-type ServerConfigurationGatheringsConfigurationJoinInfo struct {
-	ExperienceID        uuid.UUID
-	ExperienceName      string
-	ExperienceWorldID   Optional[uuid.UUID]
-	ExperienceWorldName Optional[string]
-	CreatorID           string
-	TargetID            Optional[uuid.UUID]
-	ScenarioID          Optional[string]
-	ServerID            Optional[string]
-}
-
-// Marshal reads or writes ServerConfigurationGatheringsConfigurationJoinInfo using its canonical wire layout.
-func (x *ServerConfigurationGatheringsConfigurationJoinInfo) Marshal(io IO) {
-	io.UUID(&x.ExperienceID)
-	io.StringLimits(&x.ExperienceName, 1, 29)
-	OptionalFunc(io, &x.ExperienceWorldID, io.UUID)
-	OptionalFunc(io, &x.ExperienceWorldName, func(value *string) {
-		io.StringLimits(value, 1, 29)
-	})
-	io.StringLimits(&x.CreatorID, 1, 60)
-	OptionalFunc(io, &x.TargetID, io.UUID)
-	OptionalFunc(io, &x.ScenarioID, func(value *string) {
-		io.StringLimits(value, 1, 100)
-	})
-	OptionalFunc(io, &x.ServerID, func(value *string) {
-		io.StringLimits(value, 1, 100)
-	})
-}
-
 type ServerConfigurationPresenceConfiguration struct {
 	RichPresenceID Optional[string]
 }
@@ -2558,41 +2008,6 @@ type ServerSoundHandle struct {
 func (x *ServerSoundHandle) Marshal(io IO) {
 	io.Uint64(&x.ServerSoundHandle)
 }
-
-type ServerWaypoint struct {
-	UpdateFlag              uint32
-	Visible                 Optional[bool]
-	WorldPosition           Optional[WorldPosition]
-	TexturePath             Optional[string]
-	IconSize                Optional[mgl32.Vec2]
-	Colour                  Optional[color.RGBA]
-	ClientPositionAuthority Optional[bool]
-	ActorUniqueID           Optional[int64]
-}
-
-// Marshal reads or writes ServerWaypoint using its canonical wire layout.
-func (x *ServerWaypoint) Marshal(io IO) {
-	io.Uint32(&x.UpdateFlag)
-	OptionalFunc(io, &x.Visible, io.Bool)
-	OptionalMarshaler(io, &x.WorldPosition)
-	OptionalFunc(io, &x.TexturePath, io.String)
-	OptionalFunc(io, &x.IconSize, io.Vec2)
-	OptionalFunc(io, &x.Colour, io.RGBA)
-	OptionalFunc(io, &x.ClientPositionAuthority, io.Bool)
-	OptionalFunc(io, &x.ActorUniqueID, io.ActorUniqueID)
-}
-
-type ServerWaypointGroupAction uint8
-
-const (
-	WaypointActionNone   ServerWaypointGroupAction = 0
-	WaypointActionAdd    ServerWaypointGroupAction = 1
-	WaypointActionRemove ServerWaypointGroupAction = 2
-	WaypointActionUpdate ServerWaypointGroupAction = 3
-)
-
-// Marshal reads or writes ServerWaypointGroupAction through its uint8 wire encoding.
-func (x *ServerWaypointGroupAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type ServerboundLoadingScreenType int32
 
@@ -2741,17 +2156,6 @@ func (x *SyncedAttribute) Marshal(io IO) {
 	io.Float32(&x.MinValue)
 	io.Float32(&x.CurrentValue)
 	io.Float32(&x.MaxValue)
-}
-
-type SyncedPlayerMovementSettings struct {
-	RewindHistorySize                int32
-	ServerAuthoritativeBlockBreaking bool
-}
-
-// Marshal reads or writes SyncedPlayerMovementSettings using its canonical wire layout.
-func (x *SyncedPlayerMovementSettings) Marshal(io IO) {
-	io.Varint32(&x.RewindHistorySize)
-	io.Bool(&x.ServerAuthoritativeBlockBreaking)
 }
 
 type SynchedActorDataCopyableDataList struct {

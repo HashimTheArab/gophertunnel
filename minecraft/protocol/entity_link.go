@@ -2,6 +2,17 @@
 
 package protocol
 
+type ActorLinkType uint8
+
+const (
+	EntityLinkRemove    ActorLinkType = 0
+	EntityLinkRider     ActorLinkType = 1
+	EntityLinkPassenger ActorLinkType = 2
+)
+
+// Marshal reads or writes ActorLinkType through its uint8 wire encoding.
+func (x *ActorLinkType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // EntityLink is a link between two entities, typically being one entity riding another.
 type EntityLink struct {
 	TargetA int64

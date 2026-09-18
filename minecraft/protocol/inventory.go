@@ -114,6 +114,70 @@ func (x *InventoryTransactionData) Marshal(io IO) {
 	})
 }
 
+type ItemReleaseInventoryTransactionActionType int32
+
+const (
+	ReleaseItemActionRelease ItemReleaseInventoryTransactionActionType = 0
+	ReleaseItemActionConsume ItemReleaseInventoryTransactionActionType = 1
+)
+
+// Marshal reads or writes ItemReleaseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemReleaseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransactionActionType int32
+
+const (
+	UseItemActionClickBlock  ItemUseInventoryTransactionActionType = 0
+	UseItemActionClickAir    ItemUseInventoryTransactionActionType = 1
+	UseItemActionBreakBlock  ItemUseInventoryTransactionActionType = 2
+	UseItemActionUseAsAttack ItemUseInventoryTransactionActionType = 3
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransactionClientCooldownState uint8
+
+const (
+	ClientCooldownStateOff ItemUseInventoryTransactionClientCooldownState = 0
+	ClientCooldownStateOn  ItemUseInventoryTransactionClientCooldownState = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionClientCooldownState through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionClientCooldownState) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionPredictedResult uint8
+
+const (
+	ClientPredictionFailure ItemUseInventoryTransactionPredictedResult = 0
+	ClientPredictionSuccess ItemUseInventoryTransactionPredictedResult = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionPredictedResult through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionPredictedResult) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionTriggerType uint8
+
+const (
+	TriggerTypeUnknown        ItemUseInventoryTransactionTriggerType = 0
+	TriggerTypePlayerInput    ItemUseInventoryTransactionTriggerType = 1
+	TriggerTypeSimulationTick ItemUseInventoryTransactionTriggerType = 2
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionTriggerType through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionTriggerType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseOnActorInventoryTransactionActionType int32
+
+const (
+	UseItemOnEntityActionInteract                            ItemUseOnActorInventoryTransactionActionType = 0
+	UseItemOnEntityActionAttack                              ItemUseOnActorInventoryTransactionActionType = 1
+	ItemUseOnActorInventoryTransactionActionTypeItemInteract ItemUseOnActorInventoryTransactionActionType = 2
+)
+
+// Marshal reads or writes ItemUseOnActorInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseOnActorInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
 // NormalTransactionData represents an inventory transaction data object for normal transactions,
 // such as crafting. It has no content.
 type NormalTransactionData struct {

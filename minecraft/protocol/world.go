@@ -30,6 +30,21 @@ func (x *DimensionDefinition) Marshal(io IO) {
 	io.UUID(&x.PackID)
 }
 
+type GeneratorType int32
+
+const (
+	GeneratorLegacy        GeneratorType = 0
+	GeneratorOverworld     GeneratorType = 1
+	GeneratorFlat          GeneratorType = 2
+	GeneratorNether        GeneratorType = 3
+	GeneratorEnd           GeneratorType = 4
+	GeneratorVoid          GeneratorType = 5
+	GeneratorTypeUndefined GeneratorType = 6
+)
+
+// Marshal reads or writes GeneratorType through its int32 wire encoding.
+func (x *GeneratorType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
 type WorldPosition struct {
 	Position      mgl32.Vec3
 	DimensionType DimensionType

@@ -1,3 +1,5 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
 import (
@@ -5,21 +7,18 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// ServerBoundPackSettingChange is sent by the client to the server when it changes a setting
-// for a specific pack in the pack settings UI.
-type ServerBoundPackSettingChange struct {
-	// PackID is the UUID of the pack.
-	PackID uuid.UUID
-	// PackSetting is the new setting value applied to the pack.
-	PackSetting protocol.PackSetting
+type ServerboundPackSettingChange struct {
+	PackID           uuid.UUID
+	PackSettingName  string
+	PackSettingValue protocol.ServerboundPackSettingChangePackSettingValue
 }
 
-// ID ...
-func (*ServerBoundPackSettingChange) ID() uint32 {
-	return IDServerBoundPackSettingChange
+// Marshal reads or writes ServerboundPackSettingChange using its canonical wire layout.
+func (x *ServerboundPackSettingChange) Marshal(io protocol.IO) {
+	io.UUID(&x.PackID)
+	io.StringLimits(&x.PackSettingName, 0, 128)
+	protocol.MarshalServerboundPackSettingChangePackSettingValue(io, &x.PackSettingValue)
 }
 
-func (pk *ServerBoundPackSettingChange) Marshal(io protocol.IO) {
-	io.UUID(&pk.PackID)
-	io.PackSetting(&pk.PackSetting)
-}
+// ID returns the protocol ID for ServerboundPackSettingChange.
+func (*ServerboundPackSettingChange) ID() uint32 { return IDServerboundPackSettingChange }

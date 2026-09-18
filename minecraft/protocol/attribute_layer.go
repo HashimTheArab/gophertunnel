@@ -76,6 +76,19 @@ func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
 	})
 }
 
+type DataItemByte struct {
+	Type  DataItemType
+	Value int8
+}
+
+func (*DataItemByte) tagDataItemEntryValue() uint8 { return 0 }
+
+// Marshal reads or writes DataItemByte using its canonical wire layout.
+func (x *DataItemByte) Marshal(io IO) {
+	x.Type.Marshal(io)
+	io.Int8(&x.Value)
+}
+
 // EnvironmentAttributeData represents an environment attribute with optional transition data.
 type EnvironmentAttributeData struct {
 	AttributeLayerName      string

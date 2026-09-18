@@ -4,6 +4,29 @@ package protocol
 
 import "github.com/go-gl/mathgl/mgl32"
 
+type AnimationMode uint8
+
+const (
+	AnimationModeNone   AnimationMode = 0
+	AnimationModeLayers AnimationMode = 1
+	AnimationModeBlocks AnimationMode = 2
+)
+
+// Marshal reads or writes AnimationMode through its uint8 wire encoding.
+func (x *AnimationMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type Rotation uint8
+
+const (
+	StructureRotationNone      Rotation = 0
+	StructureRotationRotate90  Rotation = 1
+	StructureRotationRotate180 Rotation = 2
+	StructureRotationRotate270 Rotation = 3
+)
+
+// Marshal reads or writes Rotation through its uint8 wire encoding.
+func (x *Rotation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 type StructureBlockType int32
 
 // Marshal reads or writes StructureBlockType through its int32 wire encoding.
@@ -76,26 +99,3 @@ func (x *StructureSettings) Marshal(io IO) {
 	io.Uint32(&x.IntegritySeed)
 	io.Vec3(&x.RotationPivot)
 }
-
-type StructureTemplateRequestOperation uint8
-
-const (
-	FurnaceLeftTabNone         StructureTemplateRequestOperation = 0
-	FurnaceLeftTabRecipeFood   StructureTemplateRequestOperation = 1
-	FurnaceLeftTabRecipeItems  StructureTemplateRequestOperation = 2
-	FurnaceLeftTabRecipeBlocks StructureTemplateRequestOperation = 3
-)
-
-// Marshal reads or writes StructureTemplateRequestOperation through its uint8 wire encoding.
-func (x *StructureTemplateRequestOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type StructureTemplateResponseType uint8
-
-const (
-	FurnaceLayoutNone          StructureTemplateResponseType = 0
-	FurnaceLayoutInventoryOnly StructureTemplateResponseType = 1
-	FurnaceLayoutDefault       StructureTemplateResponseType = 2
-)
-
-// Marshal reads or writes StructureTemplateResponseType through its uint8 wire encoding.
-func (x *StructureTemplateResponseType) Marshal(io IO) { io.Uint8((*uint8)(x)) }

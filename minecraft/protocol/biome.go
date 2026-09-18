@@ -507,6 +507,18 @@ func (x *FloatRange) Marshal(io IO) {
 	io.Float32(&x.Max)
 }
 
+type Mirror uint8
+
+const (
+	BiomeCoordinateEvaluationOrderXYZ Mirror = 0
+	BiomeCoordinateEvaluationOrderXZY Mirror = 1
+	BiomeCoordinateEvaluationOrderYXZ Mirror = 2
+	BiomeCoordinateEvaluationOrderYZX Mirror = 3
+)
+
+// Marshal reads or writes Mirror through its uint8 wire encoding.
+func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // NoiseDescriptor describes the gradient noise used by a BiomeNoiseGradientSurface.
 type NoiseDescriptor struct {
 	// Name is the string used to initialise the noise.
@@ -523,4 +535,44 @@ func (x *NoiseDescriptor) Marshal(io IO) {
 	io.String(&x.Name)
 	io.Int32(&x.FirstOctave)
 	FuncSliceLimits(io, &x.Amplitudes, io.Varuint32, 1, 100, io.Float32)
+}
+
+type PacketViolationType int32
+
+const (
+	BiomeExpressionOpUnknown   PacketViolationType = -1
+	BiomeExpressionOpLeftBrace PacketViolationType = 0
+)
+
+// Marshal reads or writes PacketViolationType through its int32 wire encoding.
+func (x *PacketViolationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type RandomDistributionType int32
+
+const (
+	BiomeRandomDistributionTypeSingleValued    RandomDistributionType = 0
+	BiomeRandomDistributionTypeUniform         RandomDistributionType = 1
+	BiomeRandomDistributionTypeGaussian        RandomDistributionType = 2
+	BiomeRandomDistributionTypeInverseGaussian RandomDistributionType = 3
+	BiomeRandomDistributionTypeFixedGrid       RandomDistributionType = 4
+	BiomeRandomDistributionTypeJitteredGrid    RandomDistributionType = 5
+	BiomeRandomDistributionTypeTriangle        RandomDistributionType = 6
+)
+
+// Marshal reads or writes RandomDistributionType through its int32 wire encoding.
+func (x *RandomDistributionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type SerializedNoiseBlockSpecifier struct {
+	Noise     string
+	Threshold float32
+	Range     FloatRange
+	Block     uint32
+}
+
+// Marshal reads or writes SerializedNoiseBlockSpecifier using its canonical wire layout.
+func (x *SerializedNoiseBlockSpecifier) Marshal(io IO) {
+	io.String(&x.Noise)
+	io.Float32(&x.Threshold)
+	x.Range.Marshal(io)
+	io.Uint32(&x.Block)
 }

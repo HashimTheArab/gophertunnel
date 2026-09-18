@@ -2,6 +2,18 @@
 
 package protocol
 
+type HeightMapDataType uint8
+
+const (
+	HeightMapDataNone    HeightMapDataType = 0
+	HeightMapDataHasData HeightMapDataType = 1
+	HeightMapDataTooHigh HeightMapDataType = 2
+	HeightMapDataTooLow  HeightMapDataType = 3
+)
+
+// Marshal reads or writes HeightMapDataType through its uint8 wire encoding.
+func (x *HeightMapDataType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 type SubChunkData struct {
 	SubChunkPosOffset     SubChunkPosOffset
 	SubChunkRequestResult SubChunkRequestResult

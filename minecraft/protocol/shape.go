@@ -8,6 +8,68 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
+type ArrowData struct {
+	ArrowEndLocation Optional[mgl32.Vec3]
+	ArrowHeadLength  Optional[float32]
+	ArrowHeadRadius  Optional[float32]
+	Segments         Optional[uint8]
+}
+
+func (*ArrowData) tagPrimitiveShapeExtraShapeData() uint32 { return 1 }
+
+// Marshal reads or writes ArrowData using its canonical wire layout.
+func (x *ArrowData) Marshal(io IO) {
+	OptionalFunc(io, &x.ArrowEndLocation, io.Vec3)
+	OptionalFunc(io, &x.ArrowHeadLength, io.Float32)
+	OptionalFunc(io, &x.ArrowHeadRadius, io.Float32)
+	OptionalFunc(io, &x.Segments, io.Uint8)
+}
+
+type ConeData struct {
+	Radii       mgl32.Vec2
+	Height      float32
+	NumSegments uint8
+}
+
+func (*ConeData) tagPrimitiveShapeExtraShapeData() uint32 { return 9 }
+
+// Marshal reads or writes ConeData using its canonical wire layout.
+func (x *ConeData) Marshal(io IO) {
+	io.Vec2(&x.Radii)
+	io.Float32(&x.Height)
+	io.Uint8(&x.NumSegments)
+}
+
+type CylinderData struct {
+	RadiusX     mgl32.Vec2
+	RadiusZ     mgl32.Vec2
+	Height      float32
+	NumSegments uint8
+}
+
+func (*CylinderData) tagPrimitiveShapeExtraShapeData() uint32 { return 6 }
+
+// Marshal reads or writes CylinderData using its canonical wire layout.
+func (x *CylinderData) Marshal(io IO) {
+	io.Vec2(&x.RadiusX)
+	io.Vec2(&x.RadiusZ)
+	io.Float32(&x.Height)
+	io.Uint8(&x.NumSegments)
+}
+
+type EllipsoidData struct {
+	Radii           mgl32.Vec3
+	SegmentsPerAxis uint8
+}
+
+func (*EllipsoidData) tagPrimitiveShapeExtraShapeData() uint32 { return 8 }
+
+// Marshal reads or writes EllipsoidData using its canonical wire layout.
+func (x *EllipsoidData) Marshal(io IO) {
+	io.Vec3(&x.Radii)
+	io.Uint8(&x.SegmentsPerAxis)
+}
+
 // PrimitiveShape defines a single shape to be rendered on the client. Each shape has a unique
 // NetworkID and a set of optional parameters depending on its type.
 type PrimitiveShape struct {
@@ -51,6 +113,39 @@ func (x *PrimitiveShape) Marshal(io IO) {
 	OptionalMarshaler(io, &x.DimensionID)
 	OptionalFunc(io, &x.AttachedToEntityID, io.ActorUniqueID)
 	MarshalPrimitiveShapeExtraShapeData(io, &x.ExtraShapeData)
+}
+
+type ScriptModuleMinecraftScriptPrimitiveShapeType uint8
+
+const (
+	PrimitiveShapeLine      ScriptModuleMinecraftScriptPrimitiveShapeType = 0
+	PrimitiveShapeBox       ScriptModuleMinecraftScriptPrimitiveShapeType = 1
+	PrimitiveShapeSphere    ScriptModuleMinecraftScriptPrimitiveShapeType = 2
+	PrimitiveShapeCircle    ScriptModuleMinecraftScriptPrimitiveShapeType = 3
+	PrimitiveShapeText      ScriptModuleMinecraftScriptPrimitiveShapeType = 4
+	PrimitiveShapeArrow     ScriptModuleMinecraftScriptPrimitiveShapeType = 5
+	PrimitiveShapeCylinder  ScriptModuleMinecraftScriptPrimitiveShapeType = 6
+	PrimitiveShapePyramid   ScriptModuleMinecraftScriptPrimitiveShapeType = 7
+	PrimitiveShapeEllipsoid ScriptModuleMinecraftScriptPrimitiveShapeType = 8
+	PrimitiveShapeCone      ScriptModuleMinecraftScriptPrimitiveShapeType = 9
+)
+
+// Marshal reads or writes ScriptModuleMinecraftScriptPrimitiveShapeType through its uint8 wire encoding.
+func (x *ScriptModuleMinecraftScriptPrimitiveShapeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type SkinImage struct {
+	Width      uint32
+	Height     uint32
+	ImageBytes []uint8
+}
+
+// Marshal reads or writes SkinImage using its canonical wire layout.
+func (x *SkinImage) Marshal(io IO) {
+	io.Uint32(&x.Width)
+	Maximum(io, &x.Width, 4096)
+	io.Uint32(&x.Height)
+	Maximum(io, &x.Height, 4096)
+	FuncSliceLimits(io, &x.ImageBytes, io.Varuint32, 0, 67108864, io.Uint8)
 }
 
 // TextShape represents a text debug shape.

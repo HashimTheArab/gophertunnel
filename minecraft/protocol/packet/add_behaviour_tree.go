@@ -1,21 +1,17 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package packet
 
-import (
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
-)
+import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// AddBehaviourTree is sent by the server to the client. The packet is currently unused by both client and
-// server.
-type AddBehaviourTree struct {
-	// BehaviourTree is an unused string.
+type AddBehaviorTree struct {
 	BehaviourTree string
 }
 
-// ID ...
-func (*AddBehaviourTree) ID() uint32 {
-	return IDAddBehaviourTree
+// Marshal reads or writes AddBehaviorTree using its canonical wire layout.
+func (x *AddBehaviorTree) Marshal(io protocol.IO) {
+	io.String(&x.BehaviourTree)
 }
 
-func (pk *AddBehaviourTree) Marshal(io protocol.IO) {
-	io.String(&pk.BehaviourTree)
-}
+// ID returns the protocol ID for AddBehaviorTree.
+func (*AddBehaviorTree) ID() uint32 { return IDAddBehaviorTree }

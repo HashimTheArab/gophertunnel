@@ -1,34 +1,26 @@
+// Code generated from canonical protocol manifest v2. DO NOT EDIT.
+
 package protocol
 
-const (
-	FurnaceLayoutNone = iota
-	FurnaceLayoutInventoryOnly
-	FurnaceLayoutDefault
-)
+type StructureTemplateRequestOperation uint8
 
 const (
-	FurnaceLeftTabNone = iota
-	FurnaceLeftTabRecipeFood
-	FurnaceLeftTabRecipeItems
-	FurnaceLeftTabRecipeBlocks
-	FurnaceLeftTabRecipeSearch
-	FurnaceLeftTabInventory
+	FurnaceLeftTabNone         StructureTemplateRequestOperation = 0
+	FurnaceLeftTabRecipeFood   StructureTemplateRequestOperation = 1
+	FurnaceLeftTabRecipeItems  StructureTemplateRequestOperation = 2
+	FurnaceLeftTabRecipeBlocks StructureTemplateRequestOperation = 3
 )
 
-// FurnaceOptions holds the options that a player has selected in a furnace-like container's UI.
-type FurnaceOptions struct {
-	// LeftFurnaceTab is the tab that is selected on the left side of the furnace UI. It is one of the
-	// FurnaceLeftTab constants above.
-	LeftFurnaceTab int32
-	// Filtering is whether the player has enabled the filtering between recipes they have unlocked or not.
-	Filtering bool
-	// Layout is the layout of the furnace UI. It is one of the FurnaceLayout constants above.
-	Layout int32
-}
+// Marshal reads or writes StructureTemplateRequestOperation through its uint8 wire encoding.
+func (x *StructureTemplateRequestOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// Marshal encodes/decodes a FurnaceOptions.
-func (x *FurnaceOptions) Marshal(r IO) {
-	r.Varint32(&x.LeftFurnaceTab)
-	r.Bool(&x.Filtering)
-	r.Varint32(&x.Layout)
-}
+type StructureTemplateResponseType uint8
+
+const (
+	FurnaceLayoutNone          StructureTemplateResponseType = 0
+	FurnaceLayoutInventoryOnly StructureTemplateResponseType = 1
+	FurnaceLayoutDefault       StructureTemplateResponseType = 2
+)
+
+// Marshal reads or writes StructureTemplateResponseType through its uint8 wire encoding.
+func (x *StructureTemplateResponseType) Marshal(io IO) { io.Uint8((*uint8)(x)) }

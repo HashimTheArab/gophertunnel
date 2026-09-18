@@ -50,16 +50,3 @@ func (x *PackInfoData) Marshal(io IO) {
 	io.Bool(&x.IsRayTracingCapable)
 	io.String(&x.CDNURL)
 }
-
-type PackInstanceID struct {
-	UUID        string
-	Version     string
-	SubPackName string
-}
-
-// Marshal reads or writes PackInstanceID using its canonical wire layout.
-func (x *PackInstanceID) Marshal(io IO) {
-	io.String(&x.UUID)
-	io.String(&x.Version)
-	io.String(&x.SubPackName)
-}

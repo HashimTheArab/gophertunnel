@@ -38,17 +38,6 @@ type ActorEventType uint8
 // Marshal reads or writes ActorEventType through its uint8 wire encoding.
 func (x *ActorEventType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-type ActorLinkType uint8
-
-const (
-	EntityLinkRemove    ActorLinkType = 0
-	EntityLinkRider     ActorLinkType = 1
-	EntityLinkPassenger ActorLinkType = 2
-)
-
-// Marshal reads or writes ActorLinkType through its uint8 wire encoding.
-func (x *ActorLinkType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
 type ActorType int32
 
 const (

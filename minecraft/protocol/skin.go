@@ -2,6 +2,39 @@
 
 package protocol
 
+import "github.com/google/uuid"
+
+type PersonaAnimatedTextureType uint32
+
+const (
+	SkinAnimationHead        PersonaAnimatedTextureType = 1
+	SkinAnimationBody32x32   PersonaAnimatedTextureType = 2
+	SkinAnimationBody128x128 PersonaAnimatedTextureType = 3
+)
+
+// Marshal reads or writes PersonaAnimatedTextureType through its uint32 wire encoding.
+func (x *PersonaAnimatedTextureType) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+
+type PersonaAnimationExpression uint32
+
+const (
+	ExpressionTypeLinear   PersonaAnimationExpression = 0
+	ExpressionTypeBlinking PersonaAnimationExpression = 1
+)
+
+// Marshal reads or writes PersonaAnimationExpression through its uint32 wire encoding.
+func (x *PersonaAnimationExpression) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+
+type PersonaArmSizeType uint8
+
+const (
+	ArmSizeSlim PersonaArmSizeType = 0
+	ArmSizeWide PersonaArmSizeType = 1
+)
+
+// Marshal reads or writes PersonaArmSizeType through its uint8 wire encoding.
+func (x *PersonaArmSizeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // PersonaPiece represents a piece of a persona skin. All pieces are sent separately.
 type PersonaPieceType uint32
 
@@ -38,17 +71,19 @@ const (
 // Marshal reads or writes PersonaPieceType through its uint32 wire encoding.
 func (x *PersonaPieceType) Marshal(io IO) { io.Uint32((*uint32)(x)) }
 
-type SkinImage struct {
-	Width      uint32
-	Height     uint32
-	ImageBytes []uint8
+type SerializedPersonaPieceHandle struct {
+	PieceID   string
+	PieceType PersonaPieceType
+	PackID    uuid.UUID
+	Default   bool
+	ProductID string
 }
 
-// Marshal reads or writes SkinImage using its canonical wire layout.
-func (x *SkinImage) Marshal(io IO) {
-	io.Uint32(&x.Width)
-	Maximum(io, &x.Width, 4096)
-	io.Uint32(&x.Height)
-	Maximum(io, &x.Height, 4096)
-	FuncSliceLimits(io, &x.ImageBytes, io.Varuint32, 0, 67108864, io.Uint8)
+// Marshal reads or writes SerializedPersonaPieceHandle using its canonical wire layout.
+func (x *SerializedPersonaPieceHandle) Marshal(io IO) {
+	io.String(&x.PieceID)
+	x.PieceType.Marshal(io)
+	io.UUID(&x.PackID)
+	io.Bool(&x.Default)
+	io.String(&x.ProductID)
 }

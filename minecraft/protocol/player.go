@@ -2,6 +2,17 @@
 
 package protocol
 
+type ArmorSlotAndDamagePair struct {
+	ArmourSlot LegacyArmorSlot
+	Damage     int16
+}
+
+// Marshal reads or writes ArmorSlotAndDamagePair using its canonical wire layout.
+func (x *ArmorSlotAndDamagePair) Marshal(io IO) {
+	x.ArmourSlot.Marshal(io)
+	io.Int16(&x.Damage)
+}
+
 type PlayerActionType int32
 
 const (
@@ -216,4 +227,15 @@ func (*PlayerWaxedOrUnwaxedCopper) tagEventData() uint32 { return 17 }
 // Marshal reads or writes PlayerWaxedOrUnwaxedCopper using its canonical wire layout.
 func (x *PlayerWaxedOrUnwaxedCopper) Marshal(io IO) {
 	io.Varint32(&x.PlayerWaxedOrUnwaxedCopperBlockID)
+}
+
+type SyncedPlayerMovementSettings struct {
+	RewindHistorySize                int32
+	ServerAuthoritativeBlockBreaking bool
+}
+
+// Marshal reads or writes SyncedPlayerMovementSettings using its canonical wire layout.
+func (x *SyncedPlayerMovementSettings) Marshal(io IO) {
+	io.Varint32(&x.RewindHistorySize)
+	io.Bool(&x.ServerAuthoritativeBlockBreaking)
 }

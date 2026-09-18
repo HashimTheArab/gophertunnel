@@ -2,6 +2,30 @@
 
 package protocol
 
+type PackInstanceID struct {
+	UUID        string
+	Version     string
+	SubPackName string
+}
+
+// Marshal reads or writes PackInstanceID using its canonical wire layout.
+func (x *PackInstanceID) Marshal(io IO) {
+	io.String(&x.UUID)
+	io.String(&x.Version)
+	io.String(&x.SubPackName)
+}
+
+type RequestAbilityType uint8
+
+const (
+	PackSettingTypeFloat  RequestAbilityType = 0
+	PackSettingTypeBool   RequestAbilityType = 1
+	PackSettingTypeString RequestAbilityType = 2
+)
+
+// Marshal reads or writes RequestAbilityType through its uint8 wire encoding.
+func (x *RequestAbilityType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 type ResourcePackClientResponseData interface {
 	Marshaler
 	tagResourcePackClientResponseData() uint32

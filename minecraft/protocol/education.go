@@ -2,16 +2,16 @@
 
 package protocol
 
-type EducationEditionOffer uint32
+type EduSharedURIResource struct {
+	ButtonName string
+	LinkURI    string
+}
 
-const (
-	DataStorePropertyTypeNone  EducationEditionOffer = 0
-	DataStorePropertyTypeBool  EducationEditionOffer = 1
-	DataStorePropertyTypeInt64 EducationEditionOffer = 2
-)
-
-// Marshal reads or writes EducationEditionOffer through its uint32 wire encoding.
-func (x *EducationEditionOffer) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+// Marshal reads or writes EduSharedURIResource using its canonical wire layout.
+func (x *EduSharedURIResource) Marshal(io IO) {
+	io.String(&x.ButtonName)
+	io.String(&x.LinkURI)
+}
 
 type EducationLevelSettings struct {
 	CodeBuilderDefaultURI        string
@@ -47,4 +47,15 @@ type EducationLocalLevelSettings struct {
 // Marshal reads or writes EducationLocalLevelSettings using its canonical wire layout.
 func (x *EducationLocalLevelSettings) Marshal(io IO) {
 	OptionalFunc(io, &x.CodeBuilderOverrideURI, io.String)
+}
+
+type ExternalLinkSettings struct {
+	URL         string
+	DisplayName string
+}
+
+// Marshal reads or writes ExternalLinkSettings using its canonical wire layout.
+func (x *ExternalLinkSettings) Marshal(io IO) {
+	io.String(&x.URL)
+	io.String(&x.DisplayName)
 }

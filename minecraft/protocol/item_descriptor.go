@@ -97,6 +97,18 @@ func (x *MoLangItemDescriptor) Marshal(io IO) {
 	x.MoLangVersion.Marshal(io)
 }
 
+type MobEffectEvent uint8
+
+const (
+	ItemDescriptorInvalid MobEffectEvent = 0
+	ItemDescriptorDefault MobEffectEvent = 1
+	ItemDescriptorMoLang  MobEffectEvent = 2
+	ItemDescriptorItemTag MobEffectEvent = 3
+)
+
+// Marshal reads or writes MobEffectEvent through its uint8 wire encoding.
+func (x *MobEffectEvent) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It
 // is an alias of Marshaler.
 type StackRequestAction interface {
