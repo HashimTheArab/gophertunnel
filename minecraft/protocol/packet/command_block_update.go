@@ -7,7 +7,9 @@ import (
 // CommandBlockUpdate is sent by the client to update a command block at a specific position. The command
 // block may be either a physical block or an entity.
 type CommandBlockUpdate struct {
-	Target protocol.CommandBlockUpdateData
+	// Position is the position of the command block updated. It is only set if Block is set to true. Nothing
+	// happens if no command block is set at this position.
+	Position protocol.CommandBlockUpdateData
 	// Command is the command currently entered in the command block. This is the command that is executed when
 	// the command block is activated.
 	Command string
@@ -20,7 +22,9 @@ type CommandBlockUpdate struct {
 	// FilteredName is a filtered version of Name with all the profanity removed. The client will use this over
 	// Name if this field is not empty and they have the "Filter Profanity" setting enabled.
 	FilteredName string
-	TrackOutput  bool
+	// NeedsRedstone specifies if the command block needs to be powered by redstone to be activated. If false, the
+	// command block is always active. The field is only set if Block is set to true.
+	NeedsRedstone bool
 	// TickDelay is the delay in ticks between executions of a command block, if it is a repeating command block.
 	TickDelay int32
 	// ExecuteOnFirstTick specifies if the command block should execute on the first tick, AKA as soon as the
@@ -34,12 +38,12 @@ func (*CommandBlockUpdate) ID() uint32 {
 }
 
 func (pk *CommandBlockUpdate) Marshal(io protocol.IO) {
-	protocol.MarshalCommandBlockUpdateData(io, &pk.Target)
+	protocol.MarshalCommandBlockUpdateData(io, &pk.Position)
 	io.String(&pk.Command)
 	io.String(&pk.LastOutput)
 	io.String(&pk.Name)
 	io.String(&pk.FilteredName)
-	io.Bool(&pk.TrackOutput)
+	io.Bool(&pk.NeedsRedstone)
 	io.Int32(&pk.TickDelay)
 	io.Bool(&pk.ExecuteOnFirstTick)
 }

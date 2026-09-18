@@ -8,12 +8,19 @@ import (
 // starting the breaking of a block, dropping an item, etc.
 type PlayerAction struct {
 	PlayerRuntimeID uint64
-	Action          protocol.PlayerActionType
+	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID protocol.PlayerActionType
 	// BlockPosition is the position of the target block, if the action with the ActionType set concerned a block.
 	// If that is not the case, the block position will be zero.
 	BlockPosition protocol.BlockPos
-	ResultPos     protocol.BlockPos
-	Face          int32
+	// ResultPosition is the position of the action's result. When a UseItemOn action is sent, this is the
+	// position of the block clicked, but when a block is placed, this is the position at which the block will be
+	// placed.
+	ResultPosition protocol.BlockPos
+	// BlockFace is the face of the target block that was touched. If the action with the ActionType set concerned
+	// a block. If not, the face is always 0.
+	BlockFace int32
 }
 
 // ID ...
@@ -23,8 +30,8 @@ func (*PlayerAction) ID() uint32 {
 
 func (pk *PlayerAction) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.PlayerRuntimeID)
-	pk.Action.Marshal(io)
+	pk.EntityRuntimeID.Marshal(io)
 	pk.BlockPosition.Marshal(io)
-	pk.ResultPos.Marshal(io)
-	io.Varint32(&pk.Face)
+	pk.ResultPosition.Marshal(io)
+	io.Varint32(&pk.BlockFace)
 }

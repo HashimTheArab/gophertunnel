@@ -8,10 +8,16 @@ import (
 // sent for both players and other entities, such as zombies.
 type MobArmourEquipment struct {
 	TargetRuntimeID uint64
-	Head            protocol.NetworkItemStackDescriptorSerializedData
-	Torso           protocol.NetworkItemStackDescriptorSerializedData
-	Legs            protocol.NetworkItemStackDescriptorSerializedData
-	Feet            protocol.NetworkItemStackDescriptorSerializedData
+	// Helmet is the equipped helmet of the entity. Items that are not wearable on the head will not be rendered
+	// by the client. Unlike in Java Edition, blocks cannot be worn.
+	Helmet protocol.NetworkItemStackDescriptorSerializedData
+	// Chestplate is the chestplate of the entity. Items that are not wearable as chestplate will not be rendered.
+	Chestplate protocol.NetworkItemStackDescriptorSerializedData
+	// Leggings is the item worn as leggings by the entity. Items not wearable as leggings will not be rendered
+	// client-side.
+	Leggings protocol.NetworkItemStackDescriptorSerializedData
+	// Boots is the item worn as boots by the entity. Items not wearable as boots will not be rendered.
+	Boots protocol.NetworkItemStackDescriptorSerializedData
 	// Body is the item worn on the body of the entity. Items not wearable on the body will not be rendered.
 	Body protocol.NetworkItemStackDescriptorSerializedData
 }
@@ -23,9 +29,9 @@ func (*MobArmourEquipment) ID() uint32 {
 
 func (pk *MobArmourEquipment) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
-	pk.Head.Marshal(io)
-	pk.Torso.Marshal(io)
-	pk.Legs.Marshal(io)
-	pk.Feet.Marshal(io)
+	pk.Helmet.Marshal(io)
+	pk.Chestplate.Marshal(io)
+	pk.Leggings.Marshal(io)
+	pk.Boots.Marshal(io)
 	pk.Body.Marshal(io)
 }

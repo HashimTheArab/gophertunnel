@@ -15,7 +15,9 @@ type AddPainting struct {
 	Position mgl32.Vec3
 	// Direction is the facing direction of the painting.
 	Direction int32
-	Motif     string
+	// Title is the title of the painting. It specifies the motive of the painting. The title of the painting must
+	// be valid.
+	Title string
 }
 
 // ID ...
@@ -28,5 +30,5 @@ func (pk *AddPainting) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
 	io.Vec3(&pk.Position)
 	io.Varint32(&pk.Direction)
-	io.String(&pk.Motif)
+	io.String(&pk.Title)
 }

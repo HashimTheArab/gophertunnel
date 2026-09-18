@@ -10,8 +10,9 @@ type GameTestResults struct {
 	// Succeeded indicates whether the test succeeded or not.
 	Succeeded bool
 	// Error is the error that occurred. If Succeeded is true, this field is empty.
-	Error    string
-	TestName string
+	Error string
+	// Name represents the name of the test.
+	Name string
 }
 
 // ID ...
@@ -22,5 +23,5 @@ func (*GameTestResults) ID() uint32 {
 func (pk *GameTestResults) Marshal(io protocol.IO) {
 	io.Bool(&pk.Succeeded)
 	io.String(&pk.Error)
-	io.String(&pk.TestName)
+	io.String(&pk.Name)
 }

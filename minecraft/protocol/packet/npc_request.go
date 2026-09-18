@@ -22,8 +22,11 @@ type NPCRequest struct {
 	// either a type that indicates that the NPC should show its dialog, or that it should open the editing
 	// window.
 	RequestType protocol.RequestType
-	Actions     string
-	ActionIndex uint8
+	// CommandString is the command string set in the NPC. It may consist of multiple commands, depending on what
+	// the player set in it.
+	CommandString string
+	// ActionType is the type of the action to execute.
+	ActionType uint8
 	// SceneName is the name of the scene. This can be left empty to specify the last scene that the player was
 	// sent.
 	SceneName string
@@ -37,7 +40,7 @@ func (*NPCRequest) ID() uint32 {
 func (pk *NPCRequest) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.NPCRuntimeID)
 	pk.RequestType.Marshal(io)
-	io.String(&pk.Actions)
-	io.Uint8(&pk.ActionIndex)
+	io.String(&pk.CommandString)
+	io.Uint8(&pk.ActionType)
 	io.String(&pk.SceneName)
 }

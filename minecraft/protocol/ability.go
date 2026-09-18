@@ -17,7 +17,7 @@ type AbilityData struct {
 
 // Marshal reads or writes AbilityData using its canonical wire layout.
 func (x *AbilityData) Marshal(io IO) {
-	io.Int64(&x.EntityUniqueID)
+	io.ActorUniqueIDInt64(&x.EntityUniqueID)
 	x.PlayerPermissions.Marshal(io)
 	x.CommandPermissions.Marshal(io)
 	Slice(io, &x.Layers)

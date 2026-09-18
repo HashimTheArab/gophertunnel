@@ -7,9 +7,10 @@ type AttributeData struct {
 	CurrentValue    float32
 	DefaultMinValue float32
 	DefaultMaxValue float32
-	DefaultValue    float32
-	Name            string
-	Modifiers       []AttributeModifier
+	// FloatValue is the float value if Type is AttributeDataTypeFloat.
+	FloatValue float32
+	Name       string
+	Modifiers  []AttributeModifier
 }
 
 // Marshal reads or writes AttributeData using its canonical wire layout.
@@ -19,21 +20,22 @@ func (x *AttributeData) Marshal(io IO) {
 	io.Float32(&x.CurrentValue)
 	io.Float32(&x.DefaultMinValue)
 	io.Float32(&x.DefaultMaxValue)
-	io.Float32(&x.DefaultValue)
+	io.Float32(&x.FloatValue)
 	io.String(&x.Name)
 	Slice(io, &x.Modifiers)
 }
 
 // AttributeLayerData represents a complete attribute layer.
 type AttributeLayerData struct {
-	AttributeLayers []EASAttributeLayerData
+	// EnvironmentAttributes is the list of environment attributes in this layer.
+	EnvironmentAttributes []EASAttributeLayerData
 }
 
 func (*AttributeLayerData) tagAttributeLayerSyncData() uint32 { return 0 }
 
 // Marshal reads or writes AttributeLayerData using its canonical wire layout.
 func (x *AttributeLayerData) Marshal(io IO) {
-	SliceLimits(io, &x.AttributeLayers, 0, 512)
+	SliceLimits(io, &x.EnvironmentAttributes, 0, 512)
 }
 
 // AttributeLayerSettings represents settings for an attribute layer.
@@ -76,17 +78,19 @@ func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
 
 // EnvironmentAttributeData represents an environment attribute with optional transition data.
 type EnvironmentAttributeData struct {
-	AttributeLayerName      string
-	AttributeLayerDimension DimensionType
-	Attributes              []EASEnvironmentAttributeData
+	// AttributeName is the name of the attribute.
+	AttributeName string
+	// Attribute is the current attribute value.
+	Attribute  DimensionType
+	Attributes []EASEnvironmentAttributeData
 }
 
 func (*EnvironmentAttributeData) tagAttributeLayerSyncData() uint32 { return 2 }
 
 // Marshal reads or writes EnvironmentAttributeData using its canonical wire layout.
 func (x *EnvironmentAttributeData) Marshal(io IO) {
-	io.StringLimits(&x.AttributeLayerName, 0, 128)
-	x.AttributeLayerDimension.Marshal(io)
+	io.StringLimits(&x.AttributeName, 0, 128)
+	x.Attribute.Marshal(io)
 	SliceLimits(io, &x.Attributes, 0, 1024)
 }
 

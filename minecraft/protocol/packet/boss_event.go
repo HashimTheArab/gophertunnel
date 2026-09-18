@@ -41,10 +41,16 @@ type BossEvent struct {
 	TargetEntityID int64
 	PlayerID       int64
 	// EventType is the type of the event. It is one of the BossEvent constants above.
-	EventType     protocol.BossEventUpdateType
-	Name          string
-	FilteredName  string
-	HealthPercent float32
+	EventType protocol.BossEventUpdateType
+	// BossBarTitle is the title shown above the boss bar. It may be set to set a different title if the
+	// BossEntityUniqueID matches the client's entity unique ID.
+	BossBarTitle string
+	// FilteredBossBarTitle is a filtered version of BossBarTitle with all the profanity removed. The client will
+	// use this over BossBarTitle if this field is not empty and they have the "Filter Profanity" setting enabled.
+	FilteredBossBarTitle string
+	// HealthPercentage is the percentage of health that is shown in the boss bar (0.0-1.0). The HealthPercentage
+	// may be set to a specific value if the BossEntityUniqueID matches the client's entity unique ID.
+	HealthPercentage float32
 	// Colour is the colour of the boss bar that is shown when a player is subscribed. It is one of the
 	// BossEventColour constants listed above.
 	Colour protocol.BossBarColor
@@ -62,9 +68,9 @@ func (pk *BossEvent) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.TargetEntityID)
 	io.ActorUniqueID(&pk.PlayerID)
 	pk.EventType.Marshal(io)
-	io.StringLimits(&pk.Name, 0, 256)
-	io.StringLimits(&pk.FilteredName, 0, 256)
-	io.Float32(&pk.HealthPercent)
+	io.StringLimits(&pk.BossBarTitle, 0, 256)
+	io.StringLimits(&pk.FilteredBossBarTitle, 0, 256)
+	io.Float32(&pk.HealthPercentage)
 	pk.Colour.Marshal(io)
 	pk.Overlay.Marshal(io)
 }

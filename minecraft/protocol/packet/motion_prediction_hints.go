@@ -11,8 +11,10 @@ import (
 // enabled.
 type MotionPredictionHints struct {
 	MRuntimeID uint64
-	MMotion    mgl32.Vec3
-	MOnGround  bool
+	// Velocity is the server-calculated velocity of the entity at the point of sending the packet.
+	Velocity mgl32.Vec3
+	// OnGround specifies if the server currently thinks the entity is on the ground.
+	OnGround bool
 }
 
 // ID ...
@@ -22,6 +24,6 @@ func (*MotionPredictionHints) ID() uint32 {
 
 func (pk *MotionPredictionHints) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.MRuntimeID)
-	io.Vec3(&pk.MMotion)
-	io.Bool(&pk.MOnGround)
+	io.Vec3(&pk.Velocity)
+	io.Bool(&pk.OnGround)
 }

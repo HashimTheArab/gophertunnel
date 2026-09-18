@@ -8,13 +8,18 @@ import (
 // present in the world, for the packet to have any effect. Unlike Java Edition, Bedrock Edition requires that
 // chests for example must be present and in range to open its inventory.
 type ContainerOpen struct {
-	ContainerID uint8
+	// WindowID is the ID representing the window that is being opened. It may be used later to close the
+	// container using a ContainerClose packet.
+	WindowID uint8
 	// ContainerType is the type ID of the container that is being opened when opening the container at the
 	// position of the packet. It depends on the block/entity, and could, for example, be the window type of a
 	// chest or a hopper, but also a horse inventory.
-	ContainerType  uint8
-	Position       protocol.BlockPos
-	TargetEntityID int64
+	ContainerType uint8
+	// ContainerPosition is the position of the container opened. The position must point to a block entity that
+	// actually has a container. If that is not the case, the window will not be opened and the packet will be
+	// ignored, if a valid ContainerEntityUniqueID has not also been provided.
+	ContainerPosition protocol.BlockPos
+	TargetEntityID    int64
 }
 
 // ID ...
@@ -23,8 +28,8 @@ func (*ContainerOpen) ID() uint32 {
 }
 
 func (pk *ContainerOpen) Marshal(io protocol.IO) {
-	io.Uint8(&pk.ContainerID)
+	io.Uint8(&pk.WindowID)
 	io.Uint8(&pk.ContainerType)
-	pk.Position.Marshal(io)
+	pk.ContainerPosition.Marshal(io)
 	io.ActorUniqueID(&pk.TargetEntityID)
 }

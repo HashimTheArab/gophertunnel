@@ -18,13 +18,23 @@ type AddActor struct {
 	Position mgl32.Vec3
 	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side movement
 	// of the entity.
-	Velocity          mgl32.Vec3
-	Rotation          mgl32.Vec2
-	YHeadRotation     float32
-	YBodyRotation     float32
-	AttributesList    []protocol.SyncedAttribute
-	EntityData        protocol.SynchedActorDataCopyableDataList
-	SynchedProperties protocol.PropertySyncData
+	Velocity mgl32.Vec3
+	Rotation mgl32.Vec2
+	// Pitch is the vertical rotation of the entity. Facing straight forward yields a pitch of 0. Pitch is
+	// measured in degrees.
+	Pitch float32
+	// Yaw is the horizontal rotation of the entity. Yaw is also measured in degrees.
+	Yaw float32
+	// Attributes is a slice of attributes that the entity has. It includes attributes such as its health,
+	// movement speed, etc.
+	Attributes []protocol.SyncedAttribute
+	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
+	// particular the way the entity looks. Flags include ones such as 'on fire' and 'sprinting'. The metadata
+	// values are indexed by their property key.
+	EntityMetadata protocol.SynchedActorDataCopyableDataList
+	// EntityProperties is a list of properties that the entity inhibits. These properties define and alter
+	// specific attributes of the entity.
+	EntityProperties protocol.PropertySyncData
 	// EntityLinks is a list of entity links that are currently active on the entity. These links alter the way
 	// the entity shows up when first spawned in terms of it shown as riding an entity. Setting these links is
 	// important for new viewers to see the entity is riding another entity.
@@ -43,10 +53,10 @@ func (pk *AddActor) Marshal(io protocol.IO) {
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
 	io.Vec2(&pk.Rotation)
-	io.Float32(&pk.YHeadRotation)
-	io.Float32(&pk.YBodyRotation)
-	protocol.Slice(io, &pk.AttributesList)
-	pk.EntityData.Marshal(io)
-	pk.SynchedProperties.Marshal(io)
+	io.Float32(&pk.Pitch)
+	io.Float32(&pk.Yaw)
+	protocol.Slice(io, &pk.Attributes)
+	pk.EntityMetadata.Marshal(io)
+	pk.EntityProperties.Marshal(io)
 	protocol.Slice(io, &pk.EntityLinks)
 }

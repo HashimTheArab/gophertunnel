@@ -1,6 +1,6 @@
 package protocol
 
-// CauldronInteractEvent is the event data sent when a cauldron is interacted with.
+// ComposterInteractEvent is the event data sent when a composter is interacted with.
 type CauldronInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
@@ -8,7 +8,7 @@ type CauldronInteractEvent struct {
 	ItemID int32
 }
 
-func (*CauldronInteractEvent) tagEventData() uint32 { return 10 }
+func (*CauldronInteractEvent) tagEventData() uint32 { return 11 }
 
 // Marshal reads or writes CauldronInteractEvent using its canonical wire layout.
 func (x *CauldronInteractEvent) Marshal(io IO) {
@@ -32,7 +32,7 @@ func (x *CodeBuilderScoreboardEvent) Marshal(io IO) {
 	io.Varint32(&x.Score)
 }
 
-// ComposterInteractEvent is the event data sent when a composter is interacted with.
+// CauldronInteractEvent is the event data sent when a cauldron is interacted with.
 type ComposterInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
@@ -40,7 +40,7 @@ type ComposterInteractEvent struct {
 	ItemID int32
 }
 
-func (*ComposterInteractEvent) tagEventData() uint32 { return 11 }
+func (*ComposterInteractEvent) tagEventData() uint32 { return 10 }
 
 // Marshal reads or writes ComposterInteractEvent using its canonical wire layout.
 func (x *ComposterInteractEvent) Marshal(io IO) {
@@ -79,9 +79,9 @@ func MarshalEventData(io IO, x *EventData) {
 		case 9:
 			return new(MobBorn)
 		case 10:
-			return new(CauldronInteractEvent)
-		case 11:
 			return new(ComposterInteractEvent)
+		case 11:
+			return new(CauldronInteractEvent)
 		case 12:
 			return new(BellUsed)
 		case 13:

@@ -7,12 +7,22 @@ import (
 // MobEffect is sent by the server to apply an effect to the player, for example an effect like poison. It may
 // also be used to modify existing effects, or removing them completely.
 type MobEffect struct {
-	TargetRuntimeID     uint64
-	EventID             protocol.MobEffectEvent
-	EffectID            int32
-	EffectAmplifier     int32
-	ShowParticles       bool
-	EffectDurationTicks int32
+	TargetRuntimeID uint64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID protocol.MobEffectEvent
+	// Operation is the operation of the packet. It is either MobEffectAdd, MobEffectModify or MobEffectRemove and
+	// specifies the result of the packet client-side.
+	Operation int32
+	// EffectType is the ID of the effect to be added, removed or modified. It is one of the constants that may be
+	// found above.
+	EffectType int32
+	// Particles specifies if viewers of the entity that gets the effect shows particles around it. If set to
+	// false, no particles are emitted around the entity.
+	Particles bool
+	// Duration is the duration of the effect in ticks (20 per second). After the duration has elapsed, the effect
+	// will be removed automatically client-side. A negative duration means the effect never expires.
+	Duration int32
 	// Tick is the server tick at which the packet was sent. It is used in relation to
 	// CorrectPlayerMovePrediction.
 	Tick uint64
@@ -27,11 +37,11 @@ func (*MobEffect) ID() uint32 {
 
 func (pk *MobEffect) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.TargetRuntimeID)
-	pk.EventID.Marshal(io)
-	io.Varint32(&pk.EffectID)
-	io.Varint32(&pk.EffectAmplifier)
-	io.Bool(&pk.ShowParticles)
-	io.Varint32(&pk.EffectDurationTicks)
+	pk.EntityRuntimeID.Marshal(io)
+	io.Varint32(&pk.Operation)
+	io.Varint32(&pk.EffectType)
+	io.Bool(&pk.Particles)
+	io.Varint32(&pk.Duration)
 	io.PlayerInputTick(&pk.Tick)
 	io.Bool(&pk.Ambient)
 }

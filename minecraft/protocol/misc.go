@@ -2258,9 +2258,9 @@ type UpdateSubChunkNetworkBlockInfo struct {
 // Marshal reads or writes UpdateSubChunkNetworkBlockInfo using its canonical wire layout.
 func (x *UpdateSubChunkNetworkBlockInfo) Marshal(io IO) {
 	x.Pos.Marshal(io)
-	io.Varuint32(&x.RuntimeID)
+	io.ActorRuntimeIDVaruint32(&x.RuntimeID)
 	io.Varuint32(&x.UpdateFlags)
-	io.Varuint64(&x.SyncMessageEntityUniqueID)
+	io.ActorUniqueIDVaruint64(&x.SyncMessageEntityUniqueID)
 	io.Varuint32(&x.SyncMessageMessage)
 }
 

@@ -18,9 +18,14 @@ type AddItemActor struct {
 	Position mgl32.Vec3
 	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side movement
 	// of the entity.
-	Velocity      mgl32.Vec3
-	EntityData    protocol.SynchedActorDataCopyableDataList
-	IsFromFishing bool
+	Velocity mgl32.Vec3
+	// EntityMetadata is a map of entity metadata, which includes flags and data properties that alter in
+	// particular the way the entity looks. Flags include ones such as 'on fire' and 'sprinting'. The metadata
+	// values are indexed by their property key.
+	EntityMetadata protocol.SynchedActorDataCopyableDataList
+	// FromFishing specifies if the item was obtained by fishing it up using a fishing rod. It is not clear why
+	// the client needs to know this.
+	FromFishing bool
 }
 
 // ID ...
@@ -34,6 +39,6 @@ func (pk *AddItemActor) Marshal(io protocol.IO) {
 	pk.Item.Marshal(io)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
-	pk.EntityData.Marshal(io)
-	io.Bool(&pk.IsFromFishing)
+	pk.EntityMetadata.Marshal(io)
+	io.Bool(&pk.FromFishing)
 }

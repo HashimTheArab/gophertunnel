@@ -10,8 +10,9 @@ import (
 // this packet is not sent. Under certain circumstances, this packet is also sent from the server to the
 // client, but I was unable to find when this is done.
 type EmoteList struct {
-	RuntimeID     uint64
-	EmotePieceIds []uuid.UUID
+	RuntimeID uint64
+	// EmotePieces is a list of emote pieces that the player with the runtime ID above has.
+	EmotePieces []uuid.UUID
 }
 
 // ID ...
@@ -21,5 +22,5 @@ func (*EmoteList) ID() uint32 {
 
 func (pk *EmoteList) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.RuntimeID)
-	protocol.FuncSlice(io, &pk.EmotePieceIds, io.Varuint32, io.UUID)
+	protocol.FuncSlice(io, &pk.EmotePieces, io.Varuint32, io.UUID)
 }

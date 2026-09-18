@@ -8,8 +8,12 @@ import (
 // content of the inventory and specify additional properties, such as the items that are allowed to be put in
 // slots of the inventory.
 type UpdateEquip struct {
-	ContainerID uint8
-	Type        uint8
+	// WindowID is the identifier associated with the window that the UpdateEquip packet concerns. It is the ID
+	// sent for the horse inventory that was opened before this packet was sent.
+	WindowID uint8
+	// WindowType is the type of the window that was opened. Generally, this is the type of a horse inventory, as
+	// the packet is specifically made for that.
+	WindowType uint8
 	// Size is the size of the horse inventory that should be opened. A bigger size does, in fact, change the
 	// amount of slots displayed.
 	Size int32
@@ -25,8 +29,8 @@ func (*UpdateEquip) ID() uint32 {
 }
 
 func (pk *UpdateEquip) Marshal(io protocol.IO) {
-	io.Uint8(&pk.ContainerID)
-	io.Uint8(&pk.Type)
+	io.Uint8(&pk.WindowID)
+	io.Uint8(&pk.WindowType)
 	io.Varint32(&pk.Size)
 	io.ActorUniqueID(&pk.EntityUniqueID)
 	io.NBT(&pk.Data, protocol.NBTNetwork)

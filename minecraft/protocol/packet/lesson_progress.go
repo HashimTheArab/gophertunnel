@@ -9,8 +9,9 @@ import (
 type LessonProgress struct {
 	LessonAction int32
 	// Score is the score the client should use when displaying the progress.
-	Score      int32
-	ActivityID string
+	Score int32
+	// Identifier is the identifier of the lesson that is being progressed.
+	Identifier string
 }
 
 // ID ...
@@ -21,5 +22,5 @@ func (*LessonProgress) ID() uint32 {
 func (pk *LessonProgress) Marshal(io protocol.IO) {
 	io.Varint32(&pk.LessonAction)
 	io.Varint32(&pk.Score)
-	io.String(&pk.ActivityID)
+	io.String(&pk.Identifier)
 }

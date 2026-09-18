@@ -140,7 +140,10 @@ type CommandOrigin struct {
 	// especially important for websocket servers and it seems that this field is only non-empty for these
 	// websocket servers.
 	RequestID string
-	PlayerID  int64
+	// Origin is one of the values above that specifies the origin of the command. The origin may change,
+	// depending on what part of the client actually called the command. The command may be issued by a websocket
+	// server, for example.
+	Origin int64
 }
 
 // Marshal reads or writes CommandOrigin using its canonical wire layout.
@@ -148,7 +151,7 @@ func (x *CommandOrigin) Marshal(io IO) {
 	io.String(&x.Type)
 	io.UUID(&x.UUID)
 	io.StringLimits(&x.RequestID, 0, 39)
-	io.Int64(&x.PlayerID)
+	io.Int64(&x.Origin)
 }
 
 type CommandOutputData struct {
@@ -169,8 +172,11 @@ func (x *CommandOutputData) Marshal(io IO) {
 // CommandOutputMessage represents a message sent by a command that holds the output of one of the commands
 // executed.
 type CommandOutputMessage struct {
-	MessageID  string
-	Successful bool
+	MessageID string
+	// Success indicates if the output message was one of a successful command execution. If set to true, the
+	// output message is by default coloured white, whereas if set to false, the message is by default coloured
+	// red.
+	Success bool
 	// Parameters is a list of parameters that serve to supply the message sent with additional information, such
 	// as the position that a player was teleported to or the effect that was applied to an entity. These
 	// parameters only apply for the Minecraft built-in command output.
@@ -180,7 +186,7 @@ type CommandOutputMessage struct {
 // Marshal reads or writes CommandOutputMessage using its canonical wire layout.
 func (x *CommandOutputMessage) Marshal(io IO) {
 	io.String(&x.MessageID)
-	io.Bool(&x.Successful)
+	io.Bool(&x.Success)
 	FuncSlice(io, &x.Parameters, io.Varuint32, io.String)
 }
 

@@ -7,8 +7,10 @@ import (
 // AgentAnimation is an Education Edition packet sent from the server to the client to make an agent perform
 // an animation.
 type AgentAnimation struct {
-	AgentAnimation protocol.AgentAnimationType
-	RuntimeID      uint64
+	// Animation is the ID of the animation that the agent should perform. As of its implementation, there are no
+	// IDs that can be used in the regular client.
+	Animation protocol.AgentAnimationType
+	RuntimeID uint64
 }
 
 // ID ...
@@ -17,6 +19,6 @@ func (*AgentAnimation) ID() uint32 {
 }
 
 func (pk *AgentAnimation) Marshal(io protocol.IO) {
-	pk.AgentAnimation.Marshal(io)
+	pk.Animation.Marshal(io)
 	io.ActorRuntimeID(&pk.RuntimeID)
 }

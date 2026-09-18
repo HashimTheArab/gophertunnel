@@ -91,7 +91,7 @@ type PrimitiveShape struct {
 	// NetworkID is the network ID of the shape.
 	NetworkID uint64
 	// ShapeType is the optional dimension ID where the shape is rendered.
-	ShapeType Optional[ScriptModuleMinecraftScriptPrimitiveShapeType]
+	Type Optional[ScriptModuleMinecraftScriptPrimitiveShapeType]
 	// Location is the location of the shape.
 	Location Optional[mgl32.Vec3]
 	// Scale is the scale of the shape.
@@ -101,7 +101,7 @@ type PrimitiveShape struct {
 	// TotalTimeLeft is the total time left of the shape.
 	TotalTimeLeft Optional[float32]
 	// MaximumRenderDistance is the rotation of the shape.
-	MaximumRenderDistance Optional[float32]
+	MaxRenderDistance Optional[float32]
 	// Color is the total time left of the shape.
 	Colour Optional[color.RGBA]
 	// DimensionID is the optional dimension ID where the shape is rendered.
@@ -116,12 +116,12 @@ type PrimitiveShape struct {
 // Marshal reads or writes PrimitiveShape using its canonical wire layout.
 func (x *PrimitiveShape) Marshal(io IO) {
 	io.Varuint64(&x.NetworkID)
-	OptionalMarshaler(io, &x.ShapeType)
+	OptionalMarshaler(io, &x.Type)
 	OptionalFunc(io, &x.Location, io.Vec3)
 	OptionalFunc(io, &x.Scale, io.Float32)
 	OptionalFunc(io, &x.Rotation, io.Vec3)
 	OptionalFunc(io, &x.TotalTimeLeft, io.Float32)
-	OptionalFunc(io, &x.MaximumRenderDistance, io.Float32)
+	OptionalFunc(io, &x.MaxRenderDistance, io.Float32)
 	OptionalFunc(io, &x.Colour, io.RGBA)
 	OptionalMarshaler(io, &x.DimensionID)
 	OptionalFunc(io, &x.AttachedToEntityID, io.ActorUniqueID)
@@ -183,7 +183,7 @@ type TextShape struct {
 	// ShowTextBackface is if the text should render on the back side of the shape. This only has a visible effect
 	// when UseRotation is true since you cannot see the back side of the text otherwise. Use true for default
 	// behaviour.
-	ShowTextBackface bool
+	ShowBackfaceText bool
 }
 
 func (*TextShape) tagShape() uint32 { return 2 }
@@ -195,5 +195,5 @@ func (x *TextShape) Marshal(io IO) {
 	OptionalFunc(io, &x.BackgroundColour, io.RGBA)
 	io.Bool(&x.DepthTest)
 	io.Bool(&x.ShowBackface)
-	io.Bool(&x.ShowTextBackface)
+	io.Bool(&x.ShowBackfaceText)
 }

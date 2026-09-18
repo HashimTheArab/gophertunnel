@@ -6,7 +6,8 @@ import (
 
 // ClientBoundAttributeLayerSync is sent by the server to synchronise attribute layers with the client.
 type ClientBoundAttributeLayerSync struct {
-	Data protocol.AttributeLayerSyncData
+	// Settings is set if PayloadType is AttributeLayerPayloadTypeUpdateSettings.
+	Settings protocol.AttributeLayerSyncData
 }
 
 // ID ...
@@ -15,5 +16,5 @@ func (*ClientBoundAttributeLayerSync) ID() uint32 {
 }
 
 func (pk *ClientBoundAttributeLayerSync) Marshal(io protocol.IO) {
-	protocol.MarshalAttributeLayerSyncData(io, &pk.Data)
+	protocol.MarshalAttributeLayerSyncData(io, &pk.Settings)
 }

@@ -15,9 +15,11 @@ type GraphicsOverrideParameter struct {
 	// BiomeIdentifier is the identifier of the biome for which the parameters apply.
 	BiomeIdentifier string
 	// PlayerIdentifier is the optional identifier of the player for which the override parameter applies.
-	PlayerIdentifier       protocol.Optional[string]
-	IdentifierForParameter protocol.GraphicsOverrideParameterType
-	ResetParameter         bool
+	PlayerIdentifier protocol.Optional[string]
+	// ParameterType is the type of parameter being overridden.
+	ParameterType protocol.GraphicsOverrideParameterType
+	// Reset indicates whether to reset the parameters.
+	Reset bool
 }
 
 // ID ...
@@ -33,6 +35,6 @@ func (pk *GraphicsOverrideParameter) Marshal(io protocol.IO) {
 	protocol.OptionalFunc(io, &pk.PlayerIdentifier, func(value *string) {
 		io.StringLimits(value, 0, 255)
 	})
-	pk.IdentifierForParameter.Marshal(io)
-	io.Bool(&pk.ResetParameter)
+	pk.ParameterType.Marshal(io)
+	io.Bool(&pk.Reset)
 }

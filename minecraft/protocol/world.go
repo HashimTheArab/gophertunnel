@@ -8,9 +8,15 @@ import (
 // DimensionDefinition contains information specifying dimension-specific properties, used for data-driven
 // dimensions. These include the range (the height min/max), generator variant, and more.
 type DimensionDefinition struct {
-	HeightMaximum int32
-	HeightMinimum int32
-	GeneratorType GeneratorType
+	// MinimumY is the lowest Y coordinate that exists in the dimension.
+	MinimumY int32
+	// HeightRange is the number of blocks above MinimumY that exist in the dimension, so that the highest Y
+	// coordinate in the dimension is MinimumY + HeightRange.
+	HeightRange int32
+	// Generator is the variant of generator that exists in the provided dimension. These can be one of the
+	// constants defined above. If this is set to GeneratorLegacy, the legacy horizontal world limits will be
+	// enforced.
+	Generator GeneratorType
 	// DimensionType is the numeric identifier of the dimension. This cannot override a vanilla dimension (0-2),
 	// but custom dimensions should start from 1000 like vanilla.
 	DimensionType DimensionType
@@ -20,9 +26,9 @@ type DimensionDefinition struct {
 
 // Marshal reads or writes DimensionDefinition using its canonical wire layout.
 func (x *DimensionDefinition) Marshal(io IO) {
-	io.Varint32(&x.HeightMaximum)
-	io.Varint32(&x.HeightMinimum)
-	x.GeneratorType.Marshal(io)
+	io.Varint32(&x.MinimumY)
+	io.Varint32(&x.HeightRange)
+	x.Generator.Marshal(io)
 	x.DimensionType.Marshal(io)
 	io.UUID(&x.PackID)
 }

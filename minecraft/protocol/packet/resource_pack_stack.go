@@ -11,7 +11,10 @@ type ResourcePackStack struct {
 	// the server. If set to true, the client gets the option to either download the resource packs and join, or
 	// quit entirely. Behaviour packs never have to be downloaded.
 	TexturePackRequired bool
-	TexturePackList     []protocol.StackResourcePack
+	// TexturePacks is a list of texture packs that the client needs to download before joining the server. The
+	// order of these texture packs specifies the order that they are applied in on the client side. The first in
+	// the list will be applied first.
+	TexturePacks []protocol.StackResourcePack
 	// BaseGameVersion is the vanilla version that the client should set its resource pack stack to.
 	BaseGameVersion string
 	// Experiments holds a list of experiments that are either enabled or disabled in the world that the player
@@ -29,7 +32,7 @@ func (*ResourcePackStack) ID() uint32 {
 
 func (pk *ResourcePackStack) Marshal(io protocol.IO) {
 	io.Bool(&pk.TexturePackRequired)
-	protocol.SliceLimits(io, &pk.TexturePackList, 0, 65535)
+	protocol.SliceLimits(io, &pk.TexturePacks, 0, 65535)
 	io.String(&pk.BaseGameVersion)
 	pk.Experiments.Marshal(io)
 	io.Bool(&pk.IncludeEditorPacks)

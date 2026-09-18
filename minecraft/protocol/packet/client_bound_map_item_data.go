@@ -14,13 +14,22 @@ type ClientBoundMapItemData struct {
 	MapID int64
 	// Dimension is the dimension of the map that should be updated, for example the overworld (0), the nether (1)
 	// or the end (2).
-	Dimension      uint8
-	IsLocked       bool
-	MapOrigin      protocol.BlockPos
-	CreationMapIDs protocol.Optional[[]int64]
+	Dimension uint8
+	// LockedMap specifies if the map that was updated was a locked map, which may be done using a cartography
+	// table.
+	LockedMap bool
+	// Origin is the center position of the map being updated.
+	Origin protocol.BlockPos
+	// MapsIncludedIn holds an array of map IDs that the map updated is included in. This has to do with the scale
+	// of the map: Each map holds its own map ID and all map IDs of maps that include this map and have a bigger
+	// scale. This means that a scale 0 map will have 5 map IDs in this slice, whereas a scale 4 map will have
+	// only 1 (its own). The actual use of this field remains unknown.
+	MapsIncludedIn protocol.Optional[[]int64]
 	// Scale is the scale of the map as it is shown in-game.
-	Scale            protocol.Optional[int8]
-	TrackedEntityIDs protocol.Optional[[]protocol.MapTrackedObject]
+	Scale protocol.Optional[int8]
+	// TrackedObjects is a list of tracked objects on the map, which may either be entities or blocks. The client
+	// makes sure these tracked objects are actually tracked. (position updated etc.)
+	TrackedObjects protocol.Optional[[]protocol.MapTrackedObject]
 	// Decorations is a list of fixed decorations located on the map. The decorations will not change client-side,
 	// unless the server updates them.
 	Decorations protocol.Optional[[]protocol.MapDecoration]
@@ -30,8 +39,12 @@ type ClientBoundMapItemData struct {
 	// Height is the height of the texture area that was updated. The height may be a subset of the total height
 	// of the map.
 	Height protocol.Optional[int32]
-	StartX protocol.Optional[int32]
-	StartY protocol.Optional[int32]
+	// XOffset is the X offset in pixels at which the updated texture area starts. From this X, the updated
+	// texture will extend exactly Width pixels to the right.
+	XOffset protocol.Optional[int32]
+	// YOffset is the Y offset in pixels at which the updated texture area starts. From this Y, the updated
+	// texture will extend exactly Height pixels up.
+	YOffset protocol.Optional[int32]
 	// Pixels is a list of pixel colours for the new texture of the map. It is indexed as Pixels[y*height + x].
 	Pixels protocol.Optional[[]uint32]
 }
@@ -44,13 +57,13 @@ func (*ClientBoundMapItemData) ID() uint32 {
 func (pk *ClientBoundMapItemData) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.MapID)
 	io.Uint8(&pk.Dimension)
-	io.Bool(&pk.IsLocked)
-	pk.MapOrigin.Marshal(io)
-	protocol.OptionalFunc(io, &pk.CreationMapIDs, func(value *[]int64) {
+	io.Bool(&pk.LockedMap)
+	pk.Origin.Marshal(io)
+	protocol.OptionalFunc(io, &pk.MapsIncludedIn, func(value *[]int64) {
 		protocol.FuncSliceLimits(io, value, io.Varuint32, 0, 65535, io.ActorUniqueID)
 	})
 	protocol.OptionalFunc(io, &pk.Scale, io.Int8)
-	protocol.OptionalFunc(io, &pk.TrackedEntityIDs, func(value *[]protocol.MapTrackedObject) {
+	protocol.OptionalFunc(io, &pk.TrackedObjects, func(value *[]protocol.MapTrackedObject) {
 		protocol.SliceLimits(io, value, 0, 65535)
 	})
 	protocol.OptionalFunc(io, &pk.Decorations, func(value *[]protocol.MapDecoration) {
@@ -58,8 +71,8 @@ func (pk *ClientBoundMapItemData) Marshal(io protocol.IO) {
 	})
 	protocol.OptionalFunc(io, &pk.Width, io.Varint32)
 	protocol.OptionalFunc(io, &pk.Height, io.Varint32)
-	protocol.OptionalFunc(io, &pk.StartX, io.Varint32)
-	protocol.OptionalFunc(io, &pk.StartY, io.Varint32)
+	protocol.OptionalFunc(io, &pk.XOffset, io.Varint32)
+	protocol.OptionalFunc(io, &pk.YOffset, io.Varint32)
 	protocol.OptionalFunc(io, &pk.Pixels, func(value *[]uint32) {
 		protocol.FuncSliceLimits(io, value, io.Varuint32, 0, 16384, io.Uint32)
 	})
