@@ -8,13 +8,11 @@ import (
 // movement corrections from the server, containing information about client-predictions that are relevant to
 // movement.
 type ClientMovementPredictionSync struct {
-	// ActorFlags is a bitset of all the flags that are currently set for the client.
 	EntityDataFlag     protocol.ActorDataFlagComponent
 	EntityBoundingBox  protocol.ActorDataBoundingBoxComponent
 	MovementAttributes [9]float32
 	// EntityUniqueID is the unique ID of the entity that the prediction data applies to.
-	EntityUniqueID int64
-	// Flying specifies if the client is currently flying.
+	EntityUniqueID    int64
 	EntityFlyingState bool
 }
 

@@ -1,6 +1,6 @@
 package protocol
 
-// ComposterInteractEvent is the event data sent when a composter is interacted with.
+// CauldronInteractEvent is the event data sent when a composter is interacted with.
 type CauldronInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
@@ -32,7 +32,7 @@ func (x *CodeBuilderScoreboardEvent) Marshal(io IO) {
 	io.Varint32(&x.Score)
 }
 
-// CauldronInteractEvent is the event data sent when a cauldron is interacted with.
+// ComposterInteractEvent is the event data sent when a cauldron is interacted with.
 type ComposterInteractEvent struct {
 	// BlockInteractionType ...
 	BlockInteractionType MinecraftEventingPOIBlockInteractionType
