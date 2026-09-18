@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	ActorEventTypeNone                   protocol.ActorEventType = 0
+	ActorEventNone                       protocol.ActorEventType = 0
 	ActorEventJump                       protocol.ActorEventType = 1
 	ActorEventHurt                       protocol.ActorEventType = 2
 	ActorEventDeath                      protocol.ActorEventType = 3

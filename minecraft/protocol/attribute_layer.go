@@ -76,7 +76,9 @@ func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
 
 // EnvironmentAttributeData represents an environment attribute with optional transition data.
 type EnvironmentAttributeData struct {
-	AttributeLayerName      string
+	// AttributeName is the name of the attribute.
+	AttributeLayerName string
+	// Attribute is the current attribute value.
 	AttributeLayerDimension DimensionType
 	Attributes              []EASEnvironmentAttributeData
 }
@@ -88,20 +90,4 @@ func (x *EnvironmentAttributeData) Marshal(io IO) {
 	io.StringLimits(&x.AttributeLayerName, 0, 128)
 	x.AttributeLayerDimension.Marshal(io)
 	SliceLimits(io, &x.Attributes, 0, 1024)
-}
-
-// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
-type NoiseAlignment struct {
-	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
-	Type DataItemType
-	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
-	Value int8
-}
-
-func (*NoiseAlignment) tagDataItemEntryValue() uint8 { return 0 }
-
-// Marshal reads or writes NoiseAlignment using its canonical wire layout.
-func (x *NoiseAlignment) Marshal(io IO) {
-	x.Type.Marshal(io)
-	io.Int8(&x.Value)
 }

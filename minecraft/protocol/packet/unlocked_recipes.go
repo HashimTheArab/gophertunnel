@@ -5,10 +5,11 @@ import (
 )
 
 const (
-	UnlockedRecipesTypeEmpty             protocol.ItemDescriptorType = 0
-	UnlockedRecipesTypeInitiallyUnlocked protocol.ItemDescriptorType = 1
-	UnlockedRecipesTypeNewlyUnlocked     protocol.ItemDescriptorType = 2
-	UnlockedRecipesTypeRemoveUnlocked    protocol.ItemDescriptorType = 3
+	UnlockedRecipesTypeEmpty             protocol.PacketType = 0
+	UnlockedRecipesTypeInitiallyUnlocked protocol.PacketType = 1
+	UnlockedRecipesTypeNewlyUnlocked     protocol.PacketType = 2
+	UnlockedRecipesTypeRemoveUnlocked    protocol.PacketType = 3
+	UnlockedRecipesTypeRemoveAllUnlocked protocol.PacketType = 4
 )
 
 // UnlockedRecipes gives the client a list of recipes that have been unlocked, restricting the recipes that

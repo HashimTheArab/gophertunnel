@@ -3,9 +3,12 @@ package protocol
 // DefaultItemDescriptor represents an item descriptor for regular items. This is used for the significant
 // majority of items.
 type DefaultItemDescriptor struct {
+	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
+	// other items it is simply an identifier of a variant of the item.
 	DescriptorType ItemDescriptorType
-	FullName       string
-	AuxValue       int32
+	// Name is the identifier of the item, such as minecraft:stone.
+	Name     string
+	AuxValue int32
 }
 
 func (*DefaultItemDescriptor) tagItemDescriptor() uint32 { return 1 }
@@ -13,7 +16,7 @@ func (*DefaultItemDescriptor) tagItemDescriptor() uint32 { return 1 }
 // Marshal reads or writes DefaultItemDescriptor using its canonical wire layout.
 func (x *DefaultItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
-	io.StringLimits(&x.FullName, 1, 18446744073709551615)
+	io.StringLimits(&x.Name, 1, 18446744073709551615)
 	io.Varint32(&x.AuxValue)
 	Minimum(io, &x.AuxValue, 0)
 	Maximum(io, &x.AuxValue, 32767)
@@ -60,6 +63,13 @@ func MarshalItemDescriptor(io IO, x *ItemDescriptor) {
 // alias of Marshaler.
 type ItemDescriptorType uint8
 
+const (
+	ItemDescriptorInvalid ItemDescriptorType = 0
+	ItemDescriptorDefault ItemDescriptorType = 1
+	ItemDescriptorMoLang  ItemDescriptorType = 2
+	ItemDescriptorItemTag ItemDescriptorType = 3
+)
+
 // Marshal reads or writes ItemDescriptorType through its uint8 wire encoding.
 func (x *ItemDescriptorType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
@@ -67,7 +77,8 @@ func (x *ItemDescriptorType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 // duplicative entries for items that can be grouped under a single tag.
 type ItemTagItemDescriptor struct {
 	DescriptorType ItemDescriptorType
-	ItemTag        string
+	// Tag represents the tag that the item is part of.
+	ItemTag string
 }
 
 func (*ItemTagItemDescriptor) tagItemDescriptor() uint32 { return 3 }
@@ -81,8 +92,10 @@ func (x *ItemTagItemDescriptor) Marshal(io IO) {
 // MoLangItemDescriptor represents an item descriptor for items that use MoLang (e.g. behaviour packs).
 type MoLangItemDescriptor struct {
 	DescriptorType ItemDescriptorType
-	TagExpression  string
-	MoLangVersion  MoLangVersion
+	// Expression represents the MoLang expression used to identify the item/it's associated tag.
+	Expression string
+	// Version represents the version of MoLang to use.
+	Version MoLangVersion
 }
 
 func (*MoLangItemDescriptor) tagItemDescriptor() uint32 { return 2 }
@@ -90,21 +103,9 @@ func (*MoLangItemDescriptor) tagItemDescriptor() uint32 { return 2 }
 // Marshal reads or writes MoLangItemDescriptor using its canonical wire layout.
 func (x *MoLangItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
-	io.StringLimits(&x.TagExpression, 1, 18446744073709551615)
-	x.MoLangVersion.Marshal(io)
+	io.StringLimits(&x.Expression, 1, 18446744073709551615)
+	x.Version.Marshal(io)
 }
-
-type MobEffectEvent uint8
-
-const (
-	ItemDescriptorInvalid MobEffectEvent = 0
-	ItemDescriptorDefault MobEffectEvent = 1
-	ItemDescriptorMoLang  MobEffectEvent = 2
-	ItemDescriptorItemTag MobEffectEvent = 3
-)
-
-// Marshal reads or writes MobEffectEvent through its uint8 wire encoding.
-func (x *MobEffectEvent) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
 // alias of Marshaler.

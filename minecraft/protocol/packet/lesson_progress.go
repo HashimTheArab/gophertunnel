@@ -7,10 +7,13 @@ import (
 // LessonProgress is a packet sent by the server to the client to inform the client of updated progress on a
 // lesson. This packet only functions on the Minecraft: Education Edition version of the game.
 type LessonProgress struct {
-	LessonAction int32
+	// Action is the action the client should perform to show progress. This is one of the constants defined
+	// above.
+	Action int32
 	// Score is the score the client should use when displaying the progress.
-	Score      int32
-	ActivityID string
+	Score int32
+	// Identifier is the identifier of the lesson that is being progressed.
+	Identifier string
 }
 
 // ID ...
@@ -19,7 +22,7 @@ func (*LessonProgress) ID() uint32 {
 }
 
 func (pk *LessonProgress) Marshal(io protocol.IO) {
-	io.Varint32(&pk.LessonAction)
+	io.Varint32(&pk.Action)
 	io.Varint32(&pk.Score)
-	io.String(&pk.ActivityID)
+	io.String(&pk.Identifier)
 }

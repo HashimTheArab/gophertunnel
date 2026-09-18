@@ -22,5 +22,5 @@ func (*SubClientLogin) ID() uint32 {
 }
 
 func (pk *SubClientLogin) Marshal(io protocol.IO) {
-	io.Bytes(&pk.ConnectionRequest)
+	io.ByteSlice(&pk.ConnectionRequest)
 }

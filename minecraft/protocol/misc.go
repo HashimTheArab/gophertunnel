@@ -85,7 +85,7 @@ type AnimateAction uint8
 func (x *AnimateAction) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type AnimatedImageData struct {
-	SkinImage           PyramidShape
+	SkinImage           SkinImage
 	AnimatedTextureType PersonaAnimatedTextureType
 	Frames              float32
 	AnimationExpression PersonaAnimationExpression
@@ -164,17 +164,6 @@ func (x *BedrockDDUIDataStoreUpdate) Marshal(io IO) {
 	Maximum(io, &x.PropertyUpdateCount, 4.294967294e+09)
 	io.Uint32(&x.PathUpdateCount)
 	Maximum(io, &x.PathUpdateCount, 4.294967294e+09)
-}
-
-type BellUsed struct {
-	ItemID int32
-}
-
-func (*BellUsed) tagEventData() uint32 { return 12 }
-
-// Marshal reads or writes BellUsed using its canonical wire layout.
-func (x *BellUsed) Marshal(io IO) {
-	io.Varint32(&x.ItemID)
 }
 
 type BookEditAction interface {
@@ -285,21 +274,6 @@ type BossEventUpdateType uint8
 // Marshal reads or writes BossEventUpdateType through its uint8 wire encoding.
 func (x *BossEventUpdateType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-type BossKilled struct {
-	BossEntityID int64
-	PartySize    int32
-	BossType     int32
-}
-
-func (*BossKilled) tagEventData() uint32 { return 7 }
-
-// Marshal reads or writes BossKilled using its canonical wire layout.
-func (x *BossKilled) Marshal(io IO) {
-	io.Varint64(&x.BossEntityID)
-	io.Varint32(&x.PartySize)
-	io.Varint32(&x.BossType)
-}
-
 type BoxData struct {
 	BoxBound mgl32.Vec3
 }
@@ -322,27 +296,12 @@ func (x *Cancel) Marshal(io IO) {
 	io.String(&x.ResponseType)
 }
 
-type CauldronUsed struct {
-	ContentsColour uint32
-	ContentsType   int32
-	FillLevel      int32
-}
-
-func (*CauldronUsed) tagEventData() uint32 { return 5 }
-
-// Marshal reads or writes CauldronUsed using its canonical wire layout.
-func (x *CauldronUsed) Marshal(io IO) {
-	io.Varuint32(&x.ContentsColour)
-	io.Varint32(&x.ContentsType)
-	io.Varint32(&x.FillLevel)
-}
-
 type ChangeEntityScore struct {
-	Action        string
-	ScoreboardID  ScoreboardID
-	ObjectiveName string
-	ScoreValue    int32
-	EntityID      int64
+	Action         string
+	ScoreboardID   ScoreboardID
+	ObjectiveName  string
+	ScoreValue     int32
+	EntityUniqueID int64
 }
 
 func (*ChangeEntityScore) tagSetScoreEntriesItem() uint8 { return 2 }
@@ -353,7 +312,7 @@ func (x *ChangeEntityScore) Marshal(io IO) {
 	x.ScoreboardID.Marshal(io)
 	io.StringLimits(&x.ObjectiveName, 1, 18446744073709551615)
 	io.Int32(&x.ScoreValue)
-	io.ActorUniqueID(&x.EntityID)
+	io.ActorUniqueID(&x.EntityUniqueID)
 }
 
 type ChangeFakePlayerScore struct {
@@ -430,17 +389,6 @@ type CodeBuilderExecutionStateCodeStatus uint8
 // Marshal reads or writes CodeBuilderExecutionStateCodeStatus through its uint8 wire encoding.
 func (x *CodeBuilderExecutionStateCodeStatus) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-type CodeBuilderRuntimeAction struct {
-	CodeBuilderRuntimeAction string
-}
-
-func (*CodeBuilderRuntimeAction) tagEventData() uint32 { return 18 }
-
-// Marshal reads or writes CodeBuilderRuntimeAction using its canonical wire layout.
-func (x *CodeBuilderRuntimeAction) Marshal(io IO) {
-	io.StringLimits(&x.CodeBuilderRuntimeAction, 0, 16)
-}
-
 type CodeBuilderStorageQueryOptionsCategory uint8
 
 // Marshal reads or writes CodeBuilderStorageQueryOptionsCategory through its uint8 wire encoding.
@@ -469,20 +417,6 @@ type ControlScheme uint8
 
 // Marshal reads or writes ControlScheme through its uint8 wire encoding.
 func (x *ControlScheme) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type CoordinateEvaluationOrder int32
-
-const (
-	CoordinateEvaluationOrderXyz CoordinateEvaluationOrder = 0
-	CoordinateEvaluationOrderXzy CoordinateEvaluationOrder = 1
-	CoordinateEvaluationOrderYxz CoordinateEvaluationOrder = 2
-	CoordinateEvaluationOrderYzx CoordinateEvaluationOrder = 3
-	CoordinateEvaluationOrderZxy CoordinateEvaluationOrder = 4
-	CoordinateEvaluationOrderZyx CoordinateEvaluationOrder = 5
-)
-
-// Marshal reads or writes CoordinateEvaluationOrder through its int32 wire encoding.
-func (x *CoordinateEvaluationOrder) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 type CoordinatesLocation struct {
 	PacketType PlayerLocationType
@@ -530,6 +464,22 @@ func (x *CraftRepairAndDisenchantStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.NumberOfRequestedCrafts, 1)
 	io.Varint32(&x.RepairCost)
 	Minimum(io, &x.RepairCost, 0)
+}
+
+// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
+type DataItemByte struct {
+	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
+	Type DataItemType
+	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
+	Value int8
+}
+
+func (*DataItemByte) tagDataItemEntryValue() uint8 { return 0 }
+
+// Marshal reads or writes DataItemByte using its canonical wire layout.
+func (x *DataItemByte) Marshal(io IO) {
+	x.Type.Marshal(io)
+	io.Int8(&x.Value)
 }
 
 type DataItemCompoundTag struct {
@@ -914,7 +864,7 @@ type FeatureRegistryFeatureBinaryJSONFormat struct {
 // Marshal reads or writes FeatureRegistryFeatureBinaryJSONFormat using its canonical wire layout.
 func (x *FeatureRegistryFeatureBinaryJSONFormat) Marshal(io IO) {
 	io.String(&x.FeatureName)
-	io.Bytes(&x.BinaryJSONOutput)
+	io.ByteSlice(&x.BinaryJSONOutput)
 }
 
 type FloatOverride struct {
@@ -1056,6 +1006,22 @@ func (x *Interaction) Marshal(io IO) {
 }
 
 type LabTableReactionType uint8
+
+const (
+	LabTableReactionTypeNone               LabTableReactionType = 0
+	LabTableReactionTypeIceBomb            LabTableReactionType = 1
+	LabTableReactionTypeBleach             LabTableReactionType = 2
+	LabTableReactionTypeElephantToothpaste LabTableReactionType = 3
+	LabTableReactionTypeFertilizer         LabTableReactionType = 4
+	LabTableReactionTypeHeatBlock          LabTableReactionType = 5
+	LabTableReactionTypeMagnesiumSalts     LabTableReactionType = 6
+	LabTableReactionTypeMiscFire           LabTableReactionType = 7
+	LabTableReactionTypeMiscExplosion      LabTableReactionType = 8
+	LabTableReactionTypeMiscLava           LabTableReactionType = 9
+	LabTableReactionTypeMiscMystical       LabTableReactionType = 10
+	LabTableReactionTypeMiscSmoke          LabTableReactionType = 11
+	LabTableReactionTypeMiscLargeSmoke     LabTableReactionType = 12
+)
 
 // Marshal reads or writes LabTableReactionType through its uint8 wire encoding.
 func (x *LabTableReactionType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
@@ -1416,7 +1382,7 @@ type MissingBlobData struct {
 // Marshal reads or writes MissingBlobData using its canonical wire layout.
 func (x *MissingBlobData) Marshal(io IO) {
 	io.Uint64(&x.BlobID)
-	io.Bytes(&x.BlobData)
+	io.ByteSlice(&x.BlobData)
 }
 
 type MoLangVersion int16
@@ -1443,41 +1409,10 @@ const (
 // Marshal reads or writes MoLangVersion through its int16 wire encoding.
 func (x *MoLangVersion) Marshal(io IO) { io.Int16((*int16)(x)) }
 
-type MobBorn struct {
-	BornBabyEntityType    int32
-	BornBabyEntityVariant int32
-	BornBabyColour        uint8
-}
+type MobEffectEvent uint8
 
-func (*MobBorn) tagEventData() uint32 { return 9 }
-
-// Marshal reads or writes MobBorn using its canonical wire layout.
-func (x *MobBorn) Marshal(io IO) {
-	io.Varint32(&x.BornBabyEntityType)
-	io.Varint32(&x.BornBabyEntityVariant)
-	io.Uint8(&x.BornBabyColour)
-}
-
-type MobKilled struct {
-	InstigatorEntityID         int64
-	TargetEntityID             int64
-	InstigatorSChildEntityType ActorType
-	DamageSource               int32
-	TradeTier                  int32
-	TraderName                 string
-}
-
-func (*MobKilled) tagEventData() uint32 { return 4 }
-
-// Marshal reads or writes MobKilled using its canonical wire layout.
-func (x *MobKilled) Marshal(io IO) {
-	io.Varint64(&x.InstigatorEntityID)
-	io.Varint64(&x.TargetEntityID)
-	x.InstigatorSChildEntityType.Marshal(io)
-	io.Varint32(&x.DamageSource)
-	io.Varint32(&x.TradeTier)
-	io.StringLimits(&x.TraderName, 0, 128)
-}
+// Marshal reads or writes MobEffectEvent through its uint8 wire encoding.
+func (x *MobEffectEvent) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type ModalFormCancelReason uint8
 
@@ -1523,7 +1458,7 @@ func (x *NetworkItemInstanceDescriptorSerializedData) Marshal(io IO) {
 	io.Varuint32(&x.AuxValue)
 	Maximum(io, &x.AuxValue, 32767)
 	io.Varint32(&x.BlockRuntimeID)
-	io.Bytes(&x.UserDataBuffer)
+	io.ByteSlice(&x.UserDataBuffer)
 }
 
 type NetworkItemStackDescriptorSerializedData struct {
@@ -1544,7 +1479,7 @@ func (x *NetworkItemStackDescriptorSerializedData) Marshal(io IO) {
 	Maximum(io, &x.AuxValue, 32767)
 	OptionalFunc(io, &x.NetIDVariant, io.Varint32)
 	io.Varuint32(&x.BlockRuntimeID)
-	io.Bytes(&x.UserDataBuffer)
+	io.ByteSlice(&x.UserDataBuffer)
 }
 
 type NetworkPermissions struct {
@@ -1583,14 +1518,6 @@ func (x *PacketCompressionAlgorithm) Marshal(io IO) { io.Uint16((*uint16)(x)) }
 
 type PacketType uint32
 
-const (
-	PacketTypeEmpty                    PacketType = 0
-	PacketTypeInitiallyUnlockedRecipes PacketType = 1
-	PacketTypeNewlyUnlockedRecipes     PacketType = 2
-	PacketTypeRemoveUnlockedRecipes    PacketType = 3
-	PacketTypeRemoveAllUnlockedRecipes PacketType = 4
-)
-
 // Marshal reads or writes PacketType through its uint32 wire encoding.
 func (x *PacketType) Marshal(io IO) { io.Uint32((*uint32)(x)) }
 
@@ -1598,6 +1525,16 @@ type PacketViolationSeverity int32
 
 // Marshal reads or writes PacketViolationSeverity through its int32 wire encoding.
 func (x *PacketViolationSeverity) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type PacketViolationType int32
+
+const (
+	PacketViolationTypeUnknown         PacketViolationType = -1
+	PacketViolationTypePacketMalformed PacketViolationType = 0
+)
+
+// Marshal reads or writes PacketViolationType through its int32 wire encoding.
+func (x *PacketViolationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 type PhotoType uint8
 
@@ -1618,19 +1555,6 @@ func (*PortalCreated) tagEventData() uint32 { return 2 }
 // Marshal reads or writes PortalCreated using its canonical wire layout.
 func (x *PortalCreated) Marshal(io IO) {
 	io.Varint32(&x.DimensionID)
-}
-
-type PortalUsed struct {
-	SourceDimensionID int32
-	TargetDimensionID int32
-}
-
-func (*PortalUsed) tagEventData() uint32 { return 3 }
-
-// Marshal reads or writes PortalUsed using its canonical wire layout.
-func (x *PortalUsed) Marshal(io IO) {
-	io.Varint32(&x.SourceDimensionID)
-	io.Varint32(&x.TargetDimensionID)
 }
 
 type PotionMixDataEntry struct {
@@ -1683,36 +1607,6 @@ type PropertySyncDataPropertySyncIntEntry struct {
 func (x *PropertySyncDataPropertySyncIntEntry) Marshal(io IO) {
 	io.Varuint32(&x.PropertyIndex)
 	io.Varint32(&x.Data)
-}
-
-type PyramidData struct {
-	Width  float32
-	Depth  Optional[float32]
-	Height float32
-}
-
-func (*PyramidData) tagShape() uint32 { return 7 }
-
-// Marshal reads or writes PyramidData using its canonical wire layout.
-func (x *PyramidData) Marshal(io IO) {
-	io.Float32(&x.Width)
-	OptionalFunc(io, &x.Depth, io.Float32)
-	io.Float32(&x.Height)
-}
-
-type RaidUpdate struct {
-	CurrentWave int32
-	TotalWaves  int32
-	Success     bool
-}
-
-func (*RaidUpdate) tagEventData() uint32 { return 14 }
-
-// Marshal reads or writes RaidUpdate using its canonical wire layout.
-func (x *RaidUpdate) Marshal(io IO) {
-	io.Varint32(&x.CurrentWave)
-	io.Varint32(&x.TotalWaves)
-	io.Bool(&x.Success)
 }
 
 type RemoveEntry struct {
@@ -1786,6 +1680,11 @@ func (x *RemoveTimeMarkerData) Marshal(io IO) {
 	FuncSliceLimits(io, &x.TimeMarkerIds, io.Varuint32, 0, 256, io.Varuint64)
 }
 
+type RequestAbilityType uint8
+
+// Marshal reads or writes RequestAbilityType through its uint8 wire encoding.
+func (x *RequestAbilityType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 type RequestType uint8
 
 // Marshal reads or writes RequestType through its uint8 wire encoding.
@@ -1837,9 +1736,9 @@ type SerializedSkinRef struct {
 	ID                           string
 	PlayFabID                    string
 	ResourcePatch                string
-	ImageData                    PyramidShape
+	ImageData                    SkinImage
 	AnimatedImageData            []AnimatedImageData
-	CapeImageData                PyramidShape
+	CapeImageData                SkinImage
 	GeometryData                 string
 	GeometryDataMinEngineVersion string
 	AnimationData                string
@@ -2100,17 +1999,6 @@ func (x *SynchedActorDataCopyableDataList) Marshal(io IO) {
 	Slice(io, &x.Data)
 }
 
-type TargetBlockHit struct {
-	RedstoneLevel int32
-}
-
-func (*TargetBlockHit) tagEventData() uint32 { return 15 }
-
-// Marshal reads or writes TargetBlockHit using its canonical wire layout.
-func (x *TargetBlockHit) Marshal(io IO) {
-	io.Varint32(&x.RedstoneLevel)
-}
-
 type TargetMode uint8
 
 const (
@@ -2258,7 +2146,7 @@ type UpdateSubChunkNetworkBlockInfo struct {
 // Marshal reads or writes UpdateSubChunkNetworkBlockInfo using its canonical wire layout.
 func (x *UpdateSubChunkNetworkBlockInfo) Marshal(io IO) {
 	x.Pos.Marshal(io)
-	io.ActorRuntimeIDVaruint32(&x.RuntimeID)
+	io.Varuint32(&x.RuntimeID)
 	io.Varuint32(&x.UpdateFlags)
 	io.ActorUniqueIDVaruint64(&x.SyncMessageEntityUniqueID)
 	io.Varuint32(&x.SyncMessageMessage)

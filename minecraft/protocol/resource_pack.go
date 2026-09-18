@@ -1,16 +1,5 @@
 package protocol
 
-type RequestAbilityType uint8
-
-const (
-	PackSettingTypeFloat  RequestAbilityType = 0
-	PackSettingTypeBool   RequestAbilityType = 1
-	PackSettingTypeString RequestAbilityType = 2
-)
-
-// Marshal reads or writes RequestAbilityType through its uint8 wire encoding.
-func (x *RequestAbilityType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
 type ResourcePackClientResponseData interface {
 	Marshaler
 	tagResourcePackClientResponseData() uint32

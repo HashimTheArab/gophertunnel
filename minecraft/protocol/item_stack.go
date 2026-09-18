@@ -3,6 +3,8 @@ package protocol
 // AutoCraftRecipeStackRequestAction is sent by the client similarly to the CraftRecipeStackRequestAction. The
 // only difference is that the recipe is automatically created and crafted by shift clicking the recipe book.
 type AutoCraftRecipeStackRequestAction struct {
+	// RecipeNetworkID is the network ID of the recipe that is about to be crafted. This network ID matches one of
+	// the recipes sent in the CraftingData packet, where each of the recipes have a RecipeNetworkID as of 1.16.
 	ActionType              ItemStackRequestActionType
 	RecipeNetID             RecipeNetID
 	NumberOfRequestedCrafts uint8
@@ -25,9 +27,12 @@ func (x *AutoCraftRecipeStackRequestAction) Marshal(io IO) {
 // BeaconPaymentStackRequestAction is sent by the client when it submits an item to enable effects from a
 // beacon. These items will have been moved into the beacon item slot in advance.
 type BeaconPaymentStackRequestAction struct {
-	ActionType        ItemStackRequestActionType
-	PrimaryEffectID   int32
-	SecondaryEffectID int32
+	// PrimaryEffect and SecondaryEffect are the effects that were selected from the beacon.
+	ActionType ItemStackRequestActionType
+	// PrimaryEffect and SecondaryEffect are the effects that were selected from the beacon.
+	PrimaryEffect int32
+	// PrimaryEffect and SecondaryEffect are the effects that were selected from the beacon.
+	SecondaryEffect int32
 }
 
 func (*BeaconPaymentStackRequestAction) tagStackRequestAction() uint32 { return 8 }
@@ -35,12 +40,12 @@ func (*BeaconPaymentStackRequestAction) tagStackRequestAction() uint32 { return 
 // Marshal reads or writes BeaconPaymentStackRequestAction using its canonical wire layout.
 func (x *BeaconPaymentStackRequestAction) Marshal(io IO) {
 	x.ActionType.Marshal(io)
-	io.Varint32(&x.PrimaryEffectID)
-	Minimum(io, &x.PrimaryEffectID, 0)
-	Maximum(io, &x.PrimaryEffectID, 37)
-	io.Varint32(&x.SecondaryEffectID)
-	Minimum(io, &x.SecondaryEffectID, 0)
-	Maximum(io, &x.SecondaryEffectID, 37)
+	io.Varint32(&x.PrimaryEffect)
+	Minimum(io, &x.PrimaryEffect, 0)
+	Maximum(io, &x.PrimaryEffect, 37)
+	io.Varint32(&x.SecondaryEffect)
+	Minimum(io, &x.SecondaryEffect, 0)
+	Maximum(io, &x.SecondaryEffect, 37)
 }
 
 // ConsumeStackRequestAction is sent by the client when it uses an item to craft another item. The original
@@ -65,7 +70,11 @@ func (x *ConsumeStackRequestAction) Marshal(io IO) {
 // CraftCreativeStackRequestAction is sent by the client when it takes an item out fo the creative inventory.
 // The item is thus not really crafted, but instantly created.
 type CraftCreativeStackRequestAction struct {
-	ActionType              ItemStackRequestActionType
+	// CreativeItemNetworkID is the network ID of the creative item that is being created. This is one of the
+	// creative item network IDs sent in the CreativeContent packet.
+	ActionType ItemStackRequestActionType
+	// NumberOfCrafts is how many times the recipe was crafted. This field appears to be boilerplate and has no
+	// effect.
 	CreativeItemNetID       uint32
 	NumberOfRequestedCrafts uint8
 }
@@ -98,6 +107,9 @@ func (x *CraftNonImplementedStackRequestAction) Marshal(io IO) {
 // FilterStrings field in the respective stack request is non-empty and contains the name of the item created
 // using the anvil or cartography table.
 type CraftRecipeOptionalStackRequestAction struct {
+	// RecipeNetworkID is the network ID of the multi-recipe that is about to be crafted. This network ID matches
+	// one of the multi-recipes sent in the CraftingData packet, where each of the recipes have a RecipeNetworkID
+	// as of 1.16.
 	ActionType          ItemStackRequestActionType
 	RecipeNetID         RecipeNetID
 	FilteredStringIndex int32
@@ -117,6 +129,8 @@ func (x *CraftRecipeOptionalStackRequestAction) Marshal(io IO) {
 // an item is enchanted. Enchanting should be treated mostly the same way as crafting, where the old item is
 // consumed.
 type CraftRecipeStackRequestAction struct {
+	// RecipeNetworkID is the network ID of the recipe that is about to be crafted. This network ID matches one of
+	// the recipes sent in the CraftingData packet, where each of the recipes have a RecipeNetworkID as of 1.16.
 	ActionType              ItemStackRequestActionType
 	RecipeNetID             RecipeNetID
 	NumberOfRequestedCrafts uint8
@@ -158,6 +172,7 @@ func (x *CraftResultsDeprecatedStackRequestAction) Marshal(io IO) {
 // crafting table/grid is sent. Items that are not fully consumed when used for a recipe should not be
 // destroyed there, but instead, should be turned into their respective resulting items.
 type CreateStackRequestAction struct {
+	// ResultsSlot is the slot in the inventory in which the results of the crafting ingredients are to be placed.
 	ActionType   ItemStackRequestActionType
 	ResultsIndex uint8
 }
@@ -173,6 +188,7 @@ func (x *CreateStackRequestAction) Marshal(io IO) {
 // DestroyStackRequestAction is sent by the client when it destroys an item in creative mode by moving it back
 // into the creative inventory.
 type DestroyStackRequestAction struct {
+	// Count is the count of the item in the source slot that was destroyed.
 	ActionType ItemStackRequestActionType
 	Amount     uint8
 	// Source is the source slot from which items came that were destroyed by moving them into the creative
@@ -196,6 +212,7 @@ func (x *DestroyStackRequestAction) Marshal(io IO) {
 // (or the equivalent on mobile). The InventoryTransaction packet is still used for that action, regardless of
 // whether the item stack network IDs are used or not.
 type DropStackRequestAction struct {
+	// Count is the count of the item in the source slot that was taken towards the destination slot.
 	ActionType ItemStackRequestActionType
 	Amount     uint8
 	// Source is the source slot from which items were dropped to the ground.
@@ -404,6 +421,9 @@ func (x *ItemStackResponseContainerInfo) Marshal(io IO) {
 
 // ItemStackResponse is a response to an individual ItemStackRequest.
 type ItemStackResponseInfo struct {
+	// Status specifies if the request with the RequestID below was successful. If this is the case, the
+	// ContainerInfo below will have information on what slots ended up changing. If not, the container info will
+	// be empty. A non-0 status means an error occurred and will result in the action being reverted.
 	Result          ItemStackNetResult
 	ClientRequestID ItemStackRequestID
 	Containers      Optional[[]ItemStackResponseContainerInfo]
@@ -455,8 +475,12 @@ func (x *LabTableCombineStackRequestAction) Marshal(io IO) {
 
 // MineBlockStackRequestAction is sent by the client when it breaks a block.
 type MineBlockStackRequestAction struct {
+	// StackNetworkID is the unique stack ID that the client assumes to be present at the time. The server must
+	// check if these IDs match. If they do not match, servers should reject the stack request that the action
+	// holding this info was in.
 	ActionType ItemStackRequestActionType
-	Slot       int32
+	// HotbarSlot is the slot held by the player while mining a block.
+	HotbarSlot int32
 	// PredictedDurability is the durability of the item that the client assumes to be present at the time.
 	PredictedDurability int32
 	NetIDVariant        int32
@@ -467,7 +491,7 @@ func (*MineBlockStackRequestAction) tagStackRequestAction() uint32 { return 9 }
 // Marshal reads or writes MineBlockStackRequestAction using its canonical wire layout.
 func (x *MineBlockStackRequestAction) Marshal(io IO) {
 	x.ActionType.Marshal(io)
-	io.Varint32(&x.Slot)
+	io.Varint32(&x.HotbarSlot)
 	io.Varint32(&x.PredictedDurability)
 	io.Int32(&x.NetIDVariant)
 }
@@ -558,23 +582,23 @@ func (x *TakeStackRequestAction) Marshal(io IO) {
 type TextProcessingEventOrigin int32
 
 const (
-	TextProcessingEventOriginUnknown      TextProcessingEventOrigin = -1
-	FilterCauseServerChatPublic           TextProcessingEventOrigin = 0
-	FilterCauseServerChatWhisper          TextProcessingEventOrigin = 1
-	FilterCauseSignText                   TextProcessingEventOrigin = 2
-	FilterCauseAnvilText                  TextProcessingEventOrigin = 3
-	FilterCauseBookAndQuillText           TextProcessingEventOrigin = 4
-	FilterCauseCommandBlockText           TextProcessingEventOrigin = 5
-	FilterCauseBlockActorDataText         TextProcessingEventOrigin = 6
-	FilterCauseJoinEventText              TextProcessingEventOrigin = 7
-	FilterCauseLeaveEventText             TextProcessingEventOrigin = 8
-	FilterCauseSlashCommandChat           TextProcessingEventOrigin = 9
-	FilterCauseCartographyText            TextProcessingEventOrigin = 10
-	FilterCauseKickCommand                TextProcessingEventOrigin = 11
-	FilterCauseTitleCommand               TextProcessingEventOrigin = 12
-	FilterCauseSummonCommand              TextProcessingEventOrigin = 13
-	TextProcessingEventOriginServerForm   TextProcessingEventOrigin = 14
-	TextProcessingEventOriginDataDrivenUI TextProcessingEventOrigin = 15
+	FilterCauseUnknown            TextProcessingEventOrigin = -1
+	FilterCauseServerChatPublic   TextProcessingEventOrigin = 0
+	FilterCauseServerChatWhisper  TextProcessingEventOrigin = 1
+	FilterCauseSignText           TextProcessingEventOrigin = 2
+	FilterCauseAnvilText          TextProcessingEventOrigin = 3
+	FilterCauseBookAndQuillText   TextProcessingEventOrigin = 4
+	FilterCauseCommandBlockText   TextProcessingEventOrigin = 5
+	FilterCauseBlockActorDataText TextProcessingEventOrigin = 6
+	FilterCauseJoinEventText      TextProcessingEventOrigin = 7
+	FilterCauseLeaveEventText     TextProcessingEventOrigin = 8
+	FilterCauseSlashCommandChat   TextProcessingEventOrigin = 9
+	FilterCauseCartographyText    TextProcessingEventOrigin = 10
+	FilterCauseKickCommand        TextProcessingEventOrigin = 11
+	FilterCauseTitleCommand       TextProcessingEventOrigin = 12
+	FilterCauseSummonCommand      TextProcessingEventOrigin = 13
+	FilterCauseServerForm         TextProcessingEventOrigin = 14
+	FilterCauseDataDrivenUI       TextProcessingEventOrigin = 15
 )
 
 // Marshal reads or writes TextProcessingEventOrigin through its int32 wire encoding.

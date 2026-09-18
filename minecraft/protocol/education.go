@@ -1,5 +1,16 @@
 package protocol
 
+type EducationEditionOffer uint32
+
+const (
+	EducationEditionOfferNone            EducationEditionOffer = 0
+	EducationEditionOfferRestOfWorld     EducationEditionOffer = 1
+	EducationEditionOfferChinaDeprecated EducationEditionOffer = 2
+)
+
+// Marshal reads or writes EducationEditionOffer through its uint32 wire encoding.
+func (x *EducationEditionOffer) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+
 // EducationExternalLinkSettings ...
 type EducationExternalLinkSettings struct {
 	// URL is the external link URL.

@@ -14,8 +14,10 @@ const (
 // point to the lodestone. If not, it will start spinning around. A PositionTrackingDBServerBroadcast packet
 // should be sent in response to this packet.
 type PositionTrackingDBClientRequest struct {
-	Action  protocol.PositionTrackingDBClientRequestAction
-	IDValue protocol.PositionTrackingID
+	// RequestAction is the action that should be performed upon the receiving of the packet. It is one of the
+	// constants found above.
+	RequestAction protocol.PositionTrackingDBClientRequestAction
+	IDValue       protocol.PositionTrackingID
 }
 
 // ID ...
@@ -24,6 +26,6 @@ func (*PositionTrackingDBClientRequest) ID() uint32 {
 }
 
 func (pk *PositionTrackingDBClientRequest) Marshal(io protocol.IO) {
-	pk.Action.Marshal(io)
+	pk.RequestAction.Marshal(io)
 	pk.IDValue.Marshal(io)
 }

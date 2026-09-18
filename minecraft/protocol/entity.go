@@ -1,14 +1,14 @@
 package protocol
 
 type EntityCommandTarget struct {
-	TargetRuntimeID uint64
+	TargetEntityRuntimeID uint64
 }
 
 func (*EntityCommandTarget) tagCommandBlockUpdateData() uint32 { return 0 }
 
 // Marshal reads or writes EntityCommandTarget using its canonical wire layout.
 func (x *EntityCommandTarget) Marshal(io IO) {
-	io.ActorRuntimeID(&x.TargetRuntimeID)
+	io.ActorRuntimeID(&x.TargetEntityRuntimeID)
 }
 
 type EntityNetID struct {

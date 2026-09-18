@@ -23,10 +23,14 @@ const (
 // only the Export structure block type, but in v1.13 the ones present in Java Edition will, according to the
 // wiki, be added too.
 type StructureBlockUpdate struct {
-	BlockPosition protocol.BlockPos
+	// Position is the position of the structure block that is updated.
+	Position      protocol.BlockPos
 	StructureData protocol.StructureEditorData
-	Trigger       bool
-	IsWaterlogged bool
+	// ShouldTrigger specifies if the structure block should be triggered immediately after this packet reaches
+	// the server.
+	ShouldTrigger bool
+	// Waterlogged specifies if non-air blocks replace water or combine with water.
+	Waterlogged bool
 }
 
 // ID ...
@@ -35,8 +39,8 @@ func (*StructureBlockUpdate) ID() uint32 {
 }
 
 func (pk *StructureBlockUpdate) Marshal(io protocol.IO) {
-	pk.BlockPosition.Marshal(io)
+	pk.Position.Marshal(io)
 	pk.StructureData.Marshal(io)
-	io.Bool(&pk.Trigger)
-	io.Bool(&pk.IsWaterlogged)
+	io.Bool(&pk.ShouldTrigger)
+	io.Bool(&pk.Waterlogged)
 }

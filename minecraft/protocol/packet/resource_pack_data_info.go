@@ -40,7 +40,7 @@ func (pk *ResourcePackDataInfo) Marshal(io protocol.IO) {
 	io.Uint32(&pk.DataChunkSize)
 	io.Uint32(&pk.ChunkCount)
 	io.Uint64(&pk.Size)
-	io.Bytes(&pk.Hash)
+	io.ByteSlice(&pk.Hash)
 	io.Bool(&pk.Premium)
 	io.Uint8(&pk.PackType)
 }

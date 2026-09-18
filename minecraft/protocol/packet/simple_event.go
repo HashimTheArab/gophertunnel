@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	SubtypeUninitializedSubtype            protocol.Subtype = 0
+	SimpleEventUninitializedSubtype        protocol.Subtype = 0
 	SimpleEventCommandsEnabled             protocol.Subtype = 1
 	SimpleEventCommandsDisabled            protocol.Subtype = 2
 	SimpleEventUnlockWorldTemplateSettings protocol.Subtype = 3

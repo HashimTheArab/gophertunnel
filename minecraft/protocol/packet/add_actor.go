@@ -8,8 +8,13 @@ import (
 // AddActor is sent by the server to the client to spawn an entity to the player. It is used for every entity
 // except other players, for which the AddPlayer packet is used.
 type AddActor struct {
-	TargetEntityID  int64
-	TargetRuntimeID uint64
+	// EntityUniqueID is the unique ID of the entity. The unique ID is a value that remains consistent across
+	// different sessions of the same world, but most servers simply fill the runtime ID of the entity out for
+	// this field.
+	EntityUniqueID int64
+	// EntityRuntimeID is the runtime ID of the entity. The runtime ID is unique for each world session, and
+	// entities are generally identified in packets using this runtime ID.
+	EntityRuntimeID uint64
 	// EntityType is the string entity type of the entity, for example 'minecraft:skeleton'. A list of these
 	// entities may be found online.
 	EntityType string
@@ -18,11 +23,13 @@ type AddActor struct {
 	Position mgl32.Vec3
 	// Velocity is the initial velocity the entity spawns with. This velocity will initiate client side movement
 	// of the entity.
-	Velocity          mgl32.Vec3
-	Rotation          mgl32.Vec2
-	YHeadRotation     float32
-	YBodyRotation     float32
-	AttributesList    []protocol.SyncedAttribute
+	Velocity      mgl32.Vec3
+	Rotation      mgl32.Vec2
+	YHeadRotation float32
+	YBodyRotation float32
+	// Attributes is a slice of attributes that the entity has. It includes attributes such as its health,
+	// movement speed, etc.
+	Attributes        []protocol.SyncedAttribute
 	EntityData        protocol.SynchedActorDataCopyableDataList
 	SynchedProperties protocol.PropertySyncData
 	// EntityLinks is a list of entity links that are currently active on the entity. These links alter the way
@@ -37,15 +44,15 @@ func (*AddActor) ID() uint32 {
 }
 
 func (pk *AddActor) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetEntityID)
-	io.ActorRuntimeID(&pk.TargetRuntimeID)
+	io.ActorUniqueID(&pk.EntityUniqueID)
+	io.ActorRuntimeID(&pk.EntityRuntimeID)
 	io.String(&pk.EntityType)
 	io.Vec3(&pk.Position)
 	io.Vec3(&pk.Velocity)
 	io.Vec2(&pk.Rotation)
 	io.Float32(&pk.YHeadRotation)
 	io.Float32(&pk.YBodyRotation)
-	protocol.Slice(io, &pk.AttributesList)
+	protocol.Slice(io, &pk.Attributes)
 	pk.EntityData.Marshal(io)
 	pk.SynchedProperties.Marshal(io)
 	protocol.Slice(io, &pk.EntityLinks)

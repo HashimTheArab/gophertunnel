@@ -4,16 +4,18 @@ package protocol
 // inventory action is always unbalanced: It must be combined with other actions in an inventory transaction
 // to form a balanced transaction.
 type InventoryAction struct {
-	Source   InventorySource
-	Slot     uint32
-	FromItem NetworkItemStackDescriptorSerializedData
-	ToItem   NetworkItemStackDescriptorSerializedData
+	Source InventorySource
+	// InventorySlot is the slot in which the action took place. Each action only describes the change of item in
+	// a single slot.
+	InventorySlot uint32
+	FromItem      NetworkItemStackDescriptorSerializedData
+	ToItem        NetworkItemStackDescriptorSerializedData
 }
 
 // Marshal reads or writes InventoryAction using its canonical wire layout.
 func (x *InventoryAction) Marshal(io IO) {
 	x.Source.Marshal(io)
-	io.Varuint32(&x.Slot)
+	io.Varuint32(&x.InventorySlot)
 	x.FromItem.Marshal(io)
 	x.ToItem.Marshal(io)
 }
@@ -72,11 +74,11 @@ func (x *InventorySourceInventorySourceFlags) Marshal(io IO) { io.Varuint32((*ui
 type InventorySourceType uint32
 
 const (
-	InventoryActionSourceContainer     InventorySourceType = 0
-	InventorySourceTypeGlobalInventory InventorySourceType = 1
-	InventoryActionSourceWorld         InventorySourceType = 2
-	InventoryActionSourceCreative      InventorySourceType = 3
-	InventoryActionSourceTODO          InventorySourceType = 99999
+	InventoryActionSourceContainer       InventorySourceType = 0
+	InventoryActionSourceGlobalInventory InventorySourceType = 1
+	InventoryActionSourceWorld           InventorySourceType = 2
+	InventoryActionSourceCreative        InventorySourceType = 3
+	InventoryActionSourceTODO            InventorySourceType = 99999
 )
 
 // Marshal reads or writes InventorySourceType through its uint32 wire encoding.
@@ -151,9 +153,9 @@ func (x *ItemUseInventoryTransactionTriggerType) Marshal(io IO) { io.Uint8((*uin
 type ItemUseOnActorInventoryTransactionActionType int32
 
 const (
-	UseItemOnEntityActionInteract                            ItemUseOnActorInventoryTransactionActionType = 0
-	UseItemOnEntityActionAttack                              ItemUseOnActorInventoryTransactionActionType = 1
-	ItemUseOnActorInventoryTransactionActionTypeItemInteract ItemUseOnActorInventoryTransactionActionType = 2
+	UseItemOnEntityActionInteract     ItemUseOnActorInventoryTransactionActionType = 0
+	UseItemOnEntityActionAttack       ItemUseOnActorInventoryTransactionActionType = 1
+	UseItemOnEntityActionItemInteract ItemUseOnActorInventoryTransactionActionType = 2
 )
 
 // Marshal reads or writes ItemUseOnActorInventoryTransactionActionType through its int32 wire encoding.

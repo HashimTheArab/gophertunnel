@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	PacketViolationSeverityUnknown         protocol.PacketViolationSeverity = -1
+	ViolationSeverityUnknown               protocol.PacketViolationSeverity = -1
 	ViolationSeverityWarning               protocol.PacketViolationSeverity = 0
 	ViolationSeverityFinalWarning          protocol.PacketViolationSeverity = 1
 	ViolationSeverityTerminatingConnection protocol.PacketViolationSeverity = 2

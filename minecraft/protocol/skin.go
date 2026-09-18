@@ -95,3 +95,21 @@ const (
 
 // Marshal reads or writes PersonaPieceType through its uint32 wire encoding.
 func (x *PersonaPieceType) Marshal(io IO) { io.Uint32((*uint32)(x)) }
+
+// PyramidShape represents a pyramid debug shape.
+type SkinImage struct {
+	// Width is the width along the X axis of the pyramid base.
+	Width uint32
+	// Height is the height of the pyramid.
+	Height     uint32
+	ImageBytes []uint8
+}
+
+// Marshal reads or writes SkinImage using its canonical wire layout.
+func (x *SkinImage) Marshal(io IO) {
+	io.Uint32(&x.Width)
+	Maximum(io, &x.Width, 4096)
+	io.Uint32(&x.Height)
+	Maximum(io, &x.Height, 4096)
+	FuncSliceLimits(io, &x.ImageBytes, io.Varuint32, 0, 67108864, io.Uint8)
+}

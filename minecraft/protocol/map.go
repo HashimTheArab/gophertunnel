@@ -73,9 +73,9 @@ func (x *MapDecorationType) Marshal(io IO) { io.Int8((*int8)(x)) }
 type MapItemTrackedActorType int32
 
 const (
-	MapObjectTypeEntity          MapItemTrackedActorType = 0
-	MapObjectTypeBlock           MapItemTrackedActorType = 1
-	MapItemTrackedActorTypeOther MapItemTrackedActorType = 2
+	MapObjectTypeEntity MapItemTrackedActorType = 0
+	MapObjectTypeBlock  MapItemTrackedActorType = 1
+	MapObjectTypeOther  MapItemTrackedActorType = 2
 )
 
 // Marshal reads or writes MapItemTrackedActorType through its int32 wire encoding.

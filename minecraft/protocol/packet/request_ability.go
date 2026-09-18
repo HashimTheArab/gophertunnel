@@ -4,6 +4,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	AbilityBuild            protocol.RequestAbilityType = 0
+	AbilityMine             protocol.RequestAbilityType = 1
+	AbilityDoorsAndSwitches protocol.RequestAbilityType = 2
+)
+
 // RequestAbility is a packet sent by the client to the server to request permission for a specific ability
 // from the server. These abilities are defined above.
 type RequestAbility struct {

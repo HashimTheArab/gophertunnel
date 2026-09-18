@@ -4,6 +4,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	MobEffectInvalid protocol.MobEffectEvent = 0
+	MobEffectAdd     protocol.MobEffectEvent = 1
+	MobEffectModify  protocol.MobEffectEvent = 2
+	MobEffectRemove  protocol.MobEffectEvent = 3
+)
+
 // MobEffect is sent by the server to apply an effect to the player, for example an effect like poison. It may
 // also be used to modify existing effects, or removing them completely.
 type MobEffect struct {

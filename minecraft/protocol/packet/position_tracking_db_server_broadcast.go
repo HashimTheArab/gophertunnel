@@ -18,7 +18,11 @@ const (
 // For the lodestone compass, it is used to make the compass point towards lodestones and to make it spin if
 // the lodestone at a position is no longer there.
 type PositionTrackingDBServerBroadcast struct {
-	Action               protocol.PositionTrackingDBServerBroadcastAction
+	// BroadcastAction specifies the status of the position tracking DB response. It is one of the constants
+	// above, specifying the result of the request with the ID below. The Update action is sent for setting the
+	// position of a lodestone compass, the Destroy and NotFound to indicate that there is not (no longer) a
+	// lodestone at that position.
+	BroadcastAction      protocol.PositionTrackingDBServerBroadcastAction
 	IDValue              protocol.PositionTrackingID
 	PositionTrackingData []byte
 }
@@ -29,7 +33,7 @@ func (*PositionTrackingDBServerBroadcast) ID() uint32 {
 }
 
 func (pk *PositionTrackingDBServerBroadcast) Marshal(io protocol.IO) {
-	pk.Action.Marshal(io)
+	pk.BroadcastAction.Marshal(io)
 	pk.IDValue.Marshal(io)
 	io.NBT(&pk.PositionTrackingData, protocol.NBTNetwork)
 }

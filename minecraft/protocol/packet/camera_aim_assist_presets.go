@@ -13,9 +13,9 @@ const (
 // can be used when sending a CameraAimAssist packet or a CameraInstruction including aim assist.
 type CameraAimAssistPresets struct {
 	// CameraAimAssistPresets is a list of categories which can be referenced by one of the Presets.
-	Categories []protocol.CameraAimAssistCategory
+	Presets []protocol.CameraAimAssistCategory
 	// CameraAimAssistCategories is a list of presets which define a base for how aim assist should behave
-	Presets []protocol.CameraAimAssistPresetDefinition
+	Categories []protocol.CameraAimAssistPresetDefinition
 	// Operation is the operation to perform with the presets. It is one of the constants above.
 	Operation protocol.CameraAimAssistPresetOperation
 }
@@ -26,7 +26,7 @@ func (*CameraAimAssistPresets) ID() uint32 {
 }
 
 func (pk *CameraAimAssistPresets) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Categories)
 	protocol.Slice(io, &pk.Presets)
+	protocol.Slice(io, &pk.Categories)
 	pk.Operation.Marshal(io)
 }

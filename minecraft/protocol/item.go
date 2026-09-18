@@ -65,7 +65,7 @@ func (x *ItemInstance) Marshal(io IO) {
 	Minimum(io, &x.StackSize, 1)
 	Maximum(io, &x.StackSize, 64)
 	io.Varuint32(&x.BlockRuntimeID)
-	io.Bytes(&x.UserDataBuffer)
+	io.ByteSlice(&x.UserDataBuffer)
 }
 
 type ItemReleaseInventoryTransaction struct {
@@ -121,13 +121,13 @@ func (x *ItemUseInventoryTransaction) Marshal(io IO) {
 }
 
 type ItemUseOnActorInventoryTransaction struct {
-	Actions      InventoryTransactionData
-	RuntimeID    uint64
-	ActionType   ItemUseOnActorInventoryTransactionActionType
-	Slot         int32
-	Item         NetworkItemStackDescriptorSerializedData
-	FromPosition mgl32.Vec3
-	HitPosition  mgl32.Vec3
+	Actions         InventoryTransactionData
+	EntityRuntimeID uint64
+	ActionType      ItemUseOnActorInventoryTransactionActionType
+	Slot            int32
+	Item            NetworkItemStackDescriptorSerializedData
+	FromPosition    mgl32.Vec3
+	HitPosition     mgl32.Vec3
 }
 
 func (*ItemUseOnActorInventoryTransaction) tagInventoryTransactionValue() uint32 { return 3 }
@@ -135,7 +135,7 @@ func (*ItemUseOnActorInventoryTransaction) tagInventoryTransactionValue() uint32
 // Marshal reads or writes ItemUseOnActorInventoryTransaction using its canonical wire layout.
 func (x *ItemUseOnActorInventoryTransaction) Marshal(io IO) {
 	x.Actions.Marshal(io)
-	io.ActorRuntimeID(&x.RuntimeID)
+	io.ActorRuntimeID(&x.EntityRuntimeID)
 	x.ActionType.Marshal(io)
 	io.Varint32(&x.Slot)
 	x.Item.Marshal(io)

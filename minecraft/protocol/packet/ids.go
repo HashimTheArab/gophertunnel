@@ -105,7 +105,7 @@ const (
 	IDUpdateBlockSynced                  uint32 = 110
 	IDMoveActorDelta                     uint32 = 111
 	IDSetScoreboardIdentity              uint32 = 112
-	IDSetLocalPlayerAsInitialized        uint32 = 113
+	IDSetLocalPlayerAsInitialised        uint32 = 113
 	IDUpdateSoftEnum                     uint32 = 114
 	IDNetworkStackLatency                uint32 = 115
 	IDSpawnParticleEffect                uint32 = 118

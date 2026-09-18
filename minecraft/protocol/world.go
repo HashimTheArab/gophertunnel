@@ -10,7 +10,10 @@ import (
 type DimensionDefinition struct {
 	HeightMaximum int32
 	HeightMinimum int32
-	GeneratorType GeneratorType
+	// Generator is the variant of generator that exists in the provided dimension. These can be one of the
+	// constants defined above. If this is set to GeneratorLegacy, the legacy horizontal world limits will be
+	// enforced.
+	Generator GeneratorType
 	// DimensionType is the numeric identifier of the dimension. This cannot override a vanilla dimension (0-2),
 	// but custom dimensions should start from 1000 like vanilla.
 	DimensionType DimensionType
@@ -22,7 +25,7 @@ type DimensionDefinition struct {
 func (x *DimensionDefinition) Marshal(io IO) {
 	io.Varint32(&x.HeightMaximum)
 	io.Varint32(&x.HeightMinimum)
-	x.GeneratorType.Marshal(io)
+	x.Generator.Marshal(io)
 	x.DimensionType.Marshal(io)
 	io.UUID(&x.PackID)
 }
@@ -30,13 +33,13 @@ func (x *DimensionDefinition) Marshal(io IO) {
 type GeneratorType int32
 
 const (
-	GeneratorLegacy        GeneratorType = 0
-	GeneratorOverworld     GeneratorType = 1
-	GeneratorFlat          GeneratorType = 2
-	GeneratorNether        GeneratorType = 3
-	GeneratorEnd           GeneratorType = 4
-	GeneratorVoid          GeneratorType = 5
-	GeneratorTypeUndefined GeneratorType = 6
+	GeneratorLegacy    GeneratorType = 0
+	GeneratorOverworld GeneratorType = 1
+	GeneratorFlat      GeneratorType = 2
+	GeneratorNether    GeneratorType = 3
+	GeneratorEnd       GeneratorType = 4
+	GeneratorVoid      GeneratorType = 5
+	GeneratorUndefined GeneratorType = 6
 )
 
 // Marshal reads or writes GeneratorType through its int32 wire encoding.

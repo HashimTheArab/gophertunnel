@@ -129,6 +129,7 @@ func (x *BiomeCoordinate) Marshal(io IO) {
 // BiomeDefinition represents a biome definition in the game. This can be a vanilla biome or a completely
 // custom biome.
 type BiomeDefinition struct {
+	// NameIndex represents the index of the biome name in the string list.
 	ID uint16
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
 	Temperature float32
@@ -139,7 +140,8 @@ type BiomeDefinition struct {
 	// Depth is the depth of the biome.
 	Depth float32
 	// Scale is the scale of the biome.
-	Scale              float32
+	Scale float32
+	// BiomeID is the biome ID.
 	MapWaterColourARGB int32
 	// Rain is true if the biome has rain, false if it is a dry biome.
 	Rain bool
@@ -522,6 +524,20 @@ func (x *BiomeWeightedData) Marshal(io IO) {
 	io.Uint32(&x.Weight)
 }
 
+type CoordinateEvaluationOrder int32
+
+const (
+	BiomeCoordinateEvaluationOrderXYZ CoordinateEvaluationOrder = 0
+	BiomeCoordinateEvaluationOrderXZY CoordinateEvaluationOrder = 1
+	BiomeCoordinateEvaluationOrderYXZ CoordinateEvaluationOrder = 2
+	BiomeCoordinateEvaluationOrderYZX CoordinateEvaluationOrder = 3
+	BiomeCoordinateEvaluationOrderZXY CoordinateEvaluationOrder = 4
+	BiomeCoordinateEvaluationOrderZYX CoordinateEvaluationOrder = 5
+)
+
+// Marshal reads or writes CoordinateEvaluationOrder through its int32 wire encoding.
+func (x *CoordinateEvaluationOrder) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
 // FloatRange is an inclusive minimum/maximum pair of float32 values.
 type FloatRange struct {
 	// Min is the minimum value of the range.
@@ -535,18 +551,6 @@ func (x *FloatRange) Marshal(io IO) {
 	io.Float32(&x.Min)
 	io.Float32(&x.Max)
 }
-
-type Mirror uint8
-
-const (
-	BiomeCoordinateEvaluationOrderXYZ Mirror = 0
-	BiomeCoordinateEvaluationOrderXZY Mirror = 1
-	BiomeCoordinateEvaluationOrderYXZ Mirror = 2
-	BiomeCoordinateEvaluationOrderYZX Mirror = 3
-)
-
-// Marshal reads or writes Mirror through its uint8 wire encoding.
-func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // NoiseBlockSpecifier specifies a block placed by the gradient noise based on a threshold and range.
 type NoiseBlockSpecifier struct {
@@ -584,16 +588,6 @@ func (x *NoiseDescriptor) Marshal(io IO) {
 	io.Int32(&x.FirstOctave)
 	FuncSliceLimits(io, &x.Amplitudes, io.Varuint32, 1, 100, io.Float32)
 }
-
-type PacketViolationType int32
-
-const (
-	BiomeExpressionOpUnknown   PacketViolationType = -1
-	BiomeExpressionOpLeftBrace PacketViolationType = 0
-)
-
-// Marshal reads or writes PacketViolationType through its int32 wire encoding.
-func (x *PacketViolationType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 type RandomDistributionType int32
 

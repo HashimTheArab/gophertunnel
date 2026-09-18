@@ -24,5 +24,5 @@ func (*Login) ID() uint32 {
 
 func (pk *Login) Marshal(io protocol.IO) {
 	io.BEInt32(&pk.ClientProtocol)
-	io.Bytes(&pk.ConnectionRequest)
+	io.ByteSlice(&pk.ConnectionRequest)
 }

@@ -15,7 +15,7 @@ const (
 	PlayModeLivingRoom          protocol.ClientPlayMode = 6
 	PlayModeExitLevel           protocol.ClientPlayMode = 7
 	PlayModeExitLevelLivingRoom protocol.ClientPlayMode = 8
-	ClientPlayModeNumModes      protocol.ClientPlayMode = 9
+	PlayModeNumModes            protocol.ClientPlayMode = 9
 )
 
 const (
@@ -123,15 +123,22 @@ type PlayerAuthInput struct {
 	InputMode protocol.InputMode
 	// PlayMode specifies the way that the player is playing. The values it holds, which are rather random, may be
 	// found above.
-	PlayMode            protocol.ClientPlayMode
-	NewInteractionModel protocol.NewInteractionModel
-	InteractRotation    mgl32.Vec2
-	ClientTick          uint64
-	PosDelta            mgl32.Vec3
-	ItemUseTransaction  protocol.Optional[protocol.PackedItemUseLegacyInventoryTransaction]
+	PlayMode protocol.ClientPlayMode
+	// InteractionModel is a constant representing the interaction model the player is using. It is one of the
+	// constants that may be found above.
+	InteractionModel protocol.NewInteractionModel
+	InteractRotation mgl32.Vec2
+	// Tick is the server tick at which the packet was sent. It is used in relation to
+	// CorrectPlayerMovePrediction.
+	Tick uint64
+	// Delta was the delta between the old and the new position. There isn't any practical use for this field as
+	// it can be calculated by the server itself.
+	Delta              mgl32.Vec3
+	ItemUseTransaction protocol.Optional[protocol.PackedItemUseLegacyInventoryTransaction]
 	// ItemStackRequest is sent by the client to change an item in their inventory.
-	ItemStackRequest   protocol.Optional[protocol.ItemStackRequestData]
-	PlayerBlockActions protocol.Optional[[]protocol.PlayerBlockAction]
+	ItemStackRequest protocol.Optional[protocol.ItemStackRequestData]
+	// BlockActions is a slice of block actions that the client has interacted with.
+	BlockActions protocol.Optional[[]protocol.PlayerBlockAction]
 	// VehicleRotation is the rotation of the vehicle that the player is in, if any.
 	VehicleRotation protocol.Optional[mgl32.Vec2]
 	// ClientPredictedVehicle is the unique ID of the vehicle that the client predicts the player to be in.
@@ -160,17 +167,17 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	})
 	pk.InputMode.Marshal(io)
 	pk.PlayMode.Marshal(io)
-	pk.NewInteractionModel.Marshal(io)
+	pk.InteractionModel.Marshal(io)
 	io.Vec2(&pk.InteractRotation)
-	io.PlayerInputTick(&pk.ClientTick)
-	io.Vec3(&pk.PosDelta)
+	io.PlayerInputTick(&pk.Tick)
+	io.Vec3(&pk.Delta)
 	protocol.DoubleOptionalFunc(io, &pk.ItemUseTransaction, func(value *protocol.PackedItemUseLegacyInventoryTransaction) {
 		value.Marshal(io)
 	})
 	protocol.DoubleOptionalFunc(io, &pk.ItemStackRequest, func(value *protocol.ItemStackRequestData) {
 		value.Marshal(io)
 	})
-	protocol.DoubleOptionalFunc(io, &pk.PlayerBlockActions, func(value *[]protocol.PlayerBlockAction) {
+	protocol.DoubleOptionalFunc(io, &pk.BlockActions, func(value *[]protocol.PlayerBlockAction) {
 		protocol.SliceLimits(io, value, 0, 100)
 	})
 	protocol.DoubleOptionalFunc(io, &pk.VehicleRotation, io.Vec2)

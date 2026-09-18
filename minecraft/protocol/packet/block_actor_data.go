@@ -7,7 +7,9 @@ import (
 // BlockActorData is sent by the server to update data of a block entity client-side, for example the data of
 // a chest.
 type BlockActorData struct {
-	BlockPosition  protocol.BlockPos
+	// Position is the position of the block that holds the block entity. If no block entity is at this position,
+	// the packet is ignored by the client.
+	Position       protocol.BlockPos
 	EntityDataTags []byte
 }
 
@@ -17,6 +19,6 @@ func (*BlockActorData) ID() uint32 {
 }
 
 func (pk *BlockActorData) Marshal(io protocol.IO) {
-	pk.BlockPosition.Marshal(io)
+	pk.Position.Marshal(io)
 	io.NBT(&pk.EntityDataTags, protocol.NBTNetwork)
 }

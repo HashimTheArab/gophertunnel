@@ -3,7 +3,7 @@ package protocol
 type PlayerActionType int32
 
 const (
-	PlayerActionTypeUnknown                PlayerActionType = -1
+	PlayerActionUnknown                    PlayerActionType = -1
 	PlayerActionStartBreak                 PlayerActionType = 0
 	PlayerActionAbortBreak                 PlayerActionType = 1
 	PlayerActionStopBreak                  PlayerActionType = 2
@@ -78,23 +78,6 @@ func (x *PlayerBlockAction) Marshal(io IO) {
 	x.Action.Marshal(io)
 	x.BlockPos.Marshal(io)
 	io.Varint32(&x.Face)
-}
-
-type PlayerDied struct {
-	InstigatorEntityID   int32
-	InstigatorMobVariant int32
-	DamageSource         int32
-	DiedInRaid           bool
-}
-
-func (*PlayerDied) tagEventData() uint32 { return 6 }
-
-// Marshal reads or writes PlayerDied using its canonical wire layout.
-func (x *PlayerDied) Marshal(io IO) {
-	io.Varint32(&x.InstigatorEntityID)
-	io.Varint32(&x.InstigatorMobVariant)
-	io.Varint32(&x.DamageSource)
-	io.Bool(&x.DiedInRaid)
 }
 
 type PlayerListData interface {
@@ -190,12 +173,12 @@ type PlayerRespawnState uint8
 func (x *PlayerRespawnState) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type PlayerScoreboardID struct {
-	PlayerUniqueID int64
+	PlayerEntityUniqueID int64
 }
 
 // Marshal reads or writes PlayerScoreboardID using its canonical wire layout.
 func (x *PlayerScoreboardID) Marshal(io IO) {
-	io.ActorUniqueID(&x.PlayerUniqueID)
+	io.ActorUniqueID(&x.PlayerEntityUniqueID)
 }
 
 type PlayerUpdateEntityOverridesData interface {

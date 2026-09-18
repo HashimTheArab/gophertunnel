@@ -243,18 +243,20 @@ func (x *CameraInstructionFade) Marshal(io IO) {
 // CameraInstructionFieldOfView represents a camera instruction that updates the field of view.
 type CameraInstructionFieldOfView struct {
 	// FieldOfView is the field of view of the camera.
-	FieldOfView      float32
-	FOVEaseTime      float32
-	FOVEaseType      string
-	FieldOfViewClear bool
+	FieldOfView float32
+	// EaseTime is the time in seconds that the easing function should take.
+	EaseTime    float32
+	FOVEaseType string
+	// Clear can be set to true to clear the current instruction.
+	Clear bool
 }
 
 // Marshal reads or writes CameraInstructionFieldOfView using its canonical wire layout.
 func (x *CameraInstructionFieldOfView) Marshal(io IO) {
 	io.Float32(&x.FieldOfView)
-	io.Float32(&x.FOVEaseTime)
+	io.Float32(&x.EaseTime)
 	io.String(&x.FOVEaseType)
-	io.Bool(&x.FieldOfViewClear)
+	io.Bool(&x.Clear)
 }
 
 // CameraInstructionSet represents a camera instruction that sets the camera to a specified preset and can be
@@ -296,12 +298,13 @@ func (x *CameraInstructionSet) Marshal(io IO) {
 
 // CameraInstructionTarget represents a camera instruction that targets a specific entity.
 type CameraInstructionTarget struct {
-	EntityEntityID int64
+	// EntityUniqueID is the unique ID of the entity that the camera should target.
+	EntityUniqueID int64
 }
 
 // Marshal reads or writes CameraInstructionTarget using its canonical wire layout.
 func (x *CameraInstructionTarget) Marshal(io IO) {
-	io.Int64(&x.EntityEntityID)
+	io.ActorUniqueIDInt64(&x.EntityUniqueID)
 }
 
 // CameraInstructionTarget represents a camera instruction that targets a specific entity.
@@ -369,7 +372,7 @@ type CameraPreset struct {
 	YawLimitMax Optional[float32]
 	// Listener defines where the audio should be played from when using this preset. This is one of the constants
 	// above.
-	Listener Optional[CameraPresetAudioListener]
+	AudioListener Optional[CameraPresetAudioListener]
 	// PlayerEffects is currently unknown.
 	PlayerEffects Optional[bool]
 	// AimAssist defines the aim assist to use when using this preset.
@@ -405,7 +408,7 @@ func (x *CameraPreset) Marshal(io IO) {
 	OptionalFunc(io, &x.Radius, io.Float32)
 	OptionalFunc(io, &x.YawLimitMin, io.Float32)
 	OptionalFunc(io, &x.YawLimitMax, io.Float32)
-	OptionalMarshaler(io, &x.Listener)
+	OptionalMarshaler(io, &x.AudioListener)
 	OptionalFunc(io, &x.PlayerEffects, io.Bool)
 	OptionalMarshaler(io, &x.AimAssist)
 	OptionalMarshaler(io, &x.ControlScheme)
@@ -423,15 +426,17 @@ func (x *CameraPresetAudioListener) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // CameraProgressOption represents a progress keyframe option for camera spline instructions.
 type CameraProgressOption struct {
-	KeyFrameValue      float32
-	KeyFrameTime       float32
+	// Value is the progress value.
+	Value float32
+	// Time is the time for this progress option.
+	Time               float32
 	KeyFrameEasingFunc string
 }
 
 // Marshal reads or writes CameraProgressOption using its canonical wire layout.
 func (x *CameraProgressOption) Marshal(io IO) {
-	io.Float32(&x.KeyFrameValue)
-	io.Float32(&x.KeyFrameTime)
+	io.Float32(&x.Value)
+	io.Float32(&x.Time)
 	io.String(&x.KeyFrameEasingFunc)
 }
 
@@ -448,15 +453,17 @@ func (x *CameraRotation) Marshal(io IO) {
 
 // CameraRotationOption represents a rotation option for camera spline instructions.
 type CameraRotationOption struct {
-	KeyFrameValue      mgl32.Vec3
-	KeyFrameTime       float32
+	// Value is the rotation value.
+	Value mgl32.Vec3
+	// Time is the time for this rotation option.
+	Time               float32
 	KeyFrameEasingFunc string
 }
 
 // Marshal reads or writes CameraRotationOption using its canonical wire layout.
 func (x *CameraRotationOption) Marshal(io IO) {
-	io.Vec3(&x.KeyFrameValue)
-	io.Float32(&x.KeyFrameTime)
+	io.Vec3(&x.Value)
+	io.Float32(&x.Time)
 	io.String(&x.KeyFrameEasingFunc)
 }
 
@@ -518,7 +525,8 @@ type CameraSplineInstruction struct {
 	Curve []mgl32.Vec3
 	// ProgressKeyFrames is a list of progress key frames for the spline.
 	ProgressKeyFrames []CameraProgressOption
-	RotationOption    []CameraRotationOption
+	// RotationOptions is a list of rotation options for the spline.
+	RotationOptions []CameraRotationOption
 	// SplineIdentifier is an optional identifier for referencing the spline by name.
 	SplineIdentifier string
 	// LoadFromJSON optionally determines whether the spline should be loaded from a JSON definition.
@@ -531,7 +539,7 @@ func (x *CameraSplineInstruction) Marshal(io IO) {
 	io.Uint8(&x.Type)
 	FuncSlice(io, &x.Curve, io.Varuint32, io.Vec3)
 	Slice(io, &x.ProgressKeyFrames)
-	Slice(io, &x.RotationOption)
+	Slice(io, &x.RotationOptions)
 	io.StringLimits(&x.SplineIdentifier, 0, 1024)
 	io.Bool(&x.LoadFromJson)
 }

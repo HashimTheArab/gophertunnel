@@ -9,9 +9,10 @@ import (
 // pack in the pack settings UI.
 type ServerBoundPackSettingChange struct {
 	// PackID is the UUID of the pack.
-	PackID           uuid.UUID
-	PackSettingName  string
-	PackSettingValue protocol.ServerBoundPackSettingChangePackSettingValue
+	PackID          uuid.UUID
+	PackSettingName string
+	// PackSetting is the new setting value applied to the pack.
+	PackSetting protocol.ServerBoundPackSettingChangePackSetting
 }
 
 // ID ...
@@ -22,5 +23,5 @@ func (*ServerBoundPackSettingChange) ID() uint32 {
 func (pk *ServerBoundPackSettingChange) Marshal(io protocol.IO) {
 	io.UUID(&pk.PackID)
 	io.StringLimits(&pk.PackSettingName, 0, 128)
-	protocol.MarshalServerBoundPackSettingChangePackSettingValue(io, &pk.PackSettingValue)
+	protocol.MarshalServerBoundPackSettingChangePackSetting(io, &pk.PackSetting)
 }

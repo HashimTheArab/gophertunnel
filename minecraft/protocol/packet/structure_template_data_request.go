@@ -4,6 +4,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	StructureTemplateRequestNone                protocol.StructureTemplateRequestOperation = 0
+	StructureTemplateRequestExportFromSave      protocol.StructureTemplateRequestOperation = 1
+	StructureTemplateRequestExportFromLoad      protocol.StructureTemplateRequestOperation = 2
+	StructureTemplateRequestQuerySavedStructure protocol.StructureTemplateRequestOperation = 3
+)
+
 // StructureTemplateDataRequest is sent by the client to request data of a structure.
 type StructureTemplateDataRequest struct {
 	// StructureName is the name of the structure that was set in the structure block's UI. This is the name used

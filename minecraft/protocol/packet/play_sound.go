@@ -8,7 +8,7 @@ import (
 // this packet and must be stopped using the StopSound packet.
 type PlaySound struct {
 	// Name is the name of the sound to play.
-	Name string
+	SoundName string
 	// Position is the position at which the sound was played. Some sounds do not depend on a position, which will
 	// then ignore it, but most of them will play with the direction based on the position compared to the
 	// player's position.
@@ -23,7 +23,7 @@ type PlaySound struct {
 	LoopCount int32
 	// ServerSoundHandle is an optional sound handle ID. It is currently unknown what this is for, and is not
 	// required to be set by servers.
-	ServerSoundHandle protocol.Optional[protocol.ServerSoundHandle]
+	Handle protocol.Optional[protocol.ServerSoundHandle]
 }
 
 // ID ...
@@ -32,10 +32,10 @@ func (*PlaySound) ID() uint32 {
 }
 
 func (pk *PlaySound) Marshal(io protocol.IO) {
-	io.String(&pk.Name)
+	io.String(&pk.SoundName)
 	pk.Position.Marshal(io)
 	io.Float32(&pk.Volume)
 	io.Float32(&pk.Pitch)
 	io.Varint32(&pk.LoopCount)
-	protocol.OptionalMarshaler(io, &pk.ServerSoundHandle)
+	protocol.OptionalMarshaler(io, &pk.Handle)
 }

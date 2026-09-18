@@ -4,6 +4,12 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	StructureTemplateResponseNone   protocol.StructureTemplateResponseType = 0
+	StructureTemplateResponseExport protocol.StructureTemplateResponseType = 1
+	StructureTemplateResponseQuery  protocol.StructureTemplateResponseType = 2
+)
+
 // StructureTemplateDataResponse is sent by the server to send data of a structure to the client in response
 // to a StructureTemplateDataRequest packet.
 type StructureTemplateDataResponse struct {

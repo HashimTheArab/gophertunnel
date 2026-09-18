@@ -22,24 +22,3 @@ func (x *DataStoreChange) Marshal(io IO) {
 	Maximum(io, &x.UpdateCount, 4.294967294e+09)
 	MarshalDynamicValue(io, &x.NewValue)
 }
-
-type EducationEditionOffer uint32
-
-const (
-	DataStorePropertyTypeNone  EducationEditionOffer = 0
-	DataStorePropertyTypeBool  EducationEditionOffer = 1
-	DataStorePropertyTypeInt64 EducationEditionOffer = 2
-)
-
-// Marshal reads or writes EducationEditionOffer through its uint32 wire encoding.
-func (x *EducationEditionOffer) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
-
-type ScoreboardIdentityPacketType uint8
-
-const (
-	DataStoreChangeTypeUpdate ScoreboardIdentityPacketType = 0
-	DataStoreChangeTypeChange ScoreboardIdentityPacketType = 1
-)
-
-// Marshal reads or writes ScoreboardIdentityPacketType through its uint8 wire encoding.
-func (x *ScoreboardIdentityPacketType) Marshal(io IO) { io.Uint8((*uint8)(x)) }

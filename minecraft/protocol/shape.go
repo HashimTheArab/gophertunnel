@@ -131,19 +131,20 @@ func (x *PrimitiveShape) Marshal(io IO) {
 // PyramidShape represents a pyramid debug shape.
 type PyramidShape struct {
 	// Width is the width along the X axis of the pyramid base.
-	Width uint32
+	Width float32
+	// Depth is the optional depth along the Z axis of the pyramid base. It defaults to Width if unset.
+	Depth Optional[float32]
 	// Height is the height of the pyramid.
-	Height     uint32
-	ImageBytes []uint8
+	Height float32
 }
+
+func (*PyramidShape) tagShape() uint32 { return 7 }
 
 // Marshal reads or writes PyramidShape using its canonical wire layout.
 func (x *PyramidShape) Marshal(io IO) {
-	io.Uint32(&x.Width)
-	Maximum(io, &x.Width, 4096)
-	io.Uint32(&x.Height)
-	Maximum(io, &x.Height, 4096)
-	FuncSliceLimits(io, &x.ImageBytes, io.Varuint32, 0, 67108864, io.Uint8)
+	io.Float32(&x.Width)
+	OptionalFunc(io, &x.Depth, io.Float32)
+	io.Float32(&x.Height)
 }
 
 type ScriptModuleMinecraftScriptPrimitiveShapeType uint8

@@ -12,7 +12,8 @@ const (
 // or remove them completely. The client will determine how to render the player on the locator bar based on
 // their own distance to Position.
 type PlayerLocation struct {
-	TargetEntityID int64
+	// Type is the action that is being performed. It is one of the constants above.
+	EntityUniqueID int64
 	Location       protocol.PlayerLocationData
 }
 
@@ -22,6 +23,6 @@ func (*PlayerLocation) ID() uint32 {
 }
 
 func (pk *PlayerLocation) Marshal(io protocol.IO) {
-	io.ActorUniqueID(&pk.TargetEntityID)
+	io.ActorUniqueID(&pk.EntityUniqueID)
 	protocol.MarshalPlayerLocationData(io, &pk.Location)
 }

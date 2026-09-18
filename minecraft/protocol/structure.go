@@ -15,6 +15,18 @@ const (
 // Marshal reads or writes AnimationMode through its uint8 wire encoding.
 func (x *AnimationMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
+type Mirror uint8
+
+const (
+	StructureMirrorNone     Mirror = 0
+	StructureMirrorXAxis    Mirror = 1
+	StructureMirrorZAxis    Mirror = 2
+	StructureMirrorBothAxes Mirror = 3
+)
+
+// Marshal reads or writes Mirror through its uint8 wire encoding.
+func (x *Mirror) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 type Rotation uint8
 
 const (
@@ -119,3 +131,13 @@ func (x *StructureSettings) Marshal(io IO) {
 	io.Uint32(&x.Seed)
 	io.Vec3(&x.Pivot)
 }
+
+type StructureTemplateRequestOperation uint8
+
+// Marshal reads or writes StructureTemplateRequestOperation through its uint8 wire encoding.
+func (x *StructureTemplateRequestOperation) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type StructureTemplateResponseType uint8
+
+// Marshal reads or writes StructureTemplateResponseType through its uint8 wire encoding.
+func (x *StructureTemplateResponseType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
