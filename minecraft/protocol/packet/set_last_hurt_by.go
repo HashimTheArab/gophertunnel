@@ -2,16 +2,16 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// SetLastHurtBy is sent by the server to let the client know what entity type it was last hurt by.
-// At this moment, the packet is useless and should not be used. There is no behaviour that depends
-// on if this packet is sent or not.
+// SetLastHurtBy is sent by the server to let the client know what entity type it was last hurt by. At this
+// moment, the packet is useless and should not be used. There is no behaviour that depends on if this packet
+// is sent or not.
 type SetLastHurtBy struct {
-	LastHurtBy protocol.ActorType
+	EntityType protocol.ActorType
 }
 
 // Marshal reads or writes SetLastHurtBy using its canonical wire layout.
 func (x *SetLastHurtBy) Marshal(io protocol.IO) {
-	x.LastHurtBy.Marshal(io)
+	x.EntityType.Marshal(io)
 }
 
 // ID returns the protocol ID for SetLastHurtBy.

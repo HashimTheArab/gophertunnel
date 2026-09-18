@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// UpdateAttributes is sent by the server to update an amount of attributes of any entity in the
-// world. These attributes include ones such as the health or the movement speed of the entity.
+// UpdateAttributes is sent by the server to update an amount of attributes of any entity in the world. These
+// attributes include ones such as the health or the movement speed of the entity.
 type UpdateAttributes struct {
 	TargetRuntimeID uint64
 	AttributeList   []protocol.AttributeData

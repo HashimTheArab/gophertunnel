@@ -11,15 +11,15 @@ const (
 	GameTypeSpectator protocol.GameType = 6
 )
 
-// SetPlayerGameType is sent by the server to update the game type, which is otherwise known as the
-// game mode, of a player.
+// SetPlayerGameType is sent by the server to update the game type, which is otherwise known as the game mode,
+// of a player.
 type SetPlayerGameType struct {
-	PlayerGameType protocol.GameType
+	GameType protocol.GameType
 }
 
 // Marshal reads or writes SetPlayerGameType using its canonical wire layout.
 func (x *SetPlayerGameType) Marshal(io protocol.IO) {
-	x.PlayerGameType.Marshal(io)
+	x.GameType.Marshal(io)
 }
 
 // ID returns the protocol ID for SetPlayerGameType.

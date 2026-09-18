@@ -14,33 +14,32 @@ const (
 	TitleActionActionbarTextObject protocol.TitleType = 8
 )
 
-// SetTitle is sent by the server to make a title, subtitle or action bar shown to a player. It has
-// several fields that allow setting the duration of the titles.
+// SetTitle is sent by the server to make a title, subtitle or action bar shown to a player. It has several
+// fields that allow setting the duration of the titles.
 type SetTitle struct {
-	TitleType   protocol.TitleType
-	TitleText   string
-	FadeInTime  int32
-	StayTime    int32
-	FadeOutTime int32
-	// Xuid is the XBOX Live user ID of the player, which will remain consistent as long as the player
-	// is logged in with the XBOX Live account. It is empty if the user is not logged into its XBL
-	// account.
+	ActionType      protocol.TitleType
+	Text            string
+	FadeInDuration  int32
+	RemainDuration  int32
+	FadeOutDuration int32
+	// Xuid is the XBOX Live user ID of the player, which will remain consistent as long as the player is logged
+	// in with the XBOX Live account. It is empty if the user is not logged into its XBL account.
 	XUID string
 	// PlatformOnlineID is either a uint64 or an empty string.
-	PlatformOnlineID     string
-	FilteredTitleMessage string
+	PlatformOnlineID string
+	FilteredMessage  string
 }
 
 // Marshal reads or writes SetTitle using its canonical wire layout.
 func (x *SetTitle) Marshal(io protocol.IO) {
-	x.TitleType.Marshal(io)
-	io.String(&x.TitleText)
-	io.Varint32(&x.FadeInTime)
-	io.Varint32(&x.StayTime)
-	io.Varint32(&x.FadeOutTime)
+	x.ActionType.Marshal(io)
+	io.String(&x.Text)
+	io.Varint32(&x.FadeInDuration)
+	io.Varint32(&x.RemainDuration)
+	io.Varint32(&x.FadeOutDuration)
 	io.String(&x.XUID)
 	io.String(&x.PlatformOnlineID)
-	io.String(&x.FilteredTitleMessage)
+	io.String(&x.FilteredMessage)
 }
 
 // ID returns the protocol ID for SetTitle.

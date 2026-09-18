@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// RequestAbility is a packet sent by the client to the server to request permission for a specific
-// ability from the server. These abilities are defined above.
+// RequestAbility is a packet sent by the client to the server to request permission for a specific ability
+// from the server. These abilities are defined above.
 type RequestAbility struct {
 	// Ability is the ability that the client is requesting. This is one of the constants defined in the
 	// protocol/ability.go file.

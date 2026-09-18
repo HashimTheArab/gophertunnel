@@ -62,16 +62,16 @@ func (x *PlayerActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 // PlayerBlockAction ...
 type PlayerBlockActionData struct {
-	PlayerActionType PlayerActionType
-	Position         BlockPos
-	Facing           int32
+	Action   PlayerActionType
+	BlockPos BlockPos
+	Face     int32
 }
 
 // Marshal reads or writes PlayerBlockActionData using its canonical wire layout.
 func (x *PlayerBlockActionData) Marshal(io IO) {
-	x.PlayerActionType.Marshal(io)
-	x.Position.Marshal(io)
-	io.Varint32(&x.Facing)
+	x.Action.Marshal(io)
+	x.BlockPos.Marshal(io)
+	io.Varint32(&x.Face)
 }
 
 type PlayerDied struct {

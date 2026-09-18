@@ -9,11 +9,10 @@ const (
 	GraphicsModeRayTraced protocol.GraphicsMode = 3
 )
 
-// UpdateClientOptions is sent by the client when some of the client's options are updated, such as
-// the graphics mode.
+// UpdateClientOptions is sent by the client when some of the client's options are updated, such as the
+// graphics mode.
 type UpdateClientOptions struct {
-	// GraphicsModeChange is the graphics mode that the client is using. It is one of the constants
-	// above.
+	// GraphicsModeChange is the graphics mode that the client is using. It is one of the constants above.
 	GraphicsMode protocol.Optional[protocol.GraphicsMode]
 	// FilterProfanityChange is if the client only uses filtered messages or not.
 	FilterProfanity protocol.Optional[bool]

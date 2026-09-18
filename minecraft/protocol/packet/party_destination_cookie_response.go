@@ -5,8 +5,7 @@ import "github.com/sandertv/gophertunnel/minecraft/protocol"
 // PartyDestinationCookieResponse is sent by the client to the server in response to a
 // SendPartyDestinationCookie packet.
 type PartyDestinationCookieResponse struct {
-	// Cookie is the opaque party destination cookie echoed back from the SendPartyDestinationCookie
-	// packet.
+	// Cookie is the opaque party destination cookie echoed back from the SendPartyDestinationCookie packet.
 	Cookie string
 	// Accepted is true if the client accepted the party destination.
 	Accepted bool

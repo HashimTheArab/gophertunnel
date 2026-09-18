@@ -1,15 +1,13 @@
 package protocol
 
-// AutoCraftRecipeStackRequestAction is sent by the client similarly to the
-// CraftRecipeStackRequestAction. The only difference is that the recipe is automatically created
-// and crafted by shift clicking the recipe book.
+// AutoCraftRecipeStackRequestAction is sent by the client similarly to the CraftRecipeStackRequestAction. The
+// only difference is that the recipe is automatically created and crafted by shift clicking the recipe book.
 type AutoCraftRecipeStackRequestAction struct {
 	ActionType              ItemStackRequestActionType
 	RecipeNetID             RecipeNetID
 	NumberOfRequestedCrafts uint8
-	// Ingredients is a slice of ItemDescriptorCount that contains the ingredients that were used to
-	// craft the recipe. It is not exactly clear what this is used for, but it is sent by the vanilla
-	// client.
+	// Ingredients is a slice of ItemDescriptorCount that contains the ingredients that were used to craft the
+	// recipe. It is not exactly clear what this is used for, but it is sent by the vanilla client.
 	Ingredients []RecipeIngredient
 }
 
@@ -24,8 +22,8 @@ func (x *AutoCraftRecipeStackRequestAction) Marshal(io IO) {
 	Slice(io, &x.Ingredients)
 }
 
-// BeaconPaymentStackRequestAction is sent by the client when it submits an item to enable effects
-// from a beacon. These items will have been moved into the beacon item slot in advance.
+// BeaconPaymentStackRequestAction is sent by the client when it submits an item to enable effects from a
+// beacon. These items will have been moved into the beacon item slot in advance.
 type BeaconPaymentStackRequestAction struct {
 	ActionType        ItemStackRequestActionType
 	PrimaryEffectID   int32
@@ -45,8 +43,8 @@ func (x *BeaconPaymentStackRequestAction) Marshal(io IO) {
 	Maximum(io, &x.SecondaryEffectID, 37)
 }
 
-// ConsumeStackRequestAction is sent by the client when it uses an item to craft another item. The
-// original item is 'consumed'.
+// ConsumeStackRequestAction is sent by the client when it uses an item to craft another item. The original
+// item is 'consumed'.
 type ConsumeStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 	Amount     uint8
@@ -64,8 +62,8 @@ func (x *ConsumeStackRequestAction) Marshal(io IO) {
 	x.Source.Marshal(io)
 }
 
-// CraftCreativeStackRequestAction is sent by the client when it takes an item out fo the creative
-// inventory. The item is thus not really crafted, but instantly created.
+// CraftCreativeStackRequestAction is sent by the client when it takes an item out fo the creative inventory.
+// The item is thus not really crafted, but instantly created.
 type CraftCreativeStackRequestAction struct {
 	ActionType              ItemStackRequestActionType
 	CreativeItemNetID       uint32
@@ -83,8 +81,8 @@ func (x *CraftCreativeStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.NumberOfRequestedCrafts, 1)
 }
 
-// CraftNonImplementedStackRequestAction is an action sent for inventory actions that aren't yet
-// implemented in the new system. These include, for example, anvils.
+// CraftNonImplementedStackRequestAction is an action sent for inventory actions that aren't yet implemented
+// in the new system. These include, for example, anvils.
 type CraftNonImplementedStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 }
@@ -97,8 +95,8 @@ func (x *CraftNonImplementedStackRequestAction) Marshal(io IO) {
 }
 
 // CraftRecipeOptionalStackRequestAction is sent when using an anvil. When this action is sent, the
-// FilterStrings field in the respective stack request is non-empty and contains the name of the
-// item created using the anvil or cartography table.
+// FilterStrings field in the respective stack request is non-empty and contains the name of the item created
+// using the anvil or cartography table.
 type CraftRecipeOptionalStackRequestAction struct {
 	ActionType          ItemStackRequestActionType
 	RecipeNetID         RecipeNetID
@@ -114,10 +112,10 @@ func (x *CraftRecipeOptionalStackRequestAction) Marshal(io IO) {
 	io.Int32(&x.FilteredStringIndex)
 }
 
-// CraftRecipeStackRequestAction is sent by the client the moment it begins crafting an item. This
-// is the first action sent, before the Consume and Create item stack request actions. This action
-// is also sent when an item is enchanted. Enchanting should be treated mostly the same way as
-// crafting, where the old item is consumed.
+// CraftRecipeStackRequestAction is sent by the client the moment it begins crafting an item. This is the
+// first action sent, before the Consume and Create item stack request actions. This action is also sent when
+// an item is enchanted. Enchanting should be treated mostly the same way as crafting, where the old item is
+// consumed.
 type CraftRecipeStackRequestAction struct {
 	ActionType              ItemStackRequestActionType
 	RecipeNetID             RecipeNetID
@@ -134,10 +132,10 @@ func (x *CraftRecipeStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.NumberOfRequestedCrafts, 1)
 }
 
-// CraftResultsDeprecatedStackRequestAction is an additional, deprecated packet sent by the client
-// after crafting. It holds the final results and the amount of times the recipe was crafted. It
-// shouldn't be used. This action is also sent when an item is enchanted. Enchanting should be
-// treated mostly the same way as crafting, where the old item is consumed.
+// CraftResultsDeprecatedStackRequestAction is an additional, deprecated packet sent by the client after
+// crafting. It holds the final results and the amount of times the recipe was crafted. It shouldn't be used.
+// This action is also sent when an item is enchanted. Enchanting should be treated mostly the same way as
+// crafting, where the old item is consumed.
 type CraftResultsDeprecatedStackRequestAction struct {
 	ActionType   ItemStackRequestActionType
 	CraftResults []ItemInstance
@@ -154,12 +152,11 @@ func (x *CraftResultsDeprecatedStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.NumCrafts, 1)
 }
 
-// CreateStackRequestAction is sent by the client when an item is created through being used as part
-// of a recipe. For example, when milk is used to craft a cake, the buckets are leftover. The
-// buckets are moved to the slot sent by the client here. Note that before this is sent, an action
-// for consuming all items in the crafting table/grid is sent. Items that are not fully consumed
-// when used for a recipe should not be destroyed there, but instead, should be turned into their
-// respective resulting items.
+// CreateStackRequestAction is sent by the client when an item is created through being used as part of a
+// recipe. For example, when milk is used to craft a cake, the buckets are leftover. The buckets are moved to
+// the slot sent by the client here. Note that before this is sent, an action for consuming all items in the
+// crafting table/grid is sent. Items that are not fully consumed when used for a recipe should not be
+// destroyed there, but instead, should be turned into their respective resulting items.
 type CreateStackRequestAction struct {
 	ActionType   ItemStackRequestActionType
 	ResultsIndex uint8
@@ -173,13 +170,13 @@ func (x *CreateStackRequestAction) Marshal(io IO) {
 	io.Uint8(&x.ResultsIndex)
 }
 
-// DestroyStackRequestAction is sent by the client when it destroys an item in creative mode by
-// moving it back into the creative inventory.
+// DestroyStackRequestAction is sent by the client when it destroys an item in creative mode by moving it back
+// into the creative inventory.
 type DestroyStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 	Amount     uint8
-	// Source is the source slot from which items came that were destroyed by moving them into the
-	// creative inventory.
+	// Source is the source slot from which items came that were destroyed by moving them into the creative
+	// inventory.
 	Source StackRequestSlotInfo
 }
 
@@ -194,17 +191,17 @@ func (x *DestroyStackRequestAction) Marshal(io IO) {
 	x.Source.Marshal(io)
 }
 
-// DropStackRequestAction is sent by the client when it drops an item out of the inventory when it
-// has its inventory opened. This action is not sent when a player drops an item out of the hotbar
-// using the Q button (or the equivalent on mobile). The InventoryTransaction packet is still used
-// for that action, regardless of whether the item stack network IDs are used or not.
+// DropStackRequestAction is sent by the client when it drops an item out of the inventory when it has its
+// inventory opened. This action is not sent when a player drops an item out of the hotbar using the Q button
+// (or the equivalent on mobile). The InventoryTransaction packet is still used for that action, regardless of
+// whether the item stack network IDs are used or not.
 type DropStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 	Amount     uint8
 	// Source is the source slot from which items were dropped to the ground.
 	Source StackRequestSlotInfo
-	// Randomly seems to be set to false in most cases. I'm not entirely sure what this does, but this
-	// is what vanilla calls this field.
+	// Randomly seems to be set to false in most cases. I'm not entirely sure what this does, but this is what
+	// vanilla calls this field.
 	Randomly bool
 }
 
@@ -342,13 +339,13 @@ const (
 // Marshal reads or writes ItemStackRequestActionType through its uint8 wire encoding.
 func (x *ItemStackRequestActionType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// ItemStackRequest represents a single request present in an ItemStackRequest packet sent by the
-// client to change an item in an inventory. Item stack requests are either approved or rejected by
-// the server using the ItemStackResponse packet.
+// ItemStackRequest represents a single request present in an ItemStackRequest packet sent by the client to
+// change an item in an inventory. Item stack requests are either approved or rejected by the server using the
+// ItemStackResponse packet.
 type ItemStackRequestData struct {
 	ClientRequestID ItemStackRequestID
-	// Actions is a list of actions performed by the client. The actual type of the actions depends on
-	// which ID was present, and is one of the concrete types below.
+	// Actions is a list of actions performed by the client. The actual type of the actions depends on which ID
+	// was present, and is one of the concrete types below.
 	Actions               []StackRequestAction
 	StringsToFilter       []string
 	StringsToFilterOrigin TextProcessingEventOrigin
@@ -444,8 +441,7 @@ func (x *ItemStackResponseSlotInfo) Marshal(io IO) {
 	Maximum(io, &x.DurabilityCorrection, 32767)
 }
 
-// LabTableCombineStackRequestAction is sent by the client when it uses a lab table to combine item
-// stacks.
+// LabTableCombineStackRequestAction is sent by the client when it uses a lab table to combine item stacks.
 type LabTableCombineStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 }
@@ -461,8 +457,7 @@ func (x *LabTableCombineStackRequestAction) Marshal(io IO) {
 type MineBlockStackRequestAction struct {
 	ActionType ItemStackRequestActionType
 	Slot       int32
-	// PredictedDurability is the durability of the item that the client assumes to be present at the
-	// time.
+	// PredictedDurability is the durability of the item that the client assumes to be present at the time.
 	PredictedDurability int32
 	NetIDVariant        int32
 }
@@ -477,9 +472,9 @@ func (x *MineBlockStackRequestAction) Marshal(io IO) {
 	io.Int32(&x.NetIDVariant)
 }
 
-// PlaceStackRequestAction is sent by the client to the server to place x amount of items from one
-// slot into another slot, such as when shift clicking an item in the inventory to move it around or
-// when moving an item in the cursor into a slot.
+// PlaceStackRequestAction is sent by the client to the server to place x amount of items from one slot into
+// another slot, such as when shift clicking an item in the inventory to move it around or when moving an item
+// in the cursor into a slot.
 type PlaceStackRequestAction struct {
 	ActionType  ItemStackRequestActionType
 	Amount      uint8
@@ -514,15 +509,15 @@ func (x *StackRequestSlotInfo) Marshal(io IO) {
 	io.Int32(&x.StackNetworkID)
 }
 
-// SwapStackRequestAction is sent by the client to swap the item in its cursor with an item present
-// in another container. The two item stacks swap places.
+// SwapStackRequestAction is sent by the client to swap the item in its cursor with an item present in another
+// container. The two item stacks swap places.
 type SwapStackRequestAction struct {
 	ActionType ItemStackRequestActionType
-	// Source and Destination point to the source slot from which Count of the item stack were taken and
-	// the destination slot to which this item was moved.
+	// Source and Destination point to the source slot from which Count of the item stack were taken and the
+	// destination slot to which this item was moved.
 	Source StackRequestSlotInfo
-	// Source and Destination point to the source slot from which Count of the item stack were taken and
-	// the destination slot to which this item was moved.
+	// Source and Destination point to the source slot from which Count of the item stack were taken and the
+	// destination slot to which this item was moved.
 	Destination StackRequestSlotInfo
 }
 
@@ -535,8 +530,8 @@ func (x *SwapStackRequestAction) Marshal(io IO) {
 	x.Destination.Marshal(io)
 }
 
-// TakeStackRequestAction is sent by the client to the server to take x amount of items from one
-// slot in a container to the cursor.
+// TakeStackRequestAction is sent by the client to the server to take x amount of items from one slot in a
+// container to the cursor.
 type TakeStackRequestAction struct {
 	ActionType  ItemStackRequestActionType
 	Amount      uint8

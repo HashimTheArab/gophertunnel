@@ -2,8 +2,7 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// JigsawStructureData is sent by the server to let the client know all the rules for jigsaw
-// structures.
+// JigsawStructureData is sent by the server to let the client know all the rules for jigsaw structures.
 type JigsawStructureData struct {
 	JigsawStructureDataTag []byte
 }

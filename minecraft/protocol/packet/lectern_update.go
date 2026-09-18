@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// LecternUpdate is sent by the client to update the server on which page was opened in a book on a
-// lectern, or if the book should be removed from it.
+// LecternUpdate is sent by the client to update the server on which page was opened in a book on a lectern,
+// or if the book should be removed from it.
 type LecternUpdate struct {
 	Page      uint8
 	PageCount uint8

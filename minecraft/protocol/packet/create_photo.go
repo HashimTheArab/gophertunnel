@@ -2,20 +2,20 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// CreatePhoto is a packet that allows players to export photos from their portfolios into items in
-// their inventory. This packet only works on the Education Edition version of Minecraft.
+// CreatePhoto is a packet that allows players to export photos from their portfolios into items in their
+// inventory. This packet only works on the Education Edition version of Minecraft.
 type CreatePhoto struct {
-	RawID uint64
+	EntityUniqueID uint64
 	// PhotoName is the name of the photo.
-	PhotoName     string
-	PhotoItemName string
+	PhotoName string
+	ItemName  string
 }
 
 // Marshal reads or writes CreatePhoto using its canonical wire layout.
 func (x *CreatePhoto) Marshal(io protocol.IO) {
-	io.Uint64(&x.RawID)
+	io.Uint64(&x.EntityUniqueID)
 	io.String(&x.PhotoName)
-	io.String(&x.PhotoItemName)
+	io.String(&x.ItemName)
 }
 
 // ID returns the protocol ID for CreatePhoto.

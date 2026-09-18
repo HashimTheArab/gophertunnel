@@ -2,13 +2,13 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ResourcePackChunkRequest is sent by the client to request a chunk of data from a particular
-// resource pack, that it has obtained information about in a ResourcePackDataInfo packet.
+// ResourcePackChunkRequest is sent by the client to request a chunk of data from a particular resource pack,
+// that it has obtained information about in a ResourcePackDataInfo packet.
 type ResourcePackChunkRequest struct {
 	// ResourceName is the unique ID of the resource pack that the chunk of data is requested from.
 	UUID string
-	// Chunk is the requested chunk index of the chunk. It is a number that starts at 0 and is
-	// incremented for each resource pack data chunk requested.
+	// Chunk is the requested chunk index of the chunk. It is a number that starts at 0 and is incremented for
+	// each resource pack data chunk requested.
 	ChunkIndex int32
 }
 

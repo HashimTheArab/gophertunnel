@@ -5,8 +5,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
-// SetActorMotion is sent by the server to change the client-side velocity of an entity. It is
-// usually used in combination with server-side movement calculation.
+// SetActorMotion is sent by the server to change the client-side velocity of an entity. It is usually used in
+// combination with server-side movement calculation.
 type SetActorMotion struct {
 	TargetRuntimeID uint64
 	Motion          mgl32.Vec3

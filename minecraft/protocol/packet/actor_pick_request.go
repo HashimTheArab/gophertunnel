@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ActorPickRequest is sent by the client when it tries to pick an entity, so that it gets a spawn
-// egg which can spawn that entity.
+// ActorPickRequest is sent by the client when it tries to pick an entity, so that it gets a spawn egg which
+// can spawn that entity.
 type ActorPickRequest struct {
 	EntityUniqueID int64
 	HotBarSlot     uint8

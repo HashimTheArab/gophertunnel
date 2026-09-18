@@ -1,7 +1,6 @@
 package protocol
 
-// BiomeCappedSurface specifies the materials to use for the capped surface of a biome, such as in
-// the Nether.
+// BiomeCappedSurface specifies the materials to use for the capped surface of a biome, such as in the Nether.
 type BiomeCappedSurfaceData struct {
 	// FloorBlocks is a list of runtime IDs to use for the floor blocks.
 	FloorBlocks []uint32
@@ -24,18 +23,17 @@ func (x *BiomeCappedSurfaceData) Marshal(io IO) {
 	OptionalFunc(io, &x.BeachBlock, io.Uint32)
 }
 
-// BiomeClimate represents the climate of a biome, mainly for ambience but also defines certain
-// behaviours.
+// BiomeClimate represents the climate of a biome, mainly for ambience but also defines certain behaviours.
 type BiomeClimateData struct {
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
 	Temperature float32
 	// Downfall is the amount that precipitation affects colours and block changes.
 	Downfall float32
-	// SnowAccumulationMin is the minimum amount of snow that can accumulate in the biome, every 0.125
-	// is another layer of snow.
+	// SnowAccumulationMin is the minimum amount of snow that can accumulate in the biome, every 0.125 is another
+	// layer of snow.
 	SnowAccumulationMin float32
-	// SnowAccumulationMax is the maximum amount of snow that can accumulate in the biome, every 0.125
-	// is another layer of snow.
+	// SnowAccumulationMax is the maximum amount of snow that can accumulate in the biome, every 0.125 is another
+	// layer of snow.
 	SnowAccumulationMax float32
 }
 
@@ -62,8 +60,7 @@ func (x *BiomeConditionalTransformationData) Marshal(io IO) {
 	io.Uint32(&x.MinPassingNeighbours)
 }
 
-// BiomeConsolidatedFeature represents a feature that is consolidated into a single feature for the
-// biome.
+// BiomeConsolidatedFeature represents a feature that is consolidated into a single feature for the biome.
 type BiomeConsolidatedFeatureData struct {
 	// Scatter defines how the feature is scattered in the biome.
 	Scatter BiomeScatterParamData
@@ -154,8 +151,8 @@ func (x *BiomeDefinitionChunkGenData) Marshal(io IO) {
 	OptionalMarshaler(io, &x.SubsurfaceBuilderData)
 }
 
-// BiomeDefinition represents a biome definition in the game. This can be a vanilla biome or a
-// completely custom biome.
+// BiomeDefinition represents a biome definition in the game. This can be a vanilla biome or a completely
+// custom biome.
 type BiomeDefinitionData struct {
 	ID uint16
 	// Temperature is the temperature of the biome, used for weather, biome behaviours and sky colour.
@@ -171,8 +168,8 @@ type BiomeDefinitionData struct {
 	MapWaterColorARGB int32
 	// Rain is true if the biome has rain, false if it is a dry biome.
 	Rain bool
-	// Tags are a list of indices of tags in the string list. These are used to group biomes together
-	// for biome generation and other purposes.
+	// Tags are a list of indices of tags in the string list. These are used to group biomes together for biome
+	// generation and other purposes.
 	Tags         Optional[BiomeTagsData]
 	ChunkGenData Optional[BiomeDefinitionChunkGenData]
 }
@@ -198,13 +195,13 @@ type BiomeElementData struct {
 	NoiseLowerBound float32
 	// NoiseUpperBound is the maximum noise value required to be selected.
 	NoiseUpperBound float32
-	// HeightMinType is the type of expression operation to use for the minimum height, and is one of
-	// the BiomeExpressionOp constants above.
+	// HeightMinType is the type of expression operation to use for the minimum height, and is one of the
+	// BiomeExpressionOp constants above.
 	HeightMinType int32
 	// HeightMin is the index of the minimum height expression in the string list.
 	HeightMin uint16
-	// HeightMaxType is the type of expression operation to use for the maximum height, and is one of
-	// the BiomeExpressionOp constants above.
+	// HeightMaxType is the type of expression operation to use for the maximum height, and is one of the
+	// BiomeExpressionOp constants above.
 	HeightMaxType int32
 	// HeightMax is the index of the maximum height expression in the string list.
 	HeightMax uint16
@@ -329,7 +326,7 @@ func (x *BiomeOverworldGenRulesData) Marshal(io IO) {
 
 // BiomeReplacementData represents data for biome replacements.
 type BiomeReplacementData struct {
-	ReplacementBiome uint16
+	Biome uint16
 	// Dimension is the dimension ID where the replacement applies.
 	Dimension uint16
 	// TargetBiomes is a list of target biome IDs for the replacement.
@@ -344,7 +341,7 @@ type BiomeReplacementData struct {
 
 // Marshal reads or writes BiomeReplacementData using its canonical wire layout.
 func (x *BiomeReplacementData) Marshal(io IO) {
-	io.Uint16(&x.ReplacementBiome)
+	io.Uint16(&x.Biome)
 	io.Uint16(&x.Dimension)
 	FuncSlice(io, &x.TargetBiomes, io.Varuint32, io.Uint16)
 	io.Float32(&x.Amount)
@@ -363,7 +360,7 @@ func (x *BiomeReplacementsData) Marshal(io IO) {
 
 type BiomeScatterParamData struct {
 	Coordinates       []BiomeCoordinateData
-	EvalOrder         CoordinateEvaluationOrder
+	EvaluationOrder   CoordinateEvaluationOrder
 	ChancePercentType int32
 	ChancePercent     uint16
 	ChanceNumerator   int32
@@ -375,7 +372,7 @@ type BiomeScatterParamData struct {
 // Marshal reads or writes BiomeScatterParamData using its canonical wire layout.
 func (x *BiomeScatterParamData) Marshal(io IO) {
 	Slice(io, &x.Coordinates)
-	x.EvalOrder.Marshal(io)
+	x.EvaluationOrder.Marshal(io)
 	io.Varint32(&x.ChancePercentType)
 	io.Uint16(&x.ChancePercent)
 	io.Int32(&x.ChanceNumerator)
@@ -523,8 +520,7 @@ type NoiseDescriptor struct {
 	Name string
 	// FirstOctave is the first octave used by the noise.
 	FirstOctave int32
-	// Amplitudes is a list of amplitude values used by the noise. It must contain between 1 and 100
-	// entries.
+	// Amplitudes is a list of amplitude values used by the noise. It must contain between 1 and 100 entries.
 	Amplitudes []float32
 }
 

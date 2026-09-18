@@ -2,9 +2,9 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// UpdateAdventureSettings is a packet sent from the server to the client to update the adventure
-// settings of the player. It, along with the UpdateAbilities packet, are replacements of the
-// AdventureSettings packet since v1.19.10.
+// UpdateAdventureSettings is a packet sent from the server to the client to update the adventure settings of
+// the player. It, along with the UpdateAbilities packet, are replacements of the AdventureSettings packet
+// since v1.19.10.
 type UpdateAdventureSettings struct {
 	AdventureSettings protocol.AdventureSettings
 }

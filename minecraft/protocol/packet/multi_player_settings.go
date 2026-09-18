@@ -9,12 +9,12 @@ const (
 )
 
 type MultiplayerSettings struct {
-	PacketType protocol.MultiplayerSettingsType
+	ActionType protocol.MultiplayerSettingsType
 }
 
 // Marshal reads or writes MultiplayerSettings using its canonical wire layout.
 func (x *MultiplayerSettings) Marshal(io protocol.IO) {
-	x.PacketType.Marshal(io)
+	x.ActionType.Marshal(io)
 }
 
 // ID returns the protocol ID for MultiplayerSettings.

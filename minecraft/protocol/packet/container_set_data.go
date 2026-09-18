@@ -2,9 +2,9 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ContainerSetData is sent by the server to update specific data of a single container, meaning a
-// block such as a furnace or a brewing stand. This data is usually used by the client to display
-// certain features client-side.
+// ContainerSetData is sent by the server to update specific data of a single container, meaning a block such
+// as a furnace or a brewing stand. This data is usually used by the client to display certain features
+// client-side.
 type ContainerSetData struct {
 	WindowID uint8
 	Key      int32

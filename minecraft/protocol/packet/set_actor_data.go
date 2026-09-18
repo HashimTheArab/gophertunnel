@@ -2,9 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// SetActorData is sent by the server to update the entity metadata of an entity. It includes flags
-// such as if the entity is on fire, but also properties such as the air it has left until it starts
-// drowning.
+// SetActorData is sent by the server to update the entity metadata of an entity. It includes flags such as if
+// the entity is on fire, but also properties such as the air it has left until it starts drowning.
 type SetActorData struct {
 	TargetRuntimeID   uint64
 	ActorData         protocol.SynchedActorDataCopyableDataList

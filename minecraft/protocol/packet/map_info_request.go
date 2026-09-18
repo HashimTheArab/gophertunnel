@@ -2,9 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// MapInfoRequest is sent by the client to request the server to deliver information of a certain
-// map in the inventory of the player. The server should respond with a ClientBoundMapItemData
-// packet.
+// MapInfoRequest is sent by the client to request the server to deliver information of a certain map in the
+// inventory of the player. The server should respond with a ClientBoundMapItemData packet.
 type MapInfoRequest struct {
 	MapUniqueID      int64
 	ClientPixelsList []protocol.PixelRequest

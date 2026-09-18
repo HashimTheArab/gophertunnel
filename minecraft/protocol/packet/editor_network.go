@@ -2,9 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// EditorNetwork is a packet sent from the server to the client and vise-versa to communicate
-// editor-mode related information. It carries a single compound tag containing the relevant
-// information.
+// EditorNetwork is a packet sent from the server to the client and vise-versa to communicate editor-mode
+// related information. It carries a single compound tag containing the relevant information.
 type EditorNetwork struct {
 	// RouteToManager ...
 	RouteToManager bool

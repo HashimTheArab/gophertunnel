@@ -153,8 +153,8 @@ const (
 	DisconnectReasonEditorNotAllowed                                   protocol.ConnectionDisconnectFailReason = 147
 )
 
-// Disconnect may be sent by the server to disconnect the client using an optional message to send
-// as the disconnect screen.
+// Disconnect may be sent by the server to disconnect the client using an optional message to send as the
+// disconnect screen.
 type Disconnect struct {
 	// Reason is the reason for the disconnection. This affects the error code displayed on the Ore UI
 	// disconnection screen and is one of the constants above.

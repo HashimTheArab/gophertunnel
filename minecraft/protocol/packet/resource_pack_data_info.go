@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ResourcePackDataInfo is sent by the server to the client to inform the client about the data
-// contained in one of the resource packs that are about to be sent.
+// ResourcePackDataInfo is sent by the server to the client to inform the client about the data contained in
+// one of the resource packs that are about to be sent.
 type ResourcePackDataInfo struct {
 	UUID          string
 	DataChunkSize uint32
@@ -11,8 +11,8 @@ type ResourcePackDataInfo struct {
 	Size          uint64
 	Hash          []byte
 	Premium       bool
-	// PackType is the type of the resource pack. It is one of the resource pack types that may be found
-	// in the constants above.
+	// PackType is the type of the resource pack. It is one of the resource pack types that may be found in the
+	// constants above.
 	PackType uint8
 }
 

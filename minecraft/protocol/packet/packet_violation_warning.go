@@ -9,21 +9,21 @@ const (
 	ViolationSeverityTerminatingConnection protocol.PacketViolationSeverity = 2
 )
 
-// PacketViolationWarning is sent by the client when it receives an invalid packet from the server.
-// It holds some information on the error that occurred. noinspection GoNameStartsWithPackageName
+// PacketViolationWarning is sent by the client when it receives an invalid packet from the server. It holds
+// some information on the error that occurred. noinspection GoNameStartsWithPackageName
 type PacketViolationWarning struct {
-	ViolationType     protocol.PacketViolationType
-	ViolationSeverity protocol.PacketViolationSeverity
-	ViolationPacketID int32
+	Type     protocol.PacketViolationType
+	Severity protocol.PacketViolationSeverity
+	PacketID int32
 	// ViolationContext holds a description on the violation of the packet.
 	ViolationContext string
 }
 
 // Marshal reads or writes PacketViolationWarning using its canonical wire layout.
 func (x *PacketViolationWarning) Marshal(io protocol.IO) {
-	x.ViolationType.Marshal(io)
-	x.ViolationSeverity.Marshal(io)
-	io.Varint32(&x.ViolationPacketID)
+	x.Type.Marshal(io)
+	x.Severity.Marshal(io)
+	io.Varint32(&x.PacketID)
 	io.String(&x.ViolationContext)
 }
 

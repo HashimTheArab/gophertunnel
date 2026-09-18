@@ -52,15 +52,15 @@ const (
 // Marshal reads or writes EnchantType through its uint8 wire encoding.
 func (x *EnchantType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// EnchantmentInstance represents a single enchantment instance with the type of the enchantment and
-// its level.
+// EnchantmentInstance represents a single enchantment instance with the type of the enchantment and its
+// level.
 type EnchantmentInstance struct {
-	EnchantType  EnchantType
-	EnchantLevel uint8
+	Type  EnchantType
+	Level uint8
 }
 
 // Marshal reads or writes EnchantmentInstance using its canonical wire layout.
 func (x *EnchantmentInstance) Marshal(io IO) {
-	x.EnchantType.Marshal(io)
-	io.Uint8(&x.EnchantLevel)
+	x.Type.Marshal(io)
+	io.Uint8(&x.Level)
 }

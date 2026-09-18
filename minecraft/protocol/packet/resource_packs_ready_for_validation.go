@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ResourcePacksReadyForValidation is sent by the client to inform the server that the client has
-// finished loading resource packs and is ready for validation.
+// ResourcePacksReadyForValidation is sent by the client to inform the server that the client has finished
+// loading resource packs and is ready for validation.
 type ResourcePacksReadyForValidation struct {
 }
 

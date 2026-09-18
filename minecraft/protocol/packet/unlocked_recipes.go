@@ -9,17 +9,17 @@ const (
 	UnlockedRecipesTypeRemoveUnlocked    protocol.ItemDescriptorType = 3
 )
 
-// UnlockedRecipes gives the client a list of recipes that have been unlocked, restricting the
-// recipes that appear in the recipe book.
+// UnlockedRecipes gives the client a list of recipes that have been unlocked, restricting the recipes that
+// appear in the recipe book.
 type UnlockedRecipes struct {
-	PacketType          protocol.PacketType
-	UnlockedRecipesList []string
+	UnlockType protocol.PacketType
+	Recipes    []string
 }
 
 // Marshal reads or writes UnlockedRecipes using its canonical wire layout.
 func (x *UnlockedRecipes) Marshal(io protocol.IO) {
-	x.PacketType.Marshal(io)
-	protocol.FuncSlice(io, &x.UnlockedRecipesList, io.Varuint32, io.String)
+	x.UnlockType.Marshal(io)
+	protocol.FuncSlice(io, &x.Recipes, io.Varuint32, io.String)
 }
 
 // ID returns the protocol ID for UnlockedRecipes.

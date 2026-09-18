@@ -12,12 +12,12 @@ const (
 // SimulationType is an in-progress packet. We currently do not know the use case.
 type SimulationType struct {
 	// SimType is the simulation type selected.
-	SimType protocol.SimulationTypeEnum
+	SimulationType protocol.SimulationTypeEnum
 }
 
 // Marshal reads or writes SimulationType using its canonical wire layout.
 func (x *SimulationType) Marshal(io protocol.IO) {
-	x.SimType.Marshal(io)
+	x.SimulationType.Marshal(io)
 }
 
 // ID returns the protocol ID for SimulationType.

@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// AgentAnimation is an Education Edition packet sent from the server to the client to make an agent
-// perform an animation.
+// AgentAnimation is an Education Edition packet sent from the server to the client to make an agent perform
+// an animation.
 type AgentAnimation struct {
 	AgentAnimation protocol.AgentAnimationType
 	RuntimeID      uint64

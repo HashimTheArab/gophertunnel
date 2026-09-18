@@ -26,8 +26,8 @@ const (
 	InventoryRightTabArmour     protocol.InventoryRightTabIndex = 3
 )
 
-// SetPlayerInventoryOptions is a bidirectional packet that can be used to update the inventory
-// options of a player.
+// SetPlayerInventoryOptions is a bidirectional packet that can be used to update the inventory options of a
+// player.
 type SetPlayerInventoryOptions struct {
 	InventoryOptions protocol.InventoryOptions
 }

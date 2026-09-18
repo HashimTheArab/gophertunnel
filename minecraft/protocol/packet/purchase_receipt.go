@@ -2,12 +2,11 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// PurchaseReceipt is sent by the client to the server to notify the server it purchased an item
-// from the Marketplace store that was offered by the server. The packet is only used for partnered
-// servers.
+// PurchaseReceipt is sent by the client to the server to notify the server it purchased an item from the
+// Marketplace store that was offered by the server. The packet is only used for partnered servers.
 type PurchaseReceipt struct {
-	// PurchaseReceipts is a list of receipts, or proofs of purchases, for the offers that have been
-	// purchased by the player.
+	// PurchaseReceipts is a list of receipts, or proofs of purchases, for the offers that have been purchased by
+	// the player.
 	Receipts []string
 }
 

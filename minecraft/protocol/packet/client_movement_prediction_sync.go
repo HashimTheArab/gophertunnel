@@ -2,9 +2,9 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// ClientMovementPredictionSync is sent by the client to the server periodically if the client has
-// received movement corrections from the server, containing information about client-predictions
-// that are relevant to movement.
+// ClientMovementPredictionSync is sent by the client to the server periodically if the client has received
+// movement corrections from the server, containing information about client-predictions that are relevant to
+// movement.
 type ClientMovementPredictionSync struct {
 	ActorDataFlag      protocol.ActorDataFlagComponent
 	ActorBoundingBox   protocol.ActorDataBoundingBoxComponent

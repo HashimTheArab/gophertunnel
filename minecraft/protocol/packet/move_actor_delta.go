@@ -2,9 +2,9 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// MoveActorDelta is sent by the server to move an entity. The packet is specifically optimised to
-// save as much space as possible, by only writing non-zero fields. As of 1.16.100, this packet no
-// longer actually contains any deltas.
+// MoveActorDelta is sent by the server to move an entity. The packet is specifically optimised to save as
+// much space as possible, by only writing non-zero fields. As of 1.16.100, this packet no longer actually
+// contains any deltas.
 type MoveActorDelta struct {
 	MoveData protocol.MoveActorDeltaData
 }

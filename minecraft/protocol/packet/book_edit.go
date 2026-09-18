@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// BookEdit is sent by the client when it edits a book. It is sent each time a modification was made
-// and the player stops its typing 'session', rather than simply after closing the book.
+// BookEdit is sent by the client when it edits a book. It is sent each time a modification was made and the
+// player stops its typing 'session', rather than simply after closing the book.
 type BookEdit struct {
 	BookSlot  int32
 	Operation protocol.BookEditAction

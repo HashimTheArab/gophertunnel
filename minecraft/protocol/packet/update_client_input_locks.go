@@ -2,12 +2,12 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// UpdateClientInputLocks is sent by the server to the client to lock specific player inputs such as
-// camera rotation, movement, jumping, sneaking, mounting or individual directional movement.
+// UpdateClientInputLocks is sent by the server to the client to lock specific player inputs such as camera
+// rotation, movement, jumping, sneaking, mounting or individual directional movement.
 type UpdateClientInputLocks struct {
-	// InputLockComponentData is a set of flags that specify which client inputs are disabled, such as
-	// whether the player can move, rotate the camera, jump, sneak or mount/dismount entities. It is a
-	// combination of the ClientInputLock constants above.
+	// InputLockComponentData is a set of flags that specify which client inputs are disabled, such as whether the
+	// player can move, rotate the camera, jump, sneak or mount/dismount entities. It is a combination of the
+	// ClientInputLock constants above.
 	Locks uint32
 }
 

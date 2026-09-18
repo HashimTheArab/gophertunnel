@@ -8,13 +8,13 @@ const (
 )
 
 type ServerboundLoadingScreen struct {
-	LoadingScreenPacketType protocol.ServerboundLoadingScreenType
-	LoadingScreenID         protocol.Optional[uint32]
+	Type            protocol.ServerboundLoadingScreenType
+	LoadingScreenID protocol.Optional[uint32]
 }
 
 // Marshal reads or writes ServerboundLoadingScreen using its canonical wire layout.
 func (x *ServerboundLoadingScreen) Marshal(io protocol.IO) {
-	x.LoadingScreenPacketType.Marshal(io)
+	x.Type.Marshal(io)
 	protocol.OptionalFunc(io, &x.LoadingScreenID, io.Uint32)
 }
 

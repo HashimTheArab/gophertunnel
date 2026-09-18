@@ -10,16 +10,16 @@ import (
 // LocatorBarWaypoint represents a waypoint entry in the locator bar packet.
 type LocatorBarWaypoint struct {
 	// GroupHandle is the UUID handle for the waypoint group.
-	GroupHandle           WaypointGroupWaypointHandle
-	ServerWaypointPayload ServerWaypoint
-	ActionFlag            ServerWaypointGroupAction
+	GroupHandle WaypointGroupWaypointHandle
+	Waypoint    ServerWaypoint
+	Action      ServerWaypointGroupAction
 }
 
 // Marshal reads or writes LocatorBarWaypoint using its canonical wire layout.
 func (x *LocatorBarWaypoint) Marshal(io IO) {
 	x.GroupHandle.Marshal(io)
-	x.ServerWaypointPayload.Marshal(io)
-	x.ActionFlag.Marshal(io)
+	x.Waypoint.Marshal(io)
+	x.Action.Marshal(io)
 }
 
 type ServerWaypoint struct {

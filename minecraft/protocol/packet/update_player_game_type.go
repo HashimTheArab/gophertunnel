@@ -2,8 +2,8 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
-// UpdatePlayerGameType is sent by the server to change the game mode of a player. It is
-// functionally identical to the SetPlayerGameType packet.
+// UpdatePlayerGameType is sent by the server to change the game mode of a player. It is functionally
+// identical to the SetPlayerGameType packet.
 type UpdatePlayerGameType struct {
 	PlayerGameType protocol.GameType
 	TargetPlayer   int64

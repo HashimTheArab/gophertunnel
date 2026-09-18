@@ -1,7 +1,7 @@
 package protocol
 
-// DefaultItemDescriptor represents an item descriptor for regular items. This is used for the
-// significant majority of items.
+// DefaultItemDescriptor represents an item descriptor for regular items. This is used for the significant
+// majority of items.
 type DefaultItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	FullName       string
@@ -19,8 +19,8 @@ func (x *DefaultItemDescriptor) Marshal(io IO) {
 	Maximum(io, &x.AuxValue, 32767)
 }
 
-// InvalidItemDescriptor represents an invalid item descriptor. This is usually sent by the vanilla
-// server for empty slots or ingredients.
+// InvalidItemDescriptor represents an invalid item descriptor. This is usually sent by the vanilla server for
+// empty slots or ingredients.
 type InvalidItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 }
@@ -32,8 +32,8 @@ func (x *InvalidItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
 }
 
-// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It
-// is an alias of Marshaler.
+// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
+// alias of Marshaler.
 type ItemDescriptor interface {
 	Marshaler
 	tagItemDescriptor() uint32
@@ -56,15 +56,15 @@ func MarshalItemDescriptor(io IO, x *ItemDescriptor) {
 	})
 }
 
-// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It
-// is an alias of Marshaler.
+// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
+// alias of Marshaler.
 type ItemDescriptorType uint8
 
 // Marshal reads or writes ItemDescriptorType through its uint8 wire encoding.
 func (x *ItemDescriptorType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// ItemTagItemDescriptor represents an item descriptor that uses item tagging. This should be used
-// to reduce duplicative entries for items that can be grouped under a single tag.
+// ItemTagItemDescriptor represents an item descriptor that uses item tagging. This should be used to reduce
+// duplicative entries for items that can be grouped under a single tag.
 type ItemTagItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	ItemTag        string
@@ -78,8 +78,7 @@ func (x *ItemTagItemDescriptor) Marshal(io IO) {
 	io.StringLimits(&x.ItemTag, 1, 18446744073709551615)
 }
 
-// MoLangItemDescriptor represents an item descriptor for items that use MoLang (e.g. behaviour
-// packs).
+// MoLangItemDescriptor represents an item descriptor for items that use MoLang (e.g. behaviour packs).
 type MoLangItemDescriptor struct {
 	DescriptorType ItemDescriptorType
 	TagExpression  string
@@ -107,8 +106,8 @@ const (
 // Marshal reads or writes MobEffectEvent through its uint8 wire encoding.
 func (x *MobEffectEvent) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
-// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It
-// is an alias of Marshaler.
+// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
+// alias of Marshaler.
 type StackRequestAction interface {
 	Marshaler
 	tagStackRequestAction() uint32
