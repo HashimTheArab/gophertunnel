@@ -895,6 +895,11 @@ func (conn *Conn) SetSendDelay(d time.Duration) error {
 	return conn.sendDueLocked(time.Now(), true)
 }
 
+// SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
+func (conn *Conn) SendDelay() time.Duration {
+	return time.Duration(conn.sendDelay.Load())
+}
+
 // flush sends the buffered packets, holding them back first when a send delay is set. When drain is set,
 // every held batch is sent immediately regardless of the delay.
 func (conn *Conn) flush(drain bool) error {

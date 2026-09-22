@@ -152,6 +152,9 @@ func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 		t.Fatalf("SetSendDelay(0): %v", err)
 	}
 	expectSent(t, ids, 700, time.Second)
+	if got := conn.SendDelay(); got != 0 {
+		t.Fatalf("SendDelay after clearing = %v, want 0", got)
+	}
 
 	// With the delay cleared, writes go out as usual again.
 	if err := conn.WritePacketDirect(testPacket(701)); err != nil {
