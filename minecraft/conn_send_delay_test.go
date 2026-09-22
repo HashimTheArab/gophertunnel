@@ -90,6 +90,28 @@ func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 	}
 }
 
+func TestConn_SendDelayTimerLeavesUnflushedPacketsToTheOwner(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	if err := conn.SetSendDelay(50 * time.Millisecond); err != nil {
+		t.Fatalf("SetSendDelay: %v", err)
+	}
+	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	// Written after the last flush: only the owner decides when this batch closes.
+	if err := conn.WritePacket(testPacket(701)); err != nil {
+		t.Fatalf("WritePacket: %v", err)
+	}
+
+	expectSent(t, ids, 700, 2*time.Second)
+	expectNothingSent(t, ids, 150*time.Millisecond)
+
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	expectSent(t, ids, 701, 2*time.Second)
+}
+
 func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	if err := conn.SetSendDelay(100 * time.Millisecond); err != nil {

@@ -882,8 +882,9 @@ type delayedBatch struct {
 // SetSendDelay adds latency d to everything the Conn sends. Packets are still encoded when they are written,
 // so callers may reuse them immediately, but every flushed batch is held for d before it goes on the wire.
 // Ordering is kept across WritePacket, WritePacketImmediate, WritePacketDirect and Write. Held batches are
-// sent once due even if nothing else flushes the Conn, and Close sends them without waiting. A d of zero or
-// less stops delaying and sends every held batch immediately.
+// sent once due even if nothing else flushes the Conn; packets buffered since the last flush still wait for
+// one. Close sends held batches without waiting. A d of zero or less stops delaying and sends every held
+// batch immediately.
 func (conn *Conn) SetSendDelay(d time.Duration) error {
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
@@ -978,10 +979,19 @@ func (conn *Conn) sendDueLocked(now time.Time, drain bool) error {
 	return encodeErr
 }
 
-// flushDelayed sends held batches once they are due. Like the automatic flush loop, it closes the Conn when
-// sending fails.
+// flushDelayed sends held batches once they are due. It sends only batches that were already flushed, never
+// the packets buffered since, so owners that flush at batch boundaries keep control of them. Like the
+// automatic flush loop, it closes the Conn when sending fails.
 func (conn *Conn) flushDelayed() {
-	if err := conn.Flush(); err != nil {
+	select {
+	case <-conn.ctx.Done():
+		return
+	default:
+	}
+	conn.encMu.Lock()
+	err := conn.sendDueLocked(time.Now(), false)
+	conn.encMu.Unlock()
+	if err != nil {
 		_ = conn.close(err)
 	}
 }
