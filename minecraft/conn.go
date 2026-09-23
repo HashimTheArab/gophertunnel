@@ -233,6 +233,8 @@ type Conn struct {
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
 	pool                 packet.Pool
+	// delay holds encoded batches for the send delay between enc and the network. See SetSendDelay.
+	delay                *delayWriter
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
 	compression          packet.Compression
@@ -297,16 +299,6 @@ type Conn struct {
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
 	hdr               *packet.Header
-
-	// sendDelay is the latency, in nanoseconds, added before flushed packets go on the wire. See
-	// SetSendDelay.
-	sendDelay atomic.Int64
-	// delayed holds flushed batches waiting out sendDelay, oldest first. It is protected by encMu.
-	delayed []delayedBatch
-	// delayTimer sends the oldest delayed batch once it is due, even if nothing else flushes the Conn, and
-	// delayArmed is the due time it is set for. Both are protected by encMu.
-	delayTimer *time.Timer
-	delayArmed time.Time
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -419,7 +411,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
-	conn.enc = packet.NewEncoder(netConn)
+	conn.delay = &delayWriter{w: netConn}
+	conn.enc = packet.NewEncoder(conn.delay)
 	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
@@ -664,8 +657,7 @@ func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
 
 // WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
 // bypassing the buffered batch that is flushed every tick.
-// Use this only when packet ordering relative to already-buffered packets does not matter. With a send delay
-// set, the packets are held behind the packets the delay already holds instead. See SetSendDelay.
+// Use this only when packet ordering relative to already-buffered packets does not matter.
 func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	select {
 	case <-conn.ctx.Done():
@@ -684,7 +676,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
 		defer conn.encMu.Unlock()
-		return conn.sendLocked(immediate, true, false, "write packet direct")
+		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
 	}
 	return nil
 }
@@ -862,56 +854,8 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 }
 
 // Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
-// are directly sent. With a send delay set, the flushed packets are held until they are due instead, and
-// Flush sends only the held packets that already are. See SetSendDelay.
+// are directly sent.
 func (conn *Conn) Flush() error {
-	return conn.flush(false)
-}
-
-// delayedBatch is one flushed batch held back by a send delay.
-type delayedBatch struct {
-	due     time.Time
-	packets [][]byte
-}
-
-// SetSendDelay adds latency d to everything the Conn sends. Packets are still encoded when they are written,
-// so callers may reuse them immediately, but every flushed batch is held for d before it goes on the wire.
-// Ordering is kept across WritePacket, WritePacketImmediate, WritePacketDirect and Write. Held batches are
-// sent once due even if nothing else flushes the Conn; packets buffered since the last flush still wait for
-// one. A new d applies to batches flushed afterwards and never reorders: after lowering it, new batches
-// still wait for those held before them. Close sends held batches without waiting; Abort discards them. A d
-// of zero or less stops delaying and sends every held batch immediately.
-func (conn *Conn) SetSendDelay(d time.Duration) error {
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
-	conn.sendDelay.Store(int64(max(d, 0)))
-	if d > 0 || len(conn.delayed) == 0 {
-		return nil
-	}
-	return conn.sendDueLocked(true)
-}
-
-// updateEncoder applies update to the encoder after sending every batch the send delay holds, so a batch
-// flushed before compression or encryption is enabled is never encoded with it.
-func (conn *Conn) updateEncoder(update func(enc *packet.Encoder)) error {
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
-	var err error
-	if len(conn.delayed) != 0 {
-		err = conn.sendDueLocked(true)
-	}
-	update(conn.enc)
-	return err
-}
-
-// SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
-func (conn *Conn) SendDelay() time.Duration {
-	return time.Duration(conn.sendDelay.Load())
-}
-
-// flush sends the buffered packets, holding them back first when a send delay is set. When drain is set,
-// every held batch is sent immediately regardless of the delay.
-func (conn *Conn) flush(drain bool) error {
 	if conn.ctx == nil {
 		return net.ErrClosed
 	}
@@ -925,134 +869,30 @@ func (conn *Conn) flush(drain bool) error {
 	defer conn.encMu.Unlock()
 
 	conn.sendMu.Lock()
+	if len(conn.bufferedSend) == 0 {
+		conn.sendMu.Unlock()
+		return nil
+	}
+
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
-	if len(toSend) != 0 {
-		conn.bufferedSend = conn.bufferedSendSpare[:0]
-		conn.bufferedSendSpare = nil
-	}
+	conn.bufferedSend = conn.bufferedSendSpare[:0]
+	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	// toSend is recycled as the spare buffer, so a held batch keeps its own copy of the packets.
-	encodeErr := conn.sendLocked(toSend, false, drain, "flush")
-	if len(toSend) != 0 {
-		conn.recycleSend(toSend)
-	}
-	return encodeErr
-}
+	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
 
-// sendLocked sends batch without letting it overtake batches the send delay holds: with no delay and nothing
-// held it is encoded at once; otherwise it joins the held batches and only those already due are sent. drain
-// makes every held batch due. owned reports that the queue may keep batch and its packet data as they are;
-// otherwise it holds a copy of both, since batch is recycled and Write lets callers reuse their payload once
-// Flush returns. The caller holds encMu.
-func (conn *Conn) sendLocked(batch [][]byte, owned, drain bool, op string) error {
-	delay := time.Duration(conn.sendDelay.Load())
-	if len(conn.delayed) == 0 && (delay <= 0 || drain) {
-		if len(batch) == 0 {
-			return nil
-		}
-		return conn.handleEncodeError(conn.enc.Encode(batch), op)
+	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
+	// to packet payloads alive, causing an 'invisible' memory leak.
+	for i := range toSend {
+		toSend[i] = nil
 	}
-	if len(batch) != 0 {
-		if !owned {
-			batch = cloneBatch(batch)
-		}
-		conn.delayed = append(conn.delayed, delayedBatch{due: time.Now().Add(delay), packets: batch})
-	}
-	return conn.sendDueLocked(drain)
-}
 
-// cloneBatch copies batch and every packet in it into one allocation for the packet data.
-func cloneBatch(batch [][]byte) [][]byte {
-	size := 0
-	for _, data := range batch {
-		size += len(data)
-	}
-	buf := make([]byte, 0, size)
-	clone := make([][]byte, len(batch))
-	for i, data := range batch {
-		start := len(buf)
-		buf = append(buf, data...)
-		clone[i] = buf[start:len(buf):len(buf)]
-	}
-	return clone
-}
-
-// recycleSend clears a sent buffer and keeps it as the spare, so that re-using the slice after resetting its
-// length to 0 doesn't keep references to packet payloads alive, causing an 'invisible' memory leak.
-func (conn *Conn) recycleSend(toSend [][]byte) {
-	clear(toSend)
 	conn.sendMu.Lock()
 	conn.bufferedSendSpare = toSend[:0]
 	conn.sendMu.Unlock()
-}
-
-// sendDueLocked sends the held batches that are due, oldest first, and arms delayTimer for the next one.
-// The clock is read again after every send, so batches that fall due during a slow write go out too. Every
-// held batch counts as due when drain is set. The caller holds encMu.
-func (conn *Conn) sendDueLocked(drain bool) error {
-	var encodeErr error
-	due, now := 0, time.Now()
-	for due < len(conn.delayed) && (drain || !conn.delayed[due].due.After(now)) {
-		encodeErr = conn.handleEncodeError(conn.enc.Encode(conn.delayed[due].packets), "flush")
-		due, now = due+1, time.Now()
-		if encodeErr != nil {
-			break
-		}
-	}
-	// Shift the rest to the front so the queue keeps reusing one backing array.
-	n := copy(conn.delayed, conn.delayed[due:])
-	clear(conn.delayed[n:])
-	conn.delayed = conn.delayed[:n]
-	if n == 0 {
-		if conn.delayTimer != nil {
-			conn.delayTimer.Stop()
-		}
-		conn.delayArmed = time.Time{}
-		return encodeErr
-	}
-	if head := conn.delayed[0].due; !head.Equal(conn.delayArmed) {
-		conn.delayArmed = head
-		if conn.delayTimer == nil {
-			conn.delayTimer = time.AfterFunc(head.Sub(now), conn.flushDelayed)
-			// An aborted Conn never sends what it holds, so release it rather than keep it until due.
-			context.AfterFunc(conn.ctx, conn.dropDelayed)
-		} else {
-			conn.delayTimer.Reset(head.Sub(now))
-		}
-	}
 	return encodeErr
-}
-
-// flushDelayed sends held batches once they are due. It sends only batches that were already flushed, never
-// the packets buffered since, so owners that flush at batch boundaries keep control of them. Like the
-// automatic flush loop, it closes the Conn when sending fails.
-func (conn *Conn) flushDelayed() {
-	select {
-	case <-conn.ctx.Done():
-		return
-	default:
-	}
-	conn.encMu.Lock()
-	conn.delayArmed = time.Time{}
-	err := conn.sendDueLocked(false)
-	conn.encMu.Unlock()
-	if err != nil {
-		_ = conn.close(err)
-	}
-}
-
-// dropDelayed discards every held batch and stops delayTimer once the Conn is gone. It runs on its own
-// goroutine, so waiting for encMu never stalls Abort.
-func (conn *Conn) dropDelayed() {
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
-	conn.delayTimer.Stop()
-	clear(conn.delayed)
-	conn.delayed = nil
-	conn.delayArmed = time.Time{}
 }
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
@@ -1574,11 +1414,9 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	if err := conn.updateEncoder(func(enc *packet.Encoder) {
-		enc.EnableCompression(conn.compression, conn.compressionThreshold)
-	}); err != nil {
-		return fmt.Errorf("send NetworkSettings: %w", err)
-	}
+	conn.encMu.Lock()
+	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
+	conn.encMu.Unlock()
 	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
 	return nil
 }
@@ -1589,11 +1427,9 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	if !ok {
 		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
 	}
-	if err := conn.updateEncoder(func(enc *packet.Encoder) {
-		enc.EnableCompression(alg, int(pk.CompressionThreshold))
-	}); err != nil {
-		return fmt.Errorf("enable compression: %w", err)
-	}
+	conn.encMu.Lock()
+	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
+	conn.encMu.Unlock()
 	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
@@ -1808,9 +1644,9 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 		}
 
 		// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
-		if err := conn.updateEncoder(func(enc *packet.Encoder) { enc.EnableEncryption(keyBytes) }); err != nil {
-			return fmt.Errorf("enable encryption: %w", err)
-		}
+		conn.encMu.Lock()
+		conn.enc.EnableEncryption(keyBytes)
+		conn.encMu.Unlock()
 		conn.dec.EnableEncryption(keyBytes)
 	}
 
@@ -2562,9 +2398,9 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 		}
 
 		// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
-		if err := conn.updateEncoder(func(enc *packet.Encoder) { enc.EnableEncryption(keyBytes) }); err != nil {
-			return fmt.Errorf("enable encryption: %w", err)
-		}
+		conn.encMu.Lock()
+		conn.enc.EnableEncryption(keyBytes)
+		conn.encMu.Unlock()
 		conn.dec.EnableEncryption(keyBytes)
 	}
 
@@ -2625,8 +2461,11 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
 		}()
-		// Packets held by a send delay go out now: the connection will not be around when they fall due.
-		conn.gracefulCloseErr = conn.flush(true)
+		conn.gracefulCloseErr = conn.Flush()
+		// Anything the send delay holds goes out now: the connection will not be around when it falls due.
+		if conn.delay != nil {
+			conn.delay.set(0)
+		}
 	})
 	return conn.gracefulCloseErr
 }
@@ -2642,6 +2481,9 @@ func (conn *Conn) abort(cause error) error {
 		}
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
+		}
+		if conn.delay != nil {
+			conn.delay.drop()
 		}
 	})
 	return conn.abortErr

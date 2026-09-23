@@ -71,9 +71,7 @@ func testPacket(id uint32) packet.Packet { return &packet.Unknown{PacketID: id} 
 func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	const delay = 150 * time.Millisecond
-	if err := conn.SetSendDelay(delay); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(delay)
 	start := time.Now()
 	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
@@ -90,11 +88,9 @@ func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 	}
 }
 
-func TestConn_SendDelayTimerLeavesUnflushedPacketsToTheOwner(t *testing.T) {
+func TestConn_SendDelayLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(50 * time.Millisecond); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(50 * time.Millisecond)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
@@ -114,9 +110,7 @@ func TestConn_SendDelayTimerLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 
 func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(100 * time.Millisecond); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(100 * time.Millisecond)
 	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
@@ -140,17 +134,13 @@ func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 
 func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(time.Hour); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
 	expectNothingSent(t, ids, 50*time.Millisecond)
 
-	if err := conn.SetSendDelay(0); err != nil {
-		t.Fatalf("SetSendDelay(0): %v", err)
-	}
+	conn.SetSendDelay(0)
 	expectSent(t, ids, 700, time.Second)
 	if got := conn.SendDelay(); got != 0 {
 		t.Fatalf("SendDelay after clearing = %v, want 0", got)
@@ -163,31 +153,27 @@ func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	expectSent(t, ids, 701, time.Second)
 }
 
-func TestConn_EnablingCompressionSendsHeldPacketsUncompressedFirst(t *testing.T) {
+func TestConn_SendDelayKeepsTheEncodingPacketsWereSentWith(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(time.Hour); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
-	// Flushed before compression is enabled, like NetworkSettings during login: the peer still reads
-	// uncompressed batches, so the held packet must go out before the encoder changes.
+	conn.SetSendDelay(time.Hour)
+	// Sent before compression is enabled, like NetworkSettings during login: the peer still reads
+	// uncompressed batches, so the held packet must stay uncompressed.
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
 	if err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: packet.FlateCompression.EncodeCompression()}); err != nil {
 		t.Fatalf("handleNetworkSettings: %v", err)
 	}
+	conn.SetSendDelay(0)
 	expectSent(t, ids, 700, time.Second)
 }
 
-func TestConn_SendDelayHoldsACopyOfWrittenPayloads(t *testing.T) {
+func TestConn_SendDelayHoldsWhatWasSentNotTheCallersBuffer(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(time.Hour); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(time.Hour)
 	var payload bytes.Buffer
 	(&packet.Header{PacketID: 700}).Write(&payload)
-	b := payload.Bytes()
-	if _, err := conn.Write(b); err != nil {
+	if _, err := conn.Write(payload.Bytes()); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -197,42 +183,28 @@ func TestConn_SendDelayHoldsACopyOfWrittenPayloads(t *testing.T) {
 	payload.Reset()
 	(&packet.Header{PacketID: 701}).Write(&payload)
 
-	if err := conn.SetSendDelay(0); err != nil {
-		t.Fatalf("SetSendDelay(0): %v", err)
-	}
+	conn.SetSendDelay(0)
 	expectSent(t, ids, 700, time.Second)
 }
 
-func TestConn_AbortReleasesPacketsHeldBySendDelay(t *testing.T) {
+func TestConn_AbortDiscardsPacketsHeldBySendDelay(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
-	if err := conn.SetSendDelay(time.Hour); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
 	_ = conn.Abort()
 
-	deadline := time.Now().Add(time.Second)
-	for {
-		conn.encMu.Lock()
-		held := len(conn.delayed)
-		conn.encMu.Unlock()
-		if held == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("an aborted Conn still holds %d batches", held)
-		}
-		time.Sleep(5 * time.Millisecond)
+	conn.delay.mu.Lock()
+	defer conn.delay.mu.Unlock()
+	if held := len(conn.delay.held); held != 0 {
+		t.Fatalf("an aborted Conn still holds %d batches", held)
 	}
 }
 
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	if err := conn.SetSendDelay(time.Hour); err != nil {
-		t.Fatalf("SetSendDelay: %v", err)
-	}
+	conn.SetSendDelay(time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
