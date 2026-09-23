@@ -303,9 +303,10 @@ type Conn struct {
 	sendDelay atomic.Int64
 	// delayed holds flushed batches waiting out sendDelay, oldest first. It is protected by encMu.
 	delayed []delayedBatch
-	// delayTimer sends the oldest delayed batch once it is due, even if nothing else flushes the Conn. It
-	// is protected by encMu.
+	// delayTimer sends the oldest delayed batch once it is due, even if nothing else flushes the Conn, and
+	// delayArmed is the due time it is set for. Both are protected by encMu.
 	delayTimer *time.Timer
+	delayArmed time.Time
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -683,13 +684,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 	if len(immediate) > 0 {
 		conn.encMu.Lock()
 		defer conn.encMu.Unlock()
-		if delay := time.Duration(conn.sendDelay.Load()); delay > 0 || len(conn.delayed) != 0 {
-			// Sending now would overtake packets held by the send delay, so hold these behind them.
-			now := time.Now()
-			conn.delayed = append(conn.delayed, delayedBatch{due: now.Add(delay), packets: slices.Clone(immediate)})
-			return conn.sendDueLocked(now, false)
-		}
-		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
+		return conn.sendLocked(immediate, true, false, "write packet direct")
 	}
 	return nil
 }
@@ -925,21 +920,32 @@ func (conn *Conn) flush(drain bool) error {
 	}
 	conn.sendMu.Unlock()
 
+	// toSend is recycled as the spare buffer, so a held batch keeps its own copy of the packet slices.
+	encodeErr := conn.sendLocked(toSend, false, drain, "flush")
+	if len(toSend) != 0 {
+		conn.recycleSend(toSend)
+	}
+	return encodeErr
+}
+
+// sendLocked sends batch without letting it overtake batches the send delay holds: with no delay and nothing
+// held it is encoded at once; otherwise it joins the held batches and only those already due are sent. drain
+// makes every held batch due. owned reports that the queue may keep batch itself rather than a copy of its
+// packet slices; the packet data is already a copy safe to retain. The caller holds encMu.
+func (conn *Conn) sendLocked(batch [][]byte, owned, drain bool, op string) error {
 	delay := time.Duration(conn.sendDelay.Load())
 	if len(conn.delayed) == 0 && (delay <= 0 || drain) {
-		if len(toSend) == 0 {
+		if len(batch) == 0 {
 			return nil
 		}
-		encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
-		conn.recycleSend(toSend)
-		return encodeErr
+		return conn.handleEncodeError(conn.enc.Encode(batch), op)
 	}
 	now := time.Now()
-	if len(toSend) != 0 {
-		// The held batch outlives toSend, which is recycled as the spare buffer, so it keeps its own copy of
-		// the packet slices. The packet data itself is already a copy safe to retain.
-		conn.delayed = append(conn.delayed, delayedBatch{due: now.Add(delay), packets: slices.Clone(toSend)})
-		conn.recycleSend(toSend)
+	if len(batch) != 0 {
+		if !owned {
+			batch = slices.Clone(batch)
+		}
+		conn.delayed = append(conn.delayed, delayedBatch{due: now.Add(delay), packets: batch})
 	}
 	return conn.sendDueLocked(now, drain)
 }
@@ -965,21 +971,25 @@ func (conn *Conn) sendDueLocked(now time.Time, drain bool) error {
 		if encodeErr == nil {
 			encodeErr = conn.handleEncodeError(conn.enc.Encode(conn.delayed[i].packets), "flush")
 		}
-		conn.delayed[i] = delayedBatch{}
 	}
-	conn.delayed = conn.delayed[due:]
-	if len(conn.delayed) == 0 {
-		conn.delayed = nil
+	// Shift the rest to the front so the queue keeps reusing one backing array.
+	n := copy(conn.delayed, conn.delayed[due:])
+	clear(conn.delayed[n:])
+	conn.delayed = conn.delayed[:n]
+	if n == 0 {
 		if conn.delayTimer != nil {
 			conn.delayTimer.Stop()
 		}
+		conn.delayArmed = time.Time{}
 		return encodeErr
 	}
-	wait := conn.delayed[0].due.Sub(now)
-	if conn.delayTimer == nil {
-		conn.delayTimer = time.AfterFunc(wait, conn.flushDelayed)
-	} else {
-		conn.delayTimer.Reset(wait)
+	if head := conn.delayed[0].due; !head.Equal(conn.delayArmed) {
+		conn.delayArmed = head
+		if conn.delayTimer == nil {
+			conn.delayTimer = time.AfterFunc(head.Sub(now), conn.flushDelayed)
+		} else {
+			conn.delayTimer.Reset(head.Sub(now))
+		}
 	}
 	return encodeErr
 }
@@ -994,6 +1004,7 @@ func (conn *Conn) flushDelayed() {
 	default:
 	}
 	conn.encMu.Lock()
+	conn.delayArmed = time.Time{}
 	err := conn.sendDueLocked(time.Now(), false)
 	conn.encMu.Unlock()
 	if err != nil {
