@@ -878,8 +878,9 @@ type delayedBatch struct {
 // so callers may reuse them immediately, but every flushed batch is held for d before it goes on the wire.
 // Ordering is kept across WritePacket, WritePacketImmediate, WritePacketDirect and Write. Held batches are
 // sent once due even if nothing else flushes the Conn; packets buffered since the last flush still wait for
-// one. Close sends held batches without waiting. A d of zero or less stops delaying and sends every held
-// batch immediately.
+// one. A new d applies to batches flushed afterwards and never reorders: after lowering it, new batches
+// still wait for those held before them. Close sends held batches without waiting; Abort discards them. A d
+// of zero or less stops delaying and sends every held batch immediately.
 func (conn *Conn) SetSendDelay(d time.Duration) error {
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
@@ -933,7 +934,7 @@ func (conn *Conn) flush(drain bool) error {
 	}
 	conn.sendMu.Unlock()
 
-	// toSend is recycled as the spare buffer, so a held batch keeps its own copy of the packet slices.
+	// toSend is recycled as the spare buffer, so a held batch keeps its own copy of the packets.
 	encodeErr := conn.sendLocked(toSend, false, drain, "flush")
 	if len(toSend) != 0 {
 		conn.recycleSend(toSend)
@@ -943,8 +944,9 @@ func (conn *Conn) flush(drain bool) error {
 
 // sendLocked sends batch without letting it overtake batches the send delay holds: with no delay and nothing
 // held it is encoded at once; otherwise it joins the held batches and only those already due are sent. drain
-// makes every held batch due. owned reports that the queue may keep batch itself rather than a copy of its
-// packet slices; the packet data is already a copy safe to retain. The caller holds encMu.
+// makes every held batch due. owned reports that the queue may keep batch and its packet data as they are;
+// otherwise it holds a copy of both, since batch is recycled and Write lets callers reuse their payload once
+// Flush returns. The caller holds encMu.
 func (conn *Conn) sendLocked(batch [][]byte, owned, drain bool, op string) error {
 	delay := time.Duration(conn.sendDelay.Load())
 	if len(conn.delayed) == 0 && (delay <= 0 || drain) {
@@ -955,11 +957,27 @@ func (conn *Conn) sendLocked(batch [][]byte, owned, drain bool, op string) error
 	}
 	if len(batch) != 0 {
 		if !owned {
-			batch = slices.Clone(batch)
+			batch = cloneBatch(batch)
 		}
 		conn.delayed = append(conn.delayed, delayedBatch{due: time.Now().Add(delay), packets: batch})
 	}
 	return conn.sendDueLocked(drain)
+}
+
+// cloneBatch copies batch and every packet in it into one allocation for the packet data.
+func cloneBatch(batch [][]byte) [][]byte {
+	size := 0
+	for _, data := range batch {
+		size += len(data)
+	}
+	buf := make([]byte, 0, size)
+	clone := make([][]byte, len(batch))
+	for i, data := range batch {
+		start := len(buf)
+		buf = append(buf, data...)
+		clone[i] = buf[start:len(buf):len(buf)]
+	}
+	return clone
 }
 
 // recycleSend clears a sent buffer and keeps it as the spare, so that re-using the slice after resetting its
@@ -999,6 +1017,8 @@ func (conn *Conn) sendDueLocked(drain bool) error {
 		conn.delayArmed = head
 		if conn.delayTimer == nil {
 			conn.delayTimer = time.AfterFunc(head.Sub(now), conn.flushDelayed)
+			// An aborted Conn never sends what it holds, so release it rather than keep it until due.
+			context.AfterFunc(conn.ctx, conn.dropDelayed)
 		} else {
 			conn.delayTimer.Reset(head.Sub(now))
 		}
@@ -1022,6 +1042,17 @@ func (conn *Conn) flushDelayed() {
 	if err != nil {
 		_ = conn.close(err)
 	}
+}
+
+// dropDelayed discards every held batch and stops delayTimer once the Conn is gone. It runs on its own
+// goroutine, so waiting for encMu never stalls Abort.
+func (conn *Conn) dropDelayed() {
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	conn.delayTimer.Stop()
+	clear(conn.delayed)
+	conn.delayed = nil
+	conn.delayArmed = time.Time{}
 }
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the

@@ -179,6 +179,55 @@ func TestConn_EnablingCompressionSendsHeldPacketsUncompressedFirst(t *testing.T)
 	expectSent(t, ids, 700, time.Second)
 }
 
+func TestConn_SendDelayHoldsACopyOfWrittenPayloads(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	if err := conn.SetSendDelay(time.Hour); err != nil {
+		t.Fatalf("SetSendDelay: %v", err)
+	}
+	var payload bytes.Buffer
+	(&packet.Header{PacketID: 700}).Write(&payload)
+	b := payload.Bytes()
+	if _, err := conn.Write(b); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	// Flush has returned, so the caller may reuse its buffer while the packet is still held.
+	payload.Reset()
+	(&packet.Header{PacketID: 701}).Write(&payload)
+
+	if err := conn.SetSendDelay(0); err != nil {
+		t.Fatalf("SetSendDelay(0): %v", err)
+	}
+	expectSent(t, ids, 700, time.Second)
+}
+
+func TestConn_AbortReleasesPacketsHeldBySendDelay(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	if err := conn.SetSendDelay(time.Hour); err != nil {
+		t.Fatalf("SetSendDelay: %v", err)
+	}
+	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	_ = conn.Abort()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		conn.encMu.Lock()
+		held := len(conn.delayed)
+		conn.encMu.Unlock()
+		if held == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("an aborted Conn still holds %d batches", held)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	if err := conn.SetSendDelay(time.Hour); err != nil {
