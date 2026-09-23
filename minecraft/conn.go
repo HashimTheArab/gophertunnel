@@ -887,7 +887,20 @@ func (conn *Conn) SetSendDelay(d time.Duration) error {
 	if d > 0 || len(conn.delayed) == 0 {
 		return nil
 	}
-	return conn.sendDueLocked(time.Now(), true)
+	return conn.sendDueLocked(true)
+}
+
+// updateEncoder applies update to the encoder after sending every batch the send delay holds, so a batch
+// flushed before compression or encryption is enabled is never encoded with it.
+func (conn *Conn) updateEncoder(update func(enc *packet.Encoder)) error {
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	var err error
+	if len(conn.delayed) != 0 {
+		err = conn.sendDueLocked(true)
+	}
+	update(conn.enc)
+	return err
 }
 
 // SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
@@ -940,14 +953,13 @@ func (conn *Conn) sendLocked(batch [][]byte, owned, drain bool, op string) error
 		}
 		return conn.handleEncodeError(conn.enc.Encode(batch), op)
 	}
-	now := time.Now()
 	if len(batch) != 0 {
 		if !owned {
 			batch = slices.Clone(batch)
 		}
-		conn.delayed = append(conn.delayed, delayedBatch{due: now.Add(delay), packets: batch})
+		conn.delayed = append(conn.delayed, delayedBatch{due: time.Now().Add(delay), packets: batch})
 	}
-	return conn.sendDueLocked(now, drain)
+	return conn.sendDueLocked(drain)
 }
 
 // recycleSend clears a sent buffer and keeps it as the spare, so that re-using the slice after resetting its
@@ -959,17 +971,17 @@ func (conn *Conn) recycleSend(toSend [][]byte) {
 	conn.sendMu.Unlock()
 }
 
-// sendDueLocked sends the held batches that are due at now, oldest first, and arms delayTimer for the next
-// one. Every held batch counts as due when drain is set. The caller holds encMu.
-func (conn *Conn) sendDueLocked(now time.Time, drain bool) error {
-	due := 0
-	for due < len(conn.delayed) && (drain || !conn.delayed[due].due.After(now)) {
-		due++
-	}
+// sendDueLocked sends the held batches that are due, oldest first, and arms delayTimer for the next one.
+// The clock is read again after every send, so batches that fall due during a slow write go out too. Every
+// held batch counts as due when drain is set. The caller holds encMu.
+func (conn *Conn) sendDueLocked(drain bool) error {
 	var encodeErr error
-	for i := range due {
-		if encodeErr == nil {
-			encodeErr = conn.handleEncodeError(conn.enc.Encode(conn.delayed[i].packets), "flush")
+	due, now := 0, time.Now()
+	for due < len(conn.delayed) && (drain || !conn.delayed[due].due.After(now)) {
+		encodeErr = conn.handleEncodeError(conn.enc.Encode(conn.delayed[due].packets), "flush")
+		due, now = due+1, time.Now()
+		if encodeErr != nil {
+			break
 		}
 	}
 	// Shift the rest to the front so the queue keeps reusing one backing array.
@@ -1005,7 +1017,7 @@ func (conn *Conn) flushDelayed() {
 	}
 	conn.encMu.Lock()
 	conn.delayArmed = time.Time{}
-	err := conn.sendDueLocked(time.Now(), false)
+	err := conn.sendDueLocked(false)
 	conn.encMu.Unlock()
 	if err != nil {
 		_ = conn.close(err)
@@ -1531,9 +1543,11 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
-	conn.encMu.Unlock()
+	if err := conn.updateEncoder(func(enc *packet.Encoder) {
+		enc.EnableCompression(conn.compression, conn.compressionThreshold)
+	}); err != nil {
+		return fmt.Errorf("send NetworkSettings: %w", err)
+	}
 	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
 	return nil
 }
@@ -1544,9 +1558,11 @@ func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
 	if !ok {
 		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
 	}
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
-	conn.encMu.Unlock()
+	if err := conn.updateEncoder(func(enc *packet.Encoder) {
+		enc.EnableCompression(alg, int(pk.CompressionThreshold))
+	}); err != nil {
+		return fmt.Errorf("enable compression: %w", err)
+	}
 	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
 	conn.readyToLogin = true
 	return nil
@@ -1761,9 +1777,9 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 		}
 
 		// Finally we enable encryption for the enc and dec using the secret pubKey bytes we produced.
-		conn.encMu.Lock()
-		conn.enc.EnableEncryption(keyBytes)
-		conn.encMu.Unlock()
+		if err := conn.updateEncoder(func(enc *packet.Encoder) { enc.EnableEncryption(keyBytes) }); err != nil {
+			return fmt.Errorf("enable encryption: %w", err)
+		}
 		conn.dec.EnableEncryption(keyBytes)
 	}
 
@@ -2515,9 +2531,9 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 		}
 
 		// Finally we enable encryption for the encoder and decoder using the secret key bytes we produced.
-		conn.encMu.Lock()
-		conn.enc.EnableEncryption(keyBytes)
-		conn.encMu.Unlock()
+		if err := conn.updateEncoder(func(enc *packet.Encoder) { enc.EnableEncryption(keyBytes) }); err != nil {
+			return fmt.Errorf("enable encryption: %w", err)
+		}
 		conn.dec.EnableEncryption(keyBytes)
 	}
 

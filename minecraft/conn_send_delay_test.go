@@ -163,6 +163,22 @@ func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	expectSent(t, ids, 701, time.Second)
 }
 
+func TestConn_EnablingCompressionSendsHeldPacketsUncompressedFirst(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	if err := conn.SetSendDelay(time.Hour); err != nil {
+		t.Fatalf("SetSendDelay: %v", err)
+	}
+	// Flushed before compression is enabled, like NetworkSettings during login: the peer still reads
+	// uncompressed batches, so the held packet must go out before the encoder changes.
+	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	if err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: packet.FlateCompression.EncodeCompression()}); err != nil {
+		t.Fatalf("handleNetworkSettings: %v", err)
+	}
+	expectSent(t, ids, 700, time.Second)
+}
+
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	if err := conn.SetSendDelay(time.Hour); err != nil {
