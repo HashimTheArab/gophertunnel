@@ -14,7 +14,8 @@ import (
 // before them. A d of zero or less stops delaying and sends everything held immediately. Close sends what is
 // held without waiting; Abort discards it.
 func (conn *Conn) SetSendDelay(d time.Duration) {
-	conn.delay.set(d)
+	// A failed release is reported by the next write, like any other send failure.
+	_ = conn.delay.set(d)
 }
 
 // SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
@@ -43,12 +44,12 @@ type heldWrite struct {
 
 // Write writes b to w now if nothing is held and no delay is set, and otherwise holds a copy of it.
 func (d *delayWriter) Write(b []byte) (int, error) {
-	delay := time.Duration(d.delay.Load())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.err != nil {
 		return 0, d.err
 	}
+	delay := time.Duration(d.delay.Load())
 	if len(d.held) == 0 && delay <= 0 {
 		return d.w.Write(b)
 	}
@@ -59,19 +60,29 @@ func (d *delayWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// set changes the delay, writing everything held when it is cleared.
-func (d *delayWriter) set(delay time.Duration) {
-	d.delay.Store(int64(max(delay, 0)))
-	if delay <= 0 {
-		d.release(true)
-	}
-}
-
-// release writes the held batches that are due, or all of them when all is set, and arms the timer for
-// the next one. The clock is read again after every write, so batches that fall due meanwhile go too.
-func (d *delayWriter) release(all bool) {
+// set changes the delay under the same lock Write decides with, writing everything held when it is
+// cleared. It returns the error a held batch failed to write with.
+func (d *delayWriter) set(delay time.Duration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.delay.Store(int64(max(delay, 0)))
+	if delay > 0 {
+		return nil
+	}
+	return d.releaseLocked(true)
+}
+
+// releaseDue writes the held batches that are due. It runs when the timer fires.
+func (d *delayWriter) releaseDue() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_ = d.releaseLocked(false)
+}
+
+// releaseLocked writes the held batches that are due, or all of them when all is set, and arms the timer
+// for the next one. The clock is read again after every write, so batches that fall due meanwhile go too.
+// It returns the error a held batch failed to write with. The caller holds mu.
+func (d *delayWriter) releaseLocked(all bool) error {
 	n := 0
 	for ; n < len(d.held) && (all || !d.held[n].due.After(time.Now())); n++ {
 		if d.err == nil {
@@ -83,6 +94,7 @@ func (d *delayWriter) release(all bool) {
 		d.held = nil
 	}
 	d.armLocked()
+	return d.err
 }
 
 // drop discards everything held, for a Conn that will never send it.
@@ -102,7 +114,7 @@ func (d *delayWriter) armLocked() {
 	}
 	wait := time.Until(d.held[0].due)
 	if d.timer == nil {
-		d.timer = time.AfterFunc(wait, func() { d.release(false) })
+		d.timer = time.AfterFunc(wait, d.releaseDue)
 		return
 	}
 	d.timer.Reset(wait)

@@ -412,7 +412,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
 	conn.delay.w = netConn
-	conn.enc = packet.NewEncoder(&conn.delay)
+	conn.enc = packet.NewEncoderFor(netConn, &conn.delay)
 	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
@@ -2463,7 +2463,7 @@ func (conn *Conn) close(cause error) error {
 		}()
 		conn.gracefulCloseErr = conn.Flush()
 		// Anything the send delay holds goes out now: the connection will not be around when it falls due.
-		conn.delay.set(0)
+		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.delay.set(0))
 	})
 	return conn.gracefulCloseErr
 }

@@ -202,6 +202,58 @@ func TestConn_AbortDiscardsPacketsHeldBySendDelay(t *testing.T) {
 	}
 }
 
+// framedConn is a transport that frames batches itself, like NetherNet.
+type framedConn struct{ net.Conn }
+
+func (framedConn) BatchHeader() []byte { return nil }
+
+func TestConn_SendDelayKeepsTheTransportsBatchFraming(t *testing.T) {
+	client, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = peer.Close()
+	})
+	conn := newConn(framedConn{client}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	t.Cleanup(func() { _ = conn.Abort() })
+
+	sent := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 64)
+		n, _ := peer.Read(buf)
+		sent <- buf[:n]
+	}()
+	if err := conn.WritePacketDirect(testPacket(700)); err != nil {
+		t.Fatalf("WritePacketDirect: %v", err)
+	}
+	select {
+	case data := <-sent:
+		if len(data) == 0 || data[0] == 0xfe {
+			t.Fatalf("sent %x, want the transport's own framing without the standard batch header", data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("nothing was sent")
+	}
+}
+
+// failingWriter fails every write.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, net.ErrClosed }
+
+func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
+	d := &delayWriter{w: failingWriter{}}
+	if err := d.set(time.Hour); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if _, err := d.Write([]byte{1}); err != nil {
+		t.Fatalf("Write while delayed: %v", err)
+	}
+	// Close releases what is held this way, so the failure must reach its caller.
+	if err := d.set(0); err == nil {
+		t.Fatal("releasing a batch that failed to write reported no error")
+	}
+}
+
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	conn.SetSendDelay(time.Hour)
