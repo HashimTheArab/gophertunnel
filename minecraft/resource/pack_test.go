@@ -126,6 +126,15 @@ func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			link := &zip.FileHeader{Name: prefix + "entity/link.json"}
+			link.SetMode(os.ModeSymlink | 0777)
+			w, err := zw.CreateHeader(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write([]byte("player.entity.json")); err != nil {
+				t.Fatal(err)
+			}
 			if err := zw.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -135,6 +144,12 @@ func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
 			}
 			if !pack.HasResourceFile("entity/player.entity.json") || pack.HasResourceFile("entity/missing.json") {
 				t.Fatal("resource files were not resolved relative to the manifest")
+			}
+			if pack.HasResourceFile("entity/link.json") {
+				t.Fatal("ZIP symlink was reported as a resource file")
+			}
+			if _, err := pack.ReadFile("entity/link.json"); err == nil {
+				t.Fatal("ReadFile read a ZIP symlink")
 			}
 			data, err := pack.ReadFile("entity/player.entity.json")
 			if err != nil || string(data) != "{}" {

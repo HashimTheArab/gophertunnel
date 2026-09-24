@@ -333,7 +333,7 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	}
 	want := path.Join(p.manifestDir, filePath)
 	for _, file := range zr.File {
-		if strings.EqualFold(file.Name, want) && !file.FileInfo().IsDir() {
+		if strings.EqualFold(file.Name, want) && file.FileInfo().Mode().IsRegular() {
 			return file, nil
 		}
 	}
