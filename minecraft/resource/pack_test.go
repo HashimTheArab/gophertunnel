@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -133,6 +135,37 @@ func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
 			}
 			if !pack.HasResourceFile("entity/player.entity.json") || pack.HasResourceFile("entity/missing.json") {
 				t.Fatal("resource files were not resolved relative to the manifest")
+			}
+			data, err := pack.ReadFile("entity/player.entity.json")
+			if err != nil || string(data) != "{}" {
+				t.Fatalf("ReadFile from manifest root = %q, %v", data, err)
+			}
+			zipPath := filepath.Join(t.TempDir(), "pack.mcpack")
+			if err := os.WriteFile(zipPath, buf.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			fromPath, err := ReadPath(zipPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fromPath.HasResourceFile("entity/player.entity.json") {
+				t.Fatal("ReadPath lost the manifest directory")
+			}
+			if prefix == "" {
+				directory := t.TempDir()
+				if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifestData, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(directory, "entity"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "entity", "player.entity.json"), []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				fromDir, err := ReadPath(directory)
+				if err != nil || !fromDir.HasResourceFile("entity/player.entity.json") {
+					t.Fatalf("directory pack lookup = %v, %v", fromDir, err)
+				}
 			}
 		})
 	}
