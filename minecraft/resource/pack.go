@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -325,6 +326,32 @@ func (p *Pack) ReadFile(filePath string) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("file %s not found in the resource pack", filePath)
+}
+
+// HasResourceFile reports whether filePath exists relative to the directory
+// containing the pack's manifest. ZIP packs may place all files below one
+// archive directory, while directory packs are archived at their root.
+func (p *Pack) HasResourceFile(filePath string) bool {
+	if filePath == "" || path.IsAbs(filePath) || path.Clean(filePath) != filePath || strings.HasPrefix(filePath, "../") {
+		return false
+	}
+	zr, err := zip.NewReader(p.content, int64(p.content.Size()))
+	if err != nil {
+		return false
+	}
+	for _, manifest := range zr.File {
+		if path.Base(manifest.Name) != "manifest.json" {
+			continue
+		}
+		want := path.Join(path.Dir(manifest.Name), filePath)
+		for _, file := range zr.File {
+			if strings.EqualFold(file.Name, want) && !file.FileInfo().IsDir() {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // WithContentKey creates a copy of the pack and sets the encryption key to the key provided, after which the

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,4 +91,49 @@ func testPackArchive(t *testing.T) []byte {
 		t.Fatalf("close zip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
+	archive := testPackArchive(t)
+	root, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := root.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := io.ReadAll(manifest)
+	_ = manifest.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"", "MyPack/"} {
+		t.Run(prefix, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			zw := zip.NewWriter(buf)
+			for name, data := range map[string][]byte{
+				prefix + "manifest.json":             manifestData,
+				prefix + "entity/player.entity.json": []byte(`{}`),
+			} {
+				w, err := zw.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.Write(data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			pack, err := ReadBytes(buf.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !pack.HasResourceFile("entity/player.entity.json") || pack.HasResourceFile("entity/missing.json") {
+				t.Fatal("resource files were not resolved relative to the manifest")
+			}
+		})
+	}
 }
