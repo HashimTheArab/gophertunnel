@@ -578,6 +578,99 @@ func TestHandleLoginSkipsServerHandshakeWhenEncryptionDisabled(t *testing.T) {
 	}
 }
 
+// publicKeyTransport is a transport that authenticated key, or no key when nil.
+type publicKeyTransport struct {
+	net.Conn
+	key *ecdsa.PublicKey
+}
+
+func (c publicKeyTransport) DisableEncryption() bool     { return true }
+func (c publicKeyTransport) PublicKey() *ecdsa.PublicKey { return c.key }
+
+// Without encryption, only a transport key matching the login chain proves the Login is not a replay.
+func TestLoginKeyProvenOnlyByMatchingTransportKey(t *testing.T) {
+	t.Parallel()
+
+	loginKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tests := []struct {
+		name      string
+		transport *ecdsa.PublicKey
+		want      bool
+	}{
+		{name: "anonymous transport", want: false},
+		{name: "matching transport key", transport: &loginKey.PublicKey, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, serverConn := net.Pipe()
+			defer client.Close()
+			defer serverConn.Close()
+			go func() {
+				_, _ = io.Copy(io.Discard, serverConn)
+			}()
+
+			conn := newConn(publicKeyTransport{Conn: client, key: tt.transport}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			defer conn.Close()
+			conn.authEnabled = false
+
+			var identityData login.IdentityData
+			defaultIdentityData(&identityData)
+			var clientData login.ClientData
+			defaultClientData("127.0.0.1:19132", identityData.DisplayName, &clientData)
+			if err := conn.handleLogin(&packet.Login{ConnectionRequest: login.EncodeOffline(identityData, clientData, loginKey)}); err != nil {
+				t.Fatalf("handleLogin: %v", err)
+			}
+			if got := conn.LoginKeyProven(); got != tt.want {
+				t.Fatalf("LoginKeyProven() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// With encryption, the login key is proven only once the client answers the encrypted handshake.
+func TestLoginKeyProvenByEncryptionHandshake(t *testing.T) {
+	t.Parallel()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	serverKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	conn := newConn(client, serverKey, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.authEnabled = false
+
+	var identityData login.IdentityData
+	defaultIdentityData(&identityData)
+	var clientData login.ClientData
+	defaultClientData("127.0.0.1:19132", identityData.DisplayName, &clientData)
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	if err := conn.handleLogin(&packet.Login{ConnectionRequest: login.EncodeOffline(identityData, clientData, key)}); err != nil {
+		t.Fatalf("handleLogin: %v", err)
+	}
+	if conn.LoginKeyProven() {
+		t.Fatal("LoginKeyProven() = true before the client answered the encrypted handshake")
+	}
+	if err := conn.handleClientToServerHandshake(); err != nil {
+		t.Fatalf("handleClientToServerHandshake: %v", err)
+	}
+	if !conn.LoginKeyProven() {
+		t.Fatal("LoginKeyProven() = false after the encrypted handshake")
+	}
+}
+
 func TestClientCacheStatusSendsEmptyResourcePackStack(t *testing.T) {
 	t.Parallel()
 

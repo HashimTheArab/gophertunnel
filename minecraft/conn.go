@@ -303,6 +303,8 @@ type Conn struct {
 	readyToLogin bool
 	// handshakeComplete is true if the login handshake has been completed.
 	handshakeComplete bool
+	// loginKeyProven is true once the client proved it holds the private key of its login chain.
+	loginKeyProven bool
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
@@ -466,6 +468,13 @@ func (conn *Conn) SetPacketBatchFunc(f packet.BatchEncodeObserver) {
 // Authenticated returns true if the connection was authenticated through XBOX Live services.
 func (conn *Conn) Authenticated() bool {
 	return conn.IdentityData().XUID != ""
+}
+
+// LoginKeyProven reports whether a client accepted by a Listener proved it holds the private key its login
+// chain was issued to, through the encryption handshake or a transport-authenticated key. When false, the
+// Login may have been replayed from a capture, even if its chain verified.
+func (conn *Conn) LoginKeyProven() bool {
+	return conn.loginKeyProven
 }
 
 // GameData returns specific game data set to the connection for the player to be initialised with. If the
@@ -1458,9 +1467,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
 	if pkc, ok := conn.conn.(publicKeyConn); ok {
-		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
-			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+		if pub := pkc.PublicKey(); pub != nil {
+			if !authResult.PublicKey.Equal(pub) {
+				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+				return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+			}
+			conn.loginKeyProven = true
 		}
 	}
 	if conn.allow != nil {
@@ -1564,6 +1576,10 @@ type publicKeyConn interface {
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
 	conn.handshakeComplete = true
+	if !conn.disableEncryption {
+		// The client could only send this packet encrypted with the key derived from its login key.
+		conn.loginKeyProven = true
+	}
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true
 		return nil

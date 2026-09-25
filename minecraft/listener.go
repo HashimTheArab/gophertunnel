@@ -53,6 +53,12 @@ type ListenConfig struct {
 	// will be dynamically updated each time a player joins, so that an unlimited amount of players is
 	// accepted into the server.
 	MaximumPlayers int
+	// LoginTimeout bounds how long a connection may take from being accepted by the network to finishing
+	// its login sequence. Connections still logging in when it expires are closed. Zero disables the limit.
+	LoginTimeout time.Duration
+	// MaximumPendingLogins caps the connections that have not finished their login sequence. Connections
+	// beyond it are closed on arrival. Zero disables the cap.
+	MaximumPendingLogins int
 
 	// AllowUnknownPackets specifies if connections of this Listener are allowed to send packets not present
 	// in the packet pool. If false (by default), such packets lead to the connection being closed immediately.
@@ -186,6 +192,8 @@ type Listener struct {
 	// playerCount is the amount of players connected to the server. If MaximumPlayers is non-zero and equal
 	// to the playerCount, no more players will be accepted.
 	playerCount atomic.Int32
+	// pendingLogins counts connections that have not finished their login sequence.
+	pendingLogins atomic.Int32
 
 	incoming chan *Conn
 	close    chan struct{}
@@ -507,10 +515,61 @@ func (listener *Listener) createConn(netConn net.Conn) {
 		_ = conn.close(conn.closeErr("server full"))
 		return
 	}
+	if limit := listener.cfg.MaximumPendingLogins; limit > 0 && listener.pendingLogins.Load() >= int32(limit) {
+		// Abort without flushing: this runs on the accept loop, which a peer that never reads must not stall.
+		_ = conn.abort(errors.New("too many pending logins"))
+		return
+	}
 	listener.playerCount.Add(1)
 	listener.updatePongData()
 
-	go listener.handleConn(conn)
+	go listener.handleConn(conn, listener.newPendingLogin(conn))
+}
+
+// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
+var errLoginTimeout = errors.New("login timed out")
+
+// pendingLogin tracks a connection until it finishes its login sequence or is given up on.
+type pendingLogin struct {
+	listener *Listener
+	timer    *time.Timer
+	ended    atomic.Bool
+}
+
+// newPendingLogin counts conn as pending and aborts it if it is still pending after LoginTimeout.
+func (listener *Listener) newPendingLogin(conn *Conn) *pendingLogin {
+	listener.pendingLogins.Add(1)
+	p := &pendingLogin{listener: listener}
+	if timeout := listener.cfg.LoginTimeout; timeout > 0 {
+		p.timer = time.AfterFunc(timeout, func() {
+			if p.claim() {
+				conn.log.Error(errLoginTimeout.Error(), "timeout", timeout)
+				_ = conn.abort(errLoginTimeout)
+			}
+		})
+	}
+	return p
+}
+
+// end stops tracking the login and reports whether this call ended it. Only the first call ends it, so a
+// login that completes as its timeout fires is either delivered or aborted, never both.
+func (p *pendingLogin) end() bool {
+	if !p.claim() {
+		return false
+	}
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+	return true
+}
+
+// claim marks the login ended and releases its pending slot, reporting whether it was still pending.
+func (p *pendingLogin) claim() bool {
+	if !p.ended.CompareAndSwap(false, true) {
+		return false
+	}
+	p.listener.pendingLogins.Add(-1)
+	return true
 }
 
 // status returns the current ServerStatus of the Listener.
@@ -524,8 +583,9 @@ func (listener *Listener) status() ServerStatus {
 
 // handleConn handles an incoming connection of the Listener. It will first attempt to get the connection to
 // log in, after which it will expose packets received to the user.
-func (listener *Listener) handleConn(conn *Conn) {
+func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 	defer func() {
+		pending.end()
 		_ = conn.Close()
 		listener.playerCount.Add(-1)
 		listener.updatePongData()
@@ -553,6 +613,9 @@ func (listener *Listener) handleConn(conn *Conn) {
 			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
 				publish = true
 			}
+			if publish && !pending.end() {
+				return errLoginTimeout
+			}
 			if publish {
 				if conn.batchReading {
 					publishBatch = true
@@ -566,7 +629,9 @@ func (listener *Listener) handleConn(conn *Conn) {
 			if publishBatch {
 				listener.deliverConn(conn)
 			}
-			if callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed)) {
+			// A login timeout was already logged when it fired.
+			timedOut := errors.Is(context.Cause(conn.ctx), errLoginTimeout) || errors.Is(err, errLoginTimeout)
+			if !timedOut && (callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed))) {
 				conn.log.Error(err.Error())
 			}
 			return

@@ -107,7 +107,7 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
-	go listener.handleConn(conn)
+	go listener.handleConn(conn, listener.newPendingLogin(conn))
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
 		t.Fatalf("write packet: %v", err)
@@ -150,7 +150,7 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
-	go listener.handleConn(conn)
+	go listener.handleConn(conn, listener.newPendingLogin(conn))
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
 		t.Fatalf("write packet: %v", err)
@@ -195,7 +195,7 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
 	conn.expect(packet.IDClientToServerHandshake)
-	go listener.handleConn(conn)
+	go listener.handleConn(conn, listener.newPendingLogin(conn))
 
 	if err := writePacket(client, &packet.ClientToServerHandshake{}); err != nil {
 		t.Fatalf("write packet: %v", err)
@@ -640,4 +640,116 @@ func (listenTestNetwork) PingContext(context.Context, string) ([]byte, error) {
 
 func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 	return n.listen(address)
+}
+
+// newLoginLimitListener returns a passthrough listener with the login limits applied.
+func newLoginLimitListener(timeout time.Duration, maxPending int) *Listener {
+	return &Listener{
+		cfg: ListenConfig{
+			ErrorLog:              slog.New(internal.DiscardHandler{}),
+			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			LoginTimeout:          timeout,
+			MaximumPendingLogins:  maxPending,
+			DisablePacketHandling: true,
+			EnableBatchReading:    true,
+			AllowUnknownPackets:   true,
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		incoming: make(chan *Conn, 4),
+		close:    make(chan struct{}),
+	}
+}
+
+// waitClosed reports whether the peer of client closed within timeout.
+func waitClosed(client net.Conn, timeout time.Duration) bool {
+	_ = client.SetReadDeadline(time.Now().Add(timeout))
+	_, err := io.Copy(io.Discard, client)
+	return err == nil
+}
+
+// A peer that connects but never logs in must be closed once LoginTimeout passes.
+func TestListenerLoginTimeoutClosesSilentConnection(t *testing.T) {
+	t.Parallel()
+
+	listener := newLoginLimitListener(50*time.Millisecond, 0)
+	client, server := net.Pipe()
+	defer client.Close()
+	listener.createConn(server)
+
+	if !waitClosed(client, time.Second) {
+		t.Fatal("silent connection was not closed after the login timeout")
+	}
+	waitForCount(t, "player count", listener.PlayerCount)
+	waitForCount(t, "pending logins", func() int { return int(listener.pendingLogins.Load()) })
+}
+
+// A connection that logged in before LoginTimeout must stay open after it passes.
+func TestListenerLoginTimeoutKeepsLoggedInConnection(t *testing.T) {
+	t.Parallel()
+
+	listener := newLoginLimitListener(50*time.Millisecond, 0)
+	client, server := net.Pipe()
+	defer client.Close()
+	listener.createConn(server)
+	if err := writePackets(client, &packet.ResourcePacksInfo{}); err != nil {
+		t.Fatalf("write publishing batch: %v", err)
+	}
+	accepted := acceptConn(t, listener)
+	if _, err := accepted.ReadBatch(); err != nil {
+		t.Fatalf("ReadBatch publishing batch: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	go func() { _ = writePackets(client, &packet.ResourcePacksInfo{}) }()
+	if _, err := accepted.ReadBatch(); err != nil {
+		t.Fatalf("logged-in connection was closed by the login timeout: %v", err)
+	}
+	if n := listener.pendingLogins.Load(); n != 0 {
+		t.Fatalf("pending logins = %d after login, want 0", n)
+	}
+}
+
+// Connections beyond MaximumPendingLogins must be closed on arrival, and a finished login frees its slot.
+func TestListenerMaximumPendingLoginsRefusesExcessConnections(t *testing.T) {
+	t.Parallel()
+
+	listener := newLoginLimitListener(0, 1)
+	first, firstServer := net.Pipe()
+	defer first.Close()
+	listener.createConn(firstServer)
+
+	refused, refusedServer := net.Pipe()
+	defer refused.Close()
+	listener.createConn(refusedServer)
+	if !waitClosed(refused, time.Second) {
+		t.Fatal("connection beyond MaximumPendingLogins was not closed")
+	}
+	if n := listener.PlayerCount(); n != 1 {
+		t.Fatalf("player count = %d, want only the pending connection", n)
+	}
+
+	if err := writePackets(first, &packet.ResourcePacksInfo{}); err != nil {
+		t.Fatalf("write publishing batch: %v", err)
+	}
+	acceptConn(t, listener)
+	waitForCount(t, "pending logins", func() int { return int(listener.pendingLogins.Load()) })
+
+	admitted, admittedServer := net.Pipe()
+	defer admitted.Close()
+	listener.createConn(admittedServer)
+	if n := listener.PlayerCount(); n != 2 {
+		t.Fatalf("player count = %d, want the next connection admitted once the first logged in", n)
+	}
+}
+
+// waitForCount waits for count to reach zero.
+func waitForCount(t *testing.T, what string, count func() int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for count() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s = %d, want 0", what, count())
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
