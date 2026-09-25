@@ -102,6 +102,9 @@ type Dialer struct {
 	// Conn.CompleteResourcePacks. A relay uses it to serve those packs to its own client first, while the
 	// server waits as it would for a client applying packs.
 	HoldResourcePackCompletion bool
+	// ResourcePackHTTPClient fetches packs advertised with a download URL. Nil uses http.DefaultClient; a
+	// relay that must not reach private addresses on a server's behalf supplies a restricted client.
+	ResourcePackHTTPClient *http.Client
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -354,6 +357,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.holdResourcePackCompletion = d.HoldResourcePackCompletion
+	conn.resourcePackHTTPClient = d.ResourcePackHTTPClient
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets

@@ -387,6 +387,7 @@ type Conn struct {
 	// Completed response until CompleteResourcePacks; see Dialer.HoldResourcePackCompletion.
 	holdResourcePackCompletion bool
 	packPhaseDone              bool
+	resourcePackHTTPClient     *http.Client
 	// retainedPacksInfo and retainedPackStack are the server's own pack packets, kept for a relay to forward.
 	retainedPacksInfo *packet.ResourcePacksInfo
 	retainedPackStack *packet.ResourcePackStack
@@ -1868,7 +1869,11 @@ func (conn *Conn) downloadPackURL(url string, size uint64) (*resource.Pack, erro
 	if err != nil {
 		return nil, err
 	}
-	return resource.ReadURLToFile(conn.ctx, http.DefaultClient, url, size, f)
+	client := conn.resourcePackHTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return resource.ReadURLToFile(conn.ctx, client, url, size, f)
 }
 
 func (conn *Conn) trackLoadedPack(pack *resource.Pack) {
