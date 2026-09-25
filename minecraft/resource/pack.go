@@ -75,27 +75,33 @@ func ReadURL(url string) (*Pack, error) {
 // ReadURLContext downloads a resource pack found at the URL passed and compiles it. The request is canceled
 // when ctx is done.
 func ReadURLContext(ctx context.Context, url string) (*Pack, error) {
-	return readURLContext(ctx, url, 0)
+	return readURLContext(ctx, http.DefaultClient, url, 0)
 }
 
 // ReadURLContextLimit downloads a resource pack found at the URL passed and compiles it, reading at most maxSize
 // bytes from the response body. The request is canceled when ctx is done.
 func ReadURLContextLimit(ctx context.Context, url string, maxSize uint64) (*Pack, error) {
+	return ReadURLWithClient(ctx, http.DefaultClient, url, maxSize)
+}
+
+// ReadURLWithClient is ReadURLContextLimit through client, for callers that must restrict where a
+// server-supplied URL may connect.
+func ReadURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64) (*Pack, error) {
 	if maxSize == 0 {
 		return nil, errors.New("download resource pack: max size must be greater than 0")
 	}
 	if maxSize > math.MaxInt64 {
 		return nil, fmt.Errorf("download resource pack: max size %d exceeds supported limit", maxSize)
 	}
-	return readURLContext(ctx, url, int64(maxSize))
+	return readURLContext(ctx, client, url, int64(maxSize))
 }
 
-func readURLContext(ctx context.Context, url string, maxSize int64) (*Pack, error) {
+func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64) (*Pack, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create resource pack request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download resource pack: %w", err)
 	}
