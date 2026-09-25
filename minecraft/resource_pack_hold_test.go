@@ -56,6 +56,12 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 	if conn.ResourcePackStack().BaseGameVersion != "1.26.0" {
 		t.Fatal("retained stack lost")
 	}
+	if err := conn.handleResourcePackStack(&packet.ResourcePackStack{BaseGameVersion: "dup"}); err != nil {
+		t.Fatal(err)
+	}
+	if conn.ResourcePackStack().BaseGameVersion != "1.26.0" {
+		t.Fatal("a resent stack replaced the retained one")
+	}
 	if err := conn.CompleteResourcePacks(); err != nil || !conn.packPhaseDone {
 		t.Fatalf("CompleteResourcePacks = %v, done=%v", err, conn.packPhaseDone)
 	}

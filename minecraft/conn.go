@@ -1801,13 +1801,22 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
 		}
 	}
-	retained := *pk
-	conn.retainedPackStack = &retained
-	conn.expect(packet.IDDimensionData, packet.IDStartGame)
 	if conn.holdResourcePackCompletion {
+		select {
+		case <-conn.packsReady:
+			// A late ClientCacheStatus makes some servers resend the stack; the first one stands.
+			return nil
+		default:
+		}
+		retained := *pk
+		conn.retainedPackStack = &retained
+		conn.expect(packet.IDResourcePackStack, packet.IDDimensionData, packet.IDStartGame)
 		close(conn.packsReady)
 		return nil
 	}
+	retained := *pk
+	conn.retainedPackStack = &retained
+	conn.expect(packet.IDDimensionData, packet.IDStartGame)
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 	return nil
 }
