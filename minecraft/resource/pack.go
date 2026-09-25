@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +27,8 @@ type Pack struct {
 	// manifest is the manifest of the resource pack. It contains information about the pack such as the name,
 	// version and description.
 	manifest *Manifest
+	// manifestDir is the directory containing manifest.json in the archive.
+	manifestDir string
 
 	// downloadURL is the URL that the resource pack can be downloaded from. If the string is empty, then the
 	// resource pack will be downloaded over RakNet rather than HTTP.
@@ -295,36 +298,46 @@ func (pack *Pack) ReadAt(b []byte, off int64) (n int, err error) {
 	return pack.content.ReadAt(b, off)
 }
 
-// ReadFile reads a specific file from the Pack's content and returns its content as a byte slice.
+// ReadFile reads a file relative to the pack's manifest directory.
 func (p *Pack) ReadFile(filePath string) ([]byte, error) {
-	// Create a new zip reader from the content of the bytes.Reader
-	zipReader, err := zip.NewReader(p.content, int64(p.content.Size()))
+	file, err := p.findResourceFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create zip reader: %w", err)
+		return nil, err
 	}
+	rc, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open resource file %q: %w", filePath, err)
+	}
+	defer rc.Close()
+	content, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("read resource file %q: %w", filePath, err)
+	}
+	return content, nil
+}
 
-	// Iterate over the files in the archive to find the file
-	for _, file := range zipReader.File {
-		// Check if the current file is the one we're looking for
-		if strings.EqualFold(file.Name, filePath) {
-			// Open the file
-			rc, err := file.Open()
-			if err != nil {
-				return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
-			}
-			defer rc.Close()
+// HasResourceFile reports whether filePath exists relative to the pack's manifest directory.
+func (p *Pack) HasResourceFile(filePath string) bool {
+	_, err := p.findResourceFile(filePath)
+	return err == nil
+}
 
-			// Read the file content
-			content, err := io.ReadAll(rc)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read file content: %w", err)
-			}
-
-			return content, nil
+// findResourceFile finds a regular file using a path relative to manifest.json.
+func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
+	if filePath == "." || !fs.ValidPath(filePath) {
+		return nil, fmt.Errorf("invalid resource file path %q", filePath)
+	}
+	zr, err := zip.NewReader(p.content, int64(p.content.Size()))
+	if err != nil {
+		return nil, fmt.Errorf("open resource pack archive: %w", err)
+	}
+	want := path.Join(p.manifestDir, filePath)
+	for _, file := range zr.File {
+		if strings.EqualFold(file.Name, want) && file.FileInfo().Mode().IsRegular() {
+			return file, nil
 		}
 	}
-
-	return nil, fmt.Errorf("file %s not found in the resource pack", filePath)
+	return nil, fmt.Errorf("file %q not found in the resource pack", filePath)
 }
 
 // WithContentKey creates a copy of the pack and sets the encryption key to the key provided, after which the
@@ -355,7 +368,7 @@ func (pack *Pack) String() string {
 // compileDir compiles a resource pack from a directory.
 func compileDir(root string) (*Pack, error) {
 	pr := dirPackReader{base: root}
-	m, err := readManifest(pr)
+	m, manifestPath, err := readManifest(pr)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
@@ -367,9 +380,10 @@ func compileDir(root string) (*Pack, error) {
 
 	data := buf.Bytes()
 	return &Pack{
-		manifest: m,
-		checksum: sha256.Sum256(data),
-		content:  bytes.NewReader(data),
+		manifest:    m,
+		manifestDir: path.Dir(manifestPath),
+		checksum:    sha256.Sum256(data),
+		content:     bytes.NewReader(data),
 	}, nil
 }
 
@@ -384,15 +398,16 @@ func compileZipPath(p string) (*Pack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
 	}
-	m, err := readManifest(zipPackReader{zr})
+	m, manifestPath, err := readManifest(zipPackReader{zr})
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
 
 	return &Pack{
-		manifest: m,
-		checksum: sha256.Sum256(data),
-		content:  bytes.NewReader(data),
+		manifest:    m,
+		manifestDir: path.Dir(manifestPath),
+		checksum:    sha256.Sum256(data),
+		content:     bytes.NewReader(data),
 	}, nil
 }
 
@@ -429,16 +444,17 @@ func compile(data []byte, unwrapNested bool) (*Pack, error) {
 	pr := zipPackReader{zr}
 
 	// Read the manifest to ensure that it exists and is valid.
-	manifest, err := readManifest(pr)
+	manifest, manifestPath, err := readManifest(pr)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
 
 	// Compute the SHA256 checksum and create a reader for the content
 	return &Pack{
-		manifest: manifest,
-		checksum: sha256.Sum256(data),
-		content:  bytes.NewReader(data),
+		manifest:    manifest,
+		manifestDir: path.Dir(manifestPath),
+		checksum:    sha256.Sum256(data),
+		content:     bytes.NewReader(data),
 	}, nil
 }
 
@@ -507,7 +523,7 @@ func createArchive(w io.Writer, path string) error {
 }
 
 type packReader interface {
-	find(fileName string) (io.ReadCloser, error)
+	find(fileName string) (io.ReadCloser, string, error)
 }
 
 // zipPackReader wraps around a zip.Reader to provide file finding functionality.
@@ -522,59 +538,60 @@ type dirPackReader struct {
 
 // find attempts to find a file in a zip reader. If found, it returns an Open()ed reader of the file that may
 // be used to read data from the file.
-func (r zipPackReader) find(fileName string) (io.ReadCloser, error) {
+func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
 	for _, f := range r.File {
 		if filepath.Base(f.Name) != fileName {
 			continue
 		}
 		fileReader, err := f.Open()
 		if err != nil {
-			return nil, fmt.Errorf("open zip file %v: %w", f.Name, err)
+			return nil, "", fmt.Errorf("open zip file %v: %w", f.Name, err)
 		}
-		return fileReader, nil
+		return fileReader, f.Name, nil
 	}
-	return nil, fmt.Errorf("'%v' not found in zip", fileName)
+	return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
 }
 
-func (r dirPackReader) find(fileName string) (io.ReadCloser, error) {
+func (r dirPackReader) find(fileName string) (io.ReadCloser, string, error) {
 	p := filepath.Join(r.base, fileName)
 	info, err := os.Stat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("'%v' not found in directory", fileName)
+			return nil, "", fmt.Errorf("'%v' not found in directory", fileName)
 		}
-		return nil, err
+		return nil, "", err
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("'%v' is a directory, not a file", fileName)
+		return nil, "", fmt.Errorf("'%v' is a directory, not a file", fileName)
 	}
-	return os.Open(p)
+	file, err := os.Open(p)
+	return file, fileName, err
 }
 
 // readManifest reads the manifest from the resource pack located at the path passed. If not found in the root
 // of the resource pack, it will also attempt to find it deeper down into the archive.
-func readManifest(pr packReader) (*Manifest, error) {
+func readManifest(pr packReader) (*Manifest, string, error) {
 	// Try to find the manifest file in the zip.
-	manifestFile, err := pr.find("manifest.json")
+	manifestFile, manifestPath, err := pr.find("manifest.json")
 	if err != nil {
-		return nil, fmt.Errorf("load manifest: %w", err)
+		return nil, "", fmt.Errorf("load manifest: %w", err)
 	}
 	defer manifestFile.Close()
 
 	// Read all data from the manifest file so that we can decode it into a Manifest struct.
 	allData, err := io.ReadAll(manifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("read manifest file: %w", err)
+		return nil, "", fmt.Errorf("read manifest file: %w", err)
 	}
 	manifest := &Manifest{}
 	if err := jsonc.UnmarshalLenient(allData, manifest); err != nil {
-		return nil, fmt.Errorf("decode manifest JSON: %w (data: %v)", err, string(allData))
+		return nil, "", fmt.Errorf("decode manifest JSON: %w (data: %v)", err, string(allData))
 	}
 
-	if rc, err := pr.find("level.dat"); err == nil {
+	if rc, _, err := pr.find("level.dat"); err == nil {
 		_ = rc.Close()
 		manifest.worldTemplate = true
 	}
 
-	return manifest, nil
+	return manifest, manifestPath, nil
 }
