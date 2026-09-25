@@ -36,7 +36,12 @@ func TestDialHoldsResourcePackCompletion(t *testing.T) {
 			started <- err
 			return
 		}
-		started <- server.(*Conn).StartGame(GameData{WorldName: "held"})
+		// StartGame blocks on a spawn reply a passthrough dialer never sends; write the packet itself.
+		if err := server.(*Conn).WritePacket(&packet.StartGame{WorldName: "held"}); err != nil {
+			started <- err
+			return
+		}
+		started <- server.(*Conn).Flush()
 	}()
 
 	cache := DirResourcePackCache{Dir: t.TempDir()}
@@ -70,6 +75,9 @@ func TestDialHoldsResourcePackCompletion(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	if err := conn.CompleteResourcePacks(); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-started; err != nil {
