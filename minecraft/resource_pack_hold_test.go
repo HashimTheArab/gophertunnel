@@ -47,7 +47,7 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 	default:
 		t.Fatal("packs not reported ready after the stack")
 	}
-	if conn.packPhaseDone || conn.loggedIn {
+	if conn.packPhaseDone.Load() || conn.loggedIn {
 		t.Fatal("completion was not held")
 	}
 	if got := conn.ResourcePacksInfo(); got == info || !got.TexturePackRequired {
@@ -62,8 +62,8 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 	if conn.ResourcePackStack().BaseGameVersion != "1.26.0" {
 		t.Fatal("a resent stack replaced the retained one")
 	}
-	if err := conn.CompleteResourcePacks(); err != nil || !conn.packPhaseDone {
-		t.Fatalf("CompleteResourcePacks = %v, done=%v", err, conn.packPhaseDone)
+	if err := conn.CompleteResourcePacks(); err != nil || !conn.packPhaseDone.Load() {
+		t.Fatalf("CompleteResourcePacks = %v, done=%v", err, conn.packPhaseDone.Load())
 	}
 }
 

@@ -386,7 +386,7 @@ type Conn struct {
 	// holdResourcePackCompletion keeps the pack phase handled under disablePacketHandling and parks the final
 	// Completed response until CompleteResourcePacks; see Dialer.HoldResourcePackCompletion.
 	holdResourcePackCompletion bool
-	packPhaseDone              bool
+	packPhaseDone              atomic.Bool // set by CompleteResourcePacks, read by the receive goroutine
 	resourcePackHTTPClient     *http.Client
 	// retainedPacksInfo and retainedPackStack are the server's own pack packets, kept for a relay to forward.
 	retainedPacksInfo *packet.ResourcePacksInfo
@@ -1141,17 +1141,17 @@ func (conn *Conn) receive(data []byte) error {
 		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
 			return err
 		}
-		holdingPacks := conn.holdResourcePackCompletion && !conn.packPhaseDone
+		holdingPacks := conn.holdResourcePackCompletion && !conn.packPhaseDone.Load()
 		if (conn.handshakeComplete && !holdingPacks) || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
 			switch pkData.h.PacketID {
-			case packet.IDStartGame, packet.IDPlayStatus:
+			case packet.IDStartGame:
 				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
 				// packets start coming in.
 				conn.disablePacketHandlingReady = true
-			case packet.IDResourcePacksInfo:
-				// The pack phase stays handled while its completion is held.
+			case packet.IDPlayStatus, packet.IDResourcePacksInfo:
+				// Both precede the pack phase, which stays handled while its completion is held.
 				conn.disablePacketHandlingReady = !holdingPacks
 			}
 		}
@@ -1833,14 +1833,14 @@ func (conn *Conn) ResourcePacksInfo() *packet.ResourcePacksInfo { return conn.re
 func (conn *Conn) ResourcePackStack() *packet.ResourcePackStack { return conn.retainedPackStack }
 
 // CompleteResourcePacks sends the Completed response the pack phase held back and lets the connection
-// pass packets through. The server sends StartGame only after it.
+// pass packets through. The server sends StartGame only after it. The caller flushes the connection.
 func (conn *Conn) CompleteResourcePacks() error {
 	select {
 	case <-conn.packsReady:
 	default:
 		return errors.New("resource packs are not ready")
 	}
-	conn.packPhaseDone = true
+	conn.packPhaseDone.Store(true)
 	return conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 }
 
@@ -2091,7 +2091,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		// fillWindow replenishes one request for each response accepted by the client.
+		// fillWindow replenishes one request for each response accepted by the client. It flushes its own
+		// writes: this goroutine runs after the handler's flush, and a connection without a flush ticker
+		// would otherwise hold the requests until something else flushes.
 		fillWindow := func() error {
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
 				if err := requestChunk(nextRequest); err != nil {
@@ -2099,7 +2101,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				}
 				nextRequest++
 			}
-			return nil
+			return conn.Flush()
 		}
 
 		if err := fillWindow(); err != nil {
@@ -2154,6 +2156,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
 				return
 			}
+			_ = conn.Flush()
 		}
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
@@ -2471,7 +2474,7 @@ func (conn *Conn) handleLoginSuccess() error {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if !conn.disablePacketHandling {
+	if !conn.disablePacketHandling || conn.holdResourcePackCompletion {
 		conn.expect(packet.IDResourcePacksInfo)
 	}
 	return conn.Flush()
