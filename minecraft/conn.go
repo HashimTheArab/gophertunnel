@@ -1937,7 +1937,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount, ok := resourcePackChunkCount(pk.Size, pk.DataChunkSize)
+	chunkCount, ok := resource.ChunkCount(pk.Size, pk.DataChunkSize)
 	if !ok {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
