@@ -503,6 +503,7 @@ func TestResourcePacksInfoUsesConfiguredWorldTemplateFields(t *testing.T) {
 
 	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	defer conn.Close()
+	conn.disableEncryption = true
 
 	templateUUID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	conn.forceDisableVibrantVisuals = true
@@ -578,7 +579,7 @@ func TestHandleLoginSkipsServerHandshakeWhenEncryptionDisabled(t *testing.T) {
 	}
 }
 
-// publicKeyTransport is a transport that authenticated key, or no key when nil.
+// publicKeyTransport is an unencrypted transport whose peer proved possession of key, or of no key when nil.
 type publicKeyTransport struct {
 	net.Conn
 	key *ecdsa.PublicKey
@@ -662,6 +663,20 @@ func TestLoginKeyProvenByEncryptionHandshake(t *testing.T) {
 	}
 	if conn.LoginKeyProven() {
 		t.Fatal("LoginKeyProven() = true before the client answered the encrypted handshake")
+	}
+	keyBytes, err := conn.encryptionKey(conn.salt, &key.PublicKey)
+	if err != nil {
+		t.Fatalf("derive encryption key: %v", err)
+	}
+	frame, err := encodePacket(&packet.ClientToServerHandshake{})
+	if err != nil {
+		t.Fatalf("encode handshake: %v", err)
+	}
+	enc := packet.NewEncoder(serverConn)
+	enc.EnableEncryption(keyBytes)
+	go func() { _ = enc.Encode([][]byte{frame}) }()
+	if err := conn.dec.DecodeFunc(func([]byte) error { return nil }); err != nil {
+		t.Fatalf("decode encrypted handshake batch: %v", err)
 	}
 	if err := conn.handleClientToServerHandshake(); err != nil {
 		t.Fatalf("handleClientToServerHandshake: %v", err)
@@ -1256,6 +1271,7 @@ func TestClientToServerHandshakeMarksComplete(t *testing.T) {
 
 	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	defer conn.Close()
+	conn.disableEncryption = true
 
 	if conn.handshakeComplete {
 		t.Fatal("handshakeComplete was true before ClientToServerHandshake")

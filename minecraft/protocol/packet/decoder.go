@@ -27,6 +27,8 @@ type Decoder struct {
 	decompress         bool
 	maxDecompressedLen int
 	encrypt            *encrypt
+	// batchEncrypted reports whether the batch last read was decrypted.
+	batchEncrypted bool
 	// disableEncryption indicates whether to prevent encryption from being enabled
 	// even if it is requested on handshake during login.
 	disableEncryption bool
@@ -88,6 +90,12 @@ func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int)
 		maxDecompressedLen = math.MaxInt
 	}
 	decoder.maxDecompressedLen = maxDecompressedLen
+}
+
+// BatchEncrypted reports whether the batch being decoded arrived encrypted. Encryption enabled while a
+// batch is walked applies only from the next batch, so packets later in the same batch are still plaintext.
+func (decoder *Decoder) BatchEncrypted() bool {
+	return decoder.batchEncrypted
 }
 
 // DisableBatchPacketLimit disables the check that limits the number of packets allowed in a single packet
@@ -175,6 +183,7 @@ func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
 		return nil, nil, fmt.Errorf("decode batch: invalid header %x, expected %x", data[:h], decoder.header)
 	}
 	data = data[h:]
+	decoder.batchEncrypted = decoder.encrypt != nil
 	if decoder.encrypt != nil {
 		decoder.encrypt.decrypt(data)
 		if err := decoder.encrypt.verify(data); err != nil {

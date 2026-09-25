@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"container/list"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -26,7 +27,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
+var (
+	errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
+	// errLoginEnded stops a connection that authenticated after it was timed out or evicted.
+	errLoginEnded = errors.New("pending login already ended")
+)
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
@@ -53,11 +58,14 @@ type ListenConfig struct {
 	// will be dynamically updated each time a player joins, so that an unlimited amount of players is
 	// accepted into the server.
 	MaximumPlayers int
-	// LoginTimeout bounds how long a connection may take from being accepted by the network to finishing
-	// its login sequence. Connections still logging in when it expires are closed. Zero disables the limit.
+	// LoginTimeout bounds how long a connection may take from being accepted until its Login is verified and,
+	// with encryption, its encrypted handshake completes. Connections that have not authenticated by then are
+	// closed. The rest of the login sequence, such as resource pack downloads, is not bounded. Zero or negative
+	// disables it; around ten seconds suits most servers.
 	LoginTimeout time.Duration
-	// MaximumPendingLogins caps the connections that have not finished their login sequence. Connections
-	// beyond it are closed on arrival. Zero disables the cap.
+	// MaximumPendingLogins caps the connections that have not authenticated yet. When a connection arrives at
+	// the cap, the oldest unauthenticated connection is closed to make room, so peers that never log in cannot
+	// lock players out. Pending connections count toward MaximumPlayers. Zero or negative disables the cap.
 	MaximumPendingLogins int
 
 	// AllowUnknownPackets specifies if connections of this Listener are allowed to send packets not present
@@ -192,8 +200,13 @@ type Listener struct {
 	// playerCount is the amount of players connected to the server. If MaximumPlayers is non-zero and equal
 	// to the playerCount, no more players will be accepted.
 	playerCount atomic.Int32
-	// pendingLogins counts connections that have not finished their login sequence.
-	pendingLogins atomic.Int32
+	// pendingMu guards pending, the connections that have not authenticated yet, oldest first.
+	pendingMu sync.Mutex
+	pending   list.List
+	// evictions counts connections closed to make room under MaximumPendingLogins; evictionWarned is the
+	// UnixNano time of the last warning about them.
+	evictions      atomic.Int64
+	evictionWarned atomic.Int64
 
 	incoming chan *Conn
 	close    chan struct{}
@@ -475,6 +488,22 @@ func (listener *Listener) listen() {
 // createConn creates a connection for the net.Conn passed and adds it to the listener, so that it may be
 // accepted once its login sequence is complete.
 func (listener *Listener) createConn(netConn net.Conn) {
+	listener.evictPendingLogins()
+	conn := listener.newListenerConn(netConn)
+	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
+		// The server was full. We kick the player immediately and close the connection.
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
+		_ = conn.close(conn.closeErr("server full"))
+		return
+	}
+	listener.playerCount.Add(1)
+	listener.updatePongData()
+
+	go listener.handleConn(conn, listener.newPendingLogin(conn))
+}
+
+// newListenerConn returns a Conn for netConn configured from the listener.
+func (listener *Listener) newListenerConn(netConn net.Conn) *Conn {
 	listener.packsMu.RLock()
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
@@ -508,42 +537,35 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
 	conn.batchReading = listener.cfg.EnableBatchReading
-
-	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
-		// The server was full. We kick the player immediately and close the connection.
-		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
-		_ = conn.close(conn.closeErr("server full"))
-		return
-	}
-	if limit := listener.cfg.MaximumPendingLogins; limit > 0 && int(listener.pendingLogins.Load()) >= limit {
-		// Abort without flushing: this runs on the accept loop, which a peer that never reads must not stall.
-		_ = conn.abort(errors.New("too many pending logins"))
-		return
-	}
-	listener.playerCount.Add(1)
-	listener.updatePongData()
-
-	go listener.handleConn(conn, listener.newPendingLogin(conn))
+	return conn
 }
 
-// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
-var errLoginTimeout = errors.New("login timed out")
+var (
+	// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
+	errLoginTimeout = errors.New("login timed out")
+	// errLoginEvicted is the cause of closing a connection to make room under ListenConfig.MaximumPendingLogins.
+	errLoginEvicted = errors.New("evicted to make room for a new connection")
+)
 
-// pendingLogin tracks a connection until it finishes its login sequence or is given up on.
+// pendingLogin tracks a connection until it authenticates or is given up on.
 type pendingLogin struct {
 	listener *Listener
+	conn     *Conn
 	timer    *time.Timer
+	elem     *list.Element // guarded by listener.pendingMu
 	ended    atomic.Bool
 }
 
 // newPendingLogin counts conn as pending and aborts it if it is still pending after LoginTimeout.
 func (listener *Listener) newPendingLogin(conn *Conn) *pendingLogin {
-	listener.pendingLogins.Add(1)
-	p := &pendingLogin{listener: listener}
+	p := &pendingLogin{listener: listener, conn: conn}
+	listener.pendingMu.Lock()
+	p.elem = listener.pending.PushBack(p)
+	listener.pendingMu.Unlock()
 	if timeout := listener.cfg.LoginTimeout; timeout > 0 {
 		p.timer = time.AfterFunc(timeout, func() {
 			if p.claim() {
-				conn.log.Error(errLoginTimeout.Error(), "timeout", timeout)
+				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
 				_ = conn.abort(errLoginTimeout)
 			}
 		})
@@ -552,7 +574,7 @@ func (listener *Listener) newPendingLogin(conn *Conn) *pendingLogin {
 }
 
 // end stops tracking the login and reports whether this call ended it. Only the first call ends it, so a
-// login that completes as its timeout fires is either delivered or aborted, never both.
+// login that authenticates as it is timed out or evicted is either kept or aborted, never both.
 func (p *pendingLogin) end() bool {
 	if !p.claim() {
 		return false
@@ -568,8 +590,50 @@ func (p *pendingLogin) claim() bool {
 	if !p.ended.CompareAndSwap(false, true) {
 		return false
 	}
-	p.listener.pendingLogins.Add(-1)
+	p.listener.pendingMu.Lock()
+	p.listener.pending.Remove(p.elem)
+	p.listener.pendingMu.Unlock()
 	return true
+}
+
+// pendingLoginCount returns the number of connections that have not authenticated yet.
+func (listener *Listener) pendingLoginCount() int {
+	listener.pendingMu.Lock()
+	defer listener.pendingMu.Unlock()
+	return listener.pending.Len()
+}
+
+// evictPendingLogins closes the oldest unauthenticated connections until one more fits under
+// MaximumPendingLogins. It runs on the accept loop, so the evicted connections are aborted elsewhere.
+func (listener *Listener) evictPendingLogins() {
+	limit := listener.cfg.MaximumPendingLogins
+	if limit <= 0 {
+		return
+	}
+	for {
+		listener.pendingMu.Lock()
+		if listener.pending.Len() < limit {
+			listener.pendingMu.Unlock()
+			return
+		}
+		oldest := listener.pending.Front().Value.(*pendingLogin)
+		listener.pendingMu.Unlock()
+		// A login that authenticated meanwhile has already left the list, so the loop checks again.
+		if oldest.end() {
+			oldest.conn.log.Debug(errLoginEvicted.Error())
+			go oldest.conn.abort(errLoginEvicted)
+			listener.warnEviction(limit)
+		}
+	}
+}
+
+// warnEviction logs at most one warning a minute about connections evicted under MaximumPendingLogins.
+func (listener *Listener) warnEviction(limit int) {
+	total := listener.evictions.Add(1)
+	now, last := time.Now().UnixNano(), listener.evictionWarned.Load()
+	if now-last >= int64(time.Minute) && listener.evictionWarned.CompareAndSwap(last, now) {
+		listener.cfg.ErrorLog.Warn("closing connections that have not logged in to make room for new ones", "maximum_pending_logins", limit, "evicted_total", total)
+	}
 }
 
 // status returns the current ServerStatus of the Listener.
@@ -602,6 +666,11 @@ func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 				callbackErr = true
 				return err
 			}
+			if !handshakeCompleteBefore && conn.handshakeComplete {
+				if !pending.end() {
+					return errLoginEnded
+				}
+			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
 					// Login has not completed yet, so publishBatch cannot be set and the connection will not be delivered.
@@ -612,9 +681,6 @@ func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 			publish := !loggedInBefore && conn.loggedIn
 			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
 				publish = true
-			}
-			if publish && !pending.end() {
-				return errLoginTimeout
 			}
 			if publish {
 				if conn.batchReading {
@@ -629,9 +695,10 @@ func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 			if publishBatch {
 				listener.deliverConn(conn)
 			}
-			// A login timeout was already logged when it fired.
-			timedOut := errors.Is(context.Cause(conn.ctx), errLoginTimeout) || errors.Is(err, errLoginTimeout)
-			if !timedOut && (callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed))) {
+			// Timeouts and evictions were logged when they happened.
+			cause := context.Cause(conn.ctx)
+			ended := errors.Is(err, errLoginEnded) || errors.Is(cause, errLoginTimeout) || errors.Is(cause, errLoginEvicted)
+			if !ended && (callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed))) {
 				conn.log.Error(err.Error())
 			}
 			return

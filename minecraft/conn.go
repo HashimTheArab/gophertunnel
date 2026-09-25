@@ -239,7 +239,7 @@ type Conn struct {
 	compressionSelector  func(proto Protocol) packet.Compression
 	compressionThreshold int
 	maxDecompressedLen   int
-	readerLimits         bool
+	readerLimits         bool // set for connections accepted by a Listener, whose peer is an untrusted client
 
 	disconnectOnUnknownPacket bool
 	disconnectOnInvalidPacket bool
@@ -472,7 +472,8 @@ func (conn *Conn) Authenticated() bool {
 
 // LoginKeyProven reports whether a client accepted by a Listener proved it holds the private key its login
 // chain was issued to, through the encryption handshake or a transport-authenticated key. When false, the
-// Login may have been replayed from a capture, even if its chain verified.
+// Login may have been replayed from a capture. It says nothing about who issued the chain, so it identifies
+// a player only together with Authenticated.
 func (conn *Conn) LoginKeyProven() bool {
 	return conn.loginKeyProven
 }
@@ -1133,7 +1134,9 @@ func (conn *Conn) receive(data []byte) error {
 		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
-		} else if !conn.disablePacketHandlingReady {
+		} else if !conn.disablePacketHandlingReady && !conn.readerLimits {
+			// Only dialed connections, which have no reader limits, may infer the login from the server's
+			// packets. A listener's peer could send these IDs to be published without logging in.
 			switch pkData.h.PacketID {
 			case packet.IDResourcePacksInfo, packet.IDStartGame, packet.IDPlayStatus:
 				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
@@ -1575,11 +1578,15 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
-	conn.handshakeComplete = true
 	if !conn.disableEncryption {
-		// The client could only send this packet encrypted with the key derived from its login key.
+		// A handshake batched with the Login is still plaintext and proves nothing about the login key.
+		if !conn.dec.BatchEncrypted() {
+			return errors.New("client to server handshake was not encrypted")
+		}
+		// Only a holder of the login key could derive the key this batch was encrypted with.
 		conn.loginKeyProven = true
 	}
+	conn.handshakeComplete = true
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true
 		return nil
