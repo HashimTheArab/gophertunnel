@@ -73,6 +73,14 @@ func (cache DirResourcePackCache) Store(_ context.Context, key ResourcePackCache
 	return os.Rename(temp.Name(), cache.path(key))
 }
 
+// TempFile creates a download file beside the cache entries, so Store stays on one filesystem.
+func (cache DirResourcePackCache) TempFile() (*os.File, error) {
+	if err := os.MkdirAll(cache.Dir, 0o755); err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(cache.Dir, "download-*.tmp")
+}
+
 // path returns the file a pack with key is stored at. The version is escaped as it comes from the server.
 func (cache DirResourcePackCache) path(key ResourcePackCacheKey) string {
 	return filepath.Join(cache.Dir, key.UUID.String()+"_"+url.PathEscape(key.Version)+".mcpack")

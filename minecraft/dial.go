@@ -97,6 +97,11 @@ type Dialer struct {
 	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
 	// fall back to a normal download.
 	ResourcePackCache ResourcePackCache
+	// HoldResourcePackCompletion keeps the resource pack phase handled while DisablePacketHandling is set:
+	// the connection downloads the server's packs, then parks the Completed response until
+	// Conn.CompleteResourcePacks. A relay uses it to serve those packs to its own client first, while the
+	// server waits as it would for a client applying packs.
+	HoldResourcePackCompletion bool
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -348,6 +353,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
+	conn.holdResourcePackCompletion = d.HoldResourcePackCompletion
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets

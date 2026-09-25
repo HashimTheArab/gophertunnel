@@ -1,10 +1,10 @@
 package minecraft
 
 import (
-	"bytes"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -40,7 +40,11 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	defer conn.Abort()
 
 	const id = "550e8400-e29b-41d4-a716-446655440000"
-	pack := &downloadingPack{buf: new(bytes.Buffer), size: 200}
+	file, err := os.CreateTemp(t.TempDir(), "pack-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := &downloadingPack{file: file, size: 200}
 	conn.packQueue = &resourcePackQueue{
 		downloadingPacks: map[string]*downloadingPack{id: pack},
 		awaitingPacks:    make(map[string]*downloadingPack),
