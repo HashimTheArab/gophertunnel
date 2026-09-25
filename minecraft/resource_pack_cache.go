@@ -34,9 +34,11 @@ func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
 // non-fatal: a nil pack or an error from Load falls back to a normal download, and errors from Store are
 // only logged.
 type ResourcePackCache interface {
-	// Load returns the pack stored under key, or nil if it is not cached.
+	// Load returns the pack stored under key, or nil if it is not cached. The caller owns the returned
+	// pack and closes it, so a file-backed cache opens a fresh handle per call rather than sharing one.
 	Load(ctx context.Context, key ResourcePackCacheKey) (*resource.Pack, error)
-	// Store stores a pack under key for a later Load.
+	// Store stores a pack under key for a later Load. The pack is only valid during the call: its
+	// archive belongs to the connection and is removed with it, so an implementation copies the content.
 	Store(ctx context.Context, key ResourcePackCacheKey, pack *resource.Pack) error
 }
 
