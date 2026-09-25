@@ -417,7 +417,6 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		packetBatches:        make(chan []*packetData, 8),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
-		packsReady:           make(chan struct{}),
 		conn:                 netConn,
 		privateKey:           key,
 		log:                  log.With("raddr", netConn.RemoteAddr().String()),
@@ -1823,7 +1822,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 }
 
 // ResourcePacksReady is closed once the server's pack stack has arrived and every pack it names is
-// downloaded, under Dialer.HoldResourcePackCompletion.
+// downloaded. It is nil unless the connection was dialed with Dialer.HoldResourcePackCompletion.
 func (conn *Conn) ResourcePacksReady() <-chan struct{} { return conn.packsReady }
 
 // ResourcePacksInfo returns the server's own ResourcePacksInfo, available once ResourcePacksReady is closed.

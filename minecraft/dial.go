@@ -357,6 +357,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.holdResourcePackCompletion = d.HoldResourcePackCompletion
+	if d.HoldResourcePackCompletion {
+		conn.packsReady = make(chan struct{})
+	}
 	conn.resourcePackHTTPClient = d.ResourcePackHTTPClient
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus

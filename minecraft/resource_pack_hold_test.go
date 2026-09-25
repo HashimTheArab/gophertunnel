@@ -30,6 +30,7 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 	defer conn.Abort()
 	conn.disablePacketHandling = true
 	conn.holdResourcePackCompletion = true
+	conn.packsReady = make(chan struct{})
 
 	if err := conn.CompleteResourcePacks(); err == nil {
 		t.Fatal("completed before the stack arrived")
