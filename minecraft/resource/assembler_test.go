@@ -110,3 +110,22 @@ func TestAssembler_RejectsMalformedChunks(t *testing.T) {
 		t.Error("zero chunk size accepted")
 	}
 }
+
+// TestResourceFiles_RootAndCaseFolding lists from the manifest root and folds directory case by segment.
+func TestResourceFiles_RootAndCaseFolding(t *testing.T) {
+	root, err := ReadBytes(packArchive(t, map[string]string{"manifest.json": testManifest, "Entity/a.json": "{}"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files, err := root.ResourceFiles("."); err != nil || !slices.Contains(files, "Entity/a.json") || !slices.Contains(files, "manifest.json") {
+		t.Fatalf("root ResourceFiles = %v, %v", files, err)
+	}
+	// U+212A KELVIN SIGN folds to 'k' but is three bytes long.
+	nested, err := ReadBytes(packArchive(t, map[string]string{"\u212apack/manifest.json": testManifest, "kpack/entity/b.json": "{}"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files, err := nested.ResourceFiles("entity"); err != nil || !slices.Equal(files, []string{"entity/b.json"}) {
+		t.Fatalf("nested ResourceFiles = %v, %v", files, err)
+	}
+}

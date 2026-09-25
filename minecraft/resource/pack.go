@@ -329,7 +329,7 @@ func (p *Pack) HasResourceFile(filePath string) bool {
 }
 
 // ResourceFiles returns the regular files below dir, as paths relative to the
-// pack's manifest directory.
+// pack's manifest directory. Directory names match case-insensitively.
 func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	if !fs.ValidPath(dir) {
 		return nil, fmt.Errorf("invalid resource directory %q", dir)
@@ -338,18 +338,33 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open resource pack archive: %w", err)
 	}
-	prefix := strings.ToLower(path.Join(p.manifestDir, dir)) + "/"
+	manifest, want := pathSegments(p.manifestDir), pathSegments(path.Join(p.manifestDir, dir))
 	var files []string
 	for _, file := range zr.File {
-		if strings.HasPrefix(strings.ToLower(file.Name), prefix) && file.FileInfo().Mode().IsRegular() {
-			rel := file.Name
-			if p.manifestDir != "." {
-				rel = file.Name[len(p.manifestDir)+1:]
+		segments := strings.Split(file.Name, "/")
+		if len(segments) <= len(want) || !file.FileInfo().Mode().IsRegular() {
+			continue
+		}
+		matches := true
+		for i, segment := range want {
+			if !strings.EqualFold(segments[i], segment) {
+				matches = false
+				break
 			}
-			files = append(files, rel)
+		}
+		if matches {
+			files = append(files, strings.Join(segments[len(manifest):], "/"))
 		}
 	}
 	return files, nil
+}
+
+// pathSegments splits a cleaned slash path; the root "." has no segments.
+func pathSegments(p string) []string {
+	if p == "." {
+		return nil
+	}
+	return strings.Split(p, "/")
 }
 
 // findResourceFile finds a regular file using a path relative to manifest.json.
