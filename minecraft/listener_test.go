@@ -954,3 +954,22 @@ func TestListenerLoginTimeoutEndsBeforePostAuthCallbacks(t *testing.T) {
 		t.Fatal("client that authenticated in time was closed while resource packs were fetched")
 	}
 }
+
+// A login timed out while stuck in a callback such as Allow must still give its player slot back.
+func TestListenerLoginTimeoutFreesSlotOfBlockedLogin(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	defer close(release)
+	listener, network := newPipeListener(t, ListenConfig{
+		LoginTimeout: 50 * time.Millisecond,
+		Allow: func(net.Addr, login.IdentityData, login.ClientData) (string, bool) {
+			<-release
+			return "", true
+		},
+	}, true)
+	peer := network.connect()
+	defer peer.Close()
+	peer.logIn(t)
+	waitForCount(t, "player count", 0, listener.PlayerCount)
+}

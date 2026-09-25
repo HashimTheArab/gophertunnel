@@ -569,6 +569,8 @@ func (listener *Listener) newPendingLogin(conn *Conn) *pendingLogin {
 		p.timer = time.AfterFunc(timeout, func() {
 			if p.claim() {
 				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
+				// The login may be stuck in a callback such as Allow, so the slot cannot wait for handleConn.
+				p.releasePlayer()
 				_ = conn.abort(errLoginTimeout)
 			}
 		})
