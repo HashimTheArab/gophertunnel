@@ -8,8 +8,6 @@ import (
 // content of the inventory and specify additional properties, such as the items that are allowed to be put in
 // slots of the inventory.
 type UpdateEquip struct {
-	// WindowID is the identifier associated with the window that the UpdateEquip packet concerns. It is the ID
-	// sent for the horse inventory that was opened before this packet was sent.
 	ContainerID uint8
 	// WindowType is the type of the window that was opened. Generally, this is the type of a horse inventory, as
 	// the packet is specifically made for that.

@@ -2,11 +2,11 @@ package protocol
 
 type BedrockSafetyRedactableString struct {
 	Unredacted string
-	Redacted   string
+	Redacted   Optional[string]
 }
 
 // Marshal reads or writes BedrockSafetyRedactableString using its canonical wire layout.
 func (x *BedrockSafetyRedactableString) Marshal(io IO) {
 	io.String(&x.Unredacted)
-	io.String(&x.Redacted)
+	OptionalFunc(io, &x.Redacted, io.String)
 }

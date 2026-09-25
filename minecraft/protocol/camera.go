@@ -334,8 +334,8 @@ func (x *CameraPosition) Marshal(io IO) {
 type CameraPreset struct {
 	// Name is the name of the preset. Each preset must have their own unique name.
 	Name string
-	// InheritFrom is the name of the preset that this preset extends upon. This can be left empty.
-	InheritFrom string
+	// Parent is the name of the preset that this preset extends upon. This can be left empty.
+	Parent string
 	// PosX is the default X position of the camera.
 	PosX Optional[float32]
 	// PosY is the default Y position of the camera.
@@ -356,8 +356,8 @@ type CameraPreset struct {
 	VerticalRotationLimit Optional[mgl32.Vec2]
 	// ContinueTargeting determines whether the camera should continue targeting when using aim assist.
 	ContinueTargeting Optional[bool]
-	// BlockListeningRadius is the radius around the camera that the aim assist should track targets.
-	BlockListeningRadius Optional[float32]
+	// TrackingRadius is the radius around the camera that the aim assist should track targets.
+	TrackingRadius Optional[float32]
 	// ViewOffset is only used in a follow_orbit camera and controls an offset based on a pivot point to the
 	// player, causing it to be shifted in a certain direction.
 	ViewOffset Optional[mgl32.Vec2]
@@ -366,12 +366,12 @@ type CameraPreset struct {
 	// Radius is only used in a follow_orbit camera and controls how far away from the player the camera should be
 	// rendered.
 	Radius Optional[float32]
-	// YawLimitMin is the minimum yaw limit of the camera.
-	YawLimitMin Optional[float32]
-	// YawLimitMax is the maximum yaw limit of the camera.
-	YawLimitMax Optional[float32]
-	// Listener defines where the audio should be played from when using this preset. This is one of the constants
-	// above.
+	// MinYawLimit is the minimum yaw limit of the camera.
+	MinYawLimit Optional[float32]
+	// MaxYawLimit is the maximum yaw limit of the camera.
+	MaxYawLimit Optional[float32]
+	// AudioListener defines where the audio should be played from when using this preset. This is one of the
+	// constants above.
 	AudioListener Optional[CameraPresetAudioListener]
 	// PlayerEffects is currently unknown.
 	PlayerEffects Optional[bool]
@@ -386,12 +386,17 @@ type CameraPreset struct {
 	// will make the player turn in a circle. - ControlSchemePlayerRelativeStrafe makes movement the same as the
 	// default behaviour, but can be used in a custom camera.
 	ControlScheme Optional[ControlScheme]
+	// ApplyInheritedStartingRotation specifies if the camera should start at the rotation of the preset it
+	// inherits from, rather than at StartingRotation.
+	ApplyInheritedStartingRotation bool
+	// StartingRotation is the rotation that the camera starts at when the preset is applied.
+	StartingRotation Optional[mgl32.Vec2]
 }
 
 // Marshal reads or writes CameraPreset using its canonical wire layout.
 func (x *CameraPreset) Marshal(io IO) {
 	io.String(&x.Name)
-	io.String(&x.InheritFrom)
+	io.String(&x.Parent)
 	OptionalFunc(io, &x.PosX, io.Float32)
 	OptionalFunc(io, &x.PosY, io.Float32)
 	OptionalFunc(io, &x.PosZ, io.Float32)
@@ -402,16 +407,18 @@ func (x *CameraPreset) Marshal(io IO) {
 	OptionalFunc(io, &x.HorizontalRotationLimit, io.Vec2)
 	OptionalFunc(io, &x.VerticalRotationLimit, io.Vec2)
 	OptionalFunc(io, &x.ContinueTargeting, io.Bool)
-	OptionalFunc(io, &x.BlockListeningRadius, io.Float32)
+	OptionalFunc(io, &x.TrackingRadius, io.Float32)
 	OptionalFunc(io, &x.ViewOffset, io.Vec2)
 	OptionalFunc(io, &x.EntityOffset, io.Vec3)
 	OptionalFunc(io, &x.Radius, io.Float32)
-	OptionalFunc(io, &x.YawLimitMin, io.Float32)
-	OptionalFunc(io, &x.YawLimitMax, io.Float32)
+	OptionalFunc(io, &x.MinYawLimit, io.Float32)
+	OptionalFunc(io, &x.MaxYawLimit, io.Float32)
 	OptionalMarshaler(io, &x.AudioListener)
 	OptionalFunc(io, &x.PlayerEffects, io.Bool)
 	OptionalMarshaler(io, &x.AimAssist)
 	OptionalMarshaler(io, &x.ControlScheme)
+	io.Bool(&x.ApplyInheritedStartingRotation)
+	OptionalFunc(io, &x.StartingRotation, io.Vec2)
 }
 
 type CameraPresetAudioListener uint8

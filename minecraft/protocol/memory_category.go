@@ -1,5 +1,35 @@
 package protocol
 
+import (
+	"github.com/go-gl/mathgl/mgl32"
+)
+
+// EntityDiagnosticTimingInfo represents diagnostics for a specific entity type.
+type EntityDiagnosticTimingInfo struct {
+	// DisplayName is the name to display for this timing entry.
+	DisplayName string
+	// Entity is the identifier of the entity that is being timed.
+	Entity string
+	// DurationNanos is whole long the timing entry has lasted, in nanoseconds.
+	DurationNanos uint64
+	// PercentOfTotal is the percentage of time that this timing entry has used compared to others.
+	PercentOfTotal uint8
+	// Position is the position of the entity that is being timed.
+	Position Optional[mgl32.Vec3]
+	// Dimension is the name of the dimension that the entity being timed is in.
+	Dimension Optional[string]
+}
+
+// Marshal reads or writes EntityDiagnosticTimingInfo using its canonical wire layout.
+func (x *EntityDiagnosticTimingInfo) Marshal(io IO) {
+	io.String(&x.DisplayName)
+	io.String(&x.Entity)
+	io.Uint64(&x.DurationNanos)
+	io.Uint8(&x.PercentOfTotal)
+	OptionalFunc(io, &x.Position, io.Vec3)
+	OptionalFunc(io, &x.Dimension, io.String)
+}
+
 type MemoryCategory uint8
 
 const (
@@ -113,7 +143,6 @@ const (
 	MemoryCategoryGamefaceScriptEngine                  MemoryCategory = 107
 	MemoryCategoryGamefaceScript                        MemoryCategory = 108
 	MemoryCategoryGamefaceLayout                        MemoryCategory = 109
-	MemoryCategoryVR                                    MemoryCategory = 110
 )
 
 // Marshal reads or writes MemoryCategory through its uint8 wire encoding.

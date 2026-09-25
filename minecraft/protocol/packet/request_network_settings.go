@@ -19,6 +19,6 @@ func (*RequestNetworkSettings) ID() uint32 {
 
 func (pk *RequestNetworkSettings) Marshal(io protocol.IO) {
 	io.BEInt32(&pk.ClientProtocol)
-	protocol.Minimum(io, &pk.ClientProtocol, 2168)
-	protocol.Maximum(io, &pk.ClientProtocol, 2168)
+	protocol.Minimum(io, &pk.ClientProtocol, 2193)
+	protocol.Maximum(io, &pk.ClientProtocol, 2193)
 }

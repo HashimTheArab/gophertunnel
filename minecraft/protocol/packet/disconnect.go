@@ -29,7 +29,7 @@ const (
 	DisconnectReasonCrossPlatformDisabled                         protocol.ConnectionDisconnectFailReason = 21
 	DisconnectReasonCantConnect                                   protocol.ConnectionDisconnectFailReason = 22
 	DisconnectReasonSessionNotFound                               protocol.ConnectionDisconnectFailReason = 23
-	DisconnectReasonClientSettingsIncompatibleWithServer          protocol.ConnectionDisconnectFailReason = 24
+	DisconnectReasonClientsettingsincompatiblewithserver          protocol.ConnectionDisconnectFailReason = 24
 	DisconnectReasonServerFull                                    protocol.ConnectionDisconnectFailReason = 25
 	DisconnectReasonInvalidPlatformSkin                           protocol.ConnectionDisconnectFailReason = 26
 	DisconnectReasonEditionVersionMismatch                        protocol.ConnectionDisconnectFailReason = 27
@@ -41,10 +41,10 @@ const (
 	DisconnectReasonServerNotFound                                protocol.ConnectionDisconnectFailReason = 33
 	DisconnectReasonOutdatedServer                                protocol.ConnectionDisconnectFailReason = 34
 	DisconnectReasonOutdatedClient                                protocol.ConnectionDisconnectFailReason = 35
-	DisconnectReasonNoPremiumPlatform                             protocol.ConnectionDisconnectFailReason = 36
+	DisconnectReasonNopremiumplatform                             protocol.ConnectionDisconnectFailReason = 36
 	DisconnectReasonMultiplayerDisabled                           protocol.ConnectionDisconnectFailReason = 37
 	DisconnectReasonNoWiFi                                        protocol.ConnectionDisconnectFailReason = 38
-	DisconnectReasonWorldCorruption                               protocol.ConnectionDisconnectFailReason = 39
+	DisconnectReasonWorldcorruption                               protocol.ConnectionDisconnectFailReason = 39
 	DisconnectReasonNoReason                                      protocol.ConnectionDisconnectFailReason = 40
 	DisconnectReasonDisconnected                                  protocol.ConnectionDisconnectFailReason = 41
 	DisconnectReasonInvalidPlayer                                 protocol.ConnectionDisconnectFailReason = 42
@@ -67,14 +67,14 @@ const (
 	DisconnectReasonIncompatiblePack                              protocol.ConnectionDisconnectFailReason = 59
 	DisconnectReasonOutOfStorage                                  protocol.ConnectionDisconnectFailReason = 60
 	DisconnectReasonInvalidLevel                                  protocol.ConnectionDisconnectFailReason = 61
-	DisconnectReasonDisconnectPacket                              protocol.ConnectionDisconnectFailReason = 62
+	DisconnectReasonDisconnectpacket                              protocol.ConnectionDisconnectFailReason = 62
 	DisconnectReasonBlockMismatch                                 protocol.ConnectionDisconnectFailReason = 63
 	DisconnectReasonInvalidHeights                                protocol.ConnectionDisconnectFailReason = 64
 	DisconnectReasonInvalidWidths                                 protocol.ConnectionDisconnectFailReason = 65
-	DisconnectReasonConnectionLost                                protocol.ConnectionDisconnectFailReason = 66
-	DisconnectReasonZombieConnection                              protocol.ConnectionDisconnectFailReason = 67
+	DisconnectReasonConnectionlost                                protocol.ConnectionDisconnectFailReason = 66
+	DisconnectReasonZombieconnection                              protocol.ConnectionDisconnectFailReason = 67
 	DisconnectReasonShutdown                                      protocol.ConnectionDisconnectFailReason = 68
-	DisconnectReasonReasonNotSet                                  protocol.ConnectionDisconnectFailReason = 69
+	DisconnectReasonReasonnotset                                  protocol.ConnectionDisconnectFailReason = 69
 	DisconnectReasonLoadingStateTimeout                           protocol.ConnectionDisconnectFailReason = 70
 	DisconnectReasonResourcePackLoadingFailed                     protocol.ConnectionDisconnectFailReason = 71
 	DisconnectReasonSearchingForSessionLoadingScreenFailed        protocol.ConnectionDisconnectFailReason = 72
@@ -94,7 +94,7 @@ const (
 	DisconnectReasonNetherNetNegotiationTimeout                   protocol.ConnectionDisconnectFailReason = 86
 	DisconnectReasonNetherNetInactivityTimeout                    protocol.ConnectionDisconnectFailReason = 87
 	DisconnectReasonStaleConnectionBeingReplaced                  protocol.ConnectionDisconnectFailReason = 88
-	DisconnectReasonRealmsSessionNotFound                         protocol.ConnectionDisconnectFailReason = 89
+	DisconnectReasonRealmssessionnotfound                         protocol.ConnectionDisconnectFailReason = 89
 	DisconnectReasonBadPacket                                     protocol.ConnectionDisconnectFailReason = 90
 	DisconnectReasonNetherNetFailedToCreateOffer                  protocol.ConnectionDisconnectFailReason = 91
 	DisconnectReasonNetherNetFailedToCreateAnswer                 protocol.ConnectionDisconnectFailReason = 92
@@ -114,7 +114,7 @@ const (
 	DisconnectReasonRequestServerShutdown                         protocol.ConnectionDisconnectFailReason = 106
 	DisconnectReasonClientGameSetupCancelled                      protocol.ConnectionDisconnectFailReason = 107
 	DisconnectReasonClientGameSetupFailed                         protocol.ConnectionDisconnectFailReason = 108
-	DisconnectReasonNoVenue                                       protocol.ConnectionDisconnectFailReason = 109
+	DisconnectReasonNovenue                                       protocol.ConnectionDisconnectFailReason = 109
 	DisconnectReasonNetherNetSignalingSigninFailed                protocol.ConnectionDisconnectFailReason = 110
 	DisconnectReasonSessionAccessDenied                           protocol.ConnectionDisconnectFailReason = 111
 	DisconnectReasonServiceSigninIssue                            protocol.ConnectionDisconnectFailReason = 112
@@ -153,6 +153,8 @@ const (
 	DisconnectReasonHostAcceptsNoTypeOfAuth                       protocol.ConnectionDisconnectFailReason = 145
 	DisconnectReasonNotAuthenticatedFastFail                      protocol.ConnectionDisconnectFailReason = 146
 	DisconnectReasonEditorNotAllowed                              protocol.ConnectionDisconnectFailReason = 147
+	DisconnectReasonMissingStructureData                          protocol.ConnectionDisconnectFailReason = 148
+	DisconnectReasonUnsupportedTransport                          protocol.ConnectionDisconnectFailReason = 149
 )
 
 // Disconnect may be sent by the server to disconnect the client using an optional message to send as the

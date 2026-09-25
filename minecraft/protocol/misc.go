@@ -72,7 +72,7 @@ func (x *AgentActionType) Marshal(io IO) { io.Int32((*int32)(x)) }
 type AgentAnimationType uint8
 
 const (
-	AgentAnimationTypeArmSwing AgentAnimationType = 0
+	AgentAnimationTypeArmswing AgentAnimationType = 0
 	AgentAnimationTypeShrug    AgentAnimationType = 1
 )
 
@@ -100,14 +100,16 @@ func (x *AnimatedImageData) Marshal(io IO) {
 }
 
 type AuthorAndMessage struct {
-	PlayerName string
-	Message    string
+	MessageType TextPacketType
+	PlayerName  string
+	Message     string
 }
 
-func (*AuthorAndMessage) tagTextData() uint8 { return 1 }
+func (*AuthorAndMessage) tagTextData() uint32 { return 1 }
 
 // Marshal reads or writes AuthorAndMessage using its canonical wire layout.
 func (x *AuthorAndMessage) Marshal(io IO) {
+	x.MessageType.Marshal(io)
 	io.StringLimits(&x.PlayerName, 0, 256)
 	io.StringLimits(&x.Message, 1, 65536)
 }
@@ -164,30 +166,6 @@ func (x *BedrockDDUIDataStoreUpdate) Marshal(io IO) {
 	Maximum(io, &x.PropertyUpdateCount, 4.294967294e+09)
 	io.Uint32(&x.PathUpdateCount)
 	Maximum(io, &x.PathUpdateCount, 4.294967294e+09)
-}
-
-type BookEditAction interface {
-	Marshaler
-	tagBookEditAction() uint32
-}
-
-// MarshalBookEditAction reads or writes the BookEditAction union using its canonical wire layout.
-func MarshalBookEditAction(io IO, x *BookEditAction) {
-	Union(io, x, io.Varuint32, BookEditAction.tagBookEditAction, func(tag uint32) BookEditAction {
-		switch tag {
-		case 0:
-			return new(BookEditActionReplacePage)
-		case 1:
-			return new(BookEditActionAddPage)
-		case 2:
-			return new(BookEditActionDeletePage)
-		case 3:
-			return new(BookEditActionSwapPages)
-		case 4:
-			return new(BookEditActionFinalize)
-		}
-		return nil
-	})
 }
 
 type BookEditActionAddPage struct {
@@ -304,13 +282,13 @@ type ChangeEntityScore struct {
 	EntityUniqueID int64
 }
 
-func (*ChangeEntityScore) tagSetScoreEntriesItem() uint8 { return 2 }
+func (*ChangeEntityScore) tagSetScoreInfoItem() uint32 { return 2 }
 
 // Marshal reads or writes ChangeEntityScore using its canonical wire layout.
 func (x *ChangeEntityScore) Marshal(io IO) {
 	io.String(&x.Action)
 	x.ScoreboardID.Marshal(io)
-	io.StringLimits(&x.ObjectiveName, 1, 18446744073709551615)
+	io.String(&x.ObjectiveName)
 	io.Int32(&x.ScoreValue)
 	io.ActorUniqueID(&x.EntityUniqueID)
 }
@@ -323,15 +301,15 @@ type ChangeFakePlayerScore struct {
 	FakePlayerName string
 }
 
-func (*ChangeFakePlayerScore) tagSetScoreEntriesItem() uint8 { return 3 }
+func (*ChangeFakePlayerScore) tagSetScoreInfoItem() uint32 { return 3 }
 
 // Marshal reads or writes ChangeFakePlayerScore using its canonical wire layout.
 func (x *ChangeFakePlayerScore) Marshal(io IO) {
 	io.String(&x.Action)
 	x.ScoreboardID.Marshal(io)
-	io.StringLimits(&x.ObjectiveName, 1, 18446744073709551615)
+	io.String(&x.ObjectiveName)
 	io.Int32(&x.ScoreValue)
-	io.StringLimits(&x.FakePlayerName, 1, 18446744073709551615)
+	io.String(&x.FakePlayerName)
 }
 
 type ChangePlayerScore struct {
@@ -342,13 +320,13 @@ type ChangePlayerScore struct {
 	PlayerUniqueID PlayerScoreboardID
 }
 
-func (*ChangePlayerScore) tagSetScoreEntriesItem() uint8 { return 1 }
+func (*ChangePlayerScore) tagSetScoreInfoItem() uint32 { return 1 }
 
 // Marshal reads or writes ChangePlayerScore using its canonical wire layout.
 func (x *ChangePlayerScore) Marshal(io IO) {
 	io.String(&x.Action)
 	x.ScoreboardID.Marshal(io)
-	io.StringLimits(&x.ObjectiveName, 1, 18446744073709551615)
+	io.String(&x.ObjectiveName)
 	io.Int32(&x.ScoreValue)
 	x.PlayerUniqueID.Marshal(io)
 }
@@ -362,7 +340,7 @@ type ClearOverride struct {
 	Type string
 }
 
-func (*ClearOverride) tagPlayerUpdateEntityOverridesData() uint8 { return 0 }
+func (*ClearOverride) tagPlayerUpdateEntityOverridesData() uint32 { return 0 }
 
 // Marshal reads or writes ClearOverride using its canonical wire layout.
 func (x *ClearOverride) Marshal(io IO) {
@@ -466,15 +444,12 @@ func (x *CraftRepairAndDisenchantStackRequestAction) Marshal(io IO) {
 	Minimum(io, &x.RepairCost, 0)
 }
 
-// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
 type DataItemByte struct {
-	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
-	Type DataItemType
-	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
+	Type  DataItemType
 	Value int8
 }
 
-func (*DataItemByte) tagDataItemEntryValue() uint8 { return 0 }
+func (*DataItemByte) tagDataItemEntryValue() uint32 { return 0 }
 
 // Marshal reads or writes DataItemByte using its canonical wire layout.
 func (x *DataItemByte) Marshal(io IO) {
@@ -487,7 +462,7 @@ type DataItemCompoundTag struct {
 	Value []byte
 }
 
-func (*DataItemCompoundTag) tagDataItemEntryValue() uint8 { return 5 }
+func (*DataItemCompoundTag) tagDataItemEntryValue() uint32 { return 5 }
 
 // Marshal reads or writes DataItemCompoundTag using its canonical wire layout.
 func (x *DataItemCompoundTag) Marshal(io IO) {
@@ -511,7 +486,7 @@ type DataItemFloat struct {
 	Value float32
 }
 
-func (*DataItemFloat) tagDataItemEntryValue() uint8 { return 3 }
+func (*DataItemFloat) tagDataItemEntryValue() uint32 { return 3 }
 
 // Marshal reads or writes DataItemFloat using its canonical wire layout.
 func (x *DataItemFloat) Marshal(io IO) {
@@ -524,7 +499,7 @@ type DataItemInt struct {
 	Value int32
 }
 
-func (*DataItemInt) tagDataItemEntryValue() uint8 { return 2 }
+func (*DataItemInt) tagDataItemEntryValue() uint32 { return 2 }
 
 // Marshal reads or writes DataItemInt using its canonical wire layout.
 func (x *DataItemInt) Marshal(io IO) {
@@ -537,7 +512,7 @@ type DataItemInt64 struct {
 	Value int64
 }
 
-func (*DataItemInt64) tagDataItemEntryValue() uint8 { return 7 }
+func (*DataItemInt64) tagDataItemEntryValue() uint32 { return 7 }
 
 // Marshal reads or writes DataItemInt64 using its canonical wire layout.
 func (x *DataItemInt64) Marshal(io IO) {
@@ -550,7 +525,7 @@ type DataItemPos struct {
 	Value BlockPos
 }
 
-func (*DataItemPos) tagDataItemEntryValue() uint8 { return 6 }
+func (*DataItemPos) tagDataItemEntryValue() uint32 { return 6 }
 
 // Marshal reads or writes DataItemPos using its canonical wire layout.
 func (x *DataItemPos) Marshal(io IO) {
@@ -563,7 +538,7 @@ type DataItemShort struct {
 	Value int16
 }
 
-func (*DataItemShort) tagDataItemEntryValue() uint8 { return 1 }
+func (*DataItemShort) tagDataItemEntryValue() uint32 { return 1 }
 
 // Marshal reads or writes DataItemShort using its canonical wire layout.
 func (x *DataItemShort) Marshal(io IO) {
@@ -576,7 +551,7 @@ type DataItemString struct {
 	Value string
 }
 
-func (*DataItemString) tagDataItemEntryValue() uint8 { return 4 }
+func (*DataItemString) tagDataItemEntryValue() uint32 { return 4 }
 
 // Marshal reads or writes DataItemString using its canonical wire layout.
 func (x *DataItemString) Marshal(io IO) {
@@ -589,7 +564,7 @@ type DataItemVec3 struct {
 	Value mgl32.Vec3
 }
 
-func (*DataItemVec3) tagDataItemEntryValue() uint8 { return 8 }
+func (*DataItemVec3) tagDataItemEntryValue() uint32 { return 8 }
 
 // Marshal reads or writes DataItemVec3 using its canonical wire layout.
 func (x *DataItemVec3) Marshal(io IO) {
@@ -686,26 +661,6 @@ func MarshalDynamicValue(io IO, x *DynamicValue) {
 	})
 }
 
-type EAS interface {
-	Marshaler
-	tagEAS() uint32
-}
-
-// MarshalEAS reads or writes the EAS union using its canonical wire layout.
-func MarshalEAS(io IO, x *EAS) {
-	Union(io, x, io.Varuint32, EAS.tagEAS, func(tag uint32) EAS {
-		switch tag {
-		case 0:
-			return new(EASBoolAttributeData)
-		case 1:
-			return new(EASFloatAttributeData)
-		case 2:
-			return new(EASColorAttributeData)
-		}
-		return nil
-	})
-}
-
 type EASAttributeLayerData struct {
 	Name       string
 	NoiseName  Optional[string]
@@ -778,6 +733,7 @@ type EASEnvironmentAttributeData struct {
 	Easing                 string
 	LocalTransitionTicks   uint32
 	NoiseTransition        bool
+	NoiseAlignment         NoiseAlignment
 }
 
 // Marshal reads or writes EASEnvironmentAttributeData using its canonical wire layout.
@@ -795,6 +751,7 @@ func (x *EASEnvironmentAttributeData) Marshal(io IO) {
 	io.String(&x.Easing)
 	io.Uint32(&x.LocalTransitionTicks)
 	io.Bool(&x.NoiseTransition)
+	x.NoiseAlignment.Marshal(io)
 }
 
 type EASFloatAttributeData struct {
@@ -812,21 +769,6 @@ func (x *EASFloatAttributeData) Marshal(io IO) {
 	io.String(&x.Operation)
 	OptionalFunc(io, &x.ConstraintMin, io.Float32)
 	OptionalFunc(io, &x.ConstraintMax, io.Float32)
-}
-
-type ECSProfilingDiagnosticsEntityDiagnosticTimingInfo struct {
-	DisplayName    string
-	Entity         string
-	TimeInNS       uint64
-	PercentOfTotal uint8
-}
-
-// Marshal reads or writes ECSProfilingDiagnosticsEntityDiagnosticTimingInfo using its canonical wire layout.
-func (x *ECSProfilingDiagnosticsEntityDiagnosticTimingInfo) Marshal(io IO) {
-	io.String(&x.DisplayName)
-	io.String(&x.Entity)
-	io.Uint64(&x.TimeInNS)
-	io.Uint8(&x.PercentOfTotal)
 }
 
 type EditorWorldType int32
@@ -872,7 +814,7 @@ type FloatOverride struct {
 	Value float32
 }
 
-func (*FloatOverride) tagPlayerUpdateEntityOverridesData() uint8 { return 3 }
+func (*FloatOverride) tagPlayerUpdateEntityOverridesData() uint32 { return 3 }
 
 // Marshal reads or writes FloatOverride using its canonical wire layout.
 func (x *FloatOverride) Marshal(io IO) {
@@ -901,27 +843,23 @@ func (x *GraphicsMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 type HeightmapData struct {
 	HeightMapType           HeightMapDataType
-	SubchunkHeightMap       Optional[[16][16]int8]
+	SubchunkHeightMap       Optional[[16][]int8]
 	RenderHeightMapType     HeightMapDataType
-	SubchunkRenderHeightMap Optional[[16][16]int8]
+	SubchunkRenderHeightMap Optional[[16][]int8]
 }
 
 // Marshal reads or writes HeightmapData using its canonical wire layout.
 func (x *HeightmapData) Marshal(io IO) {
 	x.HeightMapType.Marshal(io)
-	OptionalFunc(io, &x.SubchunkHeightMap, func(value *[16][16]int8) {
+	OptionalFunc(io, &x.SubchunkHeightMap, func(value *[16][]int8) {
 		for index1 := range *value {
-			for index2 := range (*value)[index1] {
-				io.Int8(&(*value)[index1][index2])
-			}
+			FuncSlice(io, &(*value)[index1], io.Varuint32, io.Int8)
 		}
 	})
 	x.RenderHeightMapType.Marshal(io)
-	OptionalFunc(io, &x.SubchunkRenderHeightMap, func(value *[16][16]int8) {
-		for index3 := range *value {
-			for index4 := range (*value)[index3] {
-				io.Int8(&(*value)[index3][index4])
-			}
+	OptionalFunc(io, &x.SubchunkRenderHeightMap, func(value *[16][]int8) {
+		for index2 := range *value {
+			FuncSlice(io, &(*value)[index2], io.Varuint32, io.Int8)
 		}
 	})
 }
@@ -973,7 +911,7 @@ type IntOverride struct {
 	Value int32
 }
 
-func (*IntOverride) tagPlayerUpdateEntityOverridesData() uint8 { return 2 }
+func (*IntOverride) tagPlayerUpdateEntityOverridesData() uint32 { return 2 }
 
 // Marshal reads or writes IntOverride using its canonical wire layout.
 func (x *IntOverride) Marshal(io IO) {
@@ -1009,18 +947,18 @@ type LabTableReactionType uint8
 
 const (
 	LabTableReactionTypeNone               LabTableReactionType = 0
-	LabTableReactionTypeIceBomb            LabTableReactionType = 1
+	LabTableReactionTypeIcebomb            LabTableReactionType = 1
 	LabTableReactionTypeBleach             LabTableReactionType = 2
-	LabTableReactionTypeElephantToothpaste LabTableReactionType = 3
+	LabTableReactionTypeElephanttoothpaste LabTableReactionType = 3
 	LabTableReactionTypeFertilizer         LabTableReactionType = 4
-	LabTableReactionTypeHeatBlock          LabTableReactionType = 5
-	LabTableReactionTypeMagnesiumSalts     LabTableReactionType = 6
-	LabTableReactionTypeMiscFire           LabTableReactionType = 7
-	LabTableReactionTypeMiscExplosion      LabTableReactionType = 8
-	LabTableReactionTypeMiscLava           LabTableReactionType = 9
-	LabTableReactionTypeMiscMystical       LabTableReactionType = 10
-	LabTableReactionTypeMiscSmoke          LabTableReactionType = 11
-	LabTableReactionTypeMiscLargeSmoke     LabTableReactionType = 12
+	LabTableReactionTypeHeatblock          LabTableReactionType = 5
+	LabTableReactionTypeMagnesiumsalts     LabTableReactionType = 6
+	LabTableReactionTypeMiscfire           LabTableReactionType = 7
+	LabTableReactionTypeMiscexplosion      LabTableReactionType = 8
+	LabTableReactionTypeMisclava           LabTableReactionType = 9
+	LabTableReactionTypeMiscmystical       LabTableReactionType = 10
+	LabTableReactionTypeMiscsmoke          LabTableReactionType = 11
+	LabTableReactionTypeMisclargesmoke     LabTableReactionType = 12
 )
 
 // Marshal reads or writes LabTableReactionType through its uint8 wire encoding.
@@ -1202,114 +1140,118 @@ func (x *MaterialReducerEntryOutput) Marshal(io IO) {
 }
 
 type MessageAndParams struct {
+	MessageType   TextPacketType
 	Message       string
 	ParameterList []string
 }
 
-func (*MessageAndParams) tagTextData() uint8 { return 2 }
+func (*MessageAndParams) tagTextData() uint32 { return 2 }
 
 // Marshal reads or writes MessageAndParams using its canonical wire layout.
 func (x *MessageAndParams) Marshal(io IO) {
+	x.MessageType.Marshal(io)
 	io.StringLimits(&x.Message, 1, 65536)
 	FuncSliceLimits(io, &x.ParameterList, io.Varuint32, 0, 4, io.String)
 }
 
 type MessageOnly struct {
-	Message string
+	MessageType TextPacketType
+	Message     string
 }
 
-func (*MessageOnly) tagTextData() uint8 { return 0 }
+func (*MessageOnly) tagTextData() uint32 { return 0 }
 
 // Marshal reads or writes MessageOnly using its canonical wire layout.
 func (x *MessageOnly) Marshal(io IO) {
+	x.MessageType.Marshal(io)
 	io.StringLimits(&x.Message, 1, 65536)
 }
 
 type MinecraftEventingAchievementIds uint8
 
 const (
-	MinecraftEventingAchievementIdsChestFullOfCobblestone          MinecraftEventingAchievementIds = 7
-	MinecraftEventingAchievementIdsDiamondForYou                   MinecraftEventingAchievementIds = 10
-	MinecraftEventingAchievementIdsIronBelly                       MinecraftEventingAchievementIds = 20
-	MinecraftEventingAchievementIdsIronMan                         MinecraftEventingAchievementIds = 21
-	MinecraftEventingAchievementIdsOnARail                         MinecraftEventingAchievementIds = 29
+	MinecraftEventingAchievementIdsChestfullofcobblestone          MinecraftEventingAchievementIds = 7
+	MinecraftEventingAchievementIdsDiamondforyou                   MinecraftEventingAchievementIds = 10
+	MinecraftEventingAchievementIdsIronbelly                       MinecraftEventingAchievementIds = 20
+	MinecraftEventingAchievementIdsIronman                         MinecraftEventingAchievementIds = 21
+	MinecraftEventingAchievementIdsOnarail                         MinecraftEventingAchievementIds = 29
 	MinecraftEventingAchievementIdsOverkill                        MinecraftEventingAchievementIds = 30
-	MinecraftEventingAchievementIdsReturnToSender                  MinecraftEventingAchievementIds = 37
-	MinecraftEventingAchievementIdsSniperDuel                      MinecraftEventingAchievementIds = 38
-	MinecraftEventingAchievementIdsStayinFrosty                    MinecraftEventingAchievementIds = 39
-	MinecraftEventingAchievementIdsTakeInventory                   MinecraftEventingAchievementIds = 40
-	MinecraftEventingAchievementIdsMapRoom                         MinecraftEventingAchievementIds = 50
-	MinecraftEventingAchievementIdsFreightStation                  MinecraftEventingAchievementIds = 52
-	MinecraftEventingAchievementIdsSmeltEverything                 MinecraftEventingAchievementIds = 53
-	MinecraftEventingAchievementIdsTasteOfYourOwnMedicine          MinecraftEventingAchievementIds = 54
-	MinecraftEventingAchievementIdsWhenPigsFly                     MinecraftEventingAchievementIds = 56
+	MinecraftEventingAchievementIdsReturntosender                  MinecraftEventingAchievementIds = 37
+	MinecraftEventingAchievementIdsSniperduel                      MinecraftEventingAchievementIds = 38
+	MinecraftEventingAchievementIdsStayinfrosty                    MinecraftEventingAchievementIds = 39
+	MinecraftEventingAchievementIdsTakeinventory                   MinecraftEventingAchievementIds = 40
+	MinecraftEventingAchievementIdsMaproom                         MinecraftEventingAchievementIds = 50
+	MinecraftEventingAchievementIdsFreightstation                  MinecraftEventingAchievementIds = 52
+	MinecraftEventingAchievementIdsSmelteverything                 MinecraftEventingAchievementIds = 53
+	MinecraftEventingAchievementIdsTasteofyourownmedicine          MinecraftEventingAchievementIds = 54
+	MinecraftEventingAchievementIdsWhenpigsfly                     MinecraftEventingAchievementIds = 56
 	MinecraftEventingAchievementIdsInception                       MinecraftEventingAchievementIds = 58
-	MinecraftEventingAchievementIdsArtificialSelection             MinecraftEventingAchievementIds = 60
-	MinecraftEventingAchievementIdsFreeDiver                       MinecraftEventingAchievementIds = 61
-	MinecraftEventingAchievementIdsSpawnTheWither                  MinecraftEventingAchievementIds = 62
+	MinecraftEventingAchievementIdsArtificialselection             MinecraftEventingAchievementIds = 60
+	MinecraftEventingAchievementIdsFreediver                       MinecraftEventingAchievementIds = 61
+	MinecraftEventingAchievementIdsSpawnthewither                  MinecraftEventingAchievementIds = 62
 	MinecraftEventingAchievementIdsBeaconator                      MinecraftEventingAchievementIds = 63
-	MinecraftEventingAchievementIdsGreatView                       MinecraftEventingAchievementIds = 64
-	MinecraftEventingAchievementIdsSuperSonic                      MinecraftEventingAchievementIds = 65
-	MinecraftEventingAchievementIdsTheEndAgain                     MinecraftEventingAchievementIds = 66
-	MinecraftEventingAchievementIdsTreasureHunter                  MinecraftEventingAchievementIds = 67
-	MinecraftEventingAchievementIdsShootingStar                    MinecraftEventingAchievementIds = 68
-	MinecraftEventingAchievementIdsFashionShow                     MinecraftEventingAchievementIds = 69
-	MinecraftEventingAchievementIdsSelfPublishedAuthor             MinecraftEventingAchievementIds = 71
-	MinecraftEventingAchievementIdsAlternativeFuel                 MinecraftEventingAchievementIds = 72
-	MinecraftEventingAchievementIdsSleepWithTheFishes              MinecraftEventingAchievementIds = 73
+	MinecraftEventingAchievementIdsGreatview                       MinecraftEventingAchievementIds = 64
+	MinecraftEventingAchievementIdsSupersonic                      MinecraftEventingAchievementIds = 65
+	MinecraftEventingAchievementIdsTheendagain                     MinecraftEventingAchievementIds = 66
+	MinecraftEventingAchievementIdsTreasurehunter                  MinecraftEventingAchievementIds = 67
+	MinecraftEventingAchievementIdsShootingstar                    MinecraftEventingAchievementIds = 68
+	MinecraftEventingAchievementIdsFashionshow                     MinecraftEventingAchievementIds = 69
+	MinecraftEventingAchievementIdsSelfpublishedauthor             MinecraftEventingAchievementIds = 71
+	MinecraftEventingAchievementIdsAlternativefuel                 MinecraftEventingAchievementIds = 72
+	MinecraftEventingAchievementIdsSleepwiththefishes              MinecraftEventingAchievementIds = 73
 	MinecraftEventingAchievementIdsCastaway                        MinecraftEventingAchievementIds = 74
-	MinecraftEventingAchievementIdsImAMarineBiologist              MinecraftEventingAchievementIds = 75
-	MinecraftEventingAchievementIdsSailThe7Seas                    MinecraftEventingAchievementIds = 76
-	MinecraftEventingAchievementIdsMeGold                          MinecraftEventingAchievementIds = 77
+	MinecraftEventingAchievementIdsImamarinebiologist              MinecraftEventingAchievementIds = 75
+	MinecraftEventingAchievementIdsSailthe7seas                    MinecraftEventingAchievementIds = 76
+	MinecraftEventingAchievementIdsMegold                          MinecraftEventingAchievementIds = 77
 	MinecraftEventingAchievementIdsAhoy                            MinecraftEventingAchievementIds = 78
 	MinecraftEventingAchievementIdsAtlantis                        MinecraftEventingAchievementIds = 79
-	MinecraftEventingAchievementIdsOnePickleTwoPickleSeaPickleFour MinecraftEventingAchievementIds = 80
-	MinecraftEventingAchievementIdsDoaBarrelRoll                   MinecraftEventingAchievementIds = 81
+	MinecraftEventingAchievementIdsOnepickletwopickleseapicklefour MinecraftEventingAchievementIds = 80
+	MinecraftEventingAchievementIdsDoabarrelroll                   MinecraftEventingAchievementIds = 81
 	MinecraftEventingAchievementIdsMoskstraumen                    MinecraftEventingAchievementIds = 82
 	MinecraftEventingAchievementIdsEcholocation                    MinecraftEventingAchievementIds = 83
-	MinecraftEventingAchievementIdsWhereHaveYouBeen                MinecraftEventingAchievementIds = 84
-	MinecraftEventingAchievementIdsTopOfTheWorld                   MinecraftEventingAchievementIds = 85
-	MinecraftEventingAchievementIdsFruitOnTheLoom                  MinecraftEventingAchievementIds = 86
-	MinecraftEventingAchievementIdsSoundTheAlarm                   MinecraftEventingAchievementIds = 87
-	MinecraftEventingAchievementIdsBuyLowSellHigh                  MinecraftEventingAchievementIds = 88
+	MinecraftEventingAchievementIdsWherehaveyoubeen                MinecraftEventingAchievementIds = 84
+	MinecraftEventingAchievementIdsTopoftheworld                   MinecraftEventingAchievementIds = 85
+	MinecraftEventingAchievementIdsFruitontheloom                  MinecraftEventingAchievementIds = 86
+	MinecraftEventingAchievementIdsSoundthealarm                   MinecraftEventingAchievementIds = 87
+	MinecraftEventingAchievementIdsBuylowsellhigh                  MinecraftEventingAchievementIds = 88
 	MinecraftEventingAchievementIdsDisenchanted                    MinecraftEventingAchievementIds = 89
-	MinecraftEventingAchievementIdsTimeForStew                     MinecraftEventingAchievementIds = 90
-	MinecraftEventingAchievementIdsBeeOurGuest                     MinecraftEventingAchievementIds = 91
-	MinecraftEventingAchievementIdsTotalBeeLocation                MinecraftEventingAchievementIds = 92
-	MinecraftEventingAchievementIdsStickySituation                 MinecraftEventingAchievementIds = 93
-	MinecraftEventingAchievementIdsCoverMeInDebris                 MinecraftEventingAchievementIds = 94
-	MinecraftEventingAchievementIdsFloatYourGoat                   MinecraftEventingAchievementIds = 95
+	MinecraftEventingAchievementIdsTimeforstew                     MinecraftEventingAchievementIds = 90
+	MinecraftEventingAchievementIdsBeeourguest                     MinecraftEventingAchievementIds = 91
+	MinecraftEventingAchievementIdsTotalbeelocation                MinecraftEventingAchievementIds = 92
+	MinecraftEventingAchievementIdsStickysituation                 MinecraftEventingAchievementIds = 93
+	MinecraftEventingAchievementIdsCovermeindebris                 MinecraftEventingAchievementIds = 94
+	MinecraftEventingAchievementIdsFloatyourgoat                   MinecraftEventingAchievementIds = 95
 	MinecraftEventingAchievementIdsFriend                          MinecraftEventingAchievementIds = 96
-	MinecraftEventingAchievementIdsWaxOnWaxOff                     MinecraftEventingAchievementIds = 97
-	MinecraftEventingAchievementIdsStriderRiddenInLavaInOverworld  MinecraftEventingAchievementIds = 98
-	MinecraftEventingAchievementIdsGoatHornAcquired                MinecraftEventingAchievementIds = 99
-	MinecraftEventingAchievementIdsJukeboxUsedInMeadows            MinecraftEventingAchievementIds = 100
-	MinecraftEventingAchievementIdsTradedAtWorldHeight             MinecraftEventingAchievementIds = 101
-	MinecraftEventingAchievementIdsSurvivedFallFromWorldHeight     MinecraftEventingAchievementIds = 102
-	MinecraftEventingAchievementIdsSneakCloseToSculkSensor         MinecraftEventingAchievementIds = 103
-	MinecraftEventingAchievementIdsItSpreads                       MinecraftEventingAchievementIds = 104
-	MinecraftEventingAchievementIdsBirthdaySong                    MinecraftEventingAchievementIds = 105
-	MinecraftEventingAchievementIdsWithOurPowersCombined           MinecraftEventingAchievementIds = 106
-	MinecraftEventingAchievementIdsPlantingThePast                 MinecraftEventingAchievementIds = 107
-	MinecraftEventingAchievementIdsCarefulRestoration              MinecraftEventingAchievementIds = 108
+	MinecraftEventingAchievementIdsWaxonwaxoff                     MinecraftEventingAchievementIds = 97
+	MinecraftEventingAchievementIdsStriderriddeninlavainoverworld  MinecraftEventingAchievementIds = 98
+	MinecraftEventingAchievementIdsGoathornacquired                MinecraftEventingAchievementIds = 99
+	MinecraftEventingAchievementIdsJukeboxusedinmeadows            MinecraftEventingAchievementIds = 100
+	MinecraftEventingAchievementIdsTradedatworldheight             MinecraftEventingAchievementIds = 101
+	MinecraftEventingAchievementIdsSurvivedfallfromworldheight     MinecraftEventingAchievementIds = 102
+	MinecraftEventingAchievementIdsSneakclosetosculksensor         MinecraftEventingAchievementIds = 103
+	MinecraftEventingAchievementIdsItspreads                       MinecraftEventingAchievementIds = 104
+	MinecraftEventingAchievementIdsBirthdaysong                    MinecraftEventingAchievementIds = 105
+	MinecraftEventingAchievementIdsWithourpowerscombined           MinecraftEventingAchievementIds = 106
+	MinecraftEventingAchievementIdsPlantingthepast                 MinecraftEventingAchievementIds = 107
+	MinecraftEventingAchievementIdsCarefulrestoration              MinecraftEventingAchievementIds = 108
 	MinecraftEventingAchievementIdsRevaulting                      MinecraftEventingAchievementIds = 109
-	MinecraftEventingAchievementIdsCraftersCraftingCrafters        MinecraftEventingAchievementIds = 110
-	MinecraftEventingAchievementIdsWhoNeedsRockets                 MinecraftEventingAchievementIds = 111
-	MinecraftEventingAchievementIdsOverOverkill                    MinecraftEventingAchievementIds = 112
-	MinecraftEventingAchievementIdsHeartTransplanter               MinecraftEventingAchievementIds = 113
-	MinecraftEventingAchievementIdsStayHydrated                    MinecraftEventingAchievementIds = 114
-	MinecraftEventingAchievementIdsMobKabob                        MinecraftEventingAchievementIds = 115
-	MinecraftEventingAchievementIdsAdventuringTime                 MinecraftEventingAchievementIds = 116
-	MinecraftEventingAchievementIdsUhOh                            MinecraftEventingAchievementIds = 117
-	MinecraftEventingAchievementIdsGettingWood                     MinecraftEventingAchievementIds = 118
-	MinecraftEventingAchievementIdsBenchMaking                     MinecraftEventingAchievementIds = 119
-	MinecraftEventingAchievementIdsTimeToMine                      MinecraftEventingAchievementIds = 120
-	MinecraftEventingAchievementIdsHotTopic                        MinecraftEventingAchievementIds = 121
-	MinecraftEventingAchievementIdsAcquireHardware                 MinecraftEventingAchievementIds = 122
-	MinecraftEventingAchievementIdsGettingAnUpgrade                MinecraftEventingAchievementIds = 123
-	MinecraftEventingAchievementIdsMonsterHunter                   MinecraftEventingAchievementIds = 124
+	MinecraftEventingAchievementIdsCrafterscraftingcrafters        MinecraftEventingAchievementIds = 110
+	MinecraftEventingAchievementIdsWhoneedsrockets                 MinecraftEventingAchievementIds = 111
+	MinecraftEventingAchievementIdsOveroverkill                    MinecraftEventingAchievementIds = 112
+	MinecraftEventingAchievementIdsHearttransplanter               MinecraftEventingAchievementIds = 113
+	MinecraftEventingAchievementIdsStayhydrated                    MinecraftEventingAchievementIds = 114
+	MinecraftEventingAchievementIdsMobkabob                        MinecraftEventingAchievementIds = 115
+	MinecraftEventingAchievementIdsAdventuringtime                 MinecraftEventingAchievementIds = 116
+	MinecraftEventingAchievementIdsUhoh                            MinecraftEventingAchievementIds = 117
+	MinecraftEventingAchievementIdsGettingwood                     MinecraftEventingAchievementIds = 118
+	MinecraftEventingAchievementIdsBenchmaking                     MinecraftEventingAchievementIds = 119
+	MinecraftEventingAchievementIdsTimetomine                      MinecraftEventingAchievementIds = 120
+	MinecraftEventingAchievementIdsHottopic                        MinecraftEventingAchievementIds = 121
+	MinecraftEventingAchievementIdsAcquirehardware                 MinecraftEventingAchievementIds = 122
+	MinecraftEventingAchievementIdsGettinganupgrade                MinecraftEventingAchievementIds = 123
+	MinecraftEventingAchievementIdsMonsterhunter                   MinecraftEventingAchievementIds = 124
 	MinecraftEventingAchievementIdsDiamonds                        MinecraftEventingAchievementIds = 125
-	MinecraftEventingAchievementIdsPlethoraOfCats                  MinecraftEventingAchievementIds = 126
+	MinecraftEventingAchievementIdsPlethoraofcats                  MinecraftEventingAchievementIds = 126
 )
 
 // Marshal reads or writes MinecraftEventingAchievementIds through its uint8 wire encoding.
@@ -1331,7 +1273,7 @@ const (
 	MinecraftEventingInteractionTypeNaming     MinecraftEventingInteractionType = 11
 	MinecraftEventingInteractionTypeLeashing   MinecraftEventingInteractionType = 12
 	MinecraftEventingInteractionTypeUnleashing MinecraftEventingInteractionType = 13
-	MinecraftEventingInteractionTypePetSleep   MinecraftEventingInteractionType = 14
+	MinecraftEventingInteractionTypePetsleep   MinecraftEventingInteractionType = 14
 	MinecraftEventingInteractionTypeTrusting   MinecraftEventingInteractionType = 15
 	MinecraftEventingInteractionTypeCommanding MinecraftEventingInteractionType = 16
 	MinecraftEventingInteractionTypeEquipping  MinecraftEventingInteractionType = 17
@@ -1348,27 +1290,27 @@ const (
 	MinecraftEventingPOIBlockInteractionTypeClone               MinecraftEventingPOIBlockInteractionType = 2
 	MinecraftEventingPOIBlockInteractionTypeLock                MinecraftEventingPOIBlockInteractionType = 3
 	MinecraftEventingPOIBlockInteractionTypeCreate              MinecraftEventingPOIBlockInteractionType = 4
-	MinecraftEventingPOIBlockInteractionTypeCreateLocator       MinecraftEventingPOIBlockInteractionType = 5
+	MinecraftEventingPOIBlockInteractionTypeCreatelocator       MinecraftEventingPOIBlockInteractionType = 5
 	MinecraftEventingPOIBlockInteractionTypeRename              MinecraftEventingPOIBlockInteractionType = 6
-	MinecraftEventingPOIBlockInteractionTypeItemPlaced          MinecraftEventingPOIBlockInteractionType = 7
-	MinecraftEventingPOIBlockInteractionTypeItemRemoved         MinecraftEventingPOIBlockInteractionType = 8
+	MinecraftEventingPOIBlockInteractionTypeItemplaced          MinecraftEventingPOIBlockInteractionType = 7
+	MinecraftEventingPOIBlockInteractionTypeItemremoved         MinecraftEventingPOIBlockInteractionType = 8
 	MinecraftEventingPOIBlockInteractionTypeCooking             MinecraftEventingPOIBlockInteractionType = 9
 	MinecraftEventingPOIBlockInteractionTypeDousing             MinecraftEventingPOIBlockInteractionType = 10
 	MinecraftEventingPOIBlockInteractionTypeLighting            MinecraftEventingPOIBlockInteractionType = 11
 	MinecraftEventingPOIBlockInteractionTypeHaystack            MinecraftEventingPOIBlockInteractionType = 12
 	MinecraftEventingPOIBlockInteractionTypeFilled              MinecraftEventingPOIBlockInteractionType = 13
 	MinecraftEventingPOIBlockInteractionTypeEmptied             MinecraftEventingPOIBlockInteractionType = 14
-	MinecraftEventingPOIBlockInteractionTypeAddDye              MinecraftEventingPOIBlockInteractionType = 15
-	MinecraftEventingPOIBlockInteractionTypeDyeItem             MinecraftEventingPOIBlockInteractionType = 16
-	MinecraftEventingPOIBlockInteractionTypeClearItem           MinecraftEventingPOIBlockInteractionType = 17
-	MinecraftEventingPOIBlockInteractionTypeEnchantArrow        MinecraftEventingPOIBlockInteractionType = 18
-	MinecraftEventingPOIBlockInteractionTypeCompostItemPlaced   MinecraftEventingPOIBlockInteractionType = 19
-	MinecraftEventingPOIBlockInteractionTypeRecoveredBonemeal   MinecraftEventingPOIBlockInteractionType = 20
-	MinecraftEventingPOIBlockInteractionTypeBookPlaced          MinecraftEventingPOIBlockInteractionType = 21
-	MinecraftEventingPOIBlockInteractionTypeBookOpened          MinecraftEventingPOIBlockInteractionType = 22
+	MinecraftEventingPOIBlockInteractionTypeAdddye              MinecraftEventingPOIBlockInteractionType = 15
+	MinecraftEventingPOIBlockInteractionTypeDyeitem             MinecraftEventingPOIBlockInteractionType = 16
+	MinecraftEventingPOIBlockInteractionTypeClearitem           MinecraftEventingPOIBlockInteractionType = 17
+	MinecraftEventingPOIBlockInteractionTypeEnchantarrow        MinecraftEventingPOIBlockInteractionType = 18
+	MinecraftEventingPOIBlockInteractionTypeCompostitemplaced   MinecraftEventingPOIBlockInteractionType = 19
+	MinecraftEventingPOIBlockInteractionTypeRecoveredbonemeal   MinecraftEventingPOIBlockInteractionType = 20
+	MinecraftEventingPOIBlockInteractionTypeBookplaced          MinecraftEventingPOIBlockInteractionType = 21
+	MinecraftEventingPOIBlockInteractionTypeBookopened          MinecraftEventingPOIBlockInteractionType = 22
 	MinecraftEventingPOIBlockInteractionTypeDisenchant          MinecraftEventingPOIBlockInteractionType = 23
 	MinecraftEventingPOIBlockInteractionTypeRepair              MinecraftEventingPOIBlockInteractionType = 24
-	MinecraftEventingPOIBlockInteractionTypeDisenchantAndRepair MinecraftEventingPOIBlockInteractionType = 25
+	MinecraftEventingPOIBlockInteractionTypeDisenchantandrepair MinecraftEventingPOIBlockInteractionType = 25
 )
 
 // Marshal reads or writes MinecraftEventingPOIBlockInteractionType through its uint8 wire encoding.
@@ -1389,21 +1331,21 @@ type MoLangVersion int16
 
 const (
 	MoLangVersionInvalid                                MoLangVersion = -1
-	MoLangVersionBeforeVersioning                       MoLangVersion = 0
+	MoLangVersionBeforeversioning                       MoLangVersion = 0
 	MoLangVersionInitial                                MoLangVersion = 1
-	MoLangVersionFixedItemRemainingUseDurationQuery     MoLangVersion = 2
-	MoLangVersionExpressionErrorMessages                MoLangVersion = 3
-	MoLangVersionUnexpectedOperatorErrors               MoLangVersion = 4
-	MoLangVersionConditionalOperatorAssociativity       MoLangVersion = 5
-	MoLangVersionComparisonAndLogicalOperatorPrecedence MoLangVersion = 6
-	MoLangVersionDivideByNegativeValue                  MoLangVersion = 7
-	MoLangVersionFixedCapeFlapAmountQuery               MoLangVersion = 8
-	MoLangVersionQueryBlockPropertyRenamedToState       MoLangVersion = 9
-	MoLangVersionDeprecateOldBlockQueryNames            MoLangVersion = 10
-	MoLangVersionDeprecatedSnifferAndCamelQueries       MoLangVersion = 11
-	MoLangVersionLeafSupportingInFirstSolidBlockBelow   MoLangVersion = 12
+	MoLangVersionFixeditemremainingusedurationquery     MoLangVersion = 2
+	MoLangVersionExpressionerrormessages                MoLangVersion = 3
+	MoLangVersionUnexpectedoperatorerrors               MoLangVersion = 4
+	MoLangVersionConditionaloperatorassociativity       MoLangVersion = 5
+	MoLangVersionComparisonandlogicaloperatorprecedence MoLangVersion = 6
+	MoLangVersionDividebynegativevalue                  MoLangVersion = 7
+	MoLangVersionFixedcapeflapamountquery               MoLangVersion = 8
+	MoLangVersionQueryblockpropertyrenamedtostate       MoLangVersion = 9
+	MoLangVersionDeprecateoldblockquerynames            MoLangVersion = 10
+	MoLangVersionDeprecatedsnifferandcamelqueries       MoLangVersion = 11
+	MoLangVersionLeafsupportinginfirstsolidblockbelow   MoLangVersion = 12
 	MoLangVersionLatest                                 MoLangVersion = 13
-	MoLangVersionNumValidVersions                       MoLangVersion = 14
+	MoLangVersionNumvalidversions                       MoLangVersion = 14
 )
 
 // Marshal reads or writes MoLangVersion through its int16 wire encoding.
@@ -1454,7 +1396,6 @@ func (x *NetworkItemInstanceDescriptorSerializedData) Marshal(io IO) {
 	Minimum(io, &x.ID, -32768)
 	Maximum(io, &x.ID, 32767)
 	io.Uint16(&x.StackSize)
-	Maximum(io, &x.StackSize, 64)
 	io.Varuint32(&x.AuxValue)
 	Maximum(io, &x.AuxValue, 32767)
 	io.Varint32(&x.BlockRuntimeID)
@@ -1474,7 +1415,6 @@ type NetworkItemStackDescriptorSerializedData struct {
 func (x *NetworkItemStackDescriptorSerializedData) Marshal(io IO) {
 	io.Int16(&x.ID)
 	io.Uint16(&x.StackSize)
-	Maximum(io, &x.StackSize, 64)
 	io.Varuint32(&x.AuxValue)
 	Maximum(io, &x.AuxValue, 32767)
 	OptionalFunc(io, &x.NetIDVariant, io.Varint32)
@@ -1499,7 +1439,7 @@ func (x *NewInteractionModel) Marshal(io IO) { io.Varint32((*int32)(x)) }
 type PackedItemUseLegacyInventoryTransaction struct {
 	LegacyRequestID    ItemStackLegacyRequestID
 	LegacySetItemSlots Optional[[]LegacySetSlot]
-	ItemUseTransaction Optional[ItemUseInventoryTransaction]
+	ItemUseTransaction ItemUseInventoryTransaction
 }
 
 // Marshal reads or writes PackedItemUseLegacyInventoryTransaction using its canonical wire layout.
@@ -1508,7 +1448,7 @@ func (x *PackedItemUseLegacyInventoryTransaction) Marshal(io IO) {
 	OptionalFunc(io, &x.LegacySetItemSlots, func(value *[]LegacySetSlot) {
 		Slice(io, value)
 	})
-	OptionalMarshaler(io, &x.ItemUseTransaction)
+	x.ItemUseTransaction.Marshal(io)
 }
 
 type PacketCompressionAlgorithm uint16
@@ -1530,7 +1470,7 @@ type PacketViolationType int32
 
 const (
 	PacketViolationTypeUnknown         PacketViolationType = -1
-	PacketViolationTypePacketMalformed PacketViolationType = 0
+	PacketViolationTypePacketmalformed PacketViolationType = 0
 )
 
 // Marshal reads or writes PacketViolationType through its int32 wire encoding.
@@ -1643,7 +1583,7 @@ type RemoveOverride struct {
 	Type string
 }
 
-func (*RemoveOverride) tagPlayerUpdateEntityOverridesData() uint8 { return 1 }
+func (*RemoveOverride) tagPlayerUpdateEntityOverridesData() uint32 { return 1 }
 
 // Marshal reads or writes RemoveOverride using its canonical wire layout.
 func (x *RemoveOverride) Marshal(io IO) {
@@ -1656,15 +1596,13 @@ type RemoveScore struct {
 	ObjectiveName Optional[string]
 }
 
-func (*RemoveScore) tagSetScoreEntriesItem() uint8 { return 0 }
+func (*RemoveScore) tagSetScoreInfoItem() uint32 { return 0 }
 
 // Marshal reads or writes RemoveScore using its canonical wire layout.
 func (x *RemoveScore) Marshal(io IO) {
 	io.String(&x.Action)
 	x.ScoreboardID.Marshal(io)
-	DoubleOptionalFunc(io, &x.ObjectiveName, func(value *string) {
-		io.StringLimits(value, 1, 18446744073709551615)
-	})
+	OptionalFunc(io, &x.ObjectiveName, io.String)
 }
 
 type RemoveTimeMarkerData struct {
@@ -1823,9 +1761,9 @@ func (x *ServerConfigurationServerConfigurationJoinInfo) Marshal(io IO) {
 type ServerEditorConnectionPolicy int32
 
 const (
-	ServerEditorConnectionPolicyMatchWorldType ServerEditorConnectionPolicy = 0
-	ServerEditorConnectionPolicyEditorOnly     ServerEditorConnectionPolicy = 1
-	ServerEditorConnectionPolicyVanillaOnly    ServerEditorConnectionPolicy = 2
+	ServerEditorConnectionPolicyMatchworldtype ServerEditorConnectionPolicy = 0
+	ServerEditorConnectionPolicyEditoronly     ServerEditorConnectionPolicy = 1
+	ServerEditorConnectionPolicyVanillaonly    ServerEditorConnectionPolicy = 2
 	ServerEditorConnectionPolicyMixed          ServerEditorConnectionPolicy = 3
 )
 
@@ -1906,8 +1844,8 @@ func (x *SpawnBiomeType) Marshal(io IO) { io.Int16((*int16)(x)) }
 type SpawnPositionType int32
 
 const (
-	SpawnPositionTypePlayerRespawn SpawnPositionType = 0
-	SpawnPositionTypeWorldSpawn    SpawnPositionType = 1
+	SpawnPositionTypePlayerrespawn SpawnPositionType = 0
+	SpawnPositionTypeWorldspawn    SpawnPositionType = 1
 )
 
 // Marshal reads or writes SpawnPositionType through its int32 wire encoding.
@@ -2008,105 +1946,6 @@ const (
 
 // Marshal reads or writes TargetMode through its uint8 wire encoding.
 func (x *TargetMode) Marshal(io IO) { io.Uint8((*uint8)(x)) }
-
-type TextDataAnnouncement struct {
-	Value AuthorAndMessage
-}
-
-func (*TextDataAnnouncement) tagTextData() uint8 { return 8 }
-
-// Marshal reads or writes TextDataAnnouncement using its canonical wire layout.
-func (x *TextDataAnnouncement) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataJukeboxPopup struct {
-	Value MessageAndParams
-}
-
-func (*TextDataJukeboxPopup) tagTextData() uint8 { return 4 }
-
-// Marshal reads or writes TextDataJukeboxPopup using its canonical wire layout.
-func (x *TextDataJukeboxPopup) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataPopup struct {
-	Value MessageAndParams
-}
-
-func (*TextDataPopup) tagTextData() uint8 { return 3 }
-
-// Marshal reads or writes TextDataPopup using its canonical wire layout.
-func (x *TextDataPopup) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataSystemMessage struct {
-	Value MessageOnly
-}
-
-func (*TextDataSystemMessage) tagTextData() uint8 { return 6 }
-
-// Marshal reads or writes TextDataSystemMessage using its canonical wire layout.
-func (x *TextDataSystemMessage) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataTextObject struct {
-	Value MessageOnly
-}
-
-func (*TextDataTextObject) tagTextData() uint8 { return 10 }
-
-// Marshal reads or writes TextDataTextObject using its canonical wire layout.
-func (x *TextDataTextObject) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataTextObjectAnnouncement struct {
-	Value MessageOnly
-}
-
-func (*TextDataTextObjectAnnouncement) tagTextData() uint8 { return 11 }
-
-// Marshal reads or writes TextDataTextObjectAnnouncement using its canonical wire layout.
-func (x *TextDataTextObjectAnnouncement) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataTextObjectWhisper struct {
-	Value MessageOnly
-}
-
-func (*TextDataTextObjectWhisper) tagTextData() uint8 { return 9 }
-
-// Marshal reads or writes TextDataTextObjectWhisper using its canonical wire layout.
-func (x *TextDataTextObjectWhisper) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataTip struct {
-	Value MessageOnly
-}
-
-func (*TextDataTip) tagTextData() uint8 { return 5 }
-
-// Marshal reads or writes TextDataTip using its canonical wire layout.
-func (x *TextDataTip) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
-
-type TextDataWhisper struct {
-	Value AuthorAndMessage
-}
-
-func (*TextDataWhisper) tagTextData() uint8 { return 7 }
-
-// Marshal reads or writes TextDataWhisper using its canonical wire layout.
-func (x *TextDataWhisper) Marshal(io IO) {
-	x.Value.Marshal(io)
-}
 
 type TintMapColor struct {
 	Colours [4]color.RGBA

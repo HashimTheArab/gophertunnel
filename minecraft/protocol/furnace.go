@@ -1,34 +1,49 @@
 package protocol
 
-const (
-	FurnaceLayoutNone = iota
-	FurnaceLayoutInventoryOnly
-	FurnaceLayoutDefault
-)
+type FurnaceLayout int32
 
 const (
-	FurnaceLeftTabNone = iota
-	FurnaceLeftTabRecipeFood
-	FurnaceLeftTabRecipeItems
-	FurnaceLeftTabRecipeBlocks
-	FurnaceLeftTabRecipeSearch
-	FurnaceLeftTabInventory
+	FurnaceLayoutNone          FurnaceLayout = 0
+	FurnaceLayoutInventoryOnly FurnaceLayout = 1
+	FurnaceLayoutDefault       FurnaceLayout = 2
 )
+
+// Marshal reads or writes FurnaceLayout through its int32 wire encoding.
+func (x *FurnaceLayout) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type FurnaceLeftTabIndex int32
+
+const (
+	FurnaceLeftTabNone         FurnaceLeftTabIndex = 0
+	FurnaceLeftTabRecipeFood   FurnaceLeftTabIndex = 1
+	FurnaceLeftTabRecipeItems  FurnaceLeftTabIndex = 2
+	FurnaceLeftTabRecipeBlocks FurnaceLeftTabIndex = 3
+	FurnaceLeftTabRecipeSearch FurnaceLeftTabIndex = 4
+	FurnaceLeftTabInventory    FurnaceLeftTabIndex = 5
+)
+
+// Marshal reads or writes FurnaceLeftTabIndex through its int32 wire encoding.
+func (x *FurnaceLeftTabIndex) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 // FurnaceOptions holds the options that a player has selected in a furnace-like container's UI.
 type FurnaceOptions struct {
 	// LeftFurnaceTab is the tab that is selected on the left side of the furnace UI. It is one of the
 	// FurnaceLeftTab constants above.
-	LeftFurnaceTab int32
+	LeftFurnaceTab FurnaceLeftTabIndex
 	// Filtering is whether the player has enabled the filtering between recipes they have unlocked or not.
 	Filtering bool
 	// Layout is the layout of the furnace UI. It is one of the FurnaceLayout constants above.
-	Layout int32
+	Layout FurnaceLayout
 }
 
-// Marshal encodes/decodes a FurnaceOptions.
-func (x *FurnaceOptions) Marshal(r IO) {
-	r.Varint32(&x.LeftFurnaceTab)
-	r.Bool(&x.Filtering)
-	r.Varint32(&x.Layout)
+// Marshal reads or writes FurnaceOptions using its canonical wire layout.
+func (x *FurnaceOptions) Marshal(io IO) {
+	x.LeftFurnaceTab.Marshal(io)
+	io.Bool(&x.Filtering)
+	x.Layout.Marshal(io)
 }
+
+type FurnaceType uint8
+
+// Marshal reads or writes FurnaceType through its uint8 wire encoding.
+func (x *FurnaceType) Marshal(io IO) { io.Uint8((*uint8)(x)) }

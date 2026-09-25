@@ -76,7 +76,7 @@ type ItemReleaseInventoryTransaction struct {
 	FromPosition mgl32.Vec3
 }
 
-func (*ItemReleaseInventoryTransaction) tagInventoryTransactionValue() uint32 { return 4 }
+func (*ItemReleaseInventoryTransaction) tagInventoryTransactionPacketData() uint32 { return 4 }
 
 // Marshal reads or writes ItemReleaseInventoryTransaction using its canonical wire layout.
 func (x *ItemReleaseInventoryTransaction) Marshal(io IO) {
@@ -94,6 +94,7 @@ type ItemUseInventoryTransaction struct {
 	Position                 BlockPos
 	Face                     uint8
 	Slot                     int32
+	Hand                     HandSlot
 	Item                     NetworkItemStackDescriptorSerializedData
 	FromPosition             mgl32.Vec3
 	ClickPosition            mgl32.Vec3
@@ -102,7 +103,7 @@ type ItemUseInventoryTransaction struct {
 	ClientCooldownState      ItemUseInventoryTransactionClientCooldownState
 }
 
-func (*ItemUseInventoryTransaction) tagInventoryTransactionValue() uint32 { return 2 }
+func (*ItemUseInventoryTransaction) tagInventoryTransactionPacketData() uint32 { return 2 }
 
 // Marshal reads or writes ItemUseInventoryTransaction using its canonical wire layout.
 func (x *ItemUseInventoryTransaction) Marshal(io IO) {
@@ -112,6 +113,7 @@ func (x *ItemUseInventoryTransaction) Marshal(io IO) {
 	x.Position.Marshal(io)
 	io.Uint8(&x.Face)
 	io.Varint32(&x.Slot)
+	x.Hand.Marshal(io)
 	x.Item.Marshal(io)
 	io.Vec3(&x.FromPosition)
 	io.Vec3(&x.ClickPosition)
@@ -130,7 +132,7 @@ type ItemUseOnActorInventoryTransaction struct {
 	HitPosition     mgl32.Vec3
 }
 
-func (*ItemUseOnActorInventoryTransaction) tagInventoryTransactionValue() uint32 { return 3 }
+func (*ItemUseOnActorInventoryTransaction) tagInventoryTransactionPacketData() uint32 { return 3 }
 
 // Marshal reads or writes ItemUseOnActorInventoryTransaction using its canonical wire layout.
 func (x *ItemUseOnActorInventoryTransaction) Marshal(io IO) {

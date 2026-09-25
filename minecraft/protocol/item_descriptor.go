@@ -3,8 +3,6 @@ package protocol
 // DefaultItemDescriptor represents an item descriptor for regular items. This is used for the significant
 // majority of items.
 type DefaultItemDescriptor struct {
-	// MetadataValue is the metadata value of the item. For some items, this is the damage value, whereas for
-	// other items it is simply an identifier of a variant of the item.
 	DescriptorType ItemDescriptorType
 	// Name is the identifier of the item, such as minecraft:stone.
 	Name     string
@@ -37,30 +35,6 @@ func (x *InvalidItemDescriptor) Marshal(io IO) {
 
 // ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
 // alias of Marshaler.
-type ItemDescriptor interface {
-	Marshaler
-	tagItemDescriptor() uint32
-}
-
-// MarshalItemDescriptor reads or writes the ItemDescriptor union using its canonical wire layout.
-func MarshalItemDescriptor(io IO, x *ItemDescriptor) {
-	Union(io, x, io.Varuint32, ItemDescriptor.tagItemDescriptor, func(tag uint32) ItemDescriptor {
-		switch tag {
-		case 0:
-			return new(InvalidItemDescriptor)
-		case 1:
-			return new(DefaultItemDescriptor)
-		case 2:
-			return new(MoLangItemDescriptor)
-		case 3:
-			return new(ItemTagItemDescriptor)
-		}
-		return nil
-	})
-}
-
-// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
-// alias of Marshaler.
 type ItemDescriptorType uint8
 
 const (
@@ -77,8 +51,7 @@ func (x *ItemDescriptorType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 // duplicative entries for items that can be grouped under a single tag.
 type ItemTagItemDescriptor struct {
 	DescriptorType ItemDescriptorType
-	// Tag represents the tag that the item is part of.
-	ItemTag string
+	ItemTag        string
 }
 
 func (*ItemTagItemDescriptor) tagItemDescriptor() uint32 { return 3 }
@@ -105,56 +78,4 @@ func (x *MoLangItemDescriptor) Marshal(io IO) {
 	x.DescriptorType.Marshal(io)
 	io.StringLimits(&x.Expression, 1, 18446744073709551615)
 	x.Version.Marshal(io)
-}
-
-// ItemDescriptor represents a type of item descriptor. This is one of the concrete types below. It is an
-// alias of Marshaler.
-type StackRequestAction interface {
-	Marshaler
-	tagStackRequestAction() uint32
-}
-
-// MarshalStackRequestAction reads or writes the StackRequestAction union using its canonical wire layout.
-func MarshalStackRequestAction(io IO, x *StackRequestAction) {
-	Union(io, x, io.Varuint32, StackRequestAction.tagStackRequestAction, func(tag uint32) StackRequestAction {
-		switch tag {
-		case 0:
-			return new(TakeStackRequestAction)
-		case 1:
-			return new(PlaceStackRequestAction)
-		case 2:
-			return new(SwapStackRequestAction)
-		case 3:
-			return new(DropStackRequestAction)
-		case 4:
-			return new(DestroyStackRequestAction)
-		case 5:
-			return new(ConsumeStackRequestAction)
-		case 6:
-			return new(CreateStackRequestAction)
-		case 7:
-			return new(LabTableCombineStackRequestAction)
-		case 8:
-			return new(BeaconPaymentStackRequestAction)
-		case 9:
-			return new(MineBlockStackRequestAction)
-		case 10:
-			return new(CraftRecipeStackRequestAction)
-		case 11:
-			return new(AutoCraftRecipeStackRequestAction)
-		case 12:
-			return new(CraftCreativeStackRequestAction)
-		case 13:
-			return new(CraftRecipeOptionalStackRequestAction)
-		case 14:
-			return new(CraftRepairAndDisenchantStackRequestAction)
-		case 15:
-			return new(CraftLoomStackRequestAction)
-		case 16:
-			return new(CraftNonImplementedStackRequestAction)
-		case 17:
-			return new(CraftResultsDeprecatedStackRequestAction)
-		}
-		return nil
-	})
 }

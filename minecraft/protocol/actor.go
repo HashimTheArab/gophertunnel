@@ -40,61 +40,61 @@ type ActorType int32
 
 const (
 	ActorTypeUndefined                  ActorType = 1
-	ActorTypeItemEntity                 ActorType = 64
-	ActorTypePrimedTNT                  ActorType = 65
-	ActorTypeFallingBlock               ActorType = 66
-	ActorTypeMovingBlock                ActorType = 67
+	ActorTypeItementity                 ActorType = 64
+	ActorTypePrimedtnt                  ActorType = 65
+	ActorTypeFallingblock               ActorType = 66
+	ActorTypeMovingblock                ActorType = 67
 	ActorTypeExperience                 ActorType = 69
-	ActorTypeEyeOfEnder                 ActorType = 70
-	ActorTypeEnderCrystal               ActorType = 71
-	ActorTypeFireworksRocket            ActorType = 72
-	ActorTypeFishingHook                ActorType = 77
+	ActorTypeEyeofender                 ActorType = 70
+	ActorTypeEndercrystal               ActorType = 71
+	ActorTypeFireworksrocket            ActorType = 72
+	ActorTypeFishinghook                ActorType = 77
 	ActorTypeChalkboard                 ActorType = 78
 	ActorTypePainting                   ActorType = 83
-	ActorTypeLeashKnot                  ActorType = 88
-	ActorTypeBoatRideable               ActorType = 90
-	ActorTypeLightningBolt              ActorType = 93
-	ActorTypeAreaEffectCloud            ActorType = 95
+	ActorTypeLeashknot                  ActorType = 88
+	ActorTypeBoatrideable               ActorType = 90
+	ActorTypeLightningbolt              ActorType = 93
+	ActorTypeAreaeffectcloud            ActorType = 95
 	ActorTypeBalloon                    ActorType = 107
 	ActorTypeShield                     ActorType = 117
 	ActorTypeLectern                    ActorType = 119
-	ActorTypeOminousItemSpawner         ActorType = 145
+	ActorTypeOminousitemspawner         ActorType = 145
 	ActorTypeCushion                    ActorType = 154
-	ActorTypeChestBoatRideable          ActorType = 218
+	ActorTypeChestboatrideable          ActorType = 218
 	ActorTypeMob                        ActorType = 256
 	ActorTypeNpc                        ActorType = 307
 	ActorTypeAgent                      ActorType = 312
-	ActorTypeArmorStand                 ActorType = 317
-	ActorTypeTripodCamera               ActorType = 318
+	ActorTypeArmorstand                 ActorType = 317
+	ActorTypeTripodcamera               ActorType = 318
 	ActorTypePlayer                     ActorType = 319
 	ActorTypeBee                        ActorType = 378
 	ActorTypePiglin                     ActorType = 379
-	ActorTypePiglinBrute                ActorType = 383
+	ActorTypePiglinbrute                ActorType = 383
 	ActorTypeAllay                      ActorType = 390
-	ActorTypePathfinderMob              ActorType = 768
-	ActorTypeIronGolem                  ActorType = 788
-	ActorTypeSnowGolem                  ActorType = 789
-	ActorTypeWanderingTrader            ActorType = 886
-	ActorTypeCopperGolem                ActorType = 916
-	ActorTypeSulfurCube                 ActorType = 921
+	ActorTypePathfindermob              ActorType = 768
+	ActorTypeIrongolem                  ActorType = 788
+	ActorTypeSnowgolem                  ActorType = 789
+	ActorTypeWanderingtrader            ActorType = 886
+	ActorTypeCoppergolem                ActorType = 916
+	ActorTypeSulfurcube                 ActorType = 921
 	ActorTypeMonster                    ActorType = 2816
 	ActorTypeCreeper                    ActorType = 2849
 	ActorTypeSlime                      ActorType = 2853
-	ActorTypeEnderMan                   ActorType = 2854
+	ActorTypeEnderman                   ActorType = 2854
 	ActorTypeGhast                      ActorType = 2857
-	ActorTypeLavaSlime                  ActorType = 2858
+	ActorTypeLavaslime                  ActorType = 2858
 	ActorTypeBlaze                      ActorType = 2859
 	ActorTypeWitch                      ActorType = 2861
 	ActorTypeGuardian                   ActorType = 2865
-	ActorTypeElderGuardian              ActorType = 2866
+	ActorTypeElderguardian              ActorType = 2866
 	ActorTypeDragon                     ActorType = 2869
 	ActorTypeShulker                    ActorType = 2870
 	ActorTypeVindicator                 ActorType = 2873
-	ActorTypeIllagerBeast               ActorType = 2875
-	ActorTypeEvocationIllager           ActorType = 2920
+	ActorTypeIllagerbeast               ActorType = 2875
+	ActorTypeEvocationillager           ActorType = 2920
 	ActorTypeVex                        ActorType = 2921
 	ActorTypePillager                   ActorType = 2930
-	ActorTypeElderGuardianGhost         ActorType = 2936
+	ActorTypeElderguardianghost         ActorType = 2936
 	ActorTypeWarden                     ActorType = 2947
 	ActorTypeBreeze                     ActorType = 2956
 	ActorTypeCreaking                   ActorType = 2962
@@ -103,9 +103,9 @@ const (
 	ActorTypeCow                        ActorType = 4875
 	ActorTypePig                        ActorType = 4876
 	ActorTypeSheep                      ActorType = 4877
-	ActorTypeMushroomCow                ActorType = 4880
+	ActorTypeMushroomcow                ActorType = 4880
 	ActorTypeRabbit                     ActorType = 4882
-	ActorTypePolarBear                  ActorType = 4892
+	ActorTypePolarbear                  ActorType = 4892
 	ActorTypeLlama                      ActorType = 4893
 	ActorTypeTurtle                     ActorType = 4938
 	ActorTypePanda                      ActorType = 4977
@@ -118,87 +118,109 @@ const (
 	ActorTypeCamel                      ActorType = 5002
 	ActorTypeSniffer                    ActorType = 5003
 	ActorTypeArmadillo                  ActorType = 5006
-	ActorTypeHappyGhast                 ActorType = 5011
-	ActorTypeTraderLlama                ActorType = 5021
-	ActorTypeWaterAnimal                ActorType = 8960
+	ActorTypeHappyghast                 ActorType = 5011
+	ActorTypeTraderllama                ActorType = 5021
+	ActorTypeWateranimal                ActorType = 8960
 	ActorTypeSquid                      ActorType = 8977
 	ActorTypeDolphin                    ActorType = 8991
 	ActorTypePufferfish                 ActorType = 9068
 	ActorTypeSalmon                     ActorType = 9069
 	ActorTypeTropicalfish               ActorType = 9071
 	ActorTypeFish                       ActorType = 9072
-	ActorTypeGlowSquid                  ActorType = 9089
+	ActorTypeGlowsquid                  ActorType = 9089
 	ActorTypeTadpole                    ActorType = 9093
 	ActorTypeNautilus                   ActorType = 9109
-	ActorTypeTamableAnimal              ActorType = 21248
+	ActorTypeTamableanimal              ActorType = 21248
 	ActorTypeWolf                       ActorType = 21262
 	ActorTypeOcelot                     ActorType = 21270
 	ActorTypeParrot                     ActorType = 21278
 	ActorTypeCat                        ActorType = 21323
 	ActorTypeAmbient                    ActorType = 33024
 	ActorTypeBat                        ActorType = 33043
-	ActorTypeUndeadMonster              ActorType = 68352
-	ActorTypePigZombie                  ActorType = 68388
-	ActorTypeWitherBoss                 ActorType = 68404
+	ActorTypeUndeadmonster              ActorType = 68352
+	ActorTypePigzombie                  ActorType = 68388
+	ActorTypeWitherboss                 ActorType = 68404
 	ActorTypePhantom                    ActorType = 68410
 	ActorTypeZoglin                     ActorType = 68478
-	ActorTypeCamelHusk                  ActorType = 70552
-	ActorTypeZombieNautilus             ActorType = 74646
-	ActorTypeZombieMonster              ActorType = 199424
+	ActorTypeCamelhusk                  ActorType = 70552
+	ActorTypeZombienautilus             ActorType = 74646
+	ActorTypeZombiemonster              ActorType = 199424
 	ActorTypeZombie                     ActorType = 199456
-	ActorTypeZombieVillager             ActorType = 199468
+	ActorTypeZombievillager             ActorType = 199468
 	ActorTypeHusk                       ActorType = 199471
 	ActorTypeDrowned                    ActorType = 199534
-	ActorTypeZombieVillagerV2           ActorType = 199540
+	ActorTypeZombievillagerv2           ActorType = 199540
 	ActorTypeArthropod                  ActorType = 264960
 	ActorTypeSpider                     ActorType = 264995
 	ActorTypeSilverfish                 ActorType = 264999
-	ActorTypeCaveSpider                 ActorType = 265000
+	ActorTypeCavespider                 ActorType = 265000
 	ActorTypeEndermite                  ActorType = 265015
 	ActorTypeMinecart                   ActorType = 524288
-	ActorTypeMinecartRideable           ActorType = 524372
-	ActorTypeMinecartHopper             ActorType = 524384
-	ActorTypeMinecartTNT                ActorType = 524385
-	ActorTypeMinecartChest              ActorType = 524386
-	ActorTypeMinecartFurnace            ActorType = 524387
-	ActorTypeMinecartCommandBlock       ActorType = 524388
-	ActorTypeSkeletonMonster            ActorType = 1116928
+	ActorTypeMinecartrideable           ActorType = 524372
+	ActorTypeMinecarthopper             ActorType = 524384
+	ActorTypeMinecarttnt                ActorType = 524385
+	ActorTypeMinecartchest              ActorType = 524386
+	ActorTypeMinecartfurnace            ActorType = 524387
+	ActorTypeMinecartcommandblock       ActorType = 524388
+	ActorTypeSkeletonmonster            ActorType = 1116928
 	ActorTypeSkeleton                   ActorType = 1116962
 	ActorTypeStray                      ActorType = 1116974
-	ActorTypeWitherSkeleton             ActorType = 1116976
+	ActorTypeWitherskeleton             ActorType = 1116976
 	ActorTypeBogged                     ActorType = 1117072
 	ActorTypeParched                    ActorType = 1117079
-	ActorTypeEquineAnimal               ActorType = 2118400
+	ActorTypeEquineanimal               ActorType = 2118400
 	ActorTypeHorse                      ActorType = 2118423
 	ActorTypeDonkey                     ActorType = 2118424
 	ActorTypeMule                       ActorType = 2118425
-	ActorTypeSkeletonHorse              ActorType = 2183962
-	ActorTypeZombieHorse                ActorType = 2183963
+	ActorTypeSkeletonhorse              ActorType = 2183962
+	ActorTypeZombiehorse                ActorType = 2183963
 	ActorTypeProjectile                 ActorType = 4194304
-	ActorTypeExperiencePotion           ActorType = 4194372
-	ActorTypeShulkerBullet              ActorType = 4194380
-	ActorTypeDragonFireball             ActorType = 4194383
+	ActorTypeExperiencepotion           ActorType = 4194372
+	ActorTypeShulkerbullet              ActorType = 4194380
+	ActorTypeDragonfireball             ActorType = 4194383
 	ActorTypeSnowball                   ActorType = 4194385
-	ActorTypeThrownEgg                  ActorType = 4194386
-	ActorTypeLargeFireball              ActorType = 4194389
-	ActorTypeThrownPotion               ActorType = 4194390
+	ActorTypeThrownegg                  ActorType = 4194386
+	ActorTypeLargefireball              ActorType = 4194389
+	ActorTypeThrownpotion               ActorType = 4194390
 	ActorTypeEnderpearl                 ActorType = 4194391
-	ActorTypeWitherSkull                ActorType = 4194393
-	ActorTypeWitherSkullDangerous       ActorType = 4194395
-	ActorTypeSmallFireball              ActorType = 4194398
-	ActorTypeLingeringPotion            ActorType = 4194405
-	ActorTypeLlamaSpit                  ActorType = 4194406
-	ActorTypeEvocationFang              ActorType = 4194407
-	ActorTypeIceBomb                    ActorType = 4194410
-	ActorTypeBreezeWindChargeProjectile ActorType = 4194445
-	ActorTypeWindChargeProjectile       ActorType = 4194447
-	ActorTypeAbstractArrow              ActorType = 8388608
+	ActorTypeWitherskull                ActorType = 4194393
+	ActorTypeWitherskulldangerous       ActorType = 4194395
+	ActorTypeSmallfireball              ActorType = 4194398
+	ActorTypeLingeringpotion            ActorType = 4194405
+	ActorTypeLlamaspit                  ActorType = 4194406
+	ActorTypeEvocationfang              ActorType = 4194407
+	ActorTypeIcebomb                    ActorType = 4194410
+	ActorTypeBreezewindchargeprojectile ActorType = 4194445
+	ActorTypeWindchargeprojectile       ActorType = 4194447
+	ActorTypeAbstractarrow              ActorType = 8388608
 	ActorTypeTrident                    ActorType = 12582985
 	ActorTypeArrow                      ActorType = 12582992
-	ActorTypeVillagerBase               ActorType = 16777984
+	ActorTypeVillagerbase               ActorType = 16777984
 	ActorTypeVillager                   ActorType = 16777999
-	ActorTypeVillagerV2                 ActorType = 16778099
+	ActorTypeVillagerv2                 ActorType = 16778099
 )
 
 // Marshal reads or writes ActorType through its int32 wire encoding.
 func (x *ActorType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type PlayerUpdateEntityOverridesData interface {
+	Marshaler
+	tagPlayerUpdateEntityOverridesData() uint32
+}
+
+// MarshalPlayerUpdateEntityOverridesData reads or writes the PlayerUpdateEntityOverridesData union using its canonical wire layout.
+func MarshalPlayerUpdateEntityOverridesData(io IO, x *PlayerUpdateEntityOverridesData) {
+	Union(io, x, io.Varuint32, PlayerUpdateEntityOverridesData.tagPlayerUpdateEntityOverridesData, func(tag uint32) PlayerUpdateEntityOverridesData {
+		switch tag {
+		case 0:
+			return new(ClearOverride)
+		case 1:
+			return new(RemoveOverride)
+		case 2:
+			return new(IntOverride)
+		case 3:
+			return new(FloatOverride)
+		}
+		return nil
+	})
+}

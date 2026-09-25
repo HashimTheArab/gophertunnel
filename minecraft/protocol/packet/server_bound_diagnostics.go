@@ -33,7 +33,7 @@ type ServerBoundDiagnostics struct {
 	// MemoryCategoryValues is a list of memory category counters sent by the client.
 	MemoryCategoryValues []protocol.MemoryCategoryCounter
 	// EntityDiagnostics is a list of entity timing entries sent by the client.
-	EntityDiagnostics []protocol.ECSProfilingDiagnosticsEntityDiagnosticTimingInfo
+	EntityDiagnostics []protocol.EntityDiagnosticTimingInfo
 	// SystemDiagnostics is a list of system timing entries sent by the client.
 	SystemDiagnostics []protocol.SystemDiagnosticTimingInfo
 	// SystemCategories maps diagnostics category names to system indices.

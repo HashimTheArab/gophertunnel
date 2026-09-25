@@ -19,7 +19,11 @@ type InventoryTransaction struct {
 	// of the slots that were changed during the inventory transaction, and the server should send back an
 	// ItemStackResponse packet with these slots present in it. (Or false with no slots, if rejected.)
 	LegacySetItemSlots protocol.Optional[[]protocol.LegacySetSlot]
-	Transaction        protocol.Optional[protocol.InventoryTransactionValue]
+	// TransactionData is a data object that holds data specific to the type of transaction that the
+	// TransactionPacket held. Its concrete type must be one of NormalTransactionData, MismatchTransactionData
+	// UseItemTransactionData, UseItemOnEntityTransactionData or ReleaseItemTransactionData. If nil is set, the
+	// transaction will be assumed to of type InventoryTransactionTypeNormal.
+	TransactionData protocol.InventoryTransactionPacketData
 }
 
 // ID ...
@@ -32,7 +36,5 @@ func (pk *InventoryTransaction) Marshal(io protocol.IO) {
 	protocol.OptionalFunc(io, &pk.LegacySetItemSlots, func(value *[]protocol.LegacySetSlot) {
 		protocol.Slice(io, value)
 	})
-	protocol.OptionalFunc(io, &pk.Transaction, func(value *protocol.InventoryTransactionValue) {
-		protocol.MarshalInventoryTransactionValue(io, value)
-	})
+	protocol.MarshalInventoryTransactionPacketData(io, &pk.TransactionData)
 }

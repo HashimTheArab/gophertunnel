@@ -7,6 +7,7 @@ import (
 type PersonaAnimatedTextureType uint32
 
 const (
+	SkinAnimationNone        PersonaAnimatedTextureType = 0
 	SkinAnimationHead        PersonaAnimatedTextureType = 1
 	SkinAnimationBody32x32   PersonaAnimatedTextureType = 2
 	SkinAnimationBody128x128 PersonaAnimatedTextureType = 3
@@ -64,6 +65,7 @@ func (x *PersonaPiece) Marshal(io IO) {
 type PersonaPieceType uint32
 
 const (
+	PieceTypeUnknown       PersonaPieceType = 0
 	PieceTypeSkeleton      PersonaPieceType = 1
 	PieceTypeBody          PersonaPieceType = 2
 	PieceTypeSkin          PersonaPieceType = 3
@@ -91,16 +93,14 @@ const (
 	PieceTypeCapes         PersonaPieceType = 25
 	PieceTypeClassicSkin   PersonaPieceType = 26
 	PieceTypeEmote         PersonaPieceType = 27
+	PieceTypeUnsupported   PersonaPieceType = 28
 )
 
 // Marshal reads or writes PersonaPieceType through its uint32 wire encoding.
 func (x *PersonaPieceType) Marshal(io IO) { io.Uint32((*uint32)(x)) }
 
-// PyramidShape represents a pyramid debug shape.
 type SkinImage struct {
-	// Width is the width along the X axis of the pyramid base.
-	Width uint32
-	// Height is the height of the pyramid.
+	Width      uint32
 	Height     uint32
 	ImageBytes []uint8
 }

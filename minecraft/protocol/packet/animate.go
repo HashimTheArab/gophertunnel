@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	AnimateActionNoAction         protocol.AnimateAction = 0
+	AnimateActionNoaction         protocol.AnimateAction = 0
 	AnimateActionSwingArm         protocol.AnimateAction = 1
 	AnimateActionStopSleep        protocol.AnimateAction = 3
 	AnimateActionCriticalHit      protocol.AnimateAction = 4

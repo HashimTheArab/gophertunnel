@@ -39,32 +39,37 @@ func (x *MapDecoration) Marshal(io IO) {
 type MapDecorationType int8
 
 const (
-	MapDecorationTypeMarkerWhite      MapDecorationType = 0
-	MapDecorationTypeMarkerGreen      MapDecorationType = 1
-	MapDecorationTypeMarkerRed        MapDecorationType = 2
-	MapDecorationTypeMarkerBlue       MapDecorationType = 3
-	MapDecorationTypeCrossWhite       MapDecorationType = 4
-	MapDecorationTypeTriangleRed      MapDecorationType = 5
-	MapDecorationTypeSquareWhite      MapDecorationType = 6
-	MapDecorationTypeMarkerSign       MapDecorationType = 7
-	MapDecorationTypeMarkerPink       MapDecorationType = 8
-	MapDecorationTypeMarkerOrange     MapDecorationType = 9
-	MapDecorationTypeMarkerYellow     MapDecorationType = 10
-	MapDecorationTypeMarkerTeal       MapDecorationType = 11
-	MapDecorationTypeTriangleGreen    MapDecorationType = 12
-	MapDecorationTypeSmallSquareWhite MapDecorationType = 13
-	MapDecorationTypeMansion          MapDecorationType = 14
-	MapDecorationTypeMonument         MapDecorationType = 15
-	MapDecorationTypeNoDraw           MapDecorationType = 16
-	MapDecorationTypeVillageDesert    MapDecorationType = 17
-	MapDecorationTypeVillagePlains    MapDecorationType = 18
-	MapDecorationTypeVillageSavanna   MapDecorationType = 19
-	MapDecorationTypeVillageSnowy     MapDecorationType = 20
-	MapDecorationTypeVillageTaiga     MapDecorationType = 21
-	MapDecorationTypeJungleTemple     MapDecorationType = 22
-	MapDecorationTypeWitchHut         MapDecorationType = 23
-	MapDecorationTypeTrialChambers    MapDecorationType = 24
-	MapDecorationTypeAbandonedCamp    MapDecorationType = 25
+	MapDecorationTypeMarkerWhite       MapDecorationType = 0
+	MapDecorationTypeMarkerGreen       MapDecorationType = 1
+	MapDecorationTypeMarkerRed         MapDecorationType = 2
+	MapDecorationTypeMarkerBlue        MapDecorationType = 3
+	MapDecorationTypeCrossWhite        MapDecorationType = 4
+	MapDecorationTypeTriangleRed       MapDecorationType = 5
+	MapDecorationTypeSquareWhite       MapDecorationType = 6
+	MapDecorationTypeMarkerSign        MapDecorationType = 7
+	MapDecorationTypeMarkerPink        MapDecorationType = 8
+	MapDecorationTypeMarkerOrange      MapDecorationType = 9
+	MapDecorationTypeMarkerYellow      MapDecorationType = 10
+	MapDecorationTypeMarkerTeal        MapDecorationType = 11
+	MapDecorationTypeTriangleGreen     MapDecorationType = 12
+	MapDecorationTypeSmallSquareWhite  MapDecorationType = 13
+	MapDecorationTypeMansion           MapDecorationType = 14
+	MapDecorationTypeMonument          MapDecorationType = 15
+	MapDecorationTypeNoDraw            MapDecorationType = 16
+	MapDecorationTypeVillageDesert     MapDecorationType = 17
+	MapDecorationTypeVillagePlains     MapDecorationType = 18
+	MapDecorationTypeVillageSavanna    MapDecorationType = 19
+	MapDecorationTypeVillageSnowy      MapDecorationType = 20
+	MapDecorationTypeVillageTaiga      MapDecorationType = 21
+	MapDecorationTypeJungleTemple      MapDecorationType = 22
+	MapDecorationTypeWitchHut          MapDecorationType = 23
+	MapDecorationTypeTrialChambers     MapDecorationType = 24
+	MapDecorationTypeAbandonedCamp     MapDecorationType = 25
+	MapDecorationTypeBuriedAncientCity MapDecorationType = 26
+	MapDecorationTypeBuriedMineshaft   MapDecorationType = 27
+	MapDecorationTypeDesertPyramid     MapDecorationType = 28
+	MapDecorationTypeWarmOceanRuins    MapDecorationType = 29
+	MapDecorationTypeCount             MapDecorationType = 30
 )
 
 // Marshal reads or writes MapDecorationType through its int8 wire encoding.

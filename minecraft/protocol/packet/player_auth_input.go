@@ -15,7 +15,7 @@ const (
 	PlayModeLivingRoom          protocol.ClientPlayMode = 6
 	PlayModeExitLevel           protocol.ClientPlayMode = 7
 	PlayModeExitLevelLivingRoom protocol.ClientPlayMode = 8
-	PlayModeNumModes            protocol.ClientPlayMode = 9
+	PlayModeNummodes            protocol.ClientPlayMode = 9
 )
 
 const (
@@ -117,7 +117,7 @@ type PlayerAuthInput struct {
 	PlayerHeadRotation float32
 	// InputData is the set of input flags that together specify the way the player moved last tick. It holds the
 	// flags above.
-	InputData protocol.Optional[[]protocol.InputData]
+	InputData []protocol.InputData
 	// InputMode specifies the way that the client inputs data to the screen. It is one of the constants that may
 	// be found above.
 	InputMode protocol.InputMode
@@ -162,26 +162,20 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	io.Vec3(&pk.Position)
 	io.Vec2(&pk.MoveVector)
 	io.Float32(&pk.PlayerHeadRotation)
-	protocol.OptionalFunc(io, &pk.InputData, func(value *[]protocol.InputData) {
-		protocol.Slice(io, value)
-	})
+	protocol.Slice(io, &pk.InputData)
 	pk.InputMode.Marshal(io)
 	pk.PlayMode.Marshal(io)
 	pk.InteractionModel.Marshal(io)
 	io.Vec2(&pk.InteractRotation)
 	io.PlayerInputTick(&pk.Tick)
 	io.Vec3(&pk.Delta)
-	protocol.DoubleOptionalFunc(io, &pk.ItemUseTransaction, func(value *protocol.PackedItemUseLegacyInventoryTransaction) {
-		value.Marshal(io)
-	})
-	protocol.DoubleOptionalFunc(io, &pk.ItemStackRequest, func(value *protocol.ItemStackRequestData) {
-		value.Marshal(io)
-	})
-	protocol.DoubleOptionalFunc(io, &pk.BlockActions, func(value *[]protocol.PlayerBlockAction) {
+	protocol.OptionalMarshaler(io, &pk.ItemUseTransaction)
+	protocol.OptionalMarshaler(io, &pk.ItemStackRequest)
+	protocol.OptionalFunc(io, &pk.BlockActions, func(value *[]protocol.PlayerBlockAction) {
 		protocol.SliceLimits(io, value, 0, 100)
 	})
-	protocol.DoubleOptionalFunc(io, &pk.VehicleRotation, io.Vec2)
-	protocol.DoubleOptionalFunc(io, &pk.ClientPredictedVehicle, io.ActorUniqueID)
+	protocol.OptionalFunc(io, &pk.VehicleRotation, io.Vec2)
+	protocol.OptionalFunc(io, &pk.ClientPredictedVehicle, io.ActorUniqueID)
 	io.Vec2(&pk.AnalogMoveVector)
 	io.Vec3(&pk.CameraOrientation)
 	io.Vec2(&pk.RawMoveVector)

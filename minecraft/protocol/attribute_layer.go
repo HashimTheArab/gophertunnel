@@ -74,11 +74,38 @@ func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
 	})
 }
 
+type EAS interface {
+	Marshaler
+	tagEAS() uint32
+}
+
+// MarshalEAS reads or writes the EAS union using its canonical wire layout.
+func MarshalEAS(io IO, x *EAS) {
+	Union(io, x, io.Varuint32, EAS.tagEAS, func(tag uint32) EAS {
+		switch tag {
+		case 0:
+			return new(EASBoolAttributeData)
+		case 1:
+			return new(EASFloatAttributeData)
+		case 2:
+			return new(EASColorAttributeData)
+		}
+		return nil
+	})
+}
+
+type EASNoiseAlignmentType uint8
+
+const (
+	NoiseAlignmentTypeMinLocalTransitionEnd EASNoiseAlignmentType = 0
+)
+
+// Marshal reads or writes EASNoiseAlignmentType through its uint8 wire encoding.
+func (x *EASNoiseAlignmentType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // EnvironmentAttributeData represents an environment attribute with optional transition data.
 type EnvironmentAttributeData struct {
-	// AttributeName is the name of the attribute.
-	AttributeLayerName string
-	// Attribute is the current attribute value.
+	AttributeLayerName      string
 	AttributeLayerDimension DimensionType
 	Attributes              []EASEnvironmentAttributeData
 }
@@ -90,4 +117,18 @@ func (x *EnvironmentAttributeData) Marshal(io IO) {
 	io.StringLimits(&x.AttributeLayerName, 0, 128)
 	x.AttributeLayerDimension.Marshal(io)
 	SliceLimits(io, &x.Attributes, 0, 1024)
+}
+
+// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
+type NoiseAlignment struct {
+	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
+	Type EASNoiseAlignmentType
+	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
+	Value uint32
+}
+
+// Marshal reads or writes NoiseAlignment using its canonical wire layout.
+func (x *NoiseAlignment) Marshal(io IO) {
+	x.Type.Marshal(io)
+	io.Varuint32(&x.Value)
 }

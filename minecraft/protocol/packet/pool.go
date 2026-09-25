@@ -236,6 +236,8 @@ var allPacketFactories = Pool{
 	IDClientboundUpdateSoundData:         func() Packet { return &ClientboundUpdateSoundData{} },
 	IDSendPartyDestinationCookie:         func() Packet { return &SendPartyDestinationCookie{} },
 	IDPartyDestinationCookieResponse:     func() Packet { return &PartyDestinationCookieResponse{} },
+	IDSetPlayerFurnaceOptions:            func() Packet { return &SetPlayerFurnaceOptions{} },
+	IDRecordStarted:                      func() Packet { return &RecordStarted{} },
 }
 
 var clientPacketFactories = Pool{
@@ -323,6 +325,7 @@ var clientPacketFactories = Pool{
 	IDPartyChanged:                      func() Packet { return &PartyChanged{} },
 	IDServerBoundDataDrivenScreenClosed: func() Packet { return &ServerBoundDataDrivenScreenClosed{} },
 	IDPartyDestinationCookieResponse:    func() Packet { return &PartyDestinationCookieResponse{} },
+	IDSetPlayerFurnaceOptions:           func() Packet { return &SetPlayerFurnaceOptions{} },
 }
 
 var serverPacketFactories = Pool{
@@ -550,6 +553,8 @@ var serverPacketFactories = Pool{
 	IDServerPresenceInfo:                 func() Packet { return &ServerPresenceInfo{} },
 	IDClientboundUpdateSoundData:         func() Packet { return &ClientboundUpdateSoundData{} },
 	IDSendPartyDestinationCookie:         func() Packet { return &SendPartyDestinationCookie{} },
+	IDSetPlayerFurnaceOptions:            func() Packet { return &SetPlayerFurnaceOptions{} },
+	IDRecordStarted:                      func() Packet { return &RecordStarted{} },
 }
 
 // NewPool returns a copy of the complete packet factory table.

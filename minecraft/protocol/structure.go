@@ -45,7 +45,8 @@ type StructureBlockType int32
 func (x *StructureBlockType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 type StructureEditorData struct {
-	StructureName         BedrockSafetyRedactableString
+	StructureName         string
+	FilteredStructureName string
 	DataField             string
 	ShouldIncludePlayers  bool
 	ShouldShowBoundingBox bool
@@ -56,7 +57,8 @@ type StructureEditorData struct {
 
 // Marshal reads or writes StructureEditorData using its canonical wire layout.
 func (x *StructureEditorData) Marshal(io IO) {
-	x.StructureName.Marshal(io)
+	io.String(&x.StructureName)
+	io.String(&x.FilteredStructureName)
 	io.String(&x.DataField)
 	io.Bool(&x.ShouldIncludePlayers)
 	io.Bool(&x.ShouldShowBoundingBox)

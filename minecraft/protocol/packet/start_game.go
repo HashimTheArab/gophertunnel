@@ -43,17 +43,12 @@ type StartGame struct {
 	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.
 	EntityRuntimeID uint64
-	// PlayerGameMode is the game mode the player currently has. It is a value from 0-4, with 0 being survival
-	// mode, 1 being creative mode, 2 being adventure mode, 3 being survival spectator and 4 being creative
-	// spectator. This field may be set to 5 to make the client fall back to the game mode set in the
-	// WorldGameMode field.
-	GameType protocol.GameType
+	GameType        protocol.GameType
 	// PlayerPosition is the spawn position of the player in the world. In servers this is often the same as the
 	// world's spawn position found below.
 	PlayerPosition mgl32.Vec3
 	Rotation       mgl32.Vec2
-	// PlayerMovementSettings ...
-	Settings protocol.LevelSettings
+	Settings       protocol.LevelSettings
 	// LevelID is a base64 encoded world ID that is used to identify the world.
 	LevelID   string
 	LevelName string

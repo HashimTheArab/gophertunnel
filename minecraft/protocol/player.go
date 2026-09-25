@@ -181,28 +181,6 @@ func (x *PlayerScoreboardID) Marshal(io IO) {
 	io.ActorUniqueID(&x.PlayerEntityUniqueID)
 }
 
-type PlayerUpdateEntityOverridesData interface {
-	Marshaler
-	tagPlayerUpdateEntityOverridesData() uint8
-}
-
-// MarshalPlayerUpdateEntityOverridesData reads or writes the PlayerUpdateEntityOverridesData union using its canonical wire layout.
-func MarshalPlayerUpdateEntityOverridesData(io IO, x *PlayerUpdateEntityOverridesData) {
-	Union(io, x, io.Uint8, PlayerUpdateEntityOverridesData.tagPlayerUpdateEntityOverridesData, func(tag uint8) PlayerUpdateEntityOverridesData {
-		switch tag {
-		case 0:
-			return new(ClearOverride)
-		case 1:
-			return new(RemoveOverride)
-		case 2:
-			return new(IntOverride)
-		case 3:
-			return new(FloatOverride)
-		}
-		return nil
-	})
-}
-
 type PlayerVideoCaptureData interface {
 	Marshaler
 	tagPlayerVideoCaptureData() uint8

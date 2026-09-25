@@ -12,9 +12,7 @@ type AddPlayer struct {
 	// UUID is the UUID of the player. It is the same UUID that the client sent in the Login packet at the start
 	// of the session. A player with this UUID must exist in the player list (built up using the PlayerList
 	// packet), for it to show up in-game.
-	UUID uuid.UUID
-	// Username is the name of the player. This username is the username that will be set as the initial name tag
-	// of the player.
+	UUID       uuid.UUID
 	PlayerName string
 	// EntityRuntimeID is the runtime ID of the player. The runtime ID is unique for each world session, and
 	// entities are generally identified in packets using this runtime ID.

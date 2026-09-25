@@ -17,8 +17,7 @@ type GraphicsOverrideParameter struct {
 	// PlayerIdentifier is the optional identifier of the player for which the override parameter applies.
 	PlayerIdentifier       protocol.Optional[string]
 	IdentifierForParameter protocol.GraphicsOverrideParameterType
-	// Reset indicates whether to reset the parameters.
-	ResetParameter bool
+	ResetParameter         bool
 }
 
 // ID ...

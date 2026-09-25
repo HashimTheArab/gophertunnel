@@ -1,5 +1,15 @@
 package protocol
 
+type HandSlot uint8
+
+const (
+	HandSlotMainHand HandSlot = 0
+	HandSlotOffHand  HandSlot = 1
+)
+
+// Marshal reads or writes HandSlot through its uint8 wire encoding.
+func (x *HandSlot) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
 // InventoryAction represents a single action that took place during an inventory transaction. On itself, this
 // inventory action is always unbalanced: It must be combined with other actions in an inventory transaction
 // to form a balanced transaction.
@@ -34,7 +44,7 @@ type InventoryMismatchData struct {
 	Actions InventoryTransactionData
 }
 
-func (*InventoryMismatchData) tagInventoryTransactionValue() uint32 { return 1 }
+func (*InventoryMismatchData) tagInventoryTransactionPacketData() uint32 { return 1 }
 
 // Marshal reads or writes InventoryMismatchData using its canonical wire layout.
 func (x *InventoryMismatchData) Marshal(io IO) {
@@ -55,10 +65,8 @@ type InventorySource struct {
 // Marshal reads or writes InventorySource using its canonical wire layout.
 func (x *InventorySource) Marshal(io IO) {
 	x.SourceType.Marshal(io)
-	DoubleOptionalFunc(io, &x.ContainerID, io.Int8)
-	DoubleOptionalFunc(io, &x.BitFlags, func(value *InventorySourceInventorySourceFlags) {
-		value.Marshal(io)
-	})
+	OptionalFunc(io, &x.ContainerID, io.Int8)
+	OptionalMarshaler(io, &x.BitFlags)
 }
 
 type InventorySourceInventorySourceFlags uint32
@@ -87,14 +95,12 @@ func (x *InventorySourceType) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
 // InventoryTransactionData represents an object that holds data specific to an inventory transaction type.
 // The data it holds depends on the type.
 type InventoryTransactionData struct {
-	Actions Optional[[]InventoryAction]
+	Actions []InventoryAction
 }
 
 // Marshal reads or writes InventoryTransactionData using its canonical wire layout.
 func (x *InventoryTransactionData) Marshal(io IO) {
-	OptionalFunc(io, &x.Actions, func(value *[]InventoryAction) {
-		Slice(io, value)
-	})
+	Slice(io, &x.Actions)
 }
 
 type ItemReleaseInventoryTransactionActionType int32
@@ -167,7 +173,7 @@ type NormalTransactionData struct {
 	Actions InventoryTransactionData
 }
 
-func (*NormalTransactionData) tagInventoryTransactionValue() uint32 { return 0 }
+func (*NormalTransactionData) tagInventoryTransactionPacketData() uint32 { return 0 }
 
 // Marshal reads or writes NormalTransactionData using its canonical wire layout.
 func (x *NormalTransactionData) Marshal(io IO) {

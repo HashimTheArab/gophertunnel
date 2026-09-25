@@ -4,12 +4,20 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+const (
+	TextTypeRaw                protocol.TextPacketType = 0
+	TextTypeTip                protocol.TextPacketType = 5
+	TextTypeSystem             protocol.TextPacketType = 6
+	TextTypeObjectWhisper      protocol.TextPacketType = 9
+	TextTypeObject             protocol.TextPacketType = 10
+	TextTypeObjectAnnouncement protocol.TextPacketType = 11
+)
+
 // Text is sent by the client to the server to send chat messages, and by the server to the client to forward
 // or send messages, which may be chat, popups, tips etc.
 type Text struct {
-	Localize        bool
-	MessageCategory uint8
-	Body            protocol.TextData
+	Localize bool
+	Body     protocol.TextData
 	// XUID is the XBOX Live user ID of the player that sent the message. It is only set for packets of
 	// TextTypeChat. When sent to a player, the player will only be shown the chat message if a player with this
 	// XUID is present in the player list and not muted, or if the XUID is empty.
@@ -27,7 +35,6 @@ func (*Text) ID() uint32 {
 
 func (pk *Text) Marshal(io protocol.IO) {
 	io.Bool(&pk.Localize)
-	io.Uint8(&pk.MessageCategory)
 	protocol.MarshalTextData(io, &pk.Body)
 	io.StringLimits(&pk.XUID, 0, 64)
 	io.StringLimits(&pk.PlatformID, 0, 256)

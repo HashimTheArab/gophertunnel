@@ -230,4 +230,6 @@ const (
 	IDClientboundUpdateSoundData         uint32 = 348
 	IDSendPartyDestinationCookie         uint32 = 349
 	IDPartyDestinationCookieResponse     uint32 = 350
+	IDSetPlayerFurnaceOptions            uint32 = 351
+	IDRecordStarted                      uint32 = 352
 )

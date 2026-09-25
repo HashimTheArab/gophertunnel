@@ -9,7 +9,7 @@ import (
 type SetScore struct {
 	// ScoreInfo is a list of all entries that the client should operate on. Each entry's IdentityType specifies
 	// whether it is added, modified or removed.
-	Entries []protocol.SetScoreEntriesItem
+	Entries []protocol.SetScoreInfoItem
 }
 
 // ID ...
@@ -18,7 +18,7 @@ func (*SetScore) ID() uint32 {
 }
 
 func (pk *SetScore) Marshal(io protocol.IO) {
-	protocol.FuncSlice(io, &pk.Entries, io.Varuint32, func(value *protocol.SetScoreEntriesItem) {
-		protocol.MarshalSetScoreEntriesItem(io, value)
+	protocol.FuncSlice(io, &pk.Entries, io.Varuint32, func(value *protocol.SetScoreInfoItem) {
+		protocol.MarshalSetScoreInfoItem(io, value)
 	})
 }
