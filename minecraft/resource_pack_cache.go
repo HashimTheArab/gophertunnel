@@ -8,6 +8,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
@@ -37,18 +40,26 @@ type ResourcePackCache interface {
 	Store(ctx context.Context, key ResourcePackCacheKey, pack *resource.Pack) error
 }
 
-// DirResourcePackCache is a ResourcePackCache that stores resource packs as files in a directory. Entries
-// are never evicted: the caller owns the directory and its lifecycle.
+// DirResourcePackCache is a ResourcePackCache that stores resource packs as files in a directory.
 type DirResourcePackCache struct {
 	// Dir is the directory packs are stored in. It is created when the first pack is stored.
 	Dir string
+	// MaxBytes, when positive, bounds the directory: after a store, the least recently used entries are
+	// removed until the total fits. Zero keeps every entry; the caller then owns the directory's lifecycle.
+	MaxBytes int64
 }
 
 // Load returns the pack stored under key, or nil if no file exists for it.
 func (cache DirResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
-	pack, err := resource.ReadPath(cache.path(key))
+	path := cache.path(key)
+	pack, err := resource.ReadPath(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
+	}
+	if err == nil {
+		// Mark the entry recently used for eviction; mtime is portable where atime is not.
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
 	}
 	return pack, err
 }
@@ -70,7 +81,51 @@ func (cache DirResourcePackCache) Store(_ context.Context, key ResourcePackCache
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temp.Name(), cache.path(key))
+	if err := os.Rename(temp.Name(), cache.path(key)); err != nil {
+		return err
+	}
+	return cache.evict()
+}
+
+// evict removes the least recently used entries until the directory fits MaxBytes. A Load touches its
+// entry, so recently served packs survive.
+func (cache DirResourcePackCache) evict() error {
+	if cache.MaxBytes <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(cache.Dir)
+	if err != nil {
+		return err
+	}
+	type packFile struct {
+		name  string
+		size  int64
+		atime time.Time
+	}
+	var files []packFile
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".mcpack") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, packFile{name: entry.Name(), size: info.Size(), atime: info.ModTime()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].atime.Before(files[j].atime) })
+	for _, file := range files {
+		if total <= cache.MaxBytes {
+			break
+		}
+		if err := os.Remove(filepath.Join(cache.Dir, file.name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		total -= file.size
+	}
+	return nil
 }
 
 // TempFile creates a download file beside the cache entries, so Store stays on one filesystem.
