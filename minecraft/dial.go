@@ -101,6 +101,7 @@ type Dialer struct {
 	// the connection downloads the server's packs, then parks the Completed response until
 	// Conn.CompleteResourcePacks. A relay uses it to serve those packs to its own client first, while the
 	// server waits as it would for a client applying packs.
+	// It requires DisablePacketHandling; otherwise dialing returns an error.
 	HoldResourcePackCompletion bool
 	// ResourcePackHTTPClient fetches packs advertised with a download URL. Nil uses http.DefaultClient; a
 	// relay that must not reach private addresses on a server's behalf supplies a restricted client.
@@ -240,6 +241,9 @@ func (d Dialer) DialTimeout(network, address string, timeout time.Duration) (*Co
 // and send packets to. If a connection is not established before the context passed is cancelled,
 // DialContextNetwork returns an error.
 func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address string) (conn *Conn, err error) {
+	if d.HoldResourcePackCompletion && !d.DisablePacketHandling {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("HoldResourcePackCompletion requires DisablePacketHandling")}
+	}
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
@@ -467,9 +471,10 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
 			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
-			if handshakeReady || passthroughReady {
-				// In relay mode, complete dialing as soon as handshake succeeds or passthrough is ready.
-				// This supports both encrypted servers and servers that skip the handshake.
+			heldLoginReady := conn.holdResourcePackCompletion && (conn.loginSuccessReceived || conn.retainedPacksInfo != nil)
+			if handshakeReady || passthroughReady || heldLoginReady {
+				// Held packs keep passthrough disabled, so servers without encryption must also finish
+				// dialing when login succeeds. The caller can then wait for and release the pack phase.
 				if conn.disablePacketHandling && connected != nil {
 					close(connected)
 					connected = nil

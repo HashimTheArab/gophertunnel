@@ -396,7 +396,7 @@ type Conn struct {
 	// packFiles are the archives downloaded for this connection and loadedPacks the cache entries it opened;
 	// both are released with it. Listener packs are shared and never closed here.
 	packFilesMu sync.Mutex
-	packFiles   []*os.File
+	packFiles   map[*os.File]uint64
 	loadedPacks []*resource.Pack
 }
 
@@ -1716,6 +1716,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			continue
 		}
 
+		if err := conn.resourcePackDownload.validateSize(pack.Size); err != nil {
+			return fmt.Errorf("handle ResourcePacksInfo: %w", err)
+		}
 		cacheKey := ResourcePackCacheKey{
 			UUID:    pack.UUID,
 			Version: pack.Version,
@@ -1730,7 +1733,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
 				_ = cachedPack.Close()
 			case cachedPack != nil:
-				conn.trackLoadedPack(cachedPack)
+				if err := conn.trackLoadedPack(cachedPack); err != nil {
+					return err
+				}
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
 				continue
@@ -1739,11 +1744,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := conn.downloadPackURL(pack.DownloadURL, pack.Size)
+			newPack, err := conn.downloadPackURL(pack)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
-			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
-				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
 				newPack = newPack.WithContentKey(pack.ContentKey)
 				conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -1755,7 +1758,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		file, err := conn.newPackFile()
+		file, err := conn.newPackFile(pack.Size)
 		if err != nil {
 			return fmt.Errorf("handle ResourcePacksInfo: %w", err)
 		}
@@ -1822,8 +1825,9 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	return nil
 }
 
-// ResourcePacksReady is closed once the server's pack stack has arrived and every pack it names is
+// ResourcePacksReady is closed once the server's pack stack has arrived and the requested packs are
 // downloaded. It is nil unless the connection was dialed with Dialer.HoldResourcePackCompletion.
+// Also select on Context().Done(), because a failed connection may never finish downloading its packs.
 func (conn *Conn) ResourcePacksReady() <-chan struct{} { return conn.packsReady }
 
 // ResourcePacksInfo returns the server's own ResourcePacksInfo, available once ResourcePacksReady is closed.
@@ -1834,66 +1838,23 @@ func (conn *Conn) ResourcePackStack() *packet.ResourcePackStack { return conn.re
 
 // CompleteResourcePacks sends the Completed response the pack phase held back and lets the connection
 // pass packets through. The server sends StartGame only after it. The caller flushes the connection.
+// Only the first call succeeds; later calls return an error without sending another response.
 func (conn *Conn) CompleteResourcePacks() error {
+	if !conn.holdResourcePackCompletion {
+		return errors.New("resource pack completion is not held")
+	}
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("complete resource packs")
+	}
 	select {
 	case <-conn.packsReady:
 	default:
 		return errors.New("resource packs are not ready")
 	}
-	conn.packPhaseDone.Store(true)
+	if !conn.packPhaseDone.CompareAndSwap(false, true) {
+		return errors.New("resource packs were already completed")
+	}
 	return conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
-}
-
-// newPackFile creates the archive file a pack downloads into, on the cache's filesystem when it has one, and
-// registers it for removal with the connection.
-func (conn *Conn) newPackFile() (*os.File, error) {
-	var f *os.File
-	var err error
-	if cache, ok := conn.resourcePackCache.(interface{ TempFile() (*os.File, error) }); ok {
-		f, err = cache.TempFile()
-	} else {
-		f, err = os.CreateTemp("", "gophertunnel-pack-*")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("create resource pack file: %w", err)
-	}
-	conn.packFilesMu.Lock()
-	conn.packFiles = append(conn.packFiles, f)
-	conn.packFilesMu.Unlock()
-	return f, nil
-}
-
-// downloadPackURL fetches an advertised pack into a connection-owned file.
-func (conn *Conn) downloadPackURL(url string, size uint64) (*resource.Pack, error) {
-	f, err := conn.newPackFile()
-	if err != nil {
-		return nil, err
-	}
-	client := conn.resourcePackHTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return resource.ReadURLToFile(conn.ctx, client, url, size, f)
-}
-
-func (conn *Conn) trackLoadedPack(pack *resource.Pack) {
-	conn.packFilesMu.Lock()
-	conn.loadedPacks = append(conn.loadedPacks, pack)
-	conn.packFilesMu.Unlock()
-}
-
-func (conn *Conn) removePackFiles() {
-	conn.packFilesMu.Lock()
-	files, loaded := conn.packFiles, conn.loadedPacks
-	conn.packFiles, conn.loadedPacks = nil, nil
-	conn.packFilesMu.Unlock()
-	for _, f := range files {
-		_ = f.Close()
-		_ = os.Remove(f.Name())
-	}
-	for _, pack := range loaded {
-		_ = pack.Close()
-	}
 }
 
 // hasPack checks if the connection has a resource pack downloaded with the UUID and version passed, provided
@@ -2043,8 +2004,11 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		// Size mismatch: The ResourcePacksInfo packet had a size for the pack that did not match with the
 		// size sent here.
 		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id, "packs_info_size", pack.size, "data_info_size", pk.Size)
-		pack.size = pk.Size
 	}
+	if err := conn.resizePackFile(pack.file, pk.Size); err != nil {
+		return fmt.Errorf("handle ResourcePackDataInfo: %w", err)
+	}
+	pack.size = pk.Size
 
 	if pk.DataChunkSize == 0 {
 		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
@@ -2073,8 +2037,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	idCopy := pk.UUID
 	go func() {
-		fragments := make(map[uint32][]byte)
-		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
+		nextRequest, received := uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
@@ -2109,23 +2072,19 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 			return
 		}
-		for nextWrite < pack.chunkCount {
+		for received < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
-				received++
-				fragments[frag.index] = frag.data
-				// Write the contiguous prefix in index order.
-				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
-					if _, err := pack.file.Write(data); err != nil {
-						_ = conn.close(fmt.Errorf("download resource pack %v: write: %w", id, err))
-						return
-					}
-					pack.written += uint64(len(data))
-					delete(fragments, nextWrite)
-					nextWrite++
+				// Write each validated chunk at its offset, so a delayed early chunk cannot keep the
+				// rest of the archive in memory while the request window continues to advance.
+				if _, err := pack.file.WriteAt(frag.data, int64(uint64(frag.index)*uint64(pack.chunkSize))); err != nil {
+					_ = conn.abort(fmt.Errorf("download resource pack %v: write: %w", id, err))
+					return
 				}
+				pack.written += uint64(len(frag.data))
+				received++
 				if err := fillWindow(); err != nil {
 					_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 					return
@@ -2136,12 +2095,13 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.written))
 			return
 		}
-		newPack, err := resource.ReadFile(pack.file, int64(pack.size))
+		newPack, err := conn.readDownloadedPack(pack.file, pack.size)
 		if err != nil {
 			_ = conn.close(fmt.Errorf("download resource pack %v: parse: %w", id, err))
 			return
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
+		conn.storeResourcePack(pack.cacheKey, newPack)
 		conn.packMu.Lock()
 		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
@@ -2156,9 +2116,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
 				return
 			}
-			_ = conn.Flush()
+			if err := conn.Flush(); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: flush completion: %w", id, err))
+			}
 		}
-		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
 }

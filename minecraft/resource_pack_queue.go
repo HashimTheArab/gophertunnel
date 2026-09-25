@@ -26,7 +26,7 @@ type resourcePackQueue struct {
 
 // downloadingPack is a resource pack that is being downloaded by a client connection.
 type downloadingPack struct {
-	// file receives the archive in order; the finished pack reads from it.
+	// file receives chunks at their archive offsets; the finished pack reads from it.
 	file       *os.File
 	written    uint64
 	chunkSize  uint32

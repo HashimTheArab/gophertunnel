@@ -4,7 +4,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -40,7 +39,7 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	defer conn.Abort()
 
 	const id = "550e8400-e29b-41d4-a716-446655440000"
-	file, err := os.CreateTemp(t.TempDir(), "pack-*")
+	file, err := conn.newPackFile(200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +78,10 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	}
 	if !waitForResourcePackRequest(t, pack, 100) {
 		t.Fatal("out-of-order response did not replenish the request window")
+	}
+	var chunk [1]byte
+	if _, err := file.ReadAt(chunk[:], 50); err != nil || chunk[0] != 50 {
+		t.Fatalf("out-of-order chunk was not written to disk: %v, %v", chunk, err)
 	}
 }
 

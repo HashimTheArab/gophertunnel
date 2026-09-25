@@ -2,7 +2,9 @@ package minecraft
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,12 +21,28 @@ import (
 // TestDialHoldsResourcePackCompletion downloads a server's pack into the cache, parks Completed until
 // released, and then passes StartGame through.
 func TestDialHoldsResourcePackCompletion(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		disableEncryption bool
+	}{
+		{name: "encrypted"},
+		{name: "unencrypted", disableEncryption: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testDialHoldsResourcePackCompletion(t, test.disableEncryption)
+		})
+	}
+}
+
+// testDialHoldsResourcePackCompletion exercises the held phase with and without an encryption handshake.
+func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
+	t.Helper()
 	log := slog.New(internal.DiscardHandler{})
 	pack, err := resource.ReadBytes(testPackArchive(t, "held"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener, err := ListenConfig{ErrorLog: log, AuthenticationDisabled: true, ResourcePacks: []*resource.Pack{pack}}.Listen("raknet", "127.0.0.1:0")
+	listener, err := ListenConfig{ErrorLog: log, AuthenticationDisabled: true, DisablePacketEncryption: disableEncryption, ResourcePacks: []*resource.Pack{pack}}.Listen("raknet", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,4 +141,20 @@ func TestDialHoldsResourcePackCompletion(t *testing.T) {
 		t.Fatalf("cache entry missing: %v", err)
 	}
 	_ = temp
+}
+
+// TestDialRejectsHeldPacksWithoutPassthrough rejects a configuration that could never return its held Conn.
+func TestDialRejectsHeldPacksWithoutPassthrough(t *testing.T) {
+	called := false
+	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
+		called = true
+		return nil, errors.New("unexpected network dial")
+	}}
+	conn, err := (Dialer{HoldResourcePackCompletion: true}).DialContextNetwork(t.Context(), network, "example.com:19132")
+	if conn != nil || err == nil || !strings.Contains(err.Error(), "requires DisablePacketHandling") {
+		t.Fatalf("DialContextNetwork = %v, %v; want a configuration error", conn, err)
+	}
+	if called {
+		t.Fatal("invalid held-pack configuration reached the network")
+	}
 }

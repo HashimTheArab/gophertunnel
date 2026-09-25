@@ -10,11 +10,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
+
+// resourcePackCachePublishMu keeps directory snapshots consistent with stores and evictions in this
+// process, including when callers use separate cache values for the same directory. File copying and
+// downloading happen outside this short publication lock.
+var resourcePackCachePublishMu sync.Mutex
 
 // ResourcePackCacheKey identifies a resource pack advertised in the ResourcePacksInfo packet. Like the
 // vanilla client's own pack cache, pack content is assumed not to change without a version bump; the
@@ -46,15 +52,17 @@ type ResourcePackCache interface {
 type DirResourcePackCache struct {
 	// Dir is the directory packs are stored in. It is created when the first pack is stored.
 	Dir string
-	// MaxBytes, when positive, bounds the directory: after a store, the least recently used entries are
-	// removed until the total fits. Zero keeps every entry; the caller then owns the directory's lifecycle.
+	// MaxBytes, when positive, bounds completed cache entries: after a store, the least recently used
+	// entries are removed until the total fits. Zero keeps every entry. Download files are bounded by
+	// ResourcePackDownloadConfig.Budget; staging copies and evicted files still open in a connection can
+	// also occupy disk space, so this is not a filesystem quota.
 	MaxBytes int64
 }
 
 // Load returns the pack stored under key, or nil if no file exists for it.
 func (cache DirResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
 	path := cache.path(key)
-	pack, err := resource.ReadPath(path)
+	pack, err := resource.OpenPath(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -83,6 +91,8 @@ func (cache DirResourcePackCache) Store(_ context.Context, key ResourcePackCache
 	if err := temp.Close(); err != nil {
 		return err
 	}
+	resourcePackCachePublishMu.Lock()
+	defer resourcePackCachePublishMu.Unlock()
 	if err := os.Rename(temp.Name(), cache.path(key)); err != nil {
 		return err
 	}
@@ -118,14 +128,21 @@ func (cache DirResourcePackCache) evict() error {
 		total += info.Size()
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].atime.Before(files[j].atime) })
+	var removeErrors error
 	for _, file := range files {
 		if total <= cache.MaxBytes {
 			break
 		}
 		if err := os.Remove(filepath.Join(cache.Dir, file.name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			// Windows cannot remove an archive while a connection has it open. Other entries can
+			// still be evicted, including the newly stored one, so one busy file must not stop pruning.
+			removeErrors = errors.Join(removeErrors, err)
+			continue
 		}
 		total -= file.size
+	}
+	if total > cache.MaxBytes {
+		return removeErrors
 	}
 	return nil
 }
