@@ -20,6 +20,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
 func TestListenConfigListenNetworkUsesExplicitNetwork(t *testing.T) {
@@ -913,5 +914,43 @@ func TestListenerPassthroughDoesNotPublishBeforeLogin(t *testing.T) {
 	case conn := <-listener.incoming:
 		t.Fatalf("published a connection that never logged in (xuid=%q)", conn.IdentityData().XUID)
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// An eviction frees the evicted connection's player slot at once, so a full server still admits the newcomer.
+func TestListenerEvictionFreesPlayerSlot(t *testing.T) {
+	t.Parallel()
+
+	listener, network := newPipeListener(t, ListenConfig{MaximumPlayers: 1, MaximumPendingLogins: 1}, true)
+	silent := network.connect()
+	defer silent.Close()
+	newest := network.connect()
+	defer newest.Close()
+
+	if !silent.closedWithin(time.Second) {
+		t.Fatal("silent connection was not evicted")
+	}
+	if newest.closedWithin(100 * time.Millisecond) {
+		t.Fatal("newcomer was refused as server full although the eviction made room")
+	}
+	waitForCount(t, "player count", 1, listener.PlayerCount)
+}
+
+// Work after authentication, such as fetching resource packs, must not run into the login deadline.
+func TestListenerLoginTimeoutEndsBeforePostAuthCallbacks(t *testing.T) {
+	t.Parallel()
+
+	_, network := newPipeListener(t, ListenConfig{
+		LoginTimeout: 50 * time.Millisecond,
+		FetchResourcePacks: func(_ login.IdentityData, _ login.ClientData, current []*resource.Pack) []*resource.Pack {
+			time.Sleep(200 * time.Millisecond)
+			return current
+		},
+	}, true)
+	peer := network.connect()
+	defer peer.Close()
+	peer.logIn(t)
+	if peer.closedWithin(400 * time.Millisecond) {
+		t.Fatal("client that authenticated in time was closed while resource packs were fetched")
 	}
 }

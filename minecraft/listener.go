@@ -554,11 +554,14 @@ type pendingLogin struct {
 	timer    *time.Timer
 	elem     *list.Element // guarded by listener.pendingMu
 	ended    atomic.Bool
+	// playerReleased is set once the connection's slot in the player count was given back.
+	playerReleased atomic.Bool
 }
 
 // newPendingLogin counts conn as pending and aborts it if it is still pending after LoginTimeout.
 func (listener *Listener) newPendingLogin(conn *Conn) *pendingLogin {
 	p := &pendingLogin{listener: listener, conn: conn}
+	conn.authenticated = p.end
 	listener.pendingMu.Lock()
 	p.elem = listener.pending.PushBack(p)
 	listener.pendingMu.Unlock()
@@ -583,6 +586,15 @@ func (p *pendingLogin) end() bool {
 		p.timer.Stop()
 	}
 	return true
+}
+
+// releasePlayer gives the connection's slot in the player count back, once, whether the connection closed or
+// was evicted to make room for a new one.
+func (p *pendingLogin) releasePlayer() {
+	if p.playerReleased.CompareAndSwap(false, true) {
+		p.listener.playerCount.Add(-1)
+		p.listener.updatePongData()
+	}
 }
 
 // claim marks the login ended and releases its pending slot, reporting whether it was still pending.
@@ -621,6 +633,8 @@ func (listener *Listener) evictPendingLogins() {
 		// A login that authenticated meanwhile has already left the list, so the loop checks again.
 		if oldest.end() {
 			oldest.conn.log.Debug(errLoginEvicted.Error())
+			// Free its player slot now so the full-server check for the new connection counts the room made.
+			oldest.releasePlayer()
 			go oldest.conn.abort(errLoginEvicted)
 			listener.warnEviction(limit)
 		}
@@ -651,8 +665,7 @@ func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 	defer func() {
 		pending.end()
 		_ = conn.Close()
-		listener.playerCount.Add(-1)
-		listener.updatePongData()
+		pending.releasePlayer()
 	}()
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
@@ -665,11 +678,6 @@ func (listener *Listener) handleConn(conn *Conn, pending *pendingLogin) {
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
 				return err
-			}
-			if !handshakeCompleteBefore && conn.handshakeComplete {
-				if !pending.end() {
-					return errLoginEnded
-				}
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
