@@ -322,6 +322,30 @@ func (p *Pack) HasResourceFile(filePath string) bool {
 	return err == nil
 }
 
+// ResourceFiles returns the regular files below dir, as paths relative to the
+// pack's manifest directory.
+func (p *Pack) ResourceFiles(dir string) ([]string, error) {
+	if !fs.ValidPath(dir) {
+		return nil, fmt.Errorf("invalid resource directory %q", dir)
+	}
+	zr, err := zip.NewReader(p.content, int64(p.content.Size()))
+	if err != nil {
+		return nil, fmt.Errorf("open resource pack archive: %w", err)
+	}
+	prefix := strings.ToLower(path.Join(p.manifestDir, dir)) + "/"
+	var files []string
+	for _, file := range zr.File {
+		if strings.HasPrefix(strings.ToLower(file.Name), prefix) && file.FileInfo().Mode().IsRegular() {
+			rel := file.Name
+			if p.manifestDir != "." {
+				rel = file.Name[len(p.manifestDir)+1:]
+			}
+			files = append(files, rel)
+		}
+	}
+	return files, nil
+}
+
 // findResourceFile finds a regular file using a path relative to manifest.json.
 func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	if filePath == "." || !fs.ValidPath(filePath) {
