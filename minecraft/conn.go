@@ -305,8 +305,8 @@ type Conn struct {
 	handshakeComplete bool
 	// loginKeyProven is true once the client proved it holds the private key of its login chain.
 	loginKeyProven bool
-	// authenticated, set by a Listener, is called as the client authenticates; false abandons the login.
-	authenticated func() bool
+	// authenticated is set once the Login was verified and, with encryption, the encrypted handshake completed.
+	authenticated atomic.Bool
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
@@ -1588,10 +1588,8 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		// Only a holder of the login key could derive the key this batch was encrypted with.
 		conn.loginKeyProven = true
 	}
-	// Report authentication before the work that follows it, which may outlast the listener's login deadline.
-	if conn.authenticated != nil && !conn.authenticated() {
-		return errLoginEnded
-	}
+	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
+	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true

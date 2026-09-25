@@ -116,7 +116,7 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
 	conn.handshakeComplete = true
-	go listener.handleConn(conn, listener.newPendingLogin(conn))
+	go listener.handleConn(conn)
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
 		t.Fatalf("write packet: %v", err)
@@ -160,7 +160,7 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
 	conn.handshakeComplete = true
-	go listener.handleConn(conn, listener.newPendingLogin(conn))
+	go listener.handleConn(conn)
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
 		t.Fatalf("write packet: %v", err)
@@ -207,7 +207,7 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	conn.expect(packet.IDClientToServerHandshake)
 	key := [32]byte{1}
 	conn.dec.EnableEncryption(key)
-	go listener.handleConn(conn, listener.newPendingLogin(conn))
+	go listener.handleConn(conn)
 
 	frame, err := encodePacket(&packet.ClientToServerHandshake{})
 	if err != nil {
@@ -665,10 +665,8 @@ func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 func serveAuthenticated(listener *Listener, netConn net.Conn) {
 	conn := listener.newListenerConn(netConn)
 	conn.handshakeComplete = true
-	pending := listener.newPendingLogin(conn)
-	pending.end()
 	listener.playerCount.Add(1)
-	go listener.handleConn(conn, pending)
+	go listener.handleConn(conn)
 }
 
 // A peer that connects but never logs in must be closed once LoginTimeout passes.
@@ -683,74 +681,20 @@ func TestListenerLoginTimeoutClosesSilentConnection(t *testing.T) {
 		t.Fatal("silent connection was not closed after the login timeout")
 	}
 	waitForCount(t, "player count", 0, listener.PlayerCount)
-	waitForCount(t, "pending logins", 0, listener.pendingLoginCount)
 }
 
 // LoginTimeout ends at authentication: the rest of the login sequence, such as resource packs, is not bounded.
 func TestListenerLoginTimeoutEndsAtAuthentication(t *testing.T) {
 	t.Parallel()
 
-	listener, network := newPipeListener(t, ListenConfig{LoginTimeout: 100 * time.Millisecond}, true)
+	_, network := newPipeListener(t, ListenConfig{LoginTimeout: 100 * time.Millisecond}, true)
 	peer := network.connect()
 	defer peer.Close()
 	peer.logIn(t)
-	waitForCount(t, "pending logins", 0, listener.pendingLoginCount)
 
 	// The client never answers the resource pack offer that follows authentication.
 	if peer.closedWithin(300 * time.Millisecond) {
 		t.Fatal("authenticated connection was closed by the login timeout")
-	}
-}
-
-// At MaximumPendingLogins the oldest unauthenticated connection makes room, so silent peers cannot lock players out.
-func TestListenerMaximumPendingLoginsEvictsOldest(t *testing.T) {
-	t.Parallel()
-
-	listener, network := newPipeListener(t, ListenConfig{MaximumPendingLogins: 2}, true)
-	oldest, older := network.connect(), network.connect()
-	defer oldest.Close()
-	defer older.Close()
-	newest := network.connect()
-	defer newest.Close()
-
-	if !oldest.closedWithin(time.Second) {
-		t.Fatal("oldest pending connection was not evicted for the new one")
-	}
-	if older.closedWithin(50*time.Millisecond) || newest.closedWithin(50*time.Millisecond) {
-		t.Fatal("eviction closed more than the oldest pending connection")
-	}
-	newest.logIn(t)
-	waitForCount(t, "pending logins", 1, listener.pendingLoginCount)
-}
-
-// Authenticated connections no longer count toward MaximumPendingLogins and are never evicted.
-func TestListenerMaximumPendingLoginsKeepsAuthenticated(t *testing.T) {
-	t.Parallel()
-
-	listener, network := newPipeListener(t, ListenConfig{MaximumPendingLogins: 1}, true)
-	player := network.connect()
-	defer player.Close()
-	player.logIn(t)
-	waitForCount(t, "pending logins", 0, listener.pendingLoginCount)
-
-	silent := network.connect()
-	defer silent.Close()
-	waitForCount(t, "pending logins", 1, listener.pendingLoginCount)
-	if player.closedWithin(50 * time.Millisecond) {
-		t.Fatal("authenticated connection was evicted")
-	}
-}
-
-// A cap above MaxInt32 must not wrap negative when compared.
-func TestListenerMaximumPendingLoginsAboveInt32(t *testing.T) {
-	t.Parallel()
-
-	listener, network := newPipeListener(t, ListenConfig{MaximumPendingLogins: math.MaxInt}, true)
-	peer := network.connect()
-	defer peer.Close()
-	waitForCount(t, "pending logins", 1, listener.pendingLoginCount)
-	if peer.closedWithin(50 * time.Millisecond) {
-		t.Fatal("connection was evicted under a huge cap")
 	}
 }
 
@@ -917,25 +861,6 @@ func TestListenerPassthroughDoesNotPublishBeforeLogin(t *testing.T) {
 	}
 }
 
-// An eviction frees the evicted connection's player slot at once, so a full server still admits the newcomer.
-func TestListenerEvictionFreesPlayerSlot(t *testing.T) {
-	t.Parallel()
-
-	listener, network := newPipeListener(t, ListenConfig{MaximumPlayers: 1, MaximumPendingLogins: 1}, true)
-	silent := network.connect()
-	defer silent.Close()
-	newest := network.connect()
-	defer newest.Close()
-
-	if !silent.closedWithin(time.Second) {
-		t.Fatal("silent connection was not evicted")
-	}
-	if newest.closedWithin(100 * time.Millisecond) {
-		t.Fatal("newcomer was refused as server full although the eviction made room")
-	}
-	waitForCount(t, "player count", 1, listener.PlayerCount)
-}
-
 // Work after authentication, such as fetching resource packs, must not run into the login deadline.
 func TestListenerLoginTimeoutEndsBeforePostAuthCallbacks(t *testing.T) {
 	t.Parallel()
@@ -953,23 +878,4 @@ func TestListenerLoginTimeoutEndsBeforePostAuthCallbacks(t *testing.T) {
 	if peer.closedWithin(400 * time.Millisecond) {
 		t.Fatal("client that authenticated in time was closed while resource packs were fetched")
 	}
-}
-
-// A login timed out while stuck in a callback such as Allow must still give its player slot back.
-func TestListenerLoginTimeoutFreesSlotOfBlockedLogin(t *testing.T) {
-	t.Parallel()
-
-	release := make(chan struct{})
-	defer close(release)
-	listener, network := newPipeListener(t, ListenConfig{
-		LoginTimeout: 50 * time.Millisecond,
-		Allow: func(net.Addr, login.IdentityData, login.ClientData) (string, bool) {
-			<-release
-			return "", true
-		},
-	}, true)
-	peer := network.connect()
-	defer peer.Close()
-	peer.logIn(t)
-	waitForCount(t, "player count", 0, listener.PlayerCount)
 }
