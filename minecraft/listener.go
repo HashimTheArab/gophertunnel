@@ -515,7 +515,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 		_ = conn.close(conn.closeErr("server full"))
 		return
 	}
-	if limit := listener.cfg.MaximumPendingLogins; limit > 0 && listener.pendingLogins.Load() >= int32(limit) {
+	if limit := listener.cfg.MaximumPendingLogins; limit > 0 && int(listener.pendingLogins.Load()) >= limit {
 		// Abort without flushing: this runs on the accept loop, which a peer that never reads must not stall.
 		_ = conn.abort(errors.New("too many pending logins"))
 		return

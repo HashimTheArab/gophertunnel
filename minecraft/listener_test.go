@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"slices"
 	"testing"
@@ -751,5 +752,18 @@ func waitForCount(t *testing.T, what string, count func() int) {
 			t.Fatalf("%s = %d, want 0", what, count())
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A cap above MaxInt32 must not wrap negative when compared and refuse every connection.
+func TestListenerMaximumPendingLoginsAboveInt32(t *testing.T) {
+	t.Parallel()
+
+	listener := newLoginLimitListener(0, math.MaxInt)
+	client, server := net.Pipe()
+	defer client.Close()
+	listener.createConn(server)
+	if n := listener.PlayerCount(); n != 1 {
+		t.Fatalf("player count = %d, want the connection admitted under a huge cap", n)
 	}
 }
