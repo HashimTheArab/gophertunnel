@@ -50,6 +50,8 @@ type ListenerStatusProvider struct {
 	name string
 	// subName is the sub-name of the server, or the MOTD, that is displayed in the friend list.
 	subName string
+	// GameType is advertised as the pong game mode; it is one of the packet.GameType constants.
+	GameType int
 }
 
 // NewStatusProvider creates a ListenerStatusProvider that displays the server name passed.
@@ -64,6 +66,7 @@ func (l ListenerStatusProvider) ServerStatus(playerCount, maxPlayers int) Server
 		ServerSubName: l.subName,
 		PlayerCount:   playerCount,
 		MaxPlayers:    maxPlayers,
+		GameType:      l.GameType,
 	}
 }
 

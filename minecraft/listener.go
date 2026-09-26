@@ -461,7 +461,7 @@ func (listener *Listener) updatePongData() {
 	s := listener.status()
 	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, ipv4Port, ipv6Port, "0", "0",
+		listener.listener.ID(), s.ServerSubName, gameTypeName(s.GameType), 1, ipv4Port, ipv6Port, "0", "0",
 	))
 
 	if status, ok := listener.listener.(interface {
