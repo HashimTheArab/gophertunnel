@@ -239,7 +239,7 @@ type Conn struct {
 	compressionSelector  func(proto Protocol) packet.Compression
 	compressionThreshold int
 	maxDecompressedLen   int
-	readerLimits         bool
+	readerLimits         bool // set for connections accepted by a Listener, whose peer is an untrusted client
 
 	disconnectOnUnknownPacket bool
 	disconnectOnInvalidPacket bool
@@ -303,6 +303,8 @@ type Conn struct {
 	readyToLogin bool
 	// handshakeComplete is true if the login handshake has been completed.
 	handshakeComplete bool
+	// loginKeyProven is true once the client proved it holds the private key of its login chain.
+	loginKeyProven bool
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
@@ -468,6 +470,14 @@ func (conn *Conn) SetPacketBatchFunc(f packet.BatchEncodeObserver) {
 // Authenticated returns true if the connection was authenticated through XBOX Live services.
 func (conn *Conn) Authenticated() bool {
 	return conn.IdentityData().XUID != ""
+}
+
+// LoginKeyProven reports whether a client accepted by a Listener proved it holds the private key its login
+// chain was issued to, through the encryption handshake or a transport-authenticated key. When false, the
+// Login may have been replayed from a capture. It says nothing about who issued the chain, so it identifies
+// a player only together with Authenticated.
+func (conn *Conn) LoginKeyProven() bool {
+	return conn.loginKeyProven
 }
 
 // GameData returns specific game data set to the connection for the player to be initialised with. If the
@@ -1126,7 +1136,9 @@ func (conn *Conn) receive(data []byte) error {
 		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
-		} else if !conn.disablePacketHandlingReady {
+		} else if !conn.disablePacketHandlingReady && !conn.readerLimits {
+			// Only dialed connections, which have no reader limits, may infer the login from the server's
+			// packets. A listener's peer could send these IDs to be published without logging in.
 			switch pkData.h.PacketID {
 			case packet.IDResourcePacksInfo, packet.IDStartGame, packet.IDPlayStatus:
 				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
@@ -1460,9 +1472,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
 	if pkc, ok := conn.conn.(publicKeyConn); ok {
-		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
-			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+		if pub := pkc.PublicKey(); pub != nil {
+			if !authResult.PublicKey.Equal(pub) {
+				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+				return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
+			}
+			conn.loginKeyProven = true
 		}
 	}
 	if conn.allow != nil {
@@ -1565,6 +1580,18 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	// Login callbacks may return after the listener has already timed this connection out.
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("complete login")
+	}
+	if !conn.disableEncryption {
+		// A handshake batched with the Login is still plaintext and proves nothing about the login key.
+		if !conn.dec.BatchEncrypted() {
+			return errors.New("client to server handshake was not encrypted")
+		}
+		// Only a holder of the login key could derive the key this batch was encrypted with.
+		conn.loginKeyProven = true
+	}
 	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
 	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
@@ -2458,15 +2485,6 @@ func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
-}
-
-// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
-// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
-// treating the closed transport as an encoding failure.
-func (conn *Conn) closeTransport(cause error) {
-	conn.cancelFunc(cause)
-	_ = conn.conn.Close()
-	_ = conn.close(cause)
 }
 
 func (conn *Conn) close(cause error) error {

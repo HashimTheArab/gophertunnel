@@ -26,7 +26,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
-var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
+var (
+	errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
+	// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
+	errLoginTimeout = errors.New("login timed out")
+)
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
@@ -506,6 +510,34 @@ func (listener *Listener) listen() {
 // createConn creates a connection for the net.Conn passed and adds it to the listener, so that it may be
 // accepted once its login sequence is complete.
 func (listener *Listener) createConn(netConn net.Conn) {
+	conn := listener.newListenerConn(netConn)
+	if !listener.group.add(listener.cfg.MaximumPlayers) {
+		// The server was full. We kick the player immediately and close the connection.
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
+		_ = conn.close(conn.closeErr("server full"))
+		return
+	}
+	listener.updatePongData()
+
+	var timer *time.Timer
+	if timeout := listener.cfg.LoginTimeout; timeout > 0 {
+		timer = time.AfterFunc(timeout, func() {
+			if !conn.authenticated.Load() {
+				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
+				_ = conn.abort(errLoginTimeout)
+			}
+		})
+	}
+	go func() {
+		listener.handleConn(conn)
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+}
+
+// newListenerConn returns a Conn for netConn configured from the listener.
+func (listener *Listener) newListenerConn(netConn net.Conn) *Conn {
 	listener.packsMu.RLock()
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
@@ -539,34 +571,8 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
 	conn.batchReading = listener.cfg.EnableBatchReading
-
-	if !listener.group.add(listener.cfg.MaximumPlayers) {
-		// The server was full. We kick the player immediately and close the connection.
-		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
-		_ = conn.close(conn.closeErr("server full"))
-		return
-	}
-	listener.updatePongData()
-
-	var timer *time.Timer
-	if timeout := listener.cfg.LoginTimeout; timeout > 0 {
-		timer = time.AfterFunc(timeout, func() {
-			if !conn.authenticated.Load() {
-				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
-				conn.closeTransport(errLoginTimeout)
-			}
-		})
-	}
-	go func() {
-		listener.handleConn(conn)
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
+	return conn
 }
-
-// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
-var errLoginTimeout = errors.New("login timed out")
 
 // status returns the current ServerStatus of the Listener.
 func (listener *Listener) status() ServerStatus {
@@ -621,7 +627,9 @@ func (listener *Listener) handleConn(conn *Conn) {
 			if publishBatch {
 				listener.deliverConn(conn)
 			}
-			if callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed) && !errors.Is(context.Cause(conn.ctx), errLoginTimeout)) {
+			// A login timeout was logged when it fired.
+			timedOut := errors.Is(context.Cause(conn.ctx), errLoginTimeout)
+			if !timedOut && (callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed))) {
 				conn.log.Error(err.Error())
 			}
 			return
@@ -638,9 +646,13 @@ func (listener *Listener) handleConn(conn *Conn) {
 // deliverConn delivers conn to the configured owner. ConnHandler, when set, replaces the Accept path entirely:
 // connections delivered through it are not published to listener.incoming.
 func (listener *Listener) deliverConn(conn *Conn) bool {
+	if conn.ctx.Err() != nil {
+		return false
+	}
 	if listener.cfg.ConnHandler != nil {
 		// The handler runs on its own goroutine so that it may block reading the connection without
-		// stalling the goroutine that queues its incoming packets.
+		// stalling the goroutine that queues its incoming packets. Once handed off, it may still need
+		// to read queued packets even if the connection closes before the handler starts.
 		go func() {
 			if err := listener.cfg.ConnHandler(conn); err != nil {
 				conn.log.Error(err.Error())
@@ -650,6 +662,8 @@ func (listener *Listener) deliverConn(conn *Conn) bool {
 		return true
 	}
 	select {
+	case <-conn.ctx.Done():
+		return false
 	case <-listener.close:
 		// The listener was closed while this one was logged in, so the incoming channel will be closed. Just return
 		// so the connection is closed and cleaned up.
