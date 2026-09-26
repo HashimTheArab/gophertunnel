@@ -2,9 +2,7 @@ package login
 
 import (
 	"bytes"
-	"context"
 	"crypto/ecdsa"
-	"crypto/md5"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
@@ -16,7 +14,6 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
-	"github.com/google/uuid"
 )
 
 // chain holds a chain with claims, each with their own headers, payloads and signatures. Each claim holds
@@ -34,7 +31,7 @@ type request struct {
 	Certificate certificate `json:"Certificate"`
 	// AuthenticationType is the authentication type of the request.
 	AuthenticationType uint8 `json:"AuthenticationType"`
-	// Token is an empty string, it's unclear what's used for.
+	// Token holds the multiplayer token, issued by the authentication service or self-signed for offline play.
 	Token string `json:"Token"`
 	// RawToken holds the raw token that follows the JWT chain, holding the ClientData.
 	RawToken string `json:"-"`
@@ -84,10 +81,9 @@ type AuthResult struct {
 // Parse parses and verifies the login request passed. The AuthResult returned holds the ecdsa.PublicKey that
 // was parsed (which is used for encryption) and a bool specifying if the request was authenticated by XBOX
 // Live.
-// Parse returns IdentityData and ClientData, of which IdentityData cannot under any circumstance be edited by
-// the client. Rather, it is obtained from an authentication endpoint. The ClientData can, however, be edited
-// freely by the client.
-// The verifier will be used for parsing the OpenID token included in the first chain of the login request.
+// Parse resolves the identity from the login token and client data. Offline identities are supplied by the
+// client. The verifier checks service-issued multiplayer tokens; passing nil disables that verification
+// without treating service-issued tokens as self-signed. Check AuthResult before trusting the identity.
 func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, ClientData, AuthResult, error) {
 	var (
 		iData IdentityData
@@ -102,67 +98,30 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 
 	var (
 		authenticated bool
+		claims        tokenClaims
+		trustedHost   bool
 		t             = time.Now()
 	)
-	if verifier != nil && req.Token != "" {
-		// The context here is used for making requests via remote key set, which does not normally
-		// occur in this case since we use a custom-made OIDC verifier that has already static key set included.
-		idt, err := verifier.Verify(context.Background(), req.Token)
-		if err != nil {
-			return iData, cData, res, fmt.Errorf("verify ID token: %w", err)
-		}
-		var claims tokenClaims
-		if err := idt.Claims(&claims); err != nil {
-			return iData, cData, res, fmt.Errorf("parse ID token: %w", err)
-		}
-		if err := claims.Validate(jwt.Expected{Time: t}); err != nil {
-			return iData, cData, res, fmt.Errorf("validate ID token: %w", err)
-		}
-		if err := ParsePublicKey(claims.ClientPublicKey, key); err != nil {
-			return iData, cData, res, fmt.Errorf("parse cpk: %w", err)
-		}
-		iData = claims.identityData()
-		authenticated = iData.XUID != ""
-		// The OIDC token does not include the numerical XBL title ID (extraData.titleId) that is present in the
-		// legacy Mojang chain. If the chain is present and valid, we verify it and use its title ID so callers
-		// can keep using IdentityData.TitleID.
-		if authenticated && len(req.Certificate.Chain) > 0 {
-			if legacyID, _, legacyAuthed, err := parseLegacyChain(req.Certificate.Chain, t); err == nil && legacyAuthed {
-				if legacyID.TitleID != "" && legacyID.XUID == iData.XUID {
-					iData.TitleID = legacyID.TitleID
-				}
-			}
-		}
-		if err := iData.Validate(); err != nil {
-			return iData, cData, res, fmt.Errorf("validate identity data: %w", err)
-		}
-	} else if req.Token != "" {
-		// Parse the token without verification to extract identity and the public key for encryption.
-		tok, err := jwt.ParseSigned(req.Token, []jose.SignatureAlgorithm{jose.ES384, jose.RS256})
-		if err != nil {
-			return iData, cData, res, fmt.Errorf("parse unverified token: %w", err)
-		}
-		var claims tokenClaims
-		if err := tok.UnsafeClaimsWithoutVerification(&claims); err != nil {
-			return iData, cData, res, fmt.Errorf("parse unverified token claims: %w", err)
-		}
-		if err := ParsePublicKey(claims.ClientPublicKey, key); err != nil {
-			return iData, cData, res, fmt.Errorf("parse cpk: %w", err)
-		}
-		iData = claims.identityData()
-		if err := iData.Validate(); err != nil {
-			return iData, cData, res, fmt.Errorf("validate identity data: %w", err)
-		}
-	} else {
-		legacyID, legacyKey, legacyAuthed, err := parseLegacyChain(req.Certificate.Chain, t)
+	selfSigned := req.AuthenticationType == 2
+	if req.Token != "" {
+		claims, key, trustedHost, err = parseMultiplayerToken(req.Token, verifier, selfSigned, t)
 		if err != nil {
 			return iData, cData, res, err
 		}
-		iData, key, authenticated = legacyID, legacyKey, legacyAuthed
+	} else {
+		iData, key, authenticated, err = parseLegacyChain(req.Certificate.Chain, t)
+		if err != nil {
+			return iData, cData, res, err
+		}
 	}
 
-	if err := parseFullClaim(req.RawToken, key, &cData); err != nil {
+	clientToken, err := jwt.ParseSigned(req.RawToken, []jose.SignatureAlgorithm{jose.ES384})
+	if err != nil {
 		return iData, cData, res, fmt.Errorf("parse client data: %w", err)
+	}
+	// Client data cannot rotate the key established by the login token or certificate chain.
+	if err := clientToken.Claims(key, &cData); err != nil {
+		return iData, cData, res, fmt.Errorf("verify client data: %w", err)
 	}
 	if strings.Count(cData.ServerAddress, ":") > 1 && cData.ServerAddress[0] != '[' {
 		// IPv6: We can't net.ResolveUDPAddr this directly, because Mojang does
@@ -174,8 +133,28 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 	if err := cData.Validate(); err != nil {
 		return iData, cData, res, fmt.Errorf("validate client data: %w", err)
 	}
-	if !authenticated {
-		iData.DisplayName = cData.ThirdPartyName
+	if req.Token != "" {
+		iData, err = claims.identityData(cData, selfSigned, trustedHost)
+		if err != nil {
+			return iData, cData, res, fmt.Errorf("resolve identity data: %w", err)
+		}
+		authenticated = !selfSigned && verifier != nil && iData.XUID != ""
+		// Multiplayer tokens do not carry the legacy Xbox title ID. Use it only from a verified chain
+		// that belongs to the same Xbox account.
+		if authenticated && len(req.Certificate.Chain) > 0 {
+			if legacyID, _, legacyAuthed, err := parseLegacyChain(req.Certificate.Chain, t); err == nil && legacyAuthed && legacyID.XUID == iData.XUID {
+				iData.TitleID = legacyID.TitleID
+			}
+		}
+	} else if !authenticated {
+		// Legacy offline logins carry their name in extraData, not ThirdPartyName.
+		iData.DisplayName, err = fallbackDisplayName(iData.DisplayName, cData.DeviceOS, false)
+		if err != nil {
+			return iData, cData, res, fmt.Errorf("resolve legacy display name: %w", err)
+		}
+	}
+	if err := iData.Validate(); err != nil {
+		return iData, cData, res, fmt.Errorf("validate identity data: %w", err)
 	}
 	return iData, cData, AuthResult{PublicKey: key, XBOXLiveAuthenticated: authenticated}, nil
 }
@@ -424,67 +403,6 @@ func EncodeOffline(identityData IdentityData, data ClientData, key *ecdsa.Privat
 	req.RawToken, _ = jwt.Signed(signer).Claims(data).Serialize()
 
 	return encodeRequest(req)
-}
-
-// tokenClaims holds the claims for the multiplayer token from the first chain,
-// which contains the fields related to the identity of the player.
-type tokenClaims struct {
-	jwt.Claims
-
-	// IdentityProviderType is seemingly the underlying identity provider
-	// used to sign in to the authorization service. It is always 'PlayFab'.
-	IdentityProviderType string `json:"ipt"`
-	// PlayFabID is the PlayFab entity ID for the authenticated player.
-	// It is the ID for the master player account of the player, which
-	// is shared across multiple PlayFab titles published by Mojang.
-	PlayFabID string `json:"mid"`
-	// PlayFabTitleID is the title ID specific to PlayFab.
-	// It is typically '20CA2' for the base version of the game.
-	PlayFabTitleID string `json:"tid"`
-	// ClientPublicKey is the public key of the client used to sign the client data
-	// and to initialise the encryption in the handshake.
-	ClientPublicKey string `json:"cpk"`
-	// XUID is the ID of the authenticated player specific to Xbox Live.
-	XUID string `json:"xid"`
-	// DisplayName is the in-game name for the authenticated player.
-	DisplayName string `json:"xname"`
-	// Identity is the UUID of the player. It is only set for offline logins where
-	// the UUID cannot be derived from the XUID.
-	Identity string `json:"leguuid,omitempty"`
-}
-
-// identityData converts the OIDC tokenClaims into IdentityData.
-// Fields that exist in the legacy chain's extraData are filled to keep behavior consistent.
-func (tc tokenClaims) identityData() IdentityData {
-	identity := tc.Identity
-	if identity == "" {
-		if tc.XUID != "" {
-			identity = identityFromXUID(tc.XUID).String()
-		}
-	}
-	return IdentityData{
-		XUID:           tc.XUID,
-		Identity:       identity,
-		DisplayName:    tc.DisplayName,
-		PlayFabID:      tc.PlayFabID,
-		PlayFabTitleID: tc.PlayFabTitleID,
-	}
-}
-
-// identityFromXUID returns the UUID derived from the player's XUID claimed
-// from the new multiplayer token.
-func identityFromXUID(xuid string) uuid.UUID {
-	// See [github.com/google/uuid.NewHash], This takes 'pocket-auth-1-uuid:' as
-	// the name-space instead of UUID and uses the player's XUID to compute a v3 UUID.
-	hash := md5.New()
-	hash.Write([]byte("pocket-auth-1-xuid:"))
-	hash.Write([]byte(xuid))
-	s := hash.Sum(nil)
-	var id uuid.UUID
-	copy(id[:], s)
-	id[6] = (id[6] & 0x0f) | 0x30 // Version 3
-	id[8] = (id[8] & 0x3f) | 0x80 // RFC 4122 variant
-	return id
 }
 
 // identityClaims holds the claims for the last token in the chain, which contains the IdentityData of the

@@ -18,9 +18,10 @@ import (
 
 // IdentityData contains identity data of the player logged in.
 //
-// For legacy logins, it is found in the Mojang JWT chain (extraData) and can thus be trusted.
+// For legacy logins, it is found in the Mojang JWT chain (extraData).
 // For newer logins using multiplayer tokens (OIDC), it is derived from the verified ID token issued by the
 // Minecraft authorization service, and may be augmented with legacy chain data when present.
+// Offline identities are supplied by the client. AuthResult reports whether Xbox Live authenticated them.
 type IdentityData struct {
 	// XUID is the XBOX Live user ID of the player, which will remain consistent as long as the player is
 	// logged in with the XBOX Live account. It is empty if the user is not logged into its XBL account.
@@ -50,45 +51,17 @@ type IdentityData struct {
 	PlayFabID string `json:"-"`
 }
 
-// checkOfflineUsername is used to check if a username is valid for normal Minecraft client,
-// it validates usernames only for unauthenticated clients.
-var checkOfflineUsername = regexp.MustCompile(`[ \p{L}]`).MatchString
-
-// checkOnlineUsername is used to check if a username is valid according to the Microsoft specification: "You can
-// use up to 15 characters: Aa-Zz, 0-9, and single spaces. It cannot start with a number and cannot start or
-// end with a space."
-var checkOnlineUsername = regexp.MustCompile("[A-Za-z0-9 ]").MatchString
-
-// Validate validates the identity data. It returns an error if any data contained in the IdentityData is
-// invalid.
+// Validate checks a resolved identity's ID and name. Parse applies the name rules for the selected
+// authentication method before calling Validate. This check does not prove that the identity is authentic.
 func (data IdentityData) Validate() error {
 	if _, err := strconv.ParseInt(data.XUID, 10, 64); err != nil && len(data.XUID) != 0 {
 		return fmt.Errorf("XUID must be parseable as an int64, but got %v", data.XUID)
 	}
-	if data.XUID == "" {
-		// Non-authenticated clients don't have DisplayName nor Identity. This will be filled with their ClientData when parsing their request.
-		return nil
-	}
-	if id, err := uuid.Parse(data.Identity); err != nil || id == uuid.Nil {
+	if _, err := uuid.Parse(data.Identity); err != nil {
 		return fmt.Errorf("UUID must be parseable as a valid UUID, but got %v", data.Identity)
 	}
-	nameLimit := 15
-	if len(data.DisplayName) == 0 || len(data.DisplayName) > nameLimit {
-		return fmt.Errorf("DisplayName must not be empty or longer than %d characters, but got %v characters", nameLimit, len(data.DisplayName))
-	}
-	if data.DisplayName[0] == ' ' || data.DisplayName[len(data.DisplayName)-1] == ' ' {
-		return fmt.Errorf("DisplayName may not have a space as first/last character, but got %v", data.DisplayName)
-	}
-	if data.DisplayName[0] >= '0' && data.DisplayName[0] <= '9' {
-		return fmt.Errorf("DisplayName may not have a number as first character, but got %v", data.DisplayName)
-	}
-	if !checkOnlineUsername(data.DisplayName) {
-		return fmt.Errorf("DisplayName for authorized client must only contain numbers, Latin letters and spaces, but got %v", data.DisplayName)
-	}
-	// We check here if the name contains at least 2 spaces after each other, which is not allowed. The name
-	// is only allowed to have single spaces.
-	if strings.Contains(data.DisplayName, "  ") {
-		return fmt.Errorf("DisplayName must only have single spaces, but got %v", data.DisplayName)
+	if data.DisplayName == "" {
+		return fmt.Errorf("DisplayName must not be empty")
 	}
 	return nil
 }
@@ -202,8 +175,8 @@ type ClientData struct {
 	// PieceTintColours is a list of specific tint colours for (some of) the persona pieces found in the list
 	// above.
 	PieceTintColours []PersonaPieceTintColour `json:"PieceTintColors"`
-	// ThirdPartyName is the username of the player. This username should not be used however. The DisplayName
-	// sent in the IdentityData should be preferred over this.
+	// ThirdPartyName is the fallback username supplied by the client. Parse uses it when no platform name
+	// is available. The resolved DisplayName in IdentityData should be preferred over this field.
 	ThirdPartyName string
 	// ThirdPartyNameOnly specifies if the user only has a third party name. It should always be assumed to be
 	// false, because the third party name is not XBOX Live Auth protected, meaning it can be tempered with
@@ -336,9 +309,6 @@ func (data ClientData) Validate() error {
 	if _, err := strconv.ParseUint(data.PlatformOnlineID, 10, 64); err != nil && len(data.PlatformOnlineID) != 0 {
 		return fmt.Errorf("PlatformOnlineID must be parseable as an int64 or empty, but got %v", data.PlatformOnlineID)
 	}
-	if _, err := uuid.Parse(data.SelfSignedID); err != nil {
-		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
-	}
 	if _, err := net.ResolveUDPAddr("udp", data.ServerAddress); err != nil {
 		return fmt.Errorf("ServerAddress must be resolveable as a UDP address, but got %v", data.ServerAddress)
 	}
@@ -382,13 +352,6 @@ func (data ClientData) Validate() error {
 	}
 	if data.UIProfile < 0 || data.UIProfile > 2 {
 		return fmt.Errorf("UIProfile must be between 0-2, but got %v", data.UIProfile)
-	}
-	nameLimit := 16
-	if len(data.ThirdPartyName) == 0 || len(data.ThirdPartyName) > nameLimit {
-		return fmt.Errorf("ThirdPartyName must not be empty or longer than %d characters, but got %v characters", nameLimit, len(data.ThirdPartyName))
-	}
-	if !checkOfflineUsername(data.ThirdPartyName) {
-		return fmt.Errorf("ThirdPartyName for client must only contain numbers, Latin letters and spaces, but got %v", data.ThirdPartyName)
 	}
 	return nil
 }
