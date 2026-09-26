@@ -1,14 +1,13 @@
 package packet
 
 import (
-	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 // SyncActorProperty is an alternative to synced actor data.
 type SyncActorProperty struct {
 	// PropertyData ...
-	PropertyData map[string]any
+	PropertyData []byte
 }
 
 // ID ...
@@ -17,5 +16,5 @@ func (*SyncActorProperty) ID() uint32 {
 }
 
 func (pk *SyncActorProperty) Marshal(io protocol.IO) {
-	io.NBT(&pk.PropertyData, nbt.NetworkLittleEndian)
+	io.NBT(&pk.PropertyData, protocol.NBTNetwork)
 }

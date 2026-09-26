@@ -6,73 +6,67 @@ import (
 )
 
 const (
-	ActorEventJump = iota + 1
-	ActorEventHurt
-	ActorEventDeath
-	ActorEventStartAttacking
-	ActorEventStopAttacking
-	ActorEventTamingFailed
-	ActorEventTamingSucceeded
-	ActorEventShakeWetness
-	ActorEventUseItem
-	ActorEventEatGrass
-	ActorEventFishhookBubble
-	ActorEventFishhookFishPosition
-	ActorEventFishhookHookTime
-	ActorEventFishhookTease
-	ActorEventSquidFleeing
-	ActorEventZombieConverting
-	ActorEventPlayAmbient
-	ActorEventSpawnAlive
-	ActorEventStartOfferFlower
-	ActorEventStopOfferFlower
-	ActorEventLoveHearts
-	ActorEventVillagerAngry
-	ActorEventVillagerHappy
-	ActorEventWitchHatMagic
-	ActorEventFireworksExplode
-	ActorEventInLoveHearts
-	ActorEventSilverfishMergeAnimation
-	ActorEventGuardianAttackSound
-	ActorEventDrinkPotion
-	ActorEventThrowPotion
-	ActorEventCartWithPrimeTNT
-	ActorEventPrimeCreeper
-	ActorEventAirSupply
-	ActorEventAddPlayerLevels
-	ActorEventGuardianMiningFatigue
-	ActorEventAgentSwingArm
-	ActorEventDragonStartDeathAnim
-	ActorEventGroundDust
-	ActorEventShake
-)
-
-const (
-	ActorEventFeed = iota + 57
-	_
-	_
-	ActorEventBabyEat
-	ActorEventInstantDeath
-	ActorEventNotifyTrade
-	ActorEventLeashDestroyed
-	ActorEventCaravanUpdated
-	ActorEventTalismanActivate
-	ActorEventUpdateStructureFeature
-	ActorEventPlayerSpawnedMob
-	ActorEventPuke
-	ActorEventUpdateStackSize
-	ActorEventStartSwimming
-	ActorEventBalloonPop
-	ActorEventTreasureHunt
-	ActorEventSummonAgent
-	ActorEventFinishedChargingItem
-	ActorEventLandedOnGround
-	ActorEventActorGrowUp
-	ActorEventVibrationDetected
-	ActorEventDrinkMilk
-	ActorEventWetnessStop
-	ActorEventKineticDamageDealt
-	ActorEventHurtWithoutReceivingDamage
+	ActorEventNone                       protocol.ActorEventType = 0
+	ActorEventJump                       protocol.ActorEventType = 1
+	ActorEventHurt                       protocol.ActorEventType = 2
+	ActorEventDeath                      protocol.ActorEventType = 3
+	ActorEventStartAttacking             protocol.ActorEventType = 4
+	ActorEventStopAttacking              protocol.ActorEventType = 5
+	ActorEventTamingFailed               protocol.ActorEventType = 6
+	ActorEventTamingSucceeded            protocol.ActorEventType = 7
+	ActorEventShakeWetness               protocol.ActorEventType = 8
+	ActorEventEatGrass                   protocol.ActorEventType = 10
+	ActorEventFishhookBubble             protocol.ActorEventType = 11
+	ActorEventFishhookFishPosition       protocol.ActorEventType = 12
+	ActorEventFishhookHookTime           protocol.ActorEventType = 13
+	ActorEventFishhookTease              protocol.ActorEventType = 14
+	ActorEventSquidFleeing               protocol.ActorEventType = 15
+	ActorEventZombieConverting           protocol.ActorEventType = 16
+	ActorEventPlayAmbient                protocol.ActorEventType = 17
+	ActorEventSpawnAlive                 protocol.ActorEventType = 18
+	ActorEventStartOfferFlower           protocol.ActorEventType = 19
+	ActorEventStopOfferFlower            protocol.ActorEventType = 20
+	ActorEventLoveHearts                 protocol.ActorEventType = 21
+	ActorEventVillagerAngry              protocol.ActorEventType = 22
+	ActorEventVillagerHappy              protocol.ActorEventType = 23
+	ActorEventWitchHatMagic              protocol.ActorEventType = 24
+	ActorEventFireworksExplode           protocol.ActorEventType = 25
+	ActorEventInLoveHearts               protocol.ActorEventType = 26
+	ActorEventSilverfishMergeAnimation   protocol.ActorEventType = 27
+	ActorEventGuardianAttackSound        protocol.ActorEventType = 28
+	ActorEventDrinkPotion                protocol.ActorEventType = 29
+	ActorEventThrowPotion                protocol.ActorEventType = 30
+	ActorEventCartWithPrimeTNT           protocol.ActorEventType = 31
+	ActorEventPrimeCreeper               protocol.ActorEventType = 32
+	ActorEventAirSupply                  protocol.ActorEventType = 33
+	ActorEventAddPlayerLevels            protocol.ActorEventType = 34
+	ActorEventGuardianMiningFatigue      protocol.ActorEventType = 35
+	ActorEventAgentSwingArm              protocol.ActorEventType = 36
+	ActorEventDragonStartDeathAnim       protocol.ActorEventType = 37
+	ActorEventGroundDust                 protocol.ActorEventType = 38
+	ActorEventShake                      protocol.ActorEventType = 39
+	ActorEventFeed                       protocol.ActorEventType = 57
+	ActorEventBabyEat                    protocol.ActorEventType = 60
+	ActorEventInstantDeath               protocol.ActorEventType = 61
+	ActorEventNotifyTrade                protocol.ActorEventType = 62
+	ActorEventLeashDestroyed             protocol.ActorEventType = 63
+	ActorEventCaravanUpdated             protocol.ActorEventType = 64
+	ActorEventTalismanActivate           protocol.ActorEventType = 65
+	ActorEventUpdateStructureFeature     protocol.ActorEventType = 66
+	ActorEventPlayerSpawnedMob           protocol.ActorEventType = 67
+	ActorEventPuke                       protocol.ActorEventType = 68
+	ActorEventUpdateStackSize            protocol.ActorEventType = 69
+	ActorEventStartSwimming              protocol.ActorEventType = 70
+	ActorEventBalloonPop                 protocol.ActorEventType = 71
+	ActorEventTreasureHunt               protocol.ActorEventType = 72
+	ActorEventSummonAgent                protocol.ActorEventType = 73
+	ActorEventFinishedChargingItem       protocol.ActorEventType = 74
+	ActorEventActorGrowUp                protocol.ActorEventType = 76
+	ActorEventVibrationDetected          protocol.ActorEventType = 77
+	ActorEventDrinkMilk                  protocol.ActorEventType = 78
+	ActorEventWetnessStop                protocol.ActorEventType = 79
+	ActorEventKineticDamageDealt         protocol.ActorEventType = 80
+	ActorEventHurtWithoutReceivingDamage protocol.ActorEventType = 81
 )
 
 // ActorEvent is sent by the server when a particular event happens that has to do with an entity. Some of
@@ -83,7 +77,7 @@ type ActorEvent struct {
 	// entities are generally identified in packets using this runtime ID.
 	EntityRuntimeID uint64
 	// EventType is the ID of the event to be called. It is one of the constants that can be found above.
-	EventType byte
+	EventType protocol.ActorEventType
 	// EventData is optional data associated with a particular event. The data has a different function for
 	// different events, however most events don't use this field at all.
 	EventData int32
@@ -99,7 +93,7 @@ func (*ActorEvent) ID() uint32 {
 
 func (pk *ActorEvent) Marshal(io protocol.IO) {
 	io.ActorRuntimeID(&pk.EntityRuntimeID)
-	io.Uint8(&pk.EventType)
+	pk.EventType.Marshal(io)
 	io.Varint32(&pk.EventData)
 	protocol.OptionalFunc(io, &pk.FireAtPosition, io.Vec3)
 }

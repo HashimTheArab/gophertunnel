@@ -8,13 +8,13 @@ import (
 // server know if it supports the client-side blob cache. Clients such as Nintendo Switch do not support the
 // cache, and attempting to use it anyway will fail.
 type ClientCacheStatus struct {
-	// Enabled specifies if the blob cache is enabled. If false, the server should not attempt to use the
+	// IsCacheSupported specifies if the blob cache is enabled. If false, the server should not attempt to use the
 	// blob cache. If true, it may do so, but it may also choose not to use it.
 	Enabled bool
 }
 
 // ID ...
-func (pk *ClientCacheStatus) ID() uint32 {
+func (*ClientCacheStatus) ID() uint32 {
 	return IDClientCacheStatus
 }
 

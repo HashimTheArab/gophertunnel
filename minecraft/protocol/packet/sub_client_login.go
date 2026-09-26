@@ -9,10 +9,10 @@ import (
 // same network connection. After an initial Login packet from the 'main' client, each sub-client that
 // connects sends a SubClientLogin to request their own login.
 type SubClientLogin struct {
-	// ConnectionRequest is a string containing information about the player and JWTs that may be used to
-	// verify if the player is connected to XBOX Live. The connection request also contains the necessary
-	// client public key to initiate encryption.
-	// The ConnectionRequest in this packet is identical to the one found in the Login packet.
+	// ConnectionRequest is a string containing information about the player and JWTs that may be used to verify
+	// if the player is connected to XBOX Live. The connection request also contains the necessary client public
+	// key to initiate encryption. The ConnectionRequest in this packet is identical to the one found in the Login
+	// packet.
 	ConnectionRequest []byte
 }
 

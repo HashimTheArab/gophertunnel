@@ -8,8 +8,8 @@ import (
 // radius that the server allows the client to have. This may be lower than the chunk radius requested by the
 // client in the RequestChunkRadius packet.
 type ChunkRadiusUpdated struct {
-	// ChunkRadius is the final chunk radius that the client will adapt when it receives the packet. It does
-	// not have to be the same as the requested chunk radius.
+	// ChunkRadius is the final chunk radius that the client will adapt when it receives the packet. It does not
+	// have to be the same as the requested chunk radius.
 	ChunkRadius int32
 }
 

@@ -10,8 +10,8 @@ type Camera struct {
 	// CameraEntityUniqueID is the unique ID of the camera entity from which the picture was taken.
 	CameraEntityUniqueID int64
 	// TargetPlayerUniqueID is the unique ID of the target player. The unique ID is a value that remains
-	// consistent across different sessions of the same world, but most servers simply fill the runtime ID of
-	// the player out for this field.
+	// consistent across different sessions of the same world, but most servers simply fill the runtime ID of the
+	// player out for this field.
 	TargetPlayerUniqueID int64
 }
 

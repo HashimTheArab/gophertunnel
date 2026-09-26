@@ -9,11 +9,11 @@ import (
 // ability to be used as some kind of acknowledgement packet, to know when the client has received a certain
 // other packet.
 type NetworkStackLatency struct {
-	// Timestamp is the timestamp of the network stack latency packet. The client will, if NeedsResponse is
-	// set to true, send a NetworkStackLatency packet with this same timestamp packet in response.
-	Timestamp int64
-	// NeedsResponse specifies if the sending side of this packet wants a response to the packet, meaning that
-	// the other side should send a NetworkStackLatency packet back.
+	// Timestamp is the timestamp of the network stack latency packet. The client will, if NeedsResponse is set to
+	// true, send a NetworkStackLatency packet with this same timestamp packet in response.
+	Timestamp uint64
+	// NeedsResponse specifies if the sending side of this packet wants a response to the packet, meaning that the
+	// other side should send a NetworkStackLatency packet back.
 	NeedsResponse bool
 }
 
@@ -23,6 +23,6 @@ func (*NetworkStackLatency) ID() uint32 {
 }
 
 func (pk *NetworkStackLatency) Marshal(io protocol.IO) {
-	io.Int64(&pk.Timestamp)
+	io.Uint64(&pk.Timestamp)
 	io.Bool(&pk.NeedsResponse)
 }

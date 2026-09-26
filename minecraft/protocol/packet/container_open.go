@@ -10,17 +10,17 @@ import (
 type ContainerOpen struct {
 	// WindowID is the ID representing the window that is being opened. It may be used later to close the
 	// container using a ContainerClose packet.
-	WindowID byte
+	WindowID uint8
 	// ContainerType is the type ID of the container that is being opened when opening the container at the
-	// position of the packet. It depends on the block/entity, and could, for example, be the window type of
-	// a chest or a hopper, but also a horse inventory.
-	ContainerType byte
-	// ContainerPosition is the position of the container opened. The position must point to a block entity
-	// that actually has a container. If that is not the case, the window will not be opened and the packet
-	// will be ignored, if a valid ContainerEntityUniqueID has not also been provided.
+	// position of the packet. It depends on the block/entity, and could, for example, be the window type of a
+	// chest or a hopper, but also a horse inventory.
+	ContainerType uint8
+	// ContainerPosition is the position of the container opened. The position must point to a block entity that
+	// actually has a container. If that is not the case, the window will not be opened and the packet will be
+	// ignored, if a valid ContainerEntityUniqueID has not also been provided.
 	ContainerPosition protocol.BlockPos
-	// ContainerEntityUniqueID is the unique ID of the entity container that was opened. It is only used if
-	// the ContainerType is one that points to an entity, for example a horse.
+	// ContainerEntityUniqueID is the unique ID of the entity container that was opened. It is only used if the
+	// ContainerType is one that points to an entity, for example a horse.
 	ContainerEntityUniqueID int64
 }
 
@@ -32,6 +32,6 @@ func (*ContainerOpen) ID() uint32 {
 func (pk *ContainerOpen) Marshal(io protocol.IO) {
 	io.Uint8(&pk.WindowID)
 	io.Uint8(&pk.ContainerType)
-	io.BlockPos(&pk.ContainerPosition)
+	pk.ContainerPosition.Marshal(io)
 	io.ActorUniqueID(&pk.ContainerEntityUniqueID)
 }

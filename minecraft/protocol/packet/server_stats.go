@@ -1,9 +1,11 @@
 package packet
 
-import "github.com/sandertv/gophertunnel/minecraft/protocol"
+import (
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+)
 
-// ServerStats is a packet sent from the server to the client to update the client on server statistics. It is purely
-// used for telemetry.
+// ServerStats is a packet sent from the server to the client to update the client on server statistics. It is
+// purely used for telemetry.
 type ServerStats struct {
 	// ServerTime ...
 	ServerTime float32
@@ -12,7 +14,7 @@ type ServerStats struct {
 }
 
 // ID ...
-func (pk *ServerStats) ID() uint32 {
+func (*ServerStats) ID() uint32 {
 	return IDServerStats
 }
 

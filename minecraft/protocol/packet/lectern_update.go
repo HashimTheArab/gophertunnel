@@ -8,11 +8,11 @@ import (
 // or if the book should be removed from it.
 type LecternUpdate struct {
 	// Page is the page number in the book that was opened by the player on the lectern.
-	Page byte
+	Page uint8
 	// PageCount is the number of pages that the book opened in the lectern has.
-	PageCount byte
-	// Position is the position of the lectern that was updated. If no lectern is at the block position,
-	// the packet should be ignored.
+	PageCount uint8
+	// Position is the position of the lectern that was updated. If no lectern is at the block position, the
+	// packet should be ignored.
 	Position protocol.BlockPos
 }
 
@@ -24,5 +24,5 @@ func (*LecternUpdate) ID() uint32 {
 func (pk *LecternUpdate) Marshal(io protocol.IO) {
 	io.Uint8(&pk.Page)
 	io.Uint8(&pk.PageCount)
-	io.BlockPos(&pk.Position)
+	pk.Position.Marshal(io)
 }

@@ -9,9 +9,9 @@ import (
 // items around or crafting. The InventoryTransaction packet is still used for actions such as placing blocks
 // and interacting with entities.
 type ItemStackRequest struct {
-	// Requests holds a list of item stack requests. These requests are all separate, but the client buffers
-	// the requests, so you might find multiple unrelated requests in this packet.
-	Requests []protocol.ItemStackRequest
+	// Requests holds a list of item stack requests. These requests are all separate, but the client buffers the
+	// requests, so you might find multiple unrelated requests in this packet.
+	Requests []protocol.ItemStackRequestPacketData
 }
 
 // ID ...
@@ -20,5 +20,5 @@ func (*ItemStackRequest) ID() uint32 {
 }
 
 func (pk *ItemStackRequest) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Requests)
+	protocol.SliceLimits(io, &pk.Requests, 0, 100)
 }

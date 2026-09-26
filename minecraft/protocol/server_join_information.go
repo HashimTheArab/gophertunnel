@@ -1,6 +1,8 @@
 package protocol
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+)
 
 // GatheringJoinInfo contains information about the gathering (experience) the player is joining.
 type GatheringJoinInfo struct {
@@ -22,16 +24,22 @@ type GatheringJoinInfo struct {
 	ServerID Optional[string]
 }
 
-// Marshal encodes/decodes a GatheringJoinInfo.
-func (x *GatheringJoinInfo) Marshal(r IO) {
-	r.UUID(&x.ExperienceID)
-	r.String(&x.ExperienceName)
-	OptionalFunc(r, &x.ExperienceWorldID, r.UUID)
-	OptionalFunc(r, &x.ExperienceWorldName, r.String)
-	r.String(&x.CreatorID)
-	OptionalFunc(r, &x.TargetID, r.UUID)
-	OptionalFunc(r, &x.ScenarioID, r.String)
-	OptionalFunc(r, &x.ServerID, r.String)
+// Marshal reads or writes GatheringJoinInfo using its canonical wire layout.
+func (x *GatheringJoinInfo) Marshal(io IO) {
+	io.UUID(&x.ExperienceID)
+	io.StringLimits(&x.ExperienceName, 1, 29)
+	OptionalFunc(io, &x.ExperienceWorldID, io.UUID)
+	OptionalFunc(io, &x.ExperienceWorldName, func(value *string) {
+		io.StringLimits(value, 1, 29)
+	})
+	io.StringLimits(&x.CreatorID, 1, 60)
+	OptionalFunc(io, &x.TargetID, io.UUID)
+	OptionalFunc(io, &x.ScenarioID, func(value *string) {
+		io.StringLimits(value, 1, 100)
+	})
+	OptionalFunc(io, &x.ServerID, func(value *string) {
+		io.StringLimits(value, 1, 100)
+	})
 }
 
 // StoreEntryPointInfo contains information about the store entry point.
@@ -42,37 +50,8 @@ type StoreEntryPointInfo struct {
 	StoreName string
 }
 
-// Marshal encodes/decodes a StoreEntryPointInfo.
-func (x *StoreEntryPointInfo) Marshal(r IO) {
-	r.String(&x.StoreID)
-	r.String(&x.StoreName)
-}
-
-// PresenceInfo contains presence information about the experience.
-type PresenceInfo struct {
-	// RichPresenceID is the rich presence ID overriding the client-driven
-	// rich presence.
-	RichPresenceID Optional[string]
-}
-
-// Marshal encodes/decodes a PresenceInfo.
-func (x *PresenceInfo) Marshal(r IO) {
-	OptionalFunc(r, &x.RichPresenceID, r.String)
-}
-
-// ServerJoinInformation contains optional information about the server the player is joining.
-type ServerJoinInformation struct {
-	// GatheringJoinInfo is optional information about the gathering being joined.
-	GatheringJoinInfo Optional[GatheringJoinInfo]
-	// StoreEntryPointInfo is optional information about the store entry point.
-	StoreEntryPointInfo Optional[StoreEntryPointInfo]
-	// PresenceInfo is optional presence information.
-	PresenceInfo Optional[PresenceInfo]
-}
-
-// Marshal encodes/decodes a ServerJoinInformation.
-func (x *ServerJoinInformation) Marshal(r IO) {
-	OptionalMarshaler(r, &x.GatheringJoinInfo)
-	OptionalMarshaler(r, &x.StoreEntryPointInfo)
-	OptionalMarshaler(r, &x.PresenceInfo)
+// Marshal reads or writes StoreEntryPointInfo using its canonical wire layout.
+func (x *StoreEntryPointInfo) Marshal(io IO) {
+	io.String(&x.StoreID)
+	io.String(&x.StoreName)
 }

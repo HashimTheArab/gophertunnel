@@ -5,17 +5,17 @@ import (
 )
 
 const (
-	TextureShiftActionInvalid = iota
-	TextureShiftActionInitialize
-	TextureShiftActionStart
-	TextureShiftActionSetEnabled
-	TextureShiftActionSync
+	TextureShiftActionInvalid    protocol.ClientboundTextureShiftAction = 0
+	TextureShiftActionInitialize protocol.ClientboundTextureShiftAction = 1
+	TextureShiftActionStart      protocol.ClientboundTextureShiftAction = 2
+	TextureShiftActionSetEnabled protocol.ClientboundTextureShiftAction = 3
+	TextureShiftActionSync       protocol.ClientboundTextureShiftAction = 4
 )
 
 // ClientBoundTextureShift is sent by the server to control texture shift animations on the client.
 type ClientBoundTextureShift struct {
 	// ActionID is the texture shift action to perform. It is one of the constants above.
-	ActionID uint8
+	ActionID protocol.ClientboundTextureShiftAction
 	// CollectionName is the name of the texture shift collection.
 	CollectionName string
 	// FromStep is the step to shift from.
@@ -38,11 +38,11 @@ func (*ClientBoundTextureShift) ID() uint32 {
 }
 
 func (pk *ClientBoundTextureShift) Marshal(io protocol.IO) {
-	io.Uint8(&pk.ActionID)
+	pk.ActionID.Marshal(io)
 	io.String(&pk.CollectionName)
 	io.String(&pk.FromStep)
 	io.String(&pk.ToStep)
-	protocol.FuncSlice(io, &pk.AllSteps, io.String)
+	protocol.FuncSlice(io, &pk.AllSteps, io.Varuint32, io.String)
 	io.Varuint64(&pk.CurrentLengthTicks)
 	io.Varuint64(&pk.TotalLengthTicks)
 	io.Bool(&pk.Enabled)

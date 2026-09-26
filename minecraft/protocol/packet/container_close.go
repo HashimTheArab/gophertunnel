@@ -8,14 +8,14 @@ import (
 // using the ContainerOpen packet, or by the client to tell the server it closed a particular container, such
 // as the crafting grid.
 type ContainerClose struct {
-	// WindowID is the ID representing the window of the container that should be closed. It must be equal to
-	// the one sent in the ContainerOpen packet to close the designated window.
-	WindowID byte
-	// ContainerType is the type of container that the server is trying to close. This is used to validate on
-	// the client side whether or not the server's close request is valid.
-	ContainerType byte
-	// ServerSide determines whether or not the container was force-closed by the server. If this value is
-	// not set correctly, the client may ignore the packet and respond with a PacketViolationWarning.
+	// WindowID is the ID representing the window of the container that should be closed. It must be equal to the
+	// one sent in the ContainerOpen packet to close the designated window.
+	WindowID uint8
+	// ContainerType is the type of container that the server is trying to close. This is used to validate on the
+	// client side whether or not the server's close request is valid.
+	ContainerType uint8
+	// ServerSide determines whether or not the container was force-closed by the server. If this value is not set
+	// correctly, the client may ignore the packet and respond with a PacketViolationWarning.
 	ServerSide bool
 }
 

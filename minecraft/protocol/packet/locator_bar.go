@@ -16,5 +16,5 @@ func (*LocatorBar) ID() uint32 {
 }
 
 func (pk *LocatorBar) Marshal(io protocol.IO) {
-	protocol.Slice(io, &pk.Waypoints)
+	protocol.SliceLimits(io, &pk.Waypoints, 0, 40000)
 }

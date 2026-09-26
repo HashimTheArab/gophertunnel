@@ -8,8 +8,8 @@ import (
 // client-side by itself, so this packet does not need to be sent each tick. It is merely a means of
 // synchronising time between server and client.
 type SetTime struct {
-	// Time is the current time. The time is not limited to 24000 (time of day), but continues progressing
-	// after that.
+	// Time is the current time. The time is not limited to 24000 (time of day), but continues progressing after
+	// that.
 	Time int32
 }
 

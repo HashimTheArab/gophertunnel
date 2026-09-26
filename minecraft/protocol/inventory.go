@@ -1,304 +1,181 @@
 package protocol
 
-import (
-	"github.com/go-gl/mathgl/mgl32"
-)
+type HandSlot uint8
 
 const (
-	InventoryActionSourceContainer = 0
-	InventoryActionSourceWorld     = 2
-	InventoryActionSourceCreative  = 3
-	InventoryActionSourceTODO      = 99999
+	HandSlotMainHand HandSlot = 0
+	HandSlotOffHand  HandSlot = 1
 )
 
-const (
-	WindowIDInventory = 0
-	WindowIDOffHand   = 119
-	WindowIDArmour    = 120
-	WindowIDUI        = 124
-	WindowIDRegistry  = 125
-)
+// Marshal reads or writes HandSlot through its uint8 wire encoding.
+func (x *HandSlot) Marshal(io IO) { io.Uint8((*uint8)(x)) }
 
 // InventoryAction represents a single action that took place during an inventory transaction. On itself, this
 // inventory action is always unbalanced: It must be combined with other actions in an inventory transaction
 // to form a balanced transaction.
 type InventoryAction struct {
-	// SourceType is the source type of the inventory action. It is one of the constants above.
-	SourceType uint32
-	// WindowID is the ID of the window that the client has opened. The window ID is not set if the SourceType
-	// is InventoryActionSourceWorld.
-	WindowID Optional[int8]
-	// SourceFlags is a combination of flags that is only set if the SourceType is InventoryActionSourceWorld.
-	SourceFlags Optional[uint32]
-	// InventorySlot is the slot in which the action took place. Each action only describes the change of item
-	// in a single slot.
+	Source InventorySource
+	// InventorySlot is the slot in which the action took place. Each action only describes the change of item in
+	// a single slot.
 	InventorySlot uint32
-	// OldItem is the item that was present in the slot before the inventory action. It should be checked by
-	// the server to ensure the inventories were not out of sync.
-	OldItem ItemInstance
-	// NewItem is the new item that was put in the InventorySlot that the OldItem was in. It must be checked
-	// in combination with other inventory actions to ensure that the transaction is balanced.
-	NewItem ItemInstance
+	FromItem      NetworkItemStackDescriptorSerializedData
+	ToItem        NetworkItemStackDescriptorSerializedData
 }
 
-// Marshal encodes/decodes an InventoryAction.
-func (x *InventoryAction) Marshal(r IO) {
-	r.Varuint32(&x.SourceType)
-	OptionalFunc(r, &x.WindowID, r.Int8)
-	OptionalFunc(r, &x.SourceFlags, r.Varuint32)
-	r.Varuint32(&x.InventorySlot)
-	r.ItemInstance(&x.OldItem)
-	r.ItemInstance(&x.NewItem)
+// Marshal reads or writes InventoryAction using its canonical wire layout.
+func (x *InventoryAction) Marshal(io IO) {
+	x.Source.Marshal(io)
+	io.Varuint32(&x.InventorySlot)
+	x.FromItem.Marshal(io)
+	x.ToItem.Marshal(io)
 }
+
+type InventoryLayout int32
+
+// Marshal reads or writes InventoryLayout through its int32 wire encoding.
+func (x *InventoryLayout) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type InventoryLeftTabIndex int32
+
+// Marshal reads or writes InventoryLeftTabIndex through its int32 wire encoding.
+func (x *InventoryLeftTabIndex) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type InventoryMismatchData struct {
+	Actions InventoryTransactionData
+}
+
+func (*InventoryMismatchData) tagInventoryTransactionPacketData() uint32 { return 1 }
+
+// Marshal reads or writes InventoryMismatchData using its canonical wire layout.
+func (x *InventoryMismatchData) Marshal(io IO) {
+	x.Actions.Marshal(io)
+}
+
+type InventoryRightTabIndex int32
+
+// Marshal reads or writes InventoryRightTabIndex through its int32 wire encoding.
+func (x *InventoryRightTabIndex) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type InventorySource struct {
+	SourceType  InventorySourceType
+	ContainerID Optional[int8]
+	BitFlags    Optional[InventorySourceInventorySourceFlags]
+}
+
+// Marshal reads or writes InventorySource using its canonical wire layout.
+func (x *InventorySource) Marshal(io IO) {
+	x.SourceType.Marshal(io)
+	OptionalFunc(io, &x.ContainerID, io.Int8)
+	OptionalMarshaler(io, &x.BitFlags)
+}
+
+type InventorySourceInventorySourceFlags uint32
 
 const (
-	InventoryTransactionTypeNormal = iota
-	InventoryTransactionTypeMismatch
-	InventoryTransactionTypeUseItem
-	InventoryTransactionTypeUseItemOnEntity
-	InventoryTransactionTypeReleaseItem
+	InventorySourceInventorySourceFlagsNoFlag                 InventorySourceInventorySourceFlags = 0
+	InventorySourceInventorySourceFlagsWorldInteractionRandom InventorySourceInventorySourceFlags = 1
 )
+
+// Marshal reads or writes InventorySourceInventorySourceFlags through its uint32 wire encoding.
+func (x *InventorySourceInventorySourceFlags) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
+
+type InventorySourceType uint32
+
+const (
+	InventoryActionSourceContainer       InventorySourceType = 0
+	InventoryActionSourceGlobalInventory InventorySourceType = 1
+	InventoryActionSourceWorld           InventorySourceType = 2
+	InventoryActionSourceCreative        InventorySourceType = 3
+	InventoryActionSourceTODO            InventorySourceType = 99999
+)
+
+// Marshal reads or writes InventorySourceType through its uint32 wire encoding.
+func (x *InventorySourceType) Marshal(io IO) { io.Varuint32((*uint32)(x)) }
 
 // InventoryTransactionData represents an object that holds data specific to an inventory transaction type.
 // The data it holds depends on the type.
-type InventoryTransactionData interface {
-	// Marshal encodes/decodes a serialised inventory transaction data object.
-	Marshal(r IO)
+type InventoryTransactionData struct {
+	Actions []InventoryAction
 }
 
-// lookupTransactionData looks up inventory transaction data for the ID passed.
-func lookupTransactionData(id uint32, x *InventoryTransactionData) bool {
-	switch id {
-	case InventoryTransactionTypeNormal:
-		*x = &NormalTransactionData{}
-	case InventoryTransactionTypeMismatch:
-		*x = &MismatchTransactionData{}
-	case InventoryTransactionTypeUseItem:
-		*x = &UseItemTransactionData{}
-	case InventoryTransactionTypeUseItemOnEntity:
-		*x = &UseItemOnEntityTransactionData{}
-	case InventoryTransactionTypeReleaseItem:
-		*x = &ReleaseItemTransactionData{}
-	default:
-		return false
-	}
-	return true
+// Marshal reads or writes InventoryTransactionData using its canonical wire layout.
+func (x *InventoryTransactionData) Marshal(io IO) {
+	Slice(io, &x.Actions)
 }
 
-// lookupTransactionDataType looks up an ID for a specific transaction data.
-func lookupTransactionDataType(x InventoryTransactionData, id *uint32) bool {
-	switch x.(type) {
-	case *NormalTransactionData:
-		*id = InventoryTransactionTypeNormal
-	case *MismatchTransactionData:
-		*id = InventoryTransactionTypeMismatch
-	case *UseItemTransactionData:
-		*id = InventoryTransactionTypeUseItem
-	case *UseItemOnEntityTransactionData:
-		*id = InventoryTransactionTypeUseItemOnEntity
-	case *ReleaseItemTransactionData:
-		*id = InventoryTransactionTypeReleaseItem
-	default:
-		return false
-	}
-	return true
-}
+type ItemReleaseInventoryTransactionActionType int32
+
+const (
+	ReleaseItemActionRelease ItemReleaseInventoryTransactionActionType = 0
+	ReleaseItemActionConsume ItemReleaseInventoryTransactionActionType = 1
+)
+
+// Marshal reads or writes ItemReleaseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemReleaseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransactionActionType int32
+
+const (
+	UseItemActionClickBlock  ItemUseInventoryTransactionActionType = 0
+	UseItemActionClickAir    ItemUseInventoryTransactionActionType = 1
+	UseItemActionBreakBlock  ItemUseInventoryTransactionActionType = 2
+	UseItemActionUseAsAttack ItemUseInventoryTransactionActionType = 3
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
+
+type ItemUseInventoryTransactionClientCooldownState uint8
+
+const (
+	ClientCooldownStateOff ItemUseInventoryTransactionClientCooldownState = 0
+	ClientCooldownStateOn  ItemUseInventoryTransactionClientCooldownState = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionClientCooldownState through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionClientCooldownState) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionPredictedResult uint8
+
+const (
+	ClientPredictionFailure ItemUseInventoryTransactionPredictedResult = 0
+	ClientPredictionSuccess ItemUseInventoryTransactionPredictedResult = 1
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionPredictedResult through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionPredictedResult) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseInventoryTransactionTriggerType uint8
+
+const (
+	TriggerTypeUnknown        ItemUseInventoryTransactionTriggerType = 0
+	TriggerTypePlayerInput    ItemUseInventoryTransactionTriggerType = 1
+	TriggerTypeSimulationTick ItemUseInventoryTransactionTriggerType = 2
+)
+
+// Marshal reads or writes ItemUseInventoryTransactionTriggerType through its uint8 wire encoding.
+func (x *ItemUseInventoryTransactionTriggerType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+type ItemUseOnActorInventoryTransactionActionType int32
+
+const (
+	UseItemOnEntityActionInteract     ItemUseOnActorInventoryTransactionActionType = 0
+	UseItemOnEntityActionAttack       ItemUseOnActorInventoryTransactionActionType = 1
+	UseItemOnEntityActionItemInteract ItemUseOnActorInventoryTransactionActionType = 2
+)
+
+// Marshal reads or writes ItemUseOnActorInventoryTransactionActionType through its int32 wire encoding.
+func (x *ItemUseOnActorInventoryTransactionActionType) Marshal(io IO) { io.Varint32((*int32)(x)) }
 
 // NormalTransactionData represents an inventory transaction data object for normal transactions, such as
 // crafting. It has no content.
-type NormalTransactionData struct{}
-
-// MismatchTransactionData represents a mismatched inventory transaction's data object.
-type MismatchTransactionData struct{}
-
-const (
-	UseItemActionClickBlock = iota
-	UseItemActionClickAir
-	UseItemActionBreakBlock
-	UseItemActionUseAsAttack
-)
-
-const (
-	TriggerTypeUnknown = iota
-	TriggerTypePlayerInput
-	TriggerTypeSimulationTick
-)
-
-const (
-	ClientPredictionFailure = iota
-	ClientPredictionSuccess
-)
-
-const (
-	ClientCooldownStateOff = iota
-	ClientCooldownStateOn
-)
-
-const (
-	HandSlotMainHand = iota
-	HandSlotOffHand
-)
-
-// UseItemTransactionData represents an inventory transaction data object sent when the client uses an item on
-// a block.
-type UseItemTransactionData struct {
-	// LegacyRequestID is an ID that is only non-zero at times when sent by the client. The server should
-	// always send 0 for this. When this field is not 0, the LegacySetItemSlots slice below will have values
-	// in it.
-	// LegacyRequestID ties in with the ItemStackResponse packet. If this field is non-0, the server should
-	// respond with an ItemStackResponse packet. Some inventory actions such as dropping an item out of the
-	// hotbar are still one using this packet, and the ItemStackResponse packet needs to tie in with it.
-	LegacyRequestID int32
-	// LegacySetItemSlots are only present if the LegacyRequestID is non-zero. These item slots inform the
-	// server of the slots that were changed during the inventory transaction, and the server should send
-	// back an ItemStackResponse packet with these slots present in it. (Or false with no slots, if rejected.)
-	LegacySetItemSlots Optional[[]LegacySetItemSlot]
-	// Actions is a list of actions that took place, that form the inventory transaction together. Each of
-	// these actions hold one slot in which one item was changed to another. In general, the combination of
-	// all of these actions results in a balanced inventory transaction. This should be checked to ensure that
-	// no items are cheated into the inventory.
-	Actions []InventoryAction
-	// ActionType is the type of the UseItem inventory transaction. It is one of the action types found above,
-	// and specifies the way the player interacted with the block.
-	ActionType uint32
-	// TriggerType is the type of the trigger that caused the inventory transaction. It is one of the trigger
-	// types found in the constants above. If TriggerType is TriggerTypePlayerInput, the transaction is from
-	// the initial input of the player. If it is TriggerTypeSimulationTick, the transaction is from a simulation
-	// tick when the player is holding down the input.
-	TriggerType uint32
-	// BlockPosition is the position of the block that was interacted with. This is only really a correct
-	// block position if ActionType is not UseItemActionClickAir.
-	BlockPosition BlockPos
-	// BlockFace is the face of the block that was interacted with. When clicking the block, it is the face
-	// clicked. When breaking the block, it is the face that was last being hit until the block broke.
-	BlockFace int32
-	// HotBarSlot is the hot bar slot that the player was holding while clicking the block. It should be used
-	// to ensure that the hot bar slot and held item are correctly synchronised with the server.
-	HotBarSlot int32
-	// Hand is the hand that the player used to interact with the block. It is one of the HandSlot constants
-	// above.
-	Hand byte
-	// HeldItem is the item that was held to interact with the block. The server should check if this item
-	// is actually present in the HotBarSlot.
-	HeldItem ItemInstance
-	// Position is the position of the player at the time of interaction. For clicking a block, this is the
-	// position at that time, whereas for breaking the block it is the position at the time of breaking.
-	Position mgl32.Vec3
-	// ClickedPosition is the position that was clicked relative to the block's base coordinate. It can be
-	// used to find out exactly where a player clicked the block.
-	ClickedPosition mgl32.Vec3
-	// BlockRuntimeID is the runtime ID of the block that was clicked. It may be used by the server to verify
-	// that the player's world client-side is synchronised with the server's.
-	BlockRuntimeID uint32
-	// ClientPrediction is the client's prediction on the output of the transaction. It is one of the client
-	// prediction found in the constants above.
-	ClientPrediction uint8
-	// ClientCooldownState is the client's cooldown state for the item used. It is one of the
-	// ClientCooldownState constants above.
-	ClientCooldownState byte
+type NormalTransactionData struct {
+	Actions InventoryTransactionData
 }
 
-const (
-	UseItemOnEntityActionInteract = iota
-	UseItemOnEntityActionAttack
-)
+func (*NormalTransactionData) tagInventoryTransactionPacketData() uint32 { return 0 }
 
-// UseItemOnEntityTransactionData represents an inventory transaction data object sent when the client uses
-// an item on an entity.
-type UseItemOnEntityTransactionData struct {
-	// TargetEntityRuntimeID is the entity runtime ID of the target that was clicked. It is the runtime ID
-	// that was assigned to it in the AddEntity packet.
-	TargetEntityRuntimeID uint64
-	// ActionType is the type of the UseItemOnEntity inventory transaction. It is one of the action types
-	// found in the constants above, and specifies the way the player interacted with the entity.
-	ActionType int32
-	// HotBarSlot is the hot bar slot that the player was holding while clicking the entity. It should be used
-	// to ensure that the hot bar slot and held item are correctly synchronised with the server.
-	HotBarSlot int32
-	// HeldItem is the item that was held to interact with the entity. The server should check if this item
-	// is actually present in the HotBarSlot.
-	HeldItem ItemInstance
-	// Position is the position of the player at the time of clicking the entity.
-	Position mgl32.Vec3
-	// ClickedPosition is the position that was clicked relative to the entity's base coordinate. It can be
-	// used to find out exactly where a player clicked the entity.
-	ClickedPosition mgl32.Vec3
-}
-
-const (
-	ReleaseItemActionRelease = iota
-	ReleaseItemActionConsume
-)
-
-// ReleaseItemTransactionData represents an inventory transaction data object sent when the client releases
-// the item it was using, for example when stopping while eating or stopping the charging of a bow.
-type ReleaseItemTransactionData struct {
-	// ActionType is the type of the ReleaseItem inventory transaction. It is one of the action types found
-	// in the constants above, and specifies the way the item was released.
-	// As of 1.13, the ActionType is always 0. This field can be ignored, because releasing food (by consuming
-	// it) or releasing a bow (to shoot an arrow) is essentially the same.
-	ActionType int32
-	// HotBarSlot is the hot bar slot that the player was holding while releasing the item. It should be used
-	// to ensure that the hot bar slot and held item are correctly synchronised with the server.
-	HotBarSlot int32
-	// HeldItem is the item that was released. The server should check if this item is actually present in the
-	// HotBarSlot.
-	HeldItem ItemInstance
-	// HeadPosition is the position of the player's head at the time of releasing the item. This is used
-	// mainly for purposes such as spawning eating particles at that position.
-	HeadPosition mgl32.Vec3
-}
-
-// Marshal ...
-func (data *UseItemTransactionData) Marshal(r IO) {
-	IntegerFunc(&data.ActionType, r.Varint32)
-	IntegerFunc(&data.TriggerType, r.Uint8)
-	r.BlockPos(&data.BlockPosition)
-	IntegerFunc(&data.BlockFace, r.Uint8)
-	r.Varint32(&data.HotBarSlot)
-	r.Uint8(&data.Hand)
-	r.ItemInstance(&data.HeldItem)
-	r.Vec3(&data.Position)
-	r.Vec3(&data.ClickedPosition)
-	r.Varuint32(&data.BlockRuntimeID)
-	r.Uint8(&data.ClientPrediction)
-	r.Uint8(&data.ClientCooldownState)
-}
-
-// Marshal ...
-func (data *UseItemOnEntityTransactionData) Marshal(r IO) {
-	r.ActorRuntimeID(&data.TargetEntityRuntimeID)
-	r.Varint32(&data.ActionType)
-	r.Varint32(&data.HotBarSlot)
-	r.ItemInstance(&data.HeldItem)
-	r.Vec3(&data.Position)
-	r.Vec3(&data.ClickedPosition)
-}
-
-// Marshal ...
-func (data *ReleaseItemTransactionData) Marshal(r IO) {
-	r.Varint32(&data.ActionType)
-	r.Varint32(&data.HotBarSlot)
-	r.ItemInstance(&data.HeldItem)
-	r.Vec3(&data.HeadPosition)
-}
-
-// Marshal ...
-func (*NormalTransactionData) Marshal(IO) {}
-
-// Marshal ...
-func (*MismatchTransactionData) Marshal(IO) {}
-
-// LegacySetItemSlot represents a slot that was changed during an InventoryTransaction. These slots have to
-// have their values set accordingly for actions such as when dropping an item out of the hotbar, where the
-// inventory container and the slot that had its item dropped is passed.
-type LegacySetItemSlot struct {
-	ContainerID byte
-	Slots       []byte
-}
-
-// Marshal encodes/decodes a LegacySetItemSlot.
-func (x *LegacySetItemSlot) Marshal(r IO) {
-	r.Uint8(&x.ContainerID)
-	r.ByteSlice(&x.Slots)
+// Marshal reads or writes NormalTransactionData using its canonical wire layout.
+func (x *NormalTransactionData) Marshal(io IO) {
+	x.Actions.Marshal(io)
 }

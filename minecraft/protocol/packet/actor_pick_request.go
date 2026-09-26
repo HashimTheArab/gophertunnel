@@ -10,9 +10,9 @@ type ActorPickRequest struct {
 	// EntityUniqueID is the unique ID of the entity that was attempted to be picked. The server must find the
 	// type of that entity and provide the correct spawn egg to the player.
 	EntityUniqueID int64
-	// HotBarSlot is the held hot bar slot of the player at the time of trying to pick the entity. If empty,
-	// the resulting spawn egg should be put into this slot.
-	HotBarSlot byte
+	// HotBarSlot is the held hot bar slot of the player at the time of trying to pick the entity. If empty, the
+	// resulting spawn egg should be put into this slot.
+	HotBarSlot uint8
 	// WithData is true if the pick request requests the entity metadata.
 	WithData bool
 }

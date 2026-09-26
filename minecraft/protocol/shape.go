@@ -6,222 +6,6 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-const (
-	ShapeDataLast = iota
-	ShapeDataArrow
-	ShapeDataText
-	ShapeDataBox
-	ShapeDataLine
-	ShapeDataSphere
-	ShapeDataCylinder
-	ShapeDataPyramid
-	ShapeDataEllipsoid
-	ShapeDataCone
-)
-
-// lookupShapeData looks up an ShapeData matching the shape data type passed.
-// False is returned if no such shape data exists.
-func lookupShapeData(shapeDataType uint32, x *ShapeData) bool {
-	switch shapeDataType {
-	case ShapeDataLast:
-		*x = &LastShape{}
-	case ShapeDataArrow:
-		*x = &ArrowShape{}
-	case ShapeDataText:
-		*x = &TextShape{}
-	case ShapeDataBox:
-		*x = &BoxShape{}
-	case ShapeDataLine:
-		*x = &LineShape{}
-	case ShapeDataSphere:
-		*x = &SphereShape{}
-	case ShapeDataCylinder:
-		*x = &CylinderShape{}
-	case ShapeDataPyramid:
-		*x = &PyramidShape{}
-	case ShapeDataEllipsoid:
-		*x = &EllipsoidShape{}
-	case ShapeDataCone:
-		*x = &ConeShape{}
-	default:
-		return false
-	}
-	return true
-}
-
-// lookupShapeDataType looks up a debug shape type that matches the ShapeData passed.
-func lookupShapeDataType(x ShapeData, shapeDataType *uint32) bool {
-	switch x.(type) {
-	case *LastShape:
-		*shapeDataType = ShapeDataLast
-	case *ArrowShape:
-		*shapeDataType = ShapeDataArrow
-	case *TextShape:
-		*shapeDataType = ShapeDataText
-	case *BoxShape:
-		*shapeDataType = ShapeDataBox
-	case *LineShape:
-		*shapeDataType = ShapeDataLine
-	case *SphereShape:
-		*shapeDataType = ShapeDataSphere
-	case *CylinderShape:
-		*shapeDataType = ShapeDataCylinder
-	case *PyramidShape:
-		*shapeDataType = ShapeDataPyramid
-	case *EllipsoidShape:
-		*shapeDataType = ShapeDataEllipsoid
-	case *ConeShape:
-		*shapeDataType = ShapeDataCone
-	default:
-		return false
-	}
-	return true
-}
-
-// ShapeData represents an object that holds data specific to a debug shape.
-// The data it holds depends on the type.
-type ShapeData interface {
-	// Marshal encodes/decodes a serialised debug shape data object.
-	Marshal(r IO)
-	// Clone returns a copy that shares no storage with the receiver.
-	Clone() ShapeData
-	// Equal reports whether other is the same kind of shape data with equal values.
-	Equal(other ShapeData) bool
-}
-
-// LastShape points to using the last shape settings.
-// If no shape has ever been set, then use the default one.
-type LastShape struct{}
-
-// Marshal ...
-func (shape *LastShape) Marshal(io IO) {}
-
-// LineShape represents a line debug shape.
-type LineShape struct {
-	// LineEndLocation is the line end location of the shape.
-	LineEndLocation mgl32.Vec3
-}
-
-// Clone ...
-func (shape *LastShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *LastShape) Equal(other ShapeData) bool {
-	o, ok := other.(*LastShape)
-	return ok && *shape == *o
-}
-
-// Marshal ...
-func (shape *LineShape) Marshal(io IO) {
-	io.Vec3(&shape.LineEndLocation)
-}
-
-// Clone ...
-func (shape *LineShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *LineShape) Equal(other ShapeData) bool {
-	o, ok := other.(*LineShape)
-	return ok && *shape == *o
-}
-
-// TextShape represents a text debug shape.
-type TextShape struct {
-	// Text is the text of the debug text shape.
-	Text string
-	// UseRotation is if the text should use the provided rotation, meaning it will be static and does not follow the
-	// camera. Use false for default behaviour.
-	UseRotation bool
-	// BackgroundColour is the RGBA colour to use for the text background. This is a translucent black colour by default.
-	BackgroundColour Optional[color.RGBA]
-	// LineGapHeight is the gap to leave between each line of multiline text. If not set, the client uses its
-	// default gap.
-	LineGapHeight float32
-	// DepthTest is whether the text should show through walls. Use true for default behaviour.
-	DepthTest bool
-	// ShowBackface is if the background should render on the back side of the shape. This only has a visible effect when
-	// UseRotation is true since you cannot see the back side of the text otherwise. Use true for default behaviour.
-	ShowBackface bool
-	// ShowBackfaceText is if the text should render on the back side of the shape. This only has a visible effect when
-	// UseRotation is true since you cannot see the back side of the text otherwise. Use true for default behaviour.
-	ShowBackfaceText bool
-}
-
-// Marshal ...
-func (shape *TextShape) Marshal(io IO) {
-	io.String(&shape.Text)
-	io.Bool(&shape.UseRotation)
-	OptionalFunc(io, &shape.BackgroundColour, io.BEARGB)
-	io.Float32(&shape.LineGapHeight)
-	io.Bool(&shape.DepthTest)
-	io.Bool(&shape.ShowBackface)
-	io.Bool(&shape.ShowBackfaceText)
-}
-
-// Clone ...
-func (shape *TextShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *TextShape) Equal(other ShapeData) bool {
-	o, ok := other.(*TextShape)
-	return ok && *shape == *o
-}
-
-// BoxShape represents a box debug shape.
-type BoxShape struct {
-	// BoxBound is the box bound of the shape.
-	BoxBound mgl32.Vec3
-}
-
-// Marshal ...
-func (shape *BoxShape) Marshal(io IO) {
-	io.Vec3(&shape.BoxBound)
-}
-
-// Clone ...
-func (shape *BoxShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *BoxShape) Equal(other ShapeData) bool {
-	o, ok := other.(*BoxShape)
-	return ok && *shape == *o
-}
-
-// SphereShape represents a circle or sphere debug shape.
-type SphereShape struct {
-	// Segments is the segments that used for the debug circle or sphere.
-	Segments byte
-}
-
-// Marshal ...
-func (shape *SphereShape) Marshal(io IO) {
-	io.Uint8(&shape.Segments)
-}
-
-// Clone ...
-func (shape *SphereShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *SphereShape) Equal(other ShapeData) bool {
-	o, ok := other.(*SphereShape)
-	return ok && *shape == *o
-}
-
 // ArrowShape represents an arrow debug shape.
 type ArrowShape struct {
 	// ArrowEndLocation is the arrow end location of the shape.
@@ -231,27 +15,36 @@ type ArrowShape struct {
 	// ArrowHeadRadius is the arrow head radius of the shape.
 	ArrowHeadRadius Optional[float32]
 	// Segments is the segments that used for the debug arrow's head.
-	Segments Optional[byte]
+	Segments Optional[uint8]
 }
 
-// Marshal ...
-func (shape *ArrowShape) Marshal(io IO) {
-	OptionalFunc(io, &shape.ArrowEndLocation, io.Vec3)
-	OptionalFunc(io, &shape.ArrowHeadLength, io.Float32)
-	OptionalFunc(io, &shape.ArrowHeadRadius, io.Float32)
-	OptionalFunc(io, &shape.Segments, io.Uint8)
+func (*ArrowShape) tagShape() uint32 { return 1 }
+
+// Marshal reads or writes ArrowShape using its canonical wire layout.
+func (x *ArrowShape) Marshal(io IO) {
+	OptionalFunc(io, &x.ArrowEndLocation, io.Vec3)
+	OptionalFunc(io, &x.ArrowHeadLength, io.Float32)
+	OptionalFunc(io, &x.ArrowHeadRadius, io.Float32)
+	OptionalFunc(io, &x.Segments, io.Uint8)
 }
 
-// Clone ...
-func (shape *ArrowShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
+// ConeShape represents a cone debug shape.
+type ConeShape struct {
+	// Radii are the radii along the X/Z axes of the cone base.
+	Radii mgl32.Vec2
+	// Height is the height of the cone.
+	Height float32
+	// NumSegments is the number of segments used for the cone.
+	NumSegments uint8
 }
 
-// Equal ...
-func (shape *ArrowShape) Equal(other ShapeData) bool {
-	o, ok := other.(*ArrowShape)
-	return ok && *shape == *o
+func (*ConeShape) tagShape() uint32 { return 9 }
+
+// Marshal reads or writes ConeShape using its canonical wire layout.
+func (x *ConeShape) Marshal(io IO) {
+	io.Vec2(&x.Radii)
+	io.Float32(&x.Height)
+	io.Uint8(&x.NumSegments)
 }
 
 // CylinderShape represents a cylinder debug shape.
@@ -263,27 +56,75 @@ type CylinderShape struct {
 	// Height is the height of the cylinder.
 	Height float32
 	// NumSegments is the number of segments used for the cylinder.
-	NumSegments byte
+	NumSegments uint8
 }
 
-// Marshal ...
-func (shape *CylinderShape) Marshal(io IO) {
-	io.Vec2(&shape.RadiusX)
-	io.Vec2(&shape.RadiusZ)
-	io.Float32(&shape.Height)
-	io.Uint8(&shape.NumSegments)
+func (*CylinderShape) tagShape() uint32 { return 6 }
+
+// Marshal reads or writes CylinderShape using its canonical wire layout.
+func (x *CylinderShape) Marshal(io IO) {
+	io.Vec2(&x.RadiusX)
+	io.Vec2(&x.RadiusZ)
+	io.Float32(&x.Height)
+	io.Uint8(&x.NumSegments)
 }
 
-// Clone ...
-func (shape *CylinderShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
+// EllipsoidShape represents an ellipsoid debug shape.
+type EllipsoidShape struct {
+	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
+	Radii mgl32.Vec3
+	// SegmentsPerAxis is the number of segments used per axis for the ellipsoid.
+	SegmentsPerAxis uint8
 }
 
-// Equal ...
-func (shape *CylinderShape) Equal(other ShapeData) bool {
-	o, ok := other.(*CylinderShape)
-	return ok && *shape == *o
+func (*EllipsoidShape) tagShape() uint32 { return 8 }
+
+// Marshal reads or writes EllipsoidShape using its canonical wire layout.
+func (x *EllipsoidShape) Marshal(io IO) {
+	io.Vec3(&x.Radii)
+	io.Uint8(&x.SegmentsPerAxis)
+}
+
+// PrimitiveShape defines a single shape to be rendered on the client. Each shape has a unique NetworkID and a
+// set of optional parameters depending on its type.
+type PrimitiveShape struct {
+	// NetworkID is the network ID of the shape.
+	NetworkID uint64
+	// ShapeType is the optional dimension ID where the shape is rendered.
+	Type Optional[ScriptModuleMinecraftScriptPrimitiveShapeType]
+	// Location is the location of the shape.
+	Location Optional[mgl32.Vec3]
+	// Scale is the scale of the shape.
+	Scale Optional[float32]
+	// Rotation is the rotation of the shape.
+	Rotation Optional[mgl32.Vec3]
+	// TotalTimeLeft is the total time left of the shape.
+	TotalTimeLeft Optional[float32]
+	// MaximumRenderDistance is the rotation of the shape.
+	MaxRenderDistance Optional[float32]
+	// Color is the total time left of the shape.
+	Colour Optional[color.RGBA]
+	// DimensionID is the optional dimension ID where the shape is rendered.
+	DimensionID Optional[DimensionType]
+	// AttachedToEntityID is the optional runtime ID of the entity the shape is attached to.
+	AttachedToEntityID Optional[int64]
+	// ExtraShapeData holding data specific to the type of shape (such as text string for the text shape).
+	ExtraShapeData Shape
+}
+
+// Marshal reads or writes PrimitiveShape using its canonical wire layout.
+func (x *PrimitiveShape) Marshal(io IO) {
+	io.Varuint64(&x.NetworkID)
+	OptionalMarshaler(io, &x.Type)
+	OptionalFunc(io, &x.Location, io.Vec3)
+	OptionalFunc(io, &x.Scale, io.Float32)
+	OptionalFunc(io, &x.Rotation, io.Vec3)
+	OptionalFunc(io, &x.TotalTimeLeft, io.Float32)
+	OptionalFunc(io, &x.MaxRenderDistance, io.Float32)
+	OptionalFunc(io, &x.Colour, io.RGBA)
+	OptionalMarshaler(io, &x.DimensionID)
+	OptionalFunc(io, &x.AttachedToEntityID, io.ActorUniqueID)
+	MarshalShape(io, &x.ExtraShapeData)
 }
 
 // PyramidShape represents a pyramid debug shape.
@@ -296,156 +137,67 @@ type PyramidShape struct {
 	Height float32
 }
 
-// Marshal ...
-func (shape *PyramidShape) Marshal(io IO) {
-	io.Float32(&shape.Width)
-	OptionalFunc(io, &shape.Depth, io.Float32)
-	io.Float32(&shape.Height)
+func (*PyramidShape) tagShape() uint32 { return 7 }
+
+// Marshal reads or writes PyramidShape using its canonical wire layout.
+func (x *PyramidShape) Marshal(io IO) {
+	io.Float32(&x.Width)
+	OptionalFunc(io, &x.Depth, io.Float32)
+	io.Float32(&x.Height)
 }
 
-// Clone ...
-func (shape *PyramidShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *PyramidShape) Equal(other ShapeData) bool {
-	o, ok := other.(*PyramidShape)
-	return ok && *shape == *o
-}
-
-// EllipsoidShape represents an ellipsoid debug shape.
-type EllipsoidShape struct {
-	// Radii are the radii of the ellipsoid along the X, Y and Z axes.
-	Radii mgl32.Vec3
-	// SegmentsPerAxis is the number of segments used per axis for the ellipsoid.
-	SegmentsPerAxis byte
-}
-
-// Marshal ...
-func (shape *EllipsoidShape) Marshal(io IO) {
-	io.Vec3(&shape.Radii)
-	io.Uint8(&shape.SegmentsPerAxis)
-}
-
-// Clone ...
-func (shape *EllipsoidShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *EllipsoidShape) Equal(other ShapeData) bool {
-	o, ok := other.(*EllipsoidShape)
-	return ok && *shape == *o
-}
-
-// ConeShape represents a cone debug shape.
-type ConeShape struct {
-	// Radii are the radii along the X/Z axes of the cone base.
-	Radii mgl32.Vec2
-	// Height is the height of the cone.
-	Height float32
-	// NumSegments is the number of segments used for the cone.
-	NumSegments byte
-}
-
-// Marshal ...
-func (shape *ConeShape) Marshal(io IO) {
-	io.Vec2(&shape.Radii)
-	io.Float32(&shape.Height)
-	io.Uint8(&shape.NumSegments)
-}
-
-// Clone ...
-func (shape *ConeShape) Clone() ShapeData {
-	clone := *shape
-	return &clone
-}
-
-// Equal ...
-func (shape *ConeShape) Equal(other ShapeData) bool {
-	o, ok := other.(*ConeShape)
-	return ok && *shape == *o
-}
+type ScriptModuleMinecraftScriptPrimitiveShapeType uint8
 
 const (
-	PrimitiveShapeLine uint8 = iota
-	PrimitiveShapeBox
-	PrimitiveShapeSphere
-	PrimitiveShapeCircle
-	PrimitiveShapeText
-	PrimitiveShapeArrow
-	PrimitiveShapeCylinder
-	PrimitiveShapePyramid
-	PrimitiveShapeEllipsoid
-	PrimitiveShapeCone
+	PrimitiveShapeLine      ScriptModuleMinecraftScriptPrimitiveShapeType = 0
+	PrimitiveShapeBox       ScriptModuleMinecraftScriptPrimitiveShapeType = 1
+	PrimitiveShapeSphere    ScriptModuleMinecraftScriptPrimitiveShapeType = 2
+	PrimitiveShapeCircle    ScriptModuleMinecraftScriptPrimitiveShapeType = 3
+	PrimitiveShapeText      ScriptModuleMinecraftScriptPrimitiveShapeType = 4
+	PrimitiveShapeArrow     ScriptModuleMinecraftScriptPrimitiveShapeType = 5
+	PrimitiveShapeCylinder  ScriptModuleMinecraftScriptPrimitiveShapeType = 6
+	PrimitiveShapePyramid   ScriptModuleMinecraftScriptPrimitiveShapeType = 7
+	PrimitiveShapeEllipsoid ScriptModuleMinecraftScriptPrimitiveShapeType = 8
+	PrimitiveShapeCone      ScriptModuleMinecraftScriptPrimitiveShapeType = 9
 )
 
-// PrimitiveShape defines a single shape to be rendered on the client. Each shape has a unique NetworkID and a set of
-// optional parameters depending on its type.
-type PrimitiveShape struct {
-	// NetworkID is the network ID of the shape.
-	NetworkID uint64
-	// DimensionID is the optional dimension ID where the shape is rendered.
-	DimensionID Optional[int32]
-	// AttachedToEntityID is the optional unique ID of the entity the shape is attached to. Mojang's documentation
-	// describes it as a runtime ID, but the field is an ActorUniqueID and the client resolves it as one.
-	AttachedToEntityID Optional[int64]
-	// Type is the type of the shape.
-	// If not set, the set shape will be cleared.
-	Type Optional[uint8]
-	// Location is the location of the shape.
-	Location Optional[mgl32.Vec3]
-	// Scale is the scale of the shape.
-	Scale Optional[float32]
-	// Rotation is the rotation of the shape.
-	Rotation Optional[mgl32.Vec3]
-	// TotalTimeLeft is the total time left of the shape.
-	TotalTimeLeft Optional[float32]
-	// MaxRenderDistance is the maximum distance the shape should render from the camera.
-	MaxRenderDistance Optional[float32]
-	// Colour is the ARGB colour of the shape.
-	Colour Optional[color.RGBA]
-	// ExtraShapeData holding data specific to the type of shape (such as text string for the text shape).
-	ExtraShapeData ShapeData
+// Marshal reads or writes ScriptModuleMinecraftScriptPrimitiveShapeType through its uint8 wire encoding.
+func (x *ScriptModuleMinecraftScriptPrimitiveShapeType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+// TextShape represents a text debug shape.
+type TextShape struct {
+	// Text is the text of the debug text shape.
+	Text string
+	// UseRotation is if the text should use the provided rotation, meaning it will be static and does not follow
+	// the camera. Use false for default behaviour.
+	UseRotation bool
+	// BackgroundColor is the RGBA colour to use for the text background. This is a translucent black colour by
+	// default.
+	BackgroundColour Optional[color.RGBA]
+	// LineGapHeight is the gap to leave between each line of multiline text. If not set, the client uses its
+	// default gap.
+	LineGapHeight float32
+	// DepthTest is whether the text should show through walls. Use true for default behaviour.
+	DepthTest bool
+	// ShowBackface is if the background should render on the back side of the shape. This only has a visible
+	// effect when UseRotation is true since you cannot see the back side of the text otherwise. Use true for
+	// default behaviour.
+	ShowBackface bool
+	// ShowTextBackface is if the text should render on the back side of the shape. This only has a visible effect
+	// when UseRotation is true since you cannot see the back side of the text otherwise. Use true for default
+	// behaviour.
+	ShowBackfaceText bool
 }
 
-// Clone returns a copy whose shape data shares no storage with x.
-func (x PrimitiveShape) Clone() PrimitiveShape {
-	if x.ExtraShapeData != nil {
-		x.ExtraShapeData = x.ExtraShapeData.Clone()
-	}
-	return x
-}
+func (*TextShape) tagShape() uint32 { return 2 }
 
-// Equal reports whether x and other describe the same shape, comparing shape
-// data by value rather than by pointer. Every other field takes part through
-// struct equality, so a new field is compared without further work.
-func (x PrimitiveShape) Equal(other PrimitiveShape) bool {
-	data, otherData := x.ExtraShapeData, other.ExtraShapeData
-	x.ExtraShapeData, other.ExtraShapeData = nil, nil
-	if x != other {
-		return false
-	}
-	if data == nil || otherData == nil {
-		return data == nil && otherData == nil
-	}
-	return data.Equal(otherData)
-}
-
-// Marshal ...
-func (x *PrimitiveShape) Marshal(io IO) {
-	io.Varuint64(&x.NetworkID)
-	OptionalFunc(io, &x.Type, io.Uint8)
-	OptionalFunc(io, &x.Location, io.Vec3)
-	OptionalFunc(io, &x.Scale, io.Float32)
-	OptionalFunc(io, &x.Rotation, io.Vec3)
-	OptionalFunc(io, &x.TotalTimeLeft, io.Float32)
-	OptionalFunc(io, &x.MaxRenderDistance, io.Float32)
-	OptionalFunc(io, &x.Colour, io.BEARGB)
-	OptionalFunc(io, &x.DimensionID, io.Varint32)
-	OptionalFunc(io, &x.AttachedToEntityID, io.ActorUniqueID)
-	io.ShapeData(&x.ExtraShapeData)
+// Marshal reads or writes TextShape using its canonical wire layout.
+func (x *TextShape) Marshal(io IO) {
+	io.String(&x.Text)
+	io.Bool(&x.UseRotation)
+	OptionalFunc(io, &x.BackgroundColour, io.RGBA)
+	io.Float32(&x.LineGapHeight)
+	io.Bool(&x.DepthTest)
+	io.Bool(&x.ShowBackface)
+	io.Bool(&x.ShowBackfaceText)
 }

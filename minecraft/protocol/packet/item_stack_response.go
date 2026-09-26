@@ -9,10 +9,9 @@ import (
 // client will simply continue as normal. If rejected, the client will undo the actions so that the inventory
 // should be in sync with the server again.
 type ItemStackResponse struct {
-	// Responses is a list of responses to ItemStackRequests sent by the client before. Responses either
-	// approve or reject a request from the client.
-	// Vanilla limits the size of this slice to 4096.
-	Responses []protocol.ItemStackResponse
+	// Responses is a list of responses to ItemStackRequests sent by the client before. Responses either approve
+	// or reject a request from the client. Vanilla limits the size of this slice to 4096.
+	Responses []protocol.ItemStackResponseInfo
 }
 
 // ID ...

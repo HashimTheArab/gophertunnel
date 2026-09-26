@@ -1,186 +1,134 @@
 package protocol
 
-const (
-	AttributeLayerPayloadTypeUpdateLayers = iota
-	AttributeLayerPayloadTypeUpdateSettings
-	AttributeLayerPayloadTypeUpdateEnvironment
-	AttributeLayerPayloadTypeRemoveEnvironment
-)
-
-const (
-	AttributeDataTypeBool = iota
-	AttributeDataTypeFloat
-	AttributeDataTypeColour
-)
-
-const (
-	AttributeBoolOperationOverride = iota
-	AttributeBoolOperationAlphaBlend
-	AttributeBoolOperationAnd
-	AttributeBoolOperationNand
-	AttributeBoolOperationOr
-	AttributeBoolOperationNor
-	AttributeBoolOperationXor
-	AttributeBoolOperationXnor
-)
-
-const (
-	AttributeFloatOperationOverride = iota
-	AttributeFloatOperationAlphaBlend
-	AttributeFloatOperationAdd
-	AttributeFloatOperationSubtract
-	AttributeFloatOperationMultiply
-	AttributeFloatOperationMinimum
-	AttributeFloatOperationMaximum
-)
-
-const (
-	AttributeColourOperationOverride = iota
-	AttributeColourOperationAlphaBlend
-	AttributeColourOperationAdd
-	AttributeColourOperationSubtract
-	AttributeColourOperationMultiply
-)
-
 // AttributeData represents a polymorphic attribute value.
 type AttributeData struct {
-	// Type is the attribute data type. It is one of the AttributeDataType constants.
-	Type uint32
-	// BoolValue is the boolean value if Type is AttributeDataTypeBool.
-	BoolValue bool
-	// BoolOperation is the optional operation for boolean attributes.
-	BoolOperation Optional[int32]
-	// FloatValue is the float value if Type is AttributeDataTypeFloat.
-	FloatValue float32
-	// FloatOperation is the optional operation for float attributes.
-	FloatOperation Optional[int32]
-	// FloatConstraintMin is the optional minimum constraint for float attributes.
-	FloatConstraintMin Optional[float32]
-	// FloatConstraintMax is the optional maximum constraint for float attributes.
-	FloatConstraintMax Optional[float32]
-	// ColourValue is the colour value if Type is AttributeDataTypeColour.
-	ColourValue int32
-	// ColourOperation is the optional operation for colour attributes.
-	ColourOperation Optional[int32]
+	MinValue        float32
+	MaxValue        float32
+	CurrentValue    float32
+	DefaultMinValue float32
+	DefaultMaxValue float32
+	DefaultValue    float32
+	Name            string
+	Modifiers       []AttributeModifier
 }
 
-// Marshal encodes/decodes an AttributeData.
-func (x *AttributeData) Marshal(r IO) {
-	r.Varuint32(&x.Type)
-	switch x.Type {
-	case AttributeDataTypeBool:
-		r.Bool(&x.BoolValue)
-		OptionalFunc(r, &x.BoolOperation, r.Int32)
-	case AttributeDataTypeFloat:
-		r.Float32(&x.FloatValue)
-		OptionalFunc(r, &x.FloatOperation, r.Int32)
-		OptionalFunc(r, &x.FloatConstraintMin, r.Float32)
-		OptionalFunc(r, &x.FloatConstraintMax, r.Float32)
-	case AttributeDataTypeColour:
-		r.Int32(&x.ColourValue)
-		OptionalFunc(r, &x.ColourOperation, r.Int32)
-	default:
-		r.UnknownEnumOption(x.Type, "attribute data type")
-	}
-}
-
-const (
-	NoiseAlignmentTypeMinLocalTransitionEnd = iota
-)
-
-// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
-type NoiseAlignment struct {
-	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
-	Type byte
-	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
-	Value uint32
-}
-
-// Marshal encodes/decodes a NoiseAlignment.
-func (x *NoiseAlignment) Marshal(r IO) {
-	r.Uint8(&x.Type)
-	r.Varuint32(&x.Value)
-}
-
-// EnvironmentAttributeData represents an environment attribute with optional transition data.
-type EnvironmentAttributeData struct {
-	// AttributeName is the name of the attribute.
-	AttributeName string
-	// FromAttribute is the optional starting attribute for transitions.
-	FromAttribute Optional[AttributeData]
-	// Attribute is the current attribute value.
-	Attribute AttributeData
-	// ToAttribute is the optional target attribute for transitions.
-	ToAttribute Optional[AttributeData]
-	// CurrentTransitionTicks is the number of ticks elapsed in the current transition.
-	CurrentTransitionTicks uint32
-	// TotalTransitionTicks is the total number of ticks for the transition.
-	TotalTransitionTicks uint32
-	// EaseType is the easing function used for the transition. It is one of the EasingType constants.
-	EaseType int32
-	// LocalTransitionTicks is the number of ticks elapsed in the local transition.
-	LocalTransitionTicks uint32
-	// NoiseTransition indicates whether the transition uses noise.
-	NoiseTransition bool
-	// NoiseAlignment is the alignment of the noise used by the transition.
-	NoiseAlignment NoiseAlignment
-}
-
-// Marshal encodes/decodes an EnvironmentAttributeData.
-func (x *EnvironmentAttributeData) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
-	r.String(&x.AttributeName)
-	OptionalMarshaler(r, &x.FromAttribute)
-	Single(r, &x.Attribute)
-	OptionalMarshaler(r, &x.ToAttribute)
-	r.Uint32(&x.CurrentTransitionTicks)
-	r.Uint32(&x.TotalTransitionTicks)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
-	r.Uint32(&x.LocalTransitionTicks)
-	r.Bool(&x.NoiseTransition)
-	Single(r, &x.NoiseAlignment)
-}
-
-// AttributeLayerSettings represents settings for an attribute layer.
-type AttributeLayerSettings struct {
-	// Priority is the priority of the layer.
-	Priority int32
-	// FloatWeight is the weight of the layer.
-	FloatWeight float32
-	// Enabled indicates if the layer is enabled.
-	Enabled bool
-	// TransitionsPaused indicates if transitions are paused for this layer.
-	TransitionsPaused bool
-}
-
-// Marshal encodes/decodes an AttributeLayerSettings.
-func (x *AttributeLayerSettings) Marshal(r IO) {
-	r.Int32(&x.Priority)
-	r.Float32(&x.FloatWeight)
-	r.Bool(&x.Enabled)
-	r.Bool(&x.TransitionsPaused)
+// Marshal reads or writes AttributeData using its canonical wire layout.
+func (x *AttributeData) Marshal(io IO) {
+	io.Float32(&x.MinValue)
+	io.Float32(&x.MaxValue)
+	io.Float32(&x.CurrentValue)
+	io.Float32(&x.DefaultMinValue)
+	io.Float32(&x.DefaultMaxValue)
+	io.Float32(&x.DefaultValue)
+	io.String(&x.Name)
+	Slice(io, &x.Modifiers)
 }
 
 // AttributeLayerData represents a complete attribute layer.
 type AttributeLayerData struct {
-	// Name is the name of the attribute layer.
-	Name string
-	// NoiseName is the optional name of the noise used by the layer.
-	NoiseName Optional[string]
-	// DimensionID is the dimension the layer applies to.
-	DimensionID int32
-	// Settings is the layer's settings.
-	Settings AttributeLayerSettings
-	// EnvironmentAttributes is the list of environment attributes in this layer.
-	EnvironmentAttributes []EnvironmentAttributeData
+	AttributeLayers []EASAttributeLayerData
 }
 
-// Marshal encodes/decodes an AttributeLayerData.
-func (x *AttributeLayerData) Marshal(r IO) {
-	r.String(&x.Name)
-	OptionalFunc(r, &x.NoiseName, r.String)
-	r.Varint32(&x.DimensionID)
-	Single(r, &x.Settings)
-	Slice(r, &x.EnvironmentAttributes)
+func (*AttributeLayerData) tagAttributeLayerSyncData() uint32 { return 0 }
+
+// Marshal reads or writes AttributeLayerData using its canonical wire layout.
+func (x *AttributeLayerData) Marshal(io IO) {
+	SliceLimits(io, &x.AttributeLayers, 0, 512)
+}
+
+// AttributeLayerSettings represents settings for an attribute layer.
+type AttributeLayerSettings struct {
+	AttributeLayerName      string
+	AttributeLayerDimension DimensionType
+	AttributesLayerSettings EASAttributeLayerSettings
+}
+
+func (*AttributeLayerSettings) tagAttributeLayerSyncData() uint32 { return 1 }
+
+// Marshal reads or writes AttributeLayerSettings using its canonical wire layout.
+func (x *AttributeLayerSettings) Marshal(io IO) {
+	io.StringLimits(&x.AttributeLayerName, 0, 128)
+	x.AttributeLayerDimension.Marshal(io)
+	x.AttributesLayerSettings.Marshal(io)
+}
+
+type AttributeLayerSyncData interface {
+	Marshaler
+	tagAttributeLayerSyncData() uint32
+}
+
+// MarshalAttributeLayerSyncData reads or writes the AttributeLayerSyncData union using its canonical wire layout.
+func MarshalAttributeLayerSyncData(io IO, x *AttributeLayerSyncData) {
+	Union(io, x, io.Varuint32, AttributeLayerSyncData.tagAttributeLayerSyncData, func(tag uint32) AttributeLayerSyncData {
+		switch tag {
+		case 0:
+			return new(AttributeLayerData)
+		case 1:
+			return new(AttributeLayerSettings)
+		case 2:
+			return new(EnvironmentAttributeData)
+		case 3:
+			return new(RemoveEnvironmentAttributes)
+		}
+		return nil
+	})
+}
+
+type EAS interface {
+	Marshaler
+	tagEAS() uint32
+}
+
+// MarshalEAS reads or writes the EAS union using its canonical wire layout.
+func MarshalEAS(io IO, x *EAS) {
+	Union(io, x, io.Varuint32, EAS.tagEAS, func(tag uint32) EAS {
+		switch tag {
+		case 0:
+			return new(EASBoolAttributeData)
+		case 1:
+			return new(EASFloatAttributeData)
+		case 2:
+			return new(EASColorAttributeData)
+		}
+		return nil
+	})
+}
+
+type EASNoiseAlignmentType uint8
+
+const (
+	NoiseAlignmentTypeMinLocalTransitionEnd EASNoiseAlignmentType = 0
+)
+
+// Marshal reads or writes EASNoiseAlignmentType through its uint8 wire encoding.
+func (x *EASNoiseAlignmentType) Marshal(io IO) { io.Uint8((*uint8)(x)) }
+
+// EnvironmentAttributeData represents an environment attribute with optional transition data.
+type EnvironmentAttributeData struct {
+	AttributeLayerName      string
+	AttributeLayerDimension DimensionType
+	Attributes              []EASEnvironmentAttributeData
+}
+
+func (*EnvironmentAttributeData) tagAttributeLayerSyncData() uint32 { return 2 }
+
+// Marshal reads or writes EnvironmentAttributeData using its canonical wire layout.
+func (x *EnvironmentAttributeData) Marshal(io IO) {
+	io.StringLimits(&x.AttributeLayerName, 0, 128)
+	x.AttributeLayerDimension.Marshal(io)
+	SliceLimits(io, &x.Attributes, 0, 1024)
+}
+
+// NoiseAlignment represents the way the noise of an environment attribute transition is aligned.
+type NoiseAlignment struct {
+	// Type is the type of the alignment. It is one of the NoiseAlignmentType constants above.
+	Type EASNoiseAlignmentType
+	// Value is the value that the noise is aligned against, the meaning of which depends on Type.
+	Value uint32
+}
+
+// Marshal reads or writes NoiseAlignment using its canonical wire layout.
+func (x *NoiseAlignment) Marshal(io IO) {
+	x.Type.Marshal(io)
+	io.Varuint32(&x.Value)
 }
