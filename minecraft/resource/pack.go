@@ -33,9 +33,9 @@ type Pack struct {
 	// downloadURL is the URL that the resource pack can be downloaded from. If the string is empty, then the
 	// resource pack will be downloaded over RakNet rather than HTTP.
 	downloadURL string
-	// content is a bytes.Reader that contains the full content of the zip file. It is used to send the full
-	// data to a client.
-	content *bytes.Reader
+	// content holds the archive, in memory or on disk; only ReadAt and size are needed to serve or open it.
+	content io.ReaderAt
+	size    int64
 	// contentKey is the key used to encrypt the files. The client uses this to decrypt the resource pack if encrypted.
 	// If nothing is encrypted, this field can be left as an empty string.
 	contentKey string
@@ -45,11 +45,15 @@ type Pack struct {
 	checksum [32]byte
 }
 
+// maxManifestSize bounds memory used by metadata from a compressed resource pack.
+const maxManifestSize = 1 << 20
+
 // ReadPath compiles a resource pack found at the path passed. The resource pack must either be a zip archive
 // (extension does not matter, could be .zip or .mcpack), or a directory containing a resource pack. In the
 // case of a directory, the directory is compiled into an archive and the pack is parsed from that.
 // ReadPath operates assuming the resource pack has a 'manifest.json' file in it. If it does not, the function
-// will fail and return an error.
+// will fail and return an error. The returned pack holds its own snapshot in memory, so it does not need
+// to be closed and later changes to the path do not affect it. Use OpenPath to keep an archive on disk.
 func ReadPath(path string) (*Pack, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -58,7 +62,11 @@ func ReadPath(path string) (*Pack, error) {
 	if info.IsDir() {
 		return compileDir(path)
 	}
-	return compileZipPath(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read resource pack file: %w", err)
+	}
+	return compile(data, false)
 }
 
 func ReadBytes(data []byte) (*Pack, error) {
@@ -75,7 +83,7 @@ func ReadURL(url string) (*Pack, error) {
 // ReadURLContext downloads a resource pack found at the URL passed and compiles it. The request is canceled
 // when ctx is done.
 func ReadURLContext(ctx context.Context, url string) (*Pack, error) {
-	return readURLContext(ctx, http.DefaultClient, url, 0)
+	return readURLContext(ctx, http.DefaultClient, url, 0, nil)
 }
 
 // ReadURLContextLimit downloads a resource pack found at the URL passed and compiles it, reading at most maxSize
@@ -87,16 +95,42 @@ func ReadURLContextLimit(ctx context.Context, url string, maxSize uint64) (*Pack
 // ReadURLWithClient is ReadURLContextLimit through client, for callers that must restrict where a
 // server-supplied URL may connect.
 func ReadURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64) (*Pack, error) {
+	return readURLWithClient(ctx, client, url, maxSize, nil)
+}
+
+// ReadURLToFile downloads a pack of at most maxSize bytes through client into f and compiles it from there,
+// so the archive never sits in memory. f must be a non-nil, empty file. On success, the returned pack owns
+// f and must be closed when no longer used. On error, the caller still owns f and any partial download.
+func ReadURLToFile(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File) (*Pack, error) {
+	if f == nil {
+		return nil, errors.New("download resource pack: destination file is nil")
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat resource pack destination: %w", err)
+	}
+	if info.Size() != 0 {
+		return nil, errors.New("download resource pack: destination file must be empty")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek resource pack destination: %w", err)
+	}
+	return readURLWithClient(ctx, client, url, maxSize, f)
+}
+
+// readURLWithClient validates the bounded download size before making a request.
+func readURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File) (*Pack, error) {
 	if maxSize == 0 {
 		return nil, errors.New("download resource pack: max size must be greater than 0")
 	}
 	if maxSize > math.MaxInt64 {
 		return nil, fmt.Errorf("download resource pack: max size %d exceeds supported limit", maxSize)
 	}
-	return readURLContext(ctx, client, url, int64(maxSize))
+	return readURLContext(ctx, client, url, int64(maxSize), f)
 }
 
-func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64) (*Pack, error) {
+// readURLContext downloads an archive into memory or f and validates it without unwrapping nested ZIPs.
+func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64, f *os.File) (*Pack, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create resource pack request: %w", err)
@@ -114,16 +148,33 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 		if resp.ContentLength > maxSize {
 			return nil, fmt.Errorf("download resource pack: response size %d exceeds limit %d", resp.ContentLength, maxSize)
 		}
-		r = io.LimitReader(resp.Body, maxSize+1)
+		r = io.LimitReader(resp.Body, maxSize)
 	}
-	data, err := io.ReadAll(r)
+	var data []byte
+	var n int64
+	if f != nil {
+		n, err = io.Copy(f, r)
+	} else {
+		data, err = io.ReadAll(r)
+		n = int64(len(data))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read resource pack: %w", err)
 	}
-	if maxSize > 0 && int64(len(data)) > maxSize {
-		return nil, fmt.Errorf("download resource pack: response size exceeds limit %d", maxSize)
+	if maxSize > 0 && n == maxSize {
+		var extra [1]byte
+		if _, err := io.ReadFull(resp.Body, extra[:]); err == nil {
+			return nil, fmt.Errorf("download resource pack: response size exceeds limit %d", maxSize)
+		} else if !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("read resource pack: %w", err)
+		}
 	}
-	pack, err := compile(data, false)
+	var pack *Pack
+	if f != nil {
+		pack, err = ReadFile(f, n)
+	} else {
+		pack, err = compile(data, false)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +315,7 @@ func (pack *Pack) Checksum() [32]byte {
 
 // Size returns the total size in bytes of the archive of the resource pack.
 func (pack *Pack) Size() int {
-	return int(pack.content.Size())
+	return int(pack.size)
 }
 
 // Len returns the total size in bytes of the archive of the resource pack.
@@ -334,7 +385,7 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	if !fs.ValidPath(dir) {
 		return nil, fmt.Errorf("invalid resource directory %q", dir)
 	}
-	zr, err := zip.NewReader(p.content, int64(p.content.Size()))
+	zr, err := zip.NewReader(p.content, p.size)
 	if err != nil {
 		return nil, fmt.Errorf("open resource pack archive: %w", err)
 	}
@@ -372,7 +423,7 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	if filePath == "." || !fs.ValidPath(filePath) {
 		return nil, fmt.Errorf("invalid resource file path %q", filePath)
 	}
-	zr, err := zip.NewReader(p.content, int64(p.content.Size()))
+	zr, err := zip.NewReader(p.content, p.size)
 	if err != nil {
 		return nil, fmt.Errorf("open resource pack archive: %w", err)
 	}
@@ -385,15 +436,24 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	return nil, fmt.Errorf("file %q not found in the resource pack", filePath)
 }
 
+// Close releases the archive behind a file-backed pack; an in-memory pack needs no Close.
+// Copies made with WithContentKey or WithDownloadURL share that archive and must no longer be used afterward.
+func (pack *Pack) Close() error {
+	if closer, ok := pack.content.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 // WithContentKey creates a copy of the pack and sets the encryption key to the key provided, after which the
-// new Pack is returned.
+// new Pack is returned. Both packs share the archive: closing either pack closes it for both.
 func (pack Pack) WithContentKey(key string) *Pack {
 	pack.contentKey = key
 	return &pack
 }
 
 // WithDownloadURL creates a copy of the pack and sets the HTTP download URL
-// used in ResourcePacksInfo.
+// used in ResourcePacksInfo. Both packs share the archive: closing either pack closes it for both.
 func (pack Pack) WithDownloadURL(url string) *Pack {
 	pack.downloadURL = url
 	return &pack
@@ -429,17 +489,39 @@ func compileDir(root string) (*Pack, error) {
 		manifestDir: path.Dir(manifestPath),
 		checksum:    sha256.Sum256(data),
 		content:     bytes.NewReader(data),
+		size:        int64(len(data)),
 	}, nil
 }
 
-// compileZipPath compiles a resource pack from a zip file.
-func compileZipPath(p string) (*Pack, error) {
-	data, err := os.ReadFile(p)
+// OpenPath opens a resource pack archive without loading it into memory. The archive must contain a
+// manifest.json file. The returned pack owns the open file and must be closed when no longer used.
+// The file must not be changed while the pack is in use. Use ReadPath for directories or a memory snapshot.
+func OpenPath(p string) (*Pack, error) {
+	f, err := os.Open(p)
 	if err != nil {
-		return nil, fmt.Errorf("read resource pack file: %w", err)
+		return nil, fmt.Errorf("open resource pack file: %w", err)
 	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("stat resource pack file: %w", err)
+	}
+	pack, err := ReadFile(f, info.Size())
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return pack, nil
+}
 
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+// ReadFile compiles a resource pack from an open archive of size bytes without loading it into memory.
+// On success, the returned pack owns f and must be closed when no longer used. The caller must not change
+// or close f while the pack is in use. On error, the caller still owns f. Nested ZIPs are not unwrapped.
+func ReadFile(f *os.File, size int64) (*Pack, error) {
+	if f == nil {
+		return nil, errors.New("open resource pack: file is nil")
+	}
+	zr, err := zip.NewReader(f, size)
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
 	}
@@ -447,13 +529,32 @@ func compileZipPath(p string) (*Pack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
+	h := sha256.New()
+	if _, err := io.Copy(h, io.NewSectionReader(f, 0, size)); err != nil {
+		return nil, fmt.Errorf("checksum resource pack file: %w", err)
+	}
+	pack := &Pack{manifest: m, manifestDir: path.Dir(manifestPath), content: f, size: size}
+	copy(pack.checksum[:], h.Sum(nil))
+	return pack, nil
+}
 
-	return &Pack{
-		manifest:    m,
-		manifestDir: path.Dir(manifestPath),
-		checksum:    sha256.Sum256(data),
-		content:     bytes.NewReader(data),
-	}, nil
+// NestedArchive returns the archive's sole entry when it is a nested .zip file, or nil otherwise.
+// It leaves the archive open and does not decompress the entry. The caller must limit the decompressed
+// size when copying the entry and keep r available until the entry has been read.
+func NestedArchive(r io.ReaderAt, size int64) (*zip.File, error) {
+	zr, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("open zip: %w", err)
+	}
+	return nestedArchive(zr), nil
+}
+
+// nestedArchive applies the one-entry nested ZIP rule shared by memory and file downloads.
+func nestedArchive(zr *zip.Reader) *zip.File {
+	if len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
+		return zr.File[0]
+	}
+	return nil
 }
 
 // compile compiles the resource pack from the bytes passed, either a zip archive or a directory, and returns a
@@ -466,16 +567,16 @@ func compile(data []byte, unwrapNested bool) (*Pack, error) {
 
 	// Check if this is a nested zip (only contains a single .zip file)
 	// We only unwrap one level to avoid recursive nesting issues
-	if unwrapNested && len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
-		nestedFile, err := zr.File[0].Open()
+	if nested := nestedArchive(zr); unwrapNested && nested != nil {
+		nestedFile, err := nested.Open()
 		if err != nil {
-			return nil, fmt.Errorf("open nested zip %s: %w", zr.File[0].Name, err)
+			return nil, fmt.Errorf("open nested zip %s: %w", nested.Name, err)
 		}
 		defer nestedFile.Close()
 
 		nestedData, err := io.ReadAll(nestedFile)
 		if err != nil {
-			return nil, fmt.Errorf("read nested zip %s: %w", zr.File[0].Name, err)
+			return nil, fmt.Errorf("read nested zip %s: %w", nested.Name, err)
 		}
 
 		// Replace data with the unwrapped nested zip and re-open it
@@ -500,6 +601,7 @@ func compile(data []byte, unwrapNested bool) (*Pack, error) {
 		manifestDir: path.Dir(manifestPath),
 		checksum:    sha256.Sum256(data),
 		content:     bytes.NewReader(data),
+		size:        int64(len(data)),
 	}, nil
 }
 
@@ -624,9 +726,12 @@ func readManifest(pr packReader) (*Manifest, string, error) {
 	defer manifestFile.Close()
 
 	// Read all data from the manifest file so that we can decode it into a Manifest struct.
-	allData, err := io.ReadAll(manifestFile)
+	allData, err := io.ReadAll(io.LimitReader(manifestFile, maxManifestSize+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("read manifest file: %w", err)
+	}
+	if len(allData) > maxManifestSize {
+		return nil, "", fmt.Errorf("read manifest file: size exceeds limit %d", maxManifestSize)
 	}
 	manifest := &Manifest{}
 	if err := jsonc.UnmarshalLenient(allData, manifest); err != nil {

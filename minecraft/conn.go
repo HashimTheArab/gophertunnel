@@ -13,6 +13,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -380,6 +382,22 @@ type Conn struct {
 	// when disablePacketHandling is enabled. This becomes true after handshake completion or once post-login
 	// packets start arriving on servers that skip the handshake packet.
 	disablePacketHandlingReady bool
+
+	// holdResourcePackCompletion keeps the pack phase handled under disablePacketHandling and parks the final
+	// Completed response until CompleteResourcePacks; see Dialer.HoldResourcePackCompletion.
+	holdResourcePackCompletion bool
+	packPhaseDone              atomic.Bool // set by CompleteResourcePacks, read by the receive goroutine
+	resourcePackHTTPClient     *http.Client
+	// retainedPacksInfo and retainedPackStack are the server's own pack packets, kept for a relay to forward.
+	retainedPacksInfo *packet.ResourcePacksInfo
+	retainedPackStack *packet.ResourcePackStack
+	packsReady        chan struct{}
+
+	// packFiles are the archives downloaded for this connection and loadedPacks the cache entries it opened;
+	// both are released with it. Listener packs are shared and never closed here.
+	packFilesMu sync.Mutex
+	packFiles   map[*os.File]uint64
+	loadedPacks []*resource.Pack
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
@@ -1122,14 +1140,18 @@ func (conn *Conn) receive(data []byte) error {
 		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
 			return err
 		}
-		if conn.handshakeComplete || conn.loggedIn {
+		holdingPacks := conn.holdResourcePackCompletion && !conn.packPhaseDone.Load()
+		if (conn.handshakeComplete && !holdingPacks) || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
 			switch pkData.h.PacketID {
-			case packet.IDResourcePacksInfo, packet.IDStartGame, packet.IDPlayStatus:
+			case packet.IDStartGame:
 				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
 				// packets start coming in.
 				conn.disablePacketHandlingReady = true
+			case packet.IDPlayStatus, packet.IDResourcePacksInfo:
+				// Both precede the pack phase, which stays handled while its completion is held.
+				conn.disablePacketHandlingReady = !holdingPacks
 			}
 		}
 		if conn.disablePacketHandlingReady {
@@ -1666,6 +1688,8 @@ func (conn *Conn) handleClientCacheStatus(pk *packet.ClientCacheStatus) error {
 // handleResourcePacksInfo handles a ResourcePacksInfo packet sent by the server. The client responds by
 // sending the packs it needs downloaded.
 func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
+	retained := *pk
+	conn.retainedPacksInfo = &retained
 	// First create a new resource pack queue with the information in the packet so we can download them
 	// properly later.
 	totalPacks := len(pk.TexturePacks)
@@ -1692,6 +1716,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			continue
 		}
 
+		if err := conn.resourcePackDownload.validateSize(pack.Size); err != nil {
+			return fmt.Errorf("handle ResourcePacksInfo: %w", err)
+		}
 		cacheKey := ResourcePackCacheKey{
 			UUID:    pack.UUID,
 			Version: pack.Version,
@@ -1704,7 +1731,11 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
 			case cachedPack != nil && !cacheKey.Matches(cachedPack):
 				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
+				_ = cachedPack.Close()
 			case cachedPack != nil:
+				if err := conn.trackLoadedPack(cachedPack); err != nil {
+					return err
+				}
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
 				continue
@@ -1713,11 +1744,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
+			newPack, err := conn.downloadPackURL(pack)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
-			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
-				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
 			} else {
 				newPack = newPack.WithContentKey(pack.ContentKey)
 				conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -1729,9 +1758,13 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// This UUID_Version is a hack Mojang put in place.
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
+		file, err := conn.newPackFile(pack.Size)
+		if err != nil {
+			return fmt.Errorf("handle ResourcePacksInfo: %w", err)
+		}
 		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
-			buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
+			file:       file,
 			contentKey: pack.ContentKey,
 			cacheKey:   cacheKey,
 		}
@@ -1772,9 +1805,56 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
 		}
 	}
+	if conn.holdResourcePackCompletion {
+		select {
+		case <-conn.packsReady:
+			// A late ClientCacheStatus makes some servers resend the stack; the first one stands.
+			return nil
+		default:
+		}
+		retained := *pk
+		conn.retainedPackStack = &retained
+		conn.expect(packet.IDResourcePackStack, packet.IDDimensionData, packet.IDStartGame)
+		close(conn.packsReady)
+		return nil
+	}
+	retained := *pk
+	conn.retainedPackStack = &retained
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 	return nil
+}
+
+// ResourcePacksReady is closed once the server's pack stack has arrived and the requested packs are
+// downloaded. It is nil unless the connection was dialed with Dialer.HoldResourcePackCompletion.
+// Also select on Context().Done(), because a failed connection may never finish downloading its packs.
+func (conn *Conn) ResourcePacksReady() <-chan struct{} { return conn.packsReady }
+
+// ResourcePacksInfo returns the server's own ResourcePacksInfo, available once ResourcePacksReady is closed.
+func (conn *Conn) ResourcePacksInfo() *packet.ResourcePacksInfo { return conn.retainedPacksInfo }
+
+// ResourcePackStack returns the server's own ResourcePackStack, available once ResourcePacksReady is closed.
+func (conn *Conn) ResourcePackStack() *packet.ResourcePackStack { return conn.retainedPackStack }
+
+// CompleteResourcePacks sends the Completed response the pack phase held back and lets the connection
+// pass packets through. The server sends StartGame only after it. The caller flushes the connection.
+// Only the first call succeeds; later calls return an error without sending another response.
+func (conn *Conn) CompleteResourcePacks() error {
+	if !conn.holdResourcePackCompletion {
+		return errors.New("resource pack completion is not held")
+	}
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("complete resource packs")
+	}
+	select {
+	case <-conn.packsReady:
+	default:
+		return errors.New("resource packs are not ready")
+	}
+	if !conn.packPhaseDone.CompareAndSwap(false, true) {
+		return errors.New("resource packs were already completed")
+	}
+	return conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 }
 
 // hasPack checks if the connection has a resource pack downloaded with the UUID and version passed, provided
@@ -1924,8 +2004,11 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		// Size mismatch: The ResourcePacksInfo packet had a size for the pack that did not match with the
 		// size sent here.
 		conn.log.Warn("handle ResourcePackDataInfo: pack had a different size in ResourcePacksInfo than in ResourcePackDataInfo", "UUID", id, "packs_info_size", pack.size, "data_info_size", pk.Size)
-		pack.size = pk.Size
 	}
+	if err := conn.resizePackFile(pack.file, pk.Size); err != nil {
+		return fmt.Errorf("handle ResourcePackDataInfo: %w", err)
+	}
+	pack.size = pk.Size
 
 	if pk.DataChunkSize == 0 {
 		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
@@ -1954,8 +2037,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	idCopy := pk.UUID
 	go func() {
-		fragments := make(map[uint32][]byte)
-		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
+		nextRequest, received := uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
@@ -1972,7 +2054,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		// fillWindow replenishes one request for each response accepted by the client.
+		// fillWindow replenishes one request for each response accepted by the client. It flushes its own
+		// writes: this goroutine runs after the handler's flush, and a connection without a flush ticker
+		// would otherwise hold the requests until something else flushes.
 		fillWindow := func() error {
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
 				if err := requestChunk(nextRequest); err != nil {
@@ -1980,7 +2064,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				}
 				nextRequest++
 			}
-			return nil
+			return conn.Flush()
 		}
 
 		if err := fillWindow(); err != nil {
@@ -1988,36 +2072,36 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 			return
 		}
-		for nextWrite < pack.chunkCount {
+		for received < pack.chunkCount {
 			select {
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
-				received++
-				fragments[frag.index] = frag.data
-				// Write the contiguous prefix in index order.
-				for data, ok := fragments[nextWrite]; ok; data, ok = fragments[nextWrite] {
-					_, _ = pack.buf.Write(data)
-					delete(fragments, nextWrite)
-					nextWrite++
+				// Write each validated chunk at its offset, so a delayed early chunk cannot keep the
+				// rest of the archive in memory while the request window continues to advance.
+				if _, err := pack.file.WriteAt(frag.data, int64(uint64(frag.index)*uint64(pack.chunkSize))); err != nil {
+					_ = conn.abort(fmt.Errorf("download resource pack %v: write: %w", id, err))
+					return
 				}
+				pack.written += uint64(len(frag.data))
+				received++
 				if err := fillWindow(); err != nil {
 					_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 					return
 				}
 			}
 		}
-		if pack.buf.Len() != int(pack.size) {
-			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.buf.Len()))
+		if pack.written != pack.size {
+			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.written))
 			return
 		}
-		// First parse the resource pack from the total byte buffer we obtained.
-		newPack, err := resource.Read(pack.buf)
+		newPack, err := conn.readDownloadedPack(pack.file, pack.size)
 		if err != nil {
 			_ = conn.close(fmt.Errorf("download resource pack %v: parse: %w", id, err))
 			return
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
+		conn.storeResourcePack(pack.cacheKey, newPack)
 		conn.packMu.Lock()
 		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
@@ -2032,8 +2116,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
 				return
 			}
+			if err := conn.Flush(); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: flush completion: %w", id, err))
+			}
 		}
-		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
 }
@@ -2349,7 +2435,7 @@ func (conn *Conn) handleLoginSuccess() error {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if !conn.disablePacketHandling {
+	if !conn.disablePacketHandling || conn.holdResourcePackCompletion {
 		conn.expect(packet.IDResourcePacksInfo)
 	}
 	return conn.Flush()
@@ -2475,6 +2561,7 @@ func (conn *Conn) abort(cause error) error {
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
+		conn.removePackFiles()
 	})
 	return conn.abortErr
 }

@@ -8,10 +8,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
+
+// resourcePackCachePublishMu keeps directory snapshots consistent with stores and evictions in this
+// process, including when callers use separate cache values for the same directory. File copying and
+// downloading happen outside this short publication lock.
+var resourcePackCachePublishMu sync.Mutex
 
 // ResourcePackCacheKey identifies a resource pack advertised in the ResourcePacksInfo packet. Like the
 // vanilla client's own pack cache, pack content is assumed not to change without a version bump; the
@@ -31,24 +40,36 @@ func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
 // non-fatal: a nil pack or an error from Load falls back to a normal download, and errors from Store are
 // only logged.
 type ResourcePackCache interface {
-	// Load returns the pack stored under key, or nil if it is not cached.
+	// Load returns the pack stored under key, or nil if it is not cached. The caller owns the returned
+	// pack and closes it, so a file-backed cache opens a fresh handle per call rather than sharing one.
 	Load(ctx context.Context, key ResourcePackCacheKey) (*resource.Pack, error)
-	// Store stores a pack under key for a later Load.
+	// Store stores a pack under key for a later Load. The pack is only valid during the call: its
+	// archive belongs to the connection and is removed with it, so an implementation copies the content.
 	Store(ctx context.Context, key ResourcePackCacheKey, pack *resource.Pack) error
 }
 
-// DirResourcePackCache is a ResourcePackCache that stores resource packs as files in a directory. Entries
-// are never evicted: the caller owns the directory and its lifecycle.
+// DirResourcePackCache is a ResourcePackCache that stores resource packs as files in a directory.
 type DirResourcePackCache struct {
 	// Dir is the directory packs are stored in. It is created when the first pack is stored.
 	Dir string
+	// MaxBytes, when positive, bounds completed cache entries: after a store, the least recently used
+	// entries are removed until the total fits. Zero keeps every entry. Download files are bounded by
+	// ResourcePackDownloadConfig.Budget; staging copies and evicted files still open in a connection can
+	// also occupy disk space, so this is not a filesystem quota.
+	MaxBytes int64
 }
 
 // Load returns the pack stored under key, or nil if no file exists for it.
 func (cache DirResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
-	pack, err := resource.ReadPath(cache.path(key))
+	path := cache.path(key)
+	pack, err := resource.OpenPath(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
+	}
+	if err == nil {
+		// Mark the entry recently used for eviction; mtime is portable where atime is not.
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
 	}
 	return pack, err
 }
@@ -70,7 +91,68 @@ func (cache DirResourcePackCache) Store(_ context.Context, key ResourcePackCache
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temp.Name(), cache.path(key))
+	resourcePackCachePublishMu.Lock()
+	defer resourcePackCachePublishMu.Unlock()
+	if err := os.Rename(temp.Name(), cache.path(key)); err != nil {
+		return err
+	}
+	return cache.evict()
+}
+
+// evict removes the least recently used entries until the directory fits MaxBytes. A Load touches its
+// entry, so recently served packs survive.
+func (cache DirResourcePackCache) evict() error {
+	if cache.MaxBytes <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(cache.Dir)
+	if err != nil {
+		return err
+	}
+	type packFile struct {
+		name  string
+		size  int64
+		atime time.Time
+	}
+	var files []packFile
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".mcpack") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, packFile{name: entry.Name(), size: info.Size(), atime: info.ModTime()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].atime.Before(files[j].atime) })
+	var removeErrors error
+	for _, file := range files {
+		if total <= cache.MaxBytes {
+			break
+		}
+		if err := os.Remove(filepath.Join(cache.Dir, file.name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			// Windows cannot remove an archive while a connection has it open. Other entries can
+			// still be evicted, including the newly stored one, so one busy file must not stop pruning.
+			removeErrors = errors.Join(removeErrors, err)
+			continue
+		}
+		total -= file.size
+	}
+	if total > cache.MaxBytes {
+		return removeErrors
+	}
+	return nil
+}
+
+// TempFile creates a download file beside the cache entries, so Store stays on one filesystem.
+func (cache DirResourcePackCache) TempFile() (*os.File, error) {
+	if err := os.MkdirAll(cache.Dir, 0o755); err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(cache.Dir, "download-*.tmp")
 }
 
 // path returns the file a pack with key is stored at. The version is escaped as it comes from the server.
