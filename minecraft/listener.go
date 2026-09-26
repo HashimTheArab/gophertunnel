@@ -613,9 +613,13 @@ func (listener *Listener) handleConn(conn *Conn) {
 // deliverConn delivers conn to the configured owner. ConnHandler, when set, replaces the Accept path entirely:
 // connections delivered through it are not published to listener.incoming.
 func (listener *Listener) deliverConn(conn *Conn) bool {
+	if conn.ctx.Err() != nil {
+		return false
+	}
 	if listener.cfg.ConnHandler != nil {
 		// The handler runs on its own goroutine so that it may block reading the connection without
-		// stalling the goroutine that queues its incoming packets.
+		// stalling the goroutine that queues its incoming packets. Once handed off, it may still need
+		// to read queued packets even if the connection closes before the handler starts.
 		go func() {
 			if err := listener.cfg.ConnHandler(conn); err != nil {
 				conn.log.Error(err.Error())
@@ -625,6 +629,8 @@ func (listener *Listener) deliverConn(conn *Conn) bool {
 		return true
 	}
 	select {
+	case <-conn.ctx.Done():
+		return false
 	case <-listener.close:
 		// The listener was closed while this one was logged in, so the incoming channel will be closed. Just return
 		// so the connection is closed and cleaned up.

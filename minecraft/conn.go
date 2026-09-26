@@ -1580,6 +1580,10 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	// Login callbacks may return after the listener has already timed this connection out.
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("complete login")
+	}
 	if !conn.disableEncryption {
 		// A handshake batched with the Login is still plaintext and proves nothing about the login key.
 		if !conn.dec.BatchEncrypted() {
