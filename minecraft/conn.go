@@ -306,6 +306,8 @@ type Conn struct {
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
+	// authenticated is set once the Login was verified and, with encryption, the encrypted handshake completed.
+	authenticated atomic.Bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -1563,6 +1565,8 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
+	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true
@@ -1813,6 +1817,9 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
+		if len(packs) == 0 {
+			break
+		}
 		conn.packQueue = &resourcePackQueue{
 			packs:     conn.resourcePacks,
 			chunkSize: conn.resourcePackDelivery.ChunkSize,
@@ -2276,7 +2283,9 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	if pk.ChunkRadius < 1 {
 		return fmt.Errorf("expected chunk radius of at least 1, got %v", pk.ChunkRadius)
 	}
-	conn.expect(packet.IDPlayStatus)
+	// Some servers send ResourcePacksInfo before PlayStatus(LoginSuccess); the vanilla client accepts either
+	// order, so both are expected from here on.
+	conn.expect(packet.IDPlayStatus, packet.IDResourcePacksInfo)
 
 	conn.gameData.ChunkRadius = pk.ChunkRadius
 	conn.gameDataReceived.Store(true)
@@ -2448,6 +2457,15 @@ func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
+}
+
+// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
+// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
+// treating the closed transport as an encoding failure.
+func (conn *Conn) closeTransport(cause error) {
+	conn.cancelFunc(cause)
+	_ = conn.conn.Close()
+	_ = conn.close(cause)
 }
 
 func (conn *Conn) close(cause error) error {
