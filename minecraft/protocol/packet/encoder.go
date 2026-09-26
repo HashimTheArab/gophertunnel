@@ -52,14 +52,22 @@ type Encoder struct {
 // NewEncoder returns a new Encoder for the io.Writer passed. Each final packet produced by the Encoder is
 // sent with a single call to io.Writer.Write().
 func NewEncoder(w io.Writer) *Encoder {
+	return NewEncoderFor(w, w)
+}
+
+// NewEncoderFor returns a new Encoder that encodes packets for transport, honouring its optional
+// BatchHeaderer and EncryptionDisabler, but sends each final packet to w with a single call to
+// io.Writer.Write(). It serves writers that sit between the Encoder and transport, so they need not expose
+// transport's capabilities themselves.
+func NewEncoderFor(transport, w io.Writer) *Encoder {
 	var batch []byte
-	if b, ok := w.(BatchHeaderer); ok {
+	if b, ok := transport.(BatchHeaderer); ok {
 		batch = b.BatchHeader()
 	} else {
 		batch = []byte{header}
 	}
 	var disableEncryption bool
-	if d, ok := w.(EncryptionDisabler); ok {
+	if d, ok := transport.(EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 	return &Encoder{

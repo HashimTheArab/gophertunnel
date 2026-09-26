@@ -233,6 +233,8 @@ type Conn struct {
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
 	pool                 packet.Pool
+	// delay holds encoded batches for the send delay between enc and the network. See SetSendDelay.
+	delay                delayWriter
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
 	compression          packet.Compression
@@ -409,7 +411,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
-	conn.enc = packet.NewEncoder(netConn)
+	conn.delay.w = netConn
+	conn.enc = packet.NewEncoderFor(netConn, &conn.delay)
 	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
@@ -2459,6 +2462,8 @@ func (conn *Conn) close(cause error) error {
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
+		// Anything the send delay holds goes out now: the connection will not be around when it falls due.
+		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.delay.set(0))
 	})
 	return conn.gracefulCloseErr
 }
@@ -2475,6 +2480,7 @@ func (conn *Conn) abort(cause error) error {
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
+		conn.delay.drop()
 	})
 	return conn.abortErr
 }
