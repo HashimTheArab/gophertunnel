@@ -74,6 +74,7 @@ func TestListenerDisablePacketEncryption(t *testing.T) {
 					DisablePacketHandling:   true,
 				},
 				listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+				group:    new(ListenerGroup),
 				incoming: make(chan *Conn, 1),
 				close:    make(chan struct{}),
 			}
@@ -107,10 +108,12 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 			DisablePacketHandling: true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.playerCount.Store(1)
+	listener.group = new(ListenerGroup)
+	listener.group.playerCount.Store(1)
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
@@ -151,10 +154,12 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 			},
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.playerCount.Store(1)
+	listener.group = new(ListenerGroup)
+	listener.group.playerCount.Store(1)
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
@@ -196,10 +201,12 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 			DisablePacketHandling: true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.playerCount.Store(1)
+	listener.group = new(ListenerGroup)
+	listener.group.playerCount.Store(1)
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
@@ -257,6 +264,7 @@ func TestListenerReadBatchPreservesNetworkBatch(t *testing.T) {
 			AllowUnknownPackets:   true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
@@ -344,6 +352,7 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 			},
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
@@ -386,6 +395,7 @@ func newBatchReadingListener(t *testing.T, mutate func(*ListenConfig)) (*Listene
 			AllowUnknownPackets:   true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
@@ -578,6 +588,7 @@ func TestListenerPongDataUsesStatusProviderSubtitle(t *testing.T) {
 			addr:     &net.UDPAddr{IP: net.IPv4zero, Port: 19132},
 			pongData: &pongData,
 		},
+		group: new(ListenerGroup),
 	}
 	listener.updatePongData()
 
@@ -665,7 +676,7 @@ func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 func serveAuthenticated(listener *Listener, netConn net.Conn) {
 	conn := listener.newListenerConn(netConn)
 	conn.handshakeComplete = true
-	listener.playerCount.Add(1)
+	listener.group.add(0)
 	go listener.handleConn(conn)
 }
 
