@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -62,6 +63,20 @@ func (data IdentityData) Validate() error {
 	}
 	if data.DisplayName == "" {
 		return fmt.Errorf("DisplayName must not be empty")
+	}
+	return nil
+}
+
+// validateFallbackName checks a client-supplied name without restricting its character set.
+func validateFallbackName(name string) error {
+	if strings.Trim(name, " \t\n\r") == "" {
+		return fmt.Errorf("display name must not be empty or contain only whitespace")
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("display name must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(name) > 16 {
+		return fmt.Errorf("display name must not be longer than 16 characters")
 	}
 	return nil
 }

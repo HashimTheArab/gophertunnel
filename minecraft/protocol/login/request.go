@@ -99,12 +99,11 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 	var (
 		authenticated bool
 		claims        tokenClaims
-		trustedHost   bool
 		t             = time.Now()
 	)
 	selfSigned := req.AuthenticationType == 2
 	if req.Token != "" {
-		claims, key, trustedHost, err = parseMultiplayerToken(req.Token, verifier, selfSigned, t)
+		claims, key, err = parseMultiplayerToken(req.Token, verifier, selfSigned, t)
 		if err != nil {
 			return iData, cData, res, err
 		}
@@ -134,7 +133,7 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 		return iData, cData, res, fmt.Errorf("validate client data: %w", err)
 	}
 	if req.Token != "" {
-		iData, err = claims.identityData(cData, selfSigned, trustedHost)
+		iData, err = claims.identityData(cData, selfSigned)
 		if err != nil {
 			return iData, cData, res, fmt.Errorf("resolve identity data: %w", err)
 		}
@@ -148,8 +147,7 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 		}
 	} else if !authenticated {
 		// Legacy offline logins carry their name in extraData, not ThirdPartyName.
-		iData.DisplayName, err = fallbackDisplayName(iData.DisplayName, cData.DeviceOS, false)
-		if err != nil {
+		if err := validateFallbackName(iData.DisplayName); err != nil {
 			return iData, cData, res, fmt.Errorf("resolve legacy display name: %w", err)
 		}
 	}
@@ -423,44 +421,43 @@ type tokenClaims struct {
 }
 
 // parseMultiplayerToken verifies the selected token type and extracts the key that signs client data.
-// Service tokens may be read without verification when the caller disables authentication. Only a
-// verified service token can select the trusted-host name rules.
-func parseMultiplayerToken(raw string, verifier *oidc.IDTokenVerifier, selfSigned bool, now time.Time) (tokenClaims, *ecdsa.PublicKey, bool, error) {
+// Service tokens may be read without verification when the caller disables authentication.
+func parseMultiplayerToken(raw string, verifier *oidc.IDTokenVerifier, selfSigned bool, now time.Time) (tokenClaims, *ecdsa.PublicKey, error) {
 	var claims tokenClaims
 	tok, err := jwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES384, jose.RS256})
 	if err != nil {
-		return claims, nil, false, fmt.Errorf("parse multiplayer token: %w", err)
+		return claims, nil, fmt.Errorf("parse multiplayer token: %w", err)
 	}
 	if err := tok.UnsafeClaimsWithoutVerification(&claims); err != nil {
-		return claims, nil, false, fmt.Errorf("parse multiplayer token claims: %w", err)
+		return claims, nil, fmt.Errorf("parse multiplayer token claims: %w", err)
 	}
 	key := new(ecdsa.PublicKey)
 	if err := ParsePublicKey(claims.ClientPublicKey, key); err != nil {
-		return claims, nil, false, fmt.Errorf("parse cpk: %w", err)
+		return claims, nil, fmt.Errorf("parse cpk: %w", err)
 	}
 	if selfSigned {
 		if err := tok.Claims(key, &claims); err != nil {
-			return claims, nil, false, fmt.Errorf("verify self-signed token: %w", err)
+			return claims, nil, fmt.Errorf("verify self-signed token: %w", err)
 		}
 		if claims.Expiry == nil || now.Unix() > int64(*claims.Expiry) {
-			return claims, nil, false, fmt.Errorf("self-signed token has expired")
+			return claims, nil, fmt.Errorf("self-signed token has expired")
 		}
-		return claims, key, false, nil
+		return claims, key, nil
 	}
 	if verifier == nil {
-		return claims, key, false, nil
+		return claims, key, nil
 	}
 	if _, err := verifier.Verify(context.Background(), raw); err != nil {
-		return claims, nil, false, fmt.Errorf("verify ID token: %w", err)
+		return claims, nil, fmt.Errorf("verify ID token: %w", err)
 	}
 	if err := claims.Validate(jwt.Expected{Time: now}); err != nil {
-		return claims, nil, false, fmt.Errorf("validate ID token: %w", err)
+		return claims, nil, fmt.Errorf("validate ID token: %w", err)
 	}
-	return claims, key, tok.Headers[0].KeyID == "host", nil
+	return claims, key, nil
 }
 
 // identityData selects the platform identity or resolves the client's fallback UUID and name.
-func (tc tokenClaims) identityData(data ClientData, selfSigned, trustedHost bool) (IdentityData, error) {
+func (tc tokenClaims) identityData(data ClientData, selfSigned bool) (IdentityData, error) {
 	if selfSigned {
 		// Only the offline UUID contributes to identity resolution in a self-signed token.
 		tc = tokenClaims{Identity: tc.Identity}
@@ -486,9 +483,8 @@ func (tc tokenClaims) identityData(data ClientData, selfSigned, trustedHost bool
 	case data.DeviceOS == protocol.DeviceOrbis && tc.PlayStationID != "" && tc.PlayStationName != "":
 		name = tc.PlayStationName
 	default:
-		var err error
-		name, err = fallbackDisplayName(data.ThirdPartyName, data.DeviceOS, trustedHost)
-		if err != nil {
+		name = data.ThirdPartyName
+		if err := validateFallbackName(name); err != nil {
 			return IdentityData{}, err
 		}
 	}
