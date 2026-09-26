@@ -14,19 +14,19 @@ func fallbackDisplayName(name string, deviceOS protocol.DeviceOS, trustedHost bo
 		name = sanitizeDisplayName(name)
 	} else {
 		if strings.Trim(name, " \t\n\r") == "" {
-			return "", fmt.Errorf("ThirdPartyName must not be empty or contain only whitespace")
+			return "", fmt.Errorf("display name must not be empty or contain only whitespace")
 		}
 		remaining := name
 		for count := 0; len(remaining) != 0; count++ {
 			if count == 16 {
-				return "", fmt.Errorf("ThirdPartyName must not be longer than 16 characters")
+				return "", fmt.Errorf("display name must not be longer than 16 characters")
 			}
 			r, size := displayNameRune(remaining)
 			if size == 0 {
-				return "", fmt.Errorf("ThirdPartyName contains invalid text")
+				return "", fmt.Errorf("display name contains invalid text")
 			}
 			if !ordinaryDisplayNameCharacter(r) && (deviceOS != protocol.DeviceNX || !nintendoDisplayNameCharacter(r)) {
-				return "", fmt.Errorf("ThirdPartyName contains an invalid character: %U", r)
+				return "", fmt.Errorf("display name contains an invalid character: %U", r)
 			}
 			remaining = remaining[size:]
 		}
@@ -35,7 +35,7 @@ func fallbackDisplayName(name string, deviceOS protocol.DeviceOS, trustedHost bo
 		}
 	}
 	if name == "" {
-		return "", fmt.Errorf("ThirdPartyName must not be empty after filtering")
+		return "", fmt.Errorf("display name must not be empty after filtering")
 	}
 	return name, nil
 }

@@ -51,8 +51,8 @@ type IdentityData struct {
 	PlayFabID string `json:"-"`
 }
 
-// Validate checks a resolved identity's ID and name. Parse applies the name rules for the selected
-// authentication method before calling Validate. This check does not prove that the identity is authentic.
+// Validate checks a resolved identity's UUID, XUID and nonempty name.
+// It does not establish authenticity or apply the fallback-name rules used by Parse.
 func (data IdentityData) Validate() error {
 	if _, err := strconv.ParseInt(data.XUID, 10, 64); err != nil && len(data.XUID) != 0 {
 		return fmt.Errorf("XUID must be parseable as an int64, but got %v", data.XUID)

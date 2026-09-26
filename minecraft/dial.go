@@ -109,7 +109,8 @@ type Dialer struct {
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server
 	// if the authentication token is not set. This is technically not valid and some servers might kick
 	// the client when an XUID is present without logging in.
-	// For getting this to work with BDS, authentication should be disabled.
+	// Modern vanilla servers ignore these account IDs in self-signed multiplayer tokens, even with
+	// authentication disabled. Forwarding them requires a server that accepts these unverified claims.
 	KeepXBLIdentityData bool
 
 	// EnableLegacyAuth, if set to true, will use the legacy authentication behavior
@@ -272,7 +273,11 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		setAndroidData(&conn.clientData)
 
 		request = login.Encode(chainData, conn.clientData, key, token, d.EnableLegacyAuth)
-		identityData, _, _, _ := login.Parse(request, verifier)
+		identityData, _, _, err := login.Parse(request, verifier)
+		if err != nil {
+			_ = conn.Close()
+			return nil, conn.wrap(fmt.Errorf("parse login request: %w", err), "dial")
+		}
 		// If we got the identity data from Minecraft auth, we need to make sure we set it in the Conn too, as
 		// we are not aware of the identity data ourselves yet.
 		conn.identityData = identityData
