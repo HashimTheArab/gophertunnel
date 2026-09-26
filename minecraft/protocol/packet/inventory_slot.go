@@ -9,7 +9,7 @@ import (
 // a chest inventory.
 type InventorySlot struct {
 	// WindowID is the ID of the window that the packet modifies. It must point to one of the windows that the
-	// client currently has opened.
+	// client currently has opened. It is written as a single byte, so it must not exceed 255.
 	WindowID uint32
 	// Slot is the index of the slot that the packet modifies. The new item will be set to the slot at this
 	// index.
@@ -31,7 +31,12 @@ func (*InventorySlot) ID() uint32 {
 }
 
 func (pk *InventorySlot) Marshal(io protocol.IO) {
-	io.Varuint32(&pk.WindowID)
+	windowID := uint8(pk.WindowID)
+	if uint32(windowID) != pk.WindowID {
+		io.InvalidValue(pk.WindowID, "window ID", "must fit in one byte")
+	}
+	io.Uint8(&windowID)
+	pk.WindowID = uint32(windowID)
 	io.Varuint32(&pk.Slot)
 	protocol.OptionalMarshaler(io, &pk.Container)
 	protocol.OptionalFunc(io, &pk.StorageItem, io.ItemInstance)
