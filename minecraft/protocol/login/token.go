@@ -75,8 +75,8 @@ func parseMultiplayerToken(raw string, verifier *oidc.IDTokenVerifier, selfSigne
 // identityData selects the platform identity or resolves the client's fallback UUID and name.
 func (tc tokenClaims) identityData(data ClientData, selfSigned, trustedHost bool) (IdentityData, error) {
 	if selfSigned {
-		// A self-signed token cannot establish an account ID, even if it includes one in its claims.
-		tc.XUID, tc.NintendoID, tc.PlayStationID, tc.PlayFabID, tc.PlayFabTitleID = "", "", "", "", ""
+		// Only the offline UUID contributes to identity resolution in a self-signed token.
+		tc = tokenClaims{Identity: tc.Identity}
 		trustedHost = false
 	}
 	id := parseIdentityUUID(tc.Identity)
