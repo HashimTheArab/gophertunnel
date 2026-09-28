@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -90,4 +93,95 @@ func testPackArchive(t *testing.T) []byte {
 		t.Fatalf("close zip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
+	archive := testPackArchive(t)
+	root, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := root.File[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestData, err := io.ReadAll(manifest)
+	_ = manifest.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"", "MyPack/"} {
+		t.Run(prefix, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			zw := zip.NewWriter(buf)
+			for name, data := range map[string][]byte{
+				prefix + "manifest.json":             manifestData,
+				prefix + "entity/player.entity.json": []byte(`{}`),
+			} {
+				w, err := zw.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.Write(data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			link := &zip.FileHeader{Name: prefix + "entity/link.json"}
+			link.SetMode(os.ModeSymlink | 0777)
+			w, err := zw.CreateHeader(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write([]byte("player.entity.json")); err != nil {
+				t.Fatal(err)
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			pack, err := ReadBytes(buf.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !pack.HasResourceFile("entity/player.entity.json") || pack.HasResourceFile("entity/missing.json") {
+				t.Fatal("resource files were not resolved relative to the manifest")
+			}
+			if pack.HasResourceFile("entity/link.json") {
+				t.Fatal("ZIP symlink was reported as a resource file")
+			}
+			if _, err := pack.ReadFile("entity/link.json"); err == nil {
+				t.Fatal("ReadFile read a ZIP symlink")
+			}
+			data, err := pack.ReadFile("entity/player.entity.json")
+			if err != nil || string(data) != "{}" {
+				t.Fatalf("ReadFile from manifest root = %q, %v", data, err)
+			}
+			zipPath := filepath.Join(t.TempDir(), "pack.mcpack")
+			if err := os.WriteFile(zipPath, buf.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			fromPath, err := ReadPath(zipPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fromPath.HasResourceFile("entity/player.entity.json") {
+				t.Fatal("ReadPath lost the manifest directory")
+			}
+			if prefix == "" {
+				directory := t.TempDir()
+				if err := os.WriteFile(filepath.Join(directory, "manifest.json"), manifestData, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(directory, "entity"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(directory, "entity", "player.entity.json"), []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				fromDir, err := ReadPath(directory)
+				if err != nil || !fromDir.HasResourceFile("entity/player.entity.json") {
+					t.Fatalf("directory pack lookup = %v, %v", fromDir, err)
+				}
+			}
+		})
+	}
 }

@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -13,6 +14,9 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/p2p"
 	"github.com/sandertv/gophertunnel/minecraft/room/internal"
 )
+
+// DefaultAnnounceTimeout is the [ListenConfig.AnnounceTimeout] used when none is set.
+const DefaultAnnounceTimeout = 15 * time.Second
 
 // ListenConfig holds the configuration for wrapping a [minecraft.NetworkListener] with additional functionality.
 // It provides the ability to announce server status and custom the behavior of status reporting.
@@ -29,6 +33,10 @@ type ListenConfig struct {
 	// to sync with the [minecraft.ServerStatus] reported from [minecraft.Listener]. It includes fields like [Status.MemberCount],
 	// [Status.MaxMemberCount], [Status.WorldName], and [Status.HostName].
 	DisableServerStatusOverride bool // TODO: Find a good name
+
+	// AnnounceTimeout bounds each announcement made from [Listener.ServerStatus], which runs on the
+	// listener's status ticker. If zero, DefaultAnnounceTimeout is used.
+	AnnounceTimeout time.Duration
 
 	// Log is used for logging messages at various log levels. If nil, the default [slog.Logger]
 	// will be set from [slog.Default].
@@ -47,6 +55,9 @@ func (conf ListenConfig) Wrap(n minecraft.NetworkListener) *Listener {
 	}
 	if conf.Log == nil {
 		conf.Log = slog.Default()
+	}
+	if conf.AnnounceTimeout <= 0 {
+		conf.AnnounceTimeout = DefaultAnnounceTimeout
 	}
 
 	return &Listener{
@@ -122,7 +133,9 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 		}
 	}
 
-	if err := l.conf.Announcer.Announce(&listenerContext{closed: l.closed}, status); err != nil {
+	ctx, cancel := context.WithTimeout(&listenerContext{closed: l.closed}, l.conf.AnnounceTimeout)
+	defer cancel()
+	if err := l.conf.Announcer.Announce(ctx, status); err != nil {
 		if !errors.Is(err, net.ErrClosed) {
 			l.conf.Log.Error("error announcing status", internal.ErrAttr(err))
 		}
