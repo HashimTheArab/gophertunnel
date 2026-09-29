@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -77,6 +78,11 @@ type Dialer struct {
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// or internal handling, including login and disconnect handling. Returning false silently drops only
+	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
+	// it must not block. The header is passed by value and cannot be rewritten through this hook.
+	AcceptPacketHeader func(header packet.Header) bool
 	// PacketBatchFunc is called after each outbound packet batch has been encoded.
 	PacketBatchFunc packet.BatchEncodeObserver
 
@@ -338,6 +344,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
+	conn.acceptPacketHeader = d.AcceptPacketHeader
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
@@ -500,10 +507,24 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
+// serverAddress returns the address in the form clients report it in their login request. For
+// networks addressed by a URL, such as NetherNet, clients repeat the port of the address after
+// it: 'https://<host>:<port>:<port>'.
+func serverAddress(address string) string {
+	if !strings.Contains(address, "://") {
+		return address
+	}
+	u, err := url.Parse(address)
+	if err != nil || u.Port() == "" {
+		return address
+	}
+	return address + ":" + u.Port()
+}
+
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
-		d.ServerAddress = address
+		d.ServerAddress = serverAddress(address)
 	}
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username

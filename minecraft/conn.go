@@ -311,6 +311,8 @@ type Conn struct {
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
+	// authenticated is set once the Login was verified and, with encryption, the encrypted handshake completed.
+	authenticated atomic.Bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -375,6 +377,8 @@ type Conn struct {
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// acceptPacketHeader optionally filters incoming packets before internal handling.
+	acceptPacketHeader func(packet.Header) bool
 
 	shieldID atomic.Int32
 
@@ -1226,6 +1230,9 @@ func (conn *Conn) receive(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if conn.acceptPacketHeader != nil && !conn.acceptPacketHeader(*pkData.h) {
+		return nil
+	}
 	if pkData.h.PacketID == packet.IDDisconnect {
 		// We always handle disconnect packets and close the connection if one comes in. The payload is
 		// snapshotted first because decoding drains it and the packet may turn out not to be a
@@ -1687,6 +1694,8 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
+	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true
@@ -1933,14 +1942,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	}
 
 	if len(packsToDownload) != 0 {
-		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame)
+		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame, packet.IDPlayStatus)
 		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
 		return nil
 	}
-	conn.expect(packet.IDResourcePackStack, packet.IDStartGame)
+	conn.expect(packet.IDResourcePackStack, packet.IDStartGame, packet.IDPlayStatus)
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
@@ -2027,6 +2036,9 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
+		if len(packs) == 0 {
+			break
+		}
 		conn.packQueue = &resourcePackQueue{
 			packs:     conn.resourcePacks,
 			chunkSize: conn.resourcePackDelivery.ChunkSize,
@@ -2101,6 +2113,8 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 
 // startGame sends a StartGame packet using the game data of the connection.
 func (conn *Conn) startGame() error {
+	// The client may answer before the packets below are all written, so expect its replies first.
+	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 	data := conn.gameData
 	if len(data.Dimensions) > 0 {
 		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
@@ -2138,7 +2152,6 @@ func (conn *Conn) startGame() error {
 	if err := conn.Flush(); err != nil {
 		return err
 	}
-	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 	return nil
 }
 
@@ -2188,7 +2201,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount, ok := resourcePackChunkCount(pk.Size, pk.DataChunkSize)
+	chunkCount, ok := resource.ChunkCount(pk.Size, pk.DataChunkSize)
 	if !ok {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
@@ -2278,7 +2291,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		conn.packMu.Unlock()
 
 		if packAmount == 0 {
-			conn.expect(packet.IDResourcePackStack)
+			conn.expect(packet.IDResourcePackStack, packet.IDPlayStatus)
 			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
 				return
@@ -2527,7 +2540,9 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	if pk.ChunkRadius < 1 {
 		return fmt.Errorf("expected chunk radius of at least 1, got %v", pk.ChunkRadius)
 	}
-	conn.expect(packet.IDPlayStatus)
+	// Some servers send ResourcePacksInfo before PlayStatus(LoginSuccess); the vanilla client accepts either
+	// order, so both are expected from here on.
+	conn.expect(packet.IDPlayStatus, packet.IDResourcePacksInfo)
 
 	conn.gameData.ChunkRadius = pk.ChunkRadius
 	conn.gameDataReceived.Store(true)
@@ -2699,6 +2714,15 @@ func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
+}
+
+// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
+// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
+// treating the closed transport as an encoding failure.
+func (conn *Conn) closeTransport(cause error) {
+	conn.cancelFunc(cause)
+	_ = conn.conn.Close()
+	_ = conn.close(cause)
 }
 
 func (conn *Conn) close(cause error) error {

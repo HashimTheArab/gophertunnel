@@ -33,6 +33,9 @@ var triageNames = map[triage]string{
 // bump that adds a clientbound packet fails TestServerPoolTriaged until someone decides
 // whether the new packet's state must be tracked.
 var serverPacketTriage = map[uint32]triage{
+	// Sound handles and furnace UI preferences are not currently cleared by a server swap.
+	packet.IDRecordStarted:                      triageGap,
+	packet.IDSetPlayerFurnaceOptions:            triageGap,
 	packet.IDAddActor:                           triageTracked,
 	packet.IDAddItemActor:                       triageTracked,
 	packet.IDAddPainting:                        triageTracked,

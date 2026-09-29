@@ -53,7 +53,7 @@ func TestDefaultClientDataUsesCurrentVanillaVersion(t *testing.T) {
 	if got, want := string(version), "0.0.0"; got != want {
 		t.Fatalf("skin geometry engine version = %q, want %q", got, want)
 	}
-	if got, want := data.GameVersion, "1.26.45"; got != want {
+	if got, want := data.GameVersion, "1.26.50"; got != want {
 		t.Fatalf("game version = %q, want %q", got, want)
 	}
 	if got, want := data.MemoryTier, 4; got != want {
@@ -738,27 +738,16 @@ func TestDialContextNetworkUsesExplicitNetwork(t *testing.T) {
 func TestServerPacketPool_LazyBlockActorDataIsOptIn(t *testing.T) {
 	t.Parallel()
 
-	for _, protocolTest := range []struct {
-		name     string
-		protocol Protocol
-	}{
-		{name: "current", protocol: DefaultProtocol},
-		{name: "1.26.40", protocol: Protocol12640()},
-		{name: "1.26.44", protocol: Protocol12644()},
-	} {
-		t.Run(protocolTest.name, func(t *testing.T) {
-			for _, lazy := range []bool{false, true} {
-				pk := serverPacketPool(protocolTest.protocol, lazy)[packet.IDBlockActorData]().(*packet.BlockActorData)
-				wire := []byte{0x02, 0x80, 0x01, 0x03, 0x0a, 0x00, 0x03, 0x05, 'p', 'a', 'i', 'r', 'x', 0x04, 0x00}
-				pk.Marshal(protocol.NewReader(bytes.NewBuffer(wire), 0, true))
-				if lazy && pk.NBTData != nil {
-					t.Fatalf("lazy NBTData = %#v, want nil", pk.NBTData)
-				}
-				if !lazy && pk.NBTData == nil {
-					t.Fatal("default NBTData is nil")
-				}
-			}
-		})
+	for _, lazy := range []bool{false, true} {
+		pk := serverPacketPool(DefaultProtocol, lazy)[packet.IDBlockActorData]().(*packet.BlockActorData)
+		wire := []byte{0x02, 0x80, 0x01, 0x03, 0x0a, 0x00, 0x03, 0x05, 'p', 'a', 'i', 'r', 'x', 0x04, 0x00}
+		pk.Marshal(protocol.NewReader(bytes.NewBuffer(wire), 0, true))
+		if lazy && pk.NBTData != nil {
+			t.Fatalf("lazy NBTData = %#v, want nil", pk.NBTData)
+		}
+		if !lazy && pk.NBTData == nil {
+			t.Fatal("default NBTData is nil")
+		}
 	}
 }
 

@@ -9,19 +9,20 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-func TestTextShapeProtocol2168Wire(t *testing.T) {
+func TestTextShapeProtocol2193Wire(t *testing.T) {
 	t.Parallel()
 
 	shape := &TextShape{
 		Text:             "x",
 		UseRotation:      true,
+		LineGapHeight:    1.5,
 		DepthTest:        true,
 		ShowBackfaceText: true,
 	}
 	buf := bytes.NewBuffer(nil)
 	shape.Marshal(NewWriter(buf, 0))
 
-	want := []byte{1, 'x', 1, 0, 1, 0, 1}
+	want := []byte{1, 'x', 1, 0, 0, 0, 0xc0, 0x3f, 1, 0, 1}
 	if got := buf.Bytes(); !bytes.Equal(got, want) {
 		t.Fatalf("TextShape wire bytes = %x, want %x", got, want)
 	}
