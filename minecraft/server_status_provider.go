@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -130,20 +131,31 @@ func (f *ForeignStatusProvider) update() {
 }
 
 // ParsePongData parses the unconnected pong data passed into the relevant fields of a ServerStatus struct.
+// Malformed data yields a ServerStatus whose ServerName describes the problem; use [ParsePong] to get an error.
 func ParsePongData(pong []byte) ServerStatus {
+	status, err := ParsePong(pong)
+	if err != nil {
+		return ServerStatus{ServerName: err.Error()}
+	}
+	return status
+}
+
+// ParsePong parses unconnected pong data into a ServerStatus, or returns an error when the pong lacks
+// the name, player count or max player count fields.
+func ParsePong(pong []byte) (ServerStatus, error) {
 	frag := splitPong(string(pong))
 	if len(frag) < 8 {
-		return ServerStatus{ServerName: "Invalid pong data"}
+		return ServerStatus{}, errors.New("Invalid pong data")
 	}
 	serverName := frag[1]
 	serverSubName := frag[7]
 	online, err := strconv.Atoi(frag[4])
 	if err != nil {
-		return ServerStatus{ServerName: "Invalid player count"}
+		return ServerStatus{}, errors.New("Invalid player count")
 	}
 	max, err := strconv.Atoi(frag[5])
 	if err != nil {
-		return ServerStatus{ServerName: "Invalid max player count"}
+		return ServerStatus{}, errors.New("Invalid max player count")
 	}
 	status := ServerStatus{
 		ServerName:    serverName,
@@ -155,7 +167,7 @@ func ParsePongData(pong []byte) ServerStatus {
 	if len(frag) > 8 {
 		status.GameType = parseGameType(frag[8])
 	}
-	return status
+	return status, nil
 }
 
 // gameTypeName returns the pong string for a ServerStatus.GameType. Types without a pong string are
