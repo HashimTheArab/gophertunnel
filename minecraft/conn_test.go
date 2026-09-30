@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1462,6 +1463,46 @@ func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	}
 	if len(conn.resourcePacks) != 1 {
 		t.Fatalf("resourcePacks length = %d, want 1", len(conn.resourcePacks))
+	}
+}
+
+// URL pack downloads must go through the Dialer's HTTPClient so callers can observe or restrict them.
+func TestHandleResourcePacksInfoDownloadsURLPacksWithTheDialerClient(t *testing.T) {
+	t.Parallel()
+
+	urlPackID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	urlPack := testResourcePackArchive(t, urlPackID)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(urlPack)
+	}))
+	defer server.Close()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, time.Second/20, false)
+	defer conn.Close()
+	var requests atomic.Int32
+	conn.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+
+	err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{{
+		UUID:        urlPackID,
+		Version:     "1.0.0",
+		Size:        uint64(len(urlPack)),
+		DownloadURL: server.URL,
+	}}})
+	if err != nil {
+		t.Fatalf("handleResourcePacksInfo: %v", err)
+	}
+	if requests.Load() != 1 || len(conn.resourcePacks) != 1 {
+		t.Fatalf("requests = %d, packs = %d; want the pack fetched once through the dialer client", requests.Load(), len(conn.resourcePacks))
 	}
 }
 

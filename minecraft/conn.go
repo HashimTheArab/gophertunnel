@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -344,6 +345,8 @@ type Conn struct {
 	// resourcePackDownload controls the number of chunk requests issued by a
 	// Dialer while downloading a resource pack.
 	resourcePackDownload ResourcePackDownloadConfig
+	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
+	httpClient *http.Client
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
@@ -1917,7 +1920,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
+			newPack, err := resource.ReadURLWithClient(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size)
 			if err != nil {
 				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
 			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
@@ -1953,6 +1956,14 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
+}
+
+// packHTTPClient returns the client for URL pack downloads.
+func (conn *Conn) packHTTPClient() *http.Client {
+	if conn.httpClient != nil {
+		return conn.httpClient
+	}
+	return http.DefaultClient
 }
 
 // storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
