@@ -297,7 +297,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 
 				d.PlayFabClient = client
 			}
-			m = &multiplayerTokenSource{src: e.TokenSource(d.PlayFabClient, service.TokenConfig{}), env: e}
+			m = NewMultiplayerTokenSource(e, e.TokenSource(d.PlayFabClient, service.TokenConfig{}))
 		}
 		token, err = m.MultiplayerToken(ctx, &key.PublicKey)
 		if err != nil {

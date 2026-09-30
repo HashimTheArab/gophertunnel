@@ -285,11 +285,37 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 // claim of the token.
 // Servers can verify this JWT using the remote OpenID configuration published by the
 // authorization service and validate the claims to authenticate the player.
+//
+// If the service rejects the service token as unauthorized and src implements [TokenInvalidator],
+// the token is invalidated and the request is retried once with a fresh one.
 func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, error) {
+	jwt, rejected, err := e.multiplayerToken(ctx, src, key)
+	invalidator, ok := src.(TokenInvalidator)
+	if rejected == nil || !ok {
+		return jwt, err
+	}
+	invalidator.InvalidateServiceToken(rejected)
+	jwt, _, err = e.multiplayerToken(ctx, src, key)
+	return jwt, err
+}
+
+// multiplayerToken requests one multiplayer token; it returns the service token when the
+// service rejected it as unauthorized.
+func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, *Token, error) {
 	token, err := src.ServiceToken(ctx)
 	if err != nil {
-		return "", fmt.Errorf("request service token: %w", err)
+		return "", nil, fmt.Errorf("request service token: %w", err)
 	}
+	jwt, err := e.startMultiplayerSession(ctx, token, key)
+	var responseErr *ResponseError
+	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusUnauthorized {
+		return "", token, err
+	}
+	return jwt, nil, err
+}
+
+// startMultiplayerSession exchanges token for a multiplayer token bound to key.
+func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, token *Token, key *ecdsa.PublicKey) (string, error) {
 	b, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		return "", fmt.Errorf("encode public key: %w", err)
