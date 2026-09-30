@@ -93,9 +93,20 @@ func (encoder *Encoder) SetBatchEncodeObserver(observer BatchEncodeObserver) {
 	encoder.observer = observer
 }
 
-// Encode encodes the packets passed. It writes all of them as a single packet which is  compressed and
-// optionally encrypted.
+// Encode encodes the packets passed, compressed and optionally encrypted. It writes them as one batch,
+// or as consecutive batches of at most the decoder's per-batch packet limit, in order.
 func (encoder *Encoder) Encode(packets [][]byte) error {
+	for len(packets) > maximumInBatch {
+		if err := encoder.encodeBatch(packets[:maximumInBatch]); err != nil {
+			return err
+		}
+		packets = packets[maximumInBatch:]
+	}
+	return encoder.encodeBatch(packets)
+}
+
+// encodeBatch writes packets as a single batch.
+func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	var compressedBuf *bytes.Buffer
 	defer func() {
