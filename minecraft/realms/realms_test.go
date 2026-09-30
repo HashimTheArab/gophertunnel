@@ -196,3 +196,26 @@ func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
 		t.Fatalf("relying parties = %v", src.parties)
 	}
 }
+
+// The pending invite count is a bare integer body; anything else is an error, never zero.
+func TestClientPendingInviteCount(t *testing.T) {
+	for body, want := range map[string]int{"3": 3, " 0\n": 0} {
+		c := &Client{requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
+			if method != http.MethodGet || path != "/invites/count/pending" {
+				t.Fatalf("request = %s %s", method, path)
+			}
+			return []byte(body), http.StatusOK, nil
+		}}
+		if got, err := c.PendingInviteCount(context.Background()); err != nil || got != want {
+			t.Fatalf("PendingInviteCount(%q) = %d, %v", body, got, err)
+		}
+	}
+	for _, body := range []string{"", "-1", `{"count":2}`} {
+		c := &Client{requestFunc: func(context.Context, string, string, []byte) ([]byte, int, error) {
+			return []byte(body), http.StatusOK, nil
+		}}
+		if _, err := c.PendingInviteCount(context.Background()); err == nil {
+			t.Fatalf("PendingInviteCount(%q) accepted a malformed body", body)
+		}
+	}
+}

@@ -511,6 +511,27 @@ func (c *Client) AcceptRealmInviteCode(ctx context.Context, code string) (Realm,
 	return realm, nil
 }
 
+// PendingInviteCount returns how many Realm invites await the player's answer.
+func (c *Client) PendingInviteCount(ctx context.Context) (int, error) {
+	body, _, err := c.requestGet(ctx, "/invites/count/pending")
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil || count < 0 {
+		return 0, fmt.Errorf("realms: invalid pending invite count %q", truncateBody(body))
+	}
+	return count, nil
+}
+
+// truncateBody bounds a response body quoted in an error.
+func truncateBody(body []byte) string {
+	if len(body) > 64 {
+		return string(body[:64]) + "..."
+	}
+	return string(body)
+}
+
 // Realms gets a list of all realms the token has access to.
 func (c *Client) Realms(ctx context.Context) ([]Realm, error) {
 	body, _, err := c.requestGet(ctx, "/worlds")
