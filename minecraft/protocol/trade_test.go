@@ -36,25 +36,24 @@ func TestTrade_DecodeAdvertisedOffers(t *testing.T) {
 	if len(offers) != 1 {
 		t.Fatalf("offers = %d, want 1", len(offers))
 	}
-	// Every public offer field must be explicitly covered: extending the typed
-	// view without extending its decoder or this fixture cannot silently pass.
-	want := map[string]any{
-		"NetworkID": uint32(42), "Tier": int32(2), "Uses": int32(3), "MaxUses": int32(12),
-		"BuyA":       TradeItem{Name: "minecraft:emerald", Count: 14, compound: buyA},
-		"BuyB":       TradeItem{Name: "minecraft:book", Count: 1, compound: buyB},
-		"Sell":       TradeItem{Name: "minecraft:enchanted_book", Metadata: 6, Count: 1, compound: sell},
-		"BaseCountA": int32(10), "BaseCountB": int32(1), "Demand": int32(4),
-		"PriceMultiplierA": float32(0.2), "PriceMultiplierB": float32(0.1),
+	want := TradeOffer{
+		NetworkID: 42, Tier: 2, Uses: 3, MaxUses: 12,
+		BuyA:       TradeItem{Name: "minecraft:emerald", Count: 14, compound: buyA},
+		BuyB:       TradeItem{Name: "minecraft:book", Count: 1, compound: buyB},
+		Sell:       TradeItem{Name: "minecraft:enchanted_book", Metadata: 6, Count: 1, compound: sell},
+		BaseCountA: 10, BaseCountB: 1, Demand: 4,
+		PriceMultiplierA: 0.2, PriceMultiplierB: 0.1,
 	}
-	typed := reflect.ValueOf(offers[0])
+	if !reflect.DeepEqual(offers[0], want) {
+		t.Fatalf("offer = %#v, want %#v", offers[0], want)
+	}
+	// Every public offer field must carry a non-zero fixture value: extending
+	// the typed view without extending its decoder or this fixture cannot
+	// silently pass.
+	typed := reflect.ValueOf(want)
 	for index := 0; index < typed.NumField(); index++ {
-		name := typed.Type().Field(index).Name
-		expected, present := want[name]
-		if !present {
-			t.Fatalf("TradeOffer field %s has no decoder fixture", name)
-		}
-		if got := typed.Field(index).Interface(); !reflect.DeepEqual(got, expected) {
-			t.Errorf("%s = %#v, want %#v", name, got, expected)
+		if typed.Field(index).IsZero() {
+			t.Errorf("TradeOffer field %s has no decoder fixture", typed.Type().Field(index).Name)
 		}
 	}
 	if !reflect.DeepEqual(offers[0].Sell.NBT(), sell) {

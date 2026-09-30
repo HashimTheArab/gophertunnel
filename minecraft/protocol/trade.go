@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -60,15 +61,14 @@ func DecodeTradeOffers(data []byte) ([]TradeOffer, error) {
 		return nil, fmt.Errorf("decode trade offers: %w", err)
 	}
 	if buffer.Len() != 0 {
-		return nil, fmt.Errorf("decode trade offers: trailing NBT data")
+		return nil, errors.New("decode trade offers: trailing NBT data")
 	}
-	value, present := root["Recipes"]
-	if !present {
-		return nil, fmt.Errorf("decode trade offers: missing Recipes")
+	var list []any
+	if err := tradeRequired(root, "Recipes", &list); err != nil {
+		return nil, fmt.Errorf("decode trade offers: %w", err)
 	}
-	list, ok := value.([]any)
-	if !ok || len(list) > maxTradeOffers {
-		return nil, fmt.Errorf("decode trade offers: invalid Recipes")
+	if len(list) > maxTradeOffers {
+		return nil, fmt.Errorf("decode trade offers: %d recipes exceed limit %d", len(list), maxTradeOffers)
 	}
 	offers := make([]TradeOffer, len(list))
 	for index, value := range list {
@@ -76,97 +76,88 @@ func DecodeTradeOffers(data []byte) ([]TradeOffer, error) {
 		if !ok {
 			return nil, fmt.Errorf("decode trade offer %d: expected compound", index)
 		}
-		offer, err := decodeTradeOffer(compound)
-		if err != nil {
+		if err := offers[index].decode(compound); err != nil {
 			return nil, fmt.Errorf("decode trade offer %d: %w", index, err)
 		}
-		offers[index] = offer
 	}
 	return offers, nil
 }
 
-func decodeTradeOffer(compound map[string]any) (TradeOffer, error) {
-	var offer TradeOffer
+func (offer *TradeOffer) decode(compound map[string]any) error {
 	var networkID int32
-	ints := []struct {
-		key string
-		out *int32
-	}{
-		{"netId", &networkID}, {"tier", &offer.Tier},
-		{"uses", &offer.Uses}, {"maxUses", &offer.MaxUses},
-		{"buyCountA", &offer.BaseCountA}, {"buyCountB", &offer.BaseCountB},
-		{"demand", &offer.Demand},
-	}
-	for _, field := range ints {
-		if value, present := compound[field.key]; present {
-			var ok bool
-			*field.out, ok = value.(int32)
-			if !ok {
-				return offer, fmt.Errorf("%s: expected int", field.key)
-			}
-		}
-	}
-	if networkID < 0 || offer.Tier < 0 || offer.Uses < 0 || offer.MaxUses < 0 ||
-		offer.BaseCountA < 0 || offer.BaseCountB < 0 {
-		return offer, fmt.Errorf("negative recipe identity, tier, uses, or base count")
-	}
+	err := errors.Join(
+		tradeCounter(compound, "netId", &networkID),
+		tradeCounter(compound, "tier", &offer.Tier),
+		tradeCounter(compound, "uses", &offer.Uses),
+		tradeCounter(compound, "maxUses", &offer.MaxUses),
+		tradeCounter(compound, "buyCountA", &offer.BaseCountA),
+		tradeCounter(compound, "buyCountB", &offer.BaseCountB),
+		tradeOptional(compound, "demand", &offer.Demand),
+		tradeMultiplier(compound, "priceMultiplierA", &offer.PriceMultiplierA),
+		tradeMultiplier(compound, "priceMultiplierB", &offer.PriceMultiplierB),
+		offer.BuyA.decode(compound, "buyA"),
+		offer.BuyB.decode(compound, "buyB"),
+		offer.Sell.decode(compound, "sell"),
+	)
 	offer.NetworkID = uint32(networkID)
-	for _, field := range []struct {
-		key string
-		out *float32
-	}{
-		{"priceMultiplierA", &offer.PriceMultiplierA},
-		{"priceMultiplierB", &offer.PriceMultiplierB},
-	} {
-		if value, present := compound[field.key]; present {
-			var ok bool
-			*field.out, ok = value.(float32)
-			if !ok || math.IsNaN(float64(*field.out)) || math.IsInf(float64(*field.out), 0) {
-				return offer, fmt.Errorf("%s: expected finite float", field.key)
-			}
-		}
-	}
-	for _, field := range []struct {
-		key string
-		out *TradeItem
-	}{
-		{"buyA", &offer.BuyA}, {"buyB", &offer.BuyB}, {"sell", &offer.Sell},
-	} {
-		if value, present := compound[field.key]; present {
-			var err error
-			*field.out, err = decodeTradeItem(value)
-			if err != nil {
-				return offer, fmt.Errorf("%s: %w", field.key, err)
-			}
-		}
-	}
-	return offer, nil
+	return err
 }
 
-func decodeTradeItem(value any) (TradeItem, error) {
-	compound, ok := value.(map[string]any)
+// decode reads the optional item compound under key. An absent or empty
+// compound leaves the item zero.
+func (i *TradeItem) decode(offer map[string]any, key string) error {
+	var compound, tag map[string]any
+	if err := tradeOptional(offer, key, &compound); err != nil || len(compound) == 0 {
+		return err
+	}
+	err := errors.Join(
+		tradeRequired(compound, "Name", &i.Name),
+		tradeRequired(compound, "Count", &i.Count),
+		tradeRequired(compound, "Damage", &i.Metadata),
+		tradeOptional(compound, "tag", &tag),
+	)
+	if err == nil && i.Name == "" {
+		err = errors.New("empty Name")
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	i.compound = compound
+	return nil
+}
+
+// tradeRequired stores compound[key] in out, failing if it is absent or not
+// of the NBT type T.
+func tradeRequired[T any](compound map[string]any, key string, out *T) error {
+	value, ok := compound[key].(T)
 	if !ok {
-		return TradeItem{}, fmt.Errorf("expected item compound")
+		return fmt.Errorf("%s: expected %T", key, value)
 	}
-	if len(compound) == 0 {
-		return TradeItem{}, nil
+	*out = value
+	return nil
+}
+
+// tradeOptional is tradeRequired for fields that default to zero when absent.
+func tradeOptional[T any](compound map[string]any, key string, out *T) error {
+	if _, present := compound[key]; !present {
+		return nil
 	}
-	name, ok := compound["Name"].(string)
-	if !ok || name == "" {
-		return TradeItem{}, fmt.Errorf("invalid Name")
+	return tradeRequired(compound, key, out)
+}
+
+// tradeCounter reads an optional recipe ID, tier, use count or base count,
+// none of which may be negative.
+func tradeCounter(compound map[string]any, key string, out *int32) error {
+	if err := tradeOptional(compound, key, out); err != nil || *out >= 0 {
+		return err
 	}
-	count, ok := compound["Count"].(byte)
-	if !ok {
-		return TradeItem{}, fmt.Errorf("item Count: expected byte")
+	return fmt.Errorf("%s: negative value %d", key, *out)
+}
+
+func tradeMultiplier(compound map[string]any, key string, out *float32) error {
+	if err := tradeOptional(compound, key, out); err != nil ||
+		!math.IsNaN(float64(*out)) && !math.IsInf(float64(*out), 0) {
+		return err
 	}
-	metadata, ok := compound["Damage"].(int16)
-	if !ok {
-		return TradeItem{}, fmt.Errorf("item Damage: expected short")
-	}
-	if tag, present := compound["tag"]; present {
-		if _, ok := tag.(map[string]any); !ok {
-			return TradeItem{}, fmt.Errorf("tag: expected compound")
-		}
-	}
-	return TradeItem{Name: name, Metadata: metadata, Count: count, compound: compound}, nil
+	return fmt.Errorf("%s: expected finite float", key)
 }
