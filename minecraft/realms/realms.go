@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -50,8 +51,15 @@ var (
 	ErrRealmNotFound    = errors.New("realm not found")
 )
 
+// XSTSSource supplies cached XSTS tokens per relying party; a go-xsapi token source implements it.
+type XSTSSource interface {
+	XSTSToken(ctx context.Context, relyingParty string) (*xsts.Token, error)
+}
+
 // NewClient returns a new Client instance with the supplied token source for authentication.
-// If httpClient is nil, http.DefaultClient will be used to request the realms api.
+// A src that also implements [XSTSSource] supplies the Realms XSTS token directly, sharing its
+// cache instead of starting a new SISU session. If httpClient is nil, http.DefaultClient will be
+// used to request the realms api.
 // Xbox auth requests keep using the auth package's default client unless a
 // caller explicitly supplies a client here or in ctx.
 func NewClient(src oauth2.TokenSource, httpClient *http.Client) *Client {
@@ -317,6 +325,16 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 		return nil, fmt.Errorf("token source is nil")
 	}
 	ctx = auth.WithContextClient(ctx, r.authHTTPClient)
+	if src, ok := r.tokenSrc.(XSTSSource); ok {
+		token, err := src.XSTSToken(ctx, realmsRelyingParty)
+		if err != nil {
+			return nil, err
+		}
+		if !token.Valid() {
+			return nil, errors.New("realms: invalid XSTS token")
+		}
+		return &auth.XBLToken{AuthorizationToken: token}, nil
+	}
 
 	t, err := r.tokenSrc.Token()
 	if err != nil {
