@@ -40,7 +40,8 @@ type Dialer struct {
 	ErrorLog *slog.Logger
 
 	// HTTPClient is the HTTP client used for outbound HTTP requests needed by the dialer,
-	// such as fetching OpenID configuration/JWKs when authentication is enabled.
+	// such as fetching OpenID configuration/JWKs when authentication is enabled and
+	// downloading resource packs the server offers by URL.
 	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client
 
@@ -348,6 +349,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
+	conn.httpClient = d.HTTPClient
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
