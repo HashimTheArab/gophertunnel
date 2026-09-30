@@ -8,6 +8,10 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/df-mc/go-xsapi/v2/xal/xasu"
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"golang.org/x/oauth2"
 )
 
 func TestRealmAddressRequestsImmediately(t *testing.T) {
@@ -161,5 +165,34 @@ func TestClientOptInToStoryTimelinePreservesSettings(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+type xstsTokenSource struct {
+	parties []string
+}
+
+func (s *xstsTokenSource) Token() (*oauth2.Token, error) {
+	return nil, errors.New("the OAuth token must not be used when an XSTS source is supplied")
+}
+
+func (s *xstsTokenSource) XSTSToken(_ context.Context, relyingParty string) (*xsts.Token, error) {
+	s.parties = append(s.parties, relyingParty)
+	return &xsts.Token{
+		Token:         "shared",
+		NotAfter:      time.Now().Add(time.Hour),
+		DisplayClaims: xsts.DisplayClaims{UserInfo: []xsts.UserInfo{{UserInfo: xasu.UserInfo{UserHash: "hash"}}}},
+	}, nil
+}
+
+// A token source that supplies XSTS tokens is used directly instead of a new SISU session.
+func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
+	src := new(xstsTokenSource)
+	token, err := NewClient(src, nil).xboxToken(context.Background())
+	if err != nil || token.AuthorizationToken.Token != "shared" {
+		t.Fatalf("xboxToken = %v, %v", token, err)
+	}
+	if !reflect.DeepEqual(src.parties, []string{realmsRelyingParty}) {
+		t.Fatalf("relying parties = %v", src.parties)
 	}
 }
