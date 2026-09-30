@@ -157,11 +157,11 @@ func decodeTradeItem(value any) (TradeItem, error) {
 	}
 	count, ok := compound["Count"].(byte)
 	if !ok {
-		return TradeItem{}, fmt.Errorf("Count: expected byte")
+		return TradeItem{}, fmt.Errorf("item Count: expected byte")
 	}
 	metadata, ok := compound["Damage"].(int16)
 	if !ok {
-		return TradeItem{}, fmt.Errorf("Damage: expected short")
+		return TradeItem{}, fmt.Errorf("item Damage: expected short")
 	}
 	if tag, present := compound["tag"]; present {
 		if _, ok := tag.(map[string]any); !ok {
