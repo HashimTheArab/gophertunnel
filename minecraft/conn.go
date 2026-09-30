@@ -347,6 +347,9 @@ type Conn struct {
 	resourcePackDownload ResourcePackDownloadConfig
 	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
 	httpClient *http.Client
+	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
+	resourcePackProgress   func(ResourcePackEvent)
+	resourcePackProgressMu sync.Mutex
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
@@ -1914,22 +1917,30 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			case cachedPack != nil:
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(ResourcePackEvent{Kind: ResourcePackFinished, Source: ResourcePackSourceCache, UUID: pack.UUID, Version: pack.Version, Size: uint64(max(cachedPack.Size(), 0))})
 				continue
 			}
 		}
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURLWithClient(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size)
+			event := ResourcePackEvent{Source: ResourcePackSourceURL, UUID: pack.UUID, Version: pack.Version}
+			conn.reportResourcePack(event.with(ResourcePackStarted, pack.Size, nil))
+			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
+				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
+			})
+			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
+			}
 			if err != nil {
-				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
-			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
-				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "version", pack.Version, "download_url", pack.DownloadURL, "err", err)
+				conn.reportResourcePack(event.with(ResourcePackFailed, 0, err))
 			} else {
 				newPack = newPack.WithContentKey(pack.ContentKey)
 				conn.resourcePacks = append(conn.resourcePacks, newPack)
 				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(event.with(ResourcePackFinished, 0, nil))
 				continue
 			}
 		}
@@ -1964,6 +1975,21 @@ func (conn *Conn) packHTTPClient() *http.Client {
 		return conn.httpClient
 	}
 	return http.DefaultClient
+}
+
+// reportResourcePack passes event to the Dialer's ResourcePackProgress, if any.
+func (conn *Conn) reportResourcePack(event ResourcePackEvent) {
+	if conn.resourcePackProgress == nil {
+		return
+	}
+	conn.resourcePackProgressMu.Lock()
+	defer conn.resourcePackProgressMu.Unlock()
+	conn.resourcePackProgress(event)
+}
+
+func (event ResourcePackEvent) with(kind ResourcePackEventKind, size uint64, err error) ResourcePackEvent {
+	event.Kind, event.Size, event.Err = kind, size, err
+	return event
 }
 
 // storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
@@ -2226,9 +2252,17 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	conn.packMu.Lock()
 	conn.packQueue.awaitingPacks[id] = pack
 	conn.packMu.Unlock()
+	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
+	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
 
 	idCopy := pk.UUID
 	go func() {
+		finished := false
+		defer func() {
+			if !finished {
+				conn.reportResourcePack(pack.event.with(ResourcePackFailed, 0, cmp.Or(context.Cause(conn.ctx), net.ErrClosed)))
+			}
+		}()
 		fragments := make(map[uint32][]byte)
 		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
@@ -2308,6 +2342,8 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				return
 			}
 		}
+		finished = true
+		conn.reportResourcePack(pack.event.with(ResourcePackFinished, 0, nil))
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
@@ -2347,6 +2383,7 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 	// The data is cloned as the decoder may reuse the packet's backing array once this handler returns.
 	select {
 	case pack.newFrag <- resourcePackChunk{index: pk.ChunkIndex, data: bytes.Clone(pk.Data)}:
+		conn.reportResourcePack(pack.event.with(ResourcePackReceived, uint64(len(pk.Data)), nil))
 		return nil
 	case <-conn.ctx.Done():
 		return conn.ctx.Err()

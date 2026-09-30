@@ -65,6 +65,19 @@ func ReadBytes(data []byte) (*Pack, error) {
 	return compile(data, true)
 }
 
+type progressReader struct {
+	r        io.Reader
+	progress func(int)
+}
+
+func (r progressReader) Read(b []byte) (int, error) {
+	n, err := r.r.Read(b)
+	if n > 0 {
+		r.progress(n)
+	}
+	return n, err
+}
+
 // ReadURL downloads a resource pack found at the URL passed and compiles it. The resource pack must be a valid
 // zip archive where the manifest.json file is inside a subdirectory rather than the root itself. If the resource
 // pack is not a valid zip or there is no manifest.json file, an error is returned.
@@ -75,7 +88,7 @@ func ReadURL(url string) (*Pack, error) {
 // ReadURLContext downloads a resource pack found at the URL passed and compiles it. The request is canceled
 // when ctx is done.
 func ReadURLContext(ctx context.Context, url string) (*Pack, error) {
-	return readURLContext(ctx, http.DefaultClient, url, 0)
+	return readURLContext(ctx, http.DefaultClient, url, 0, nil)
 }
 
 // ReadURLContextLimit downloads a resource pack found at the URL passed and compiles it, reading at most maxSize
@@ -87,16 +100,21 @@ func ReadURLContextLimit(ctx context.Context, url string, maxSize uint64) (*Pack
 // ReadURLWithClient is ReadURLContextLimit through client, for callers that must restrict where a
 // server-supplied URL may connect.
 func ReadURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64) (*Pack, error) {
+	return ReadURLWithProgress(ctx, client, url, maxSize, nil)
+}
+
+// ReadURLWithProgress is ReadURLWithClient that calls progress, if non-nil, with each count of body bytes read.
+func ReadURLWithProgress(ctx context.Context, client *http.Client, url string, maxSize uint64, progress func(int)) (*Pack, error) {
 	if maxSize == 0 {
 		return nil, errors.New("download resource pack: max size must be greater than 0")
 	}
 	if maxSize > math.MaxInt64 {
 		return nil, fmt.Errorf("download resource pack: max size %d exceeds supported limit", maxSize)
 	}
-	return readURLContext(ctx, client, url, int64(maxSize))
+	return readURLContext(ctx, client, url, int64(maxSize), progress)
 }
 
-func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64) (*Pack, error) {
+func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64, progress func(int)) (*Pack, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create resource pack request: %w", err)
@@ -115,6 +133,9 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 			return nil, fmt.Errorf("download resource pack: response size %d exceeds limit %d", resp.ContentLength, maxSize)
 		}
 		r = io.LimitReader(resp.Body, maxSize+1)
+	}
+	if progress != nil {
+		r = progressReader{r: r, progress: progress}
 	}
 	data, err := io.ReadAll(r)
 	if err != nil {
