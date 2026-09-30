@@ -154,3 +154,35 @@ func (snapshot ResourcePackOfferSnapshot) Packs() []*resource.Pack {
 	}
 	return packs
 }
+
+// ProjectResourcePacks restricts a proxied offer and stack to the downloaded packs keep accepts, in their
+// original order. Offer entries without kept content are dropped and a kept entry advertises the size of the
+// content that will be served; stack entries naming a dropped offer entry are dropped, while entries the offer
+// never named (built-in packs) remain.
+func ProjectResourcePacks(offer ResourcePackOfferSnapshot, stack ResourcePackStackSnapshot, keep func(*resource.Pack) bool) (ResourcePackOfferSnapshot, ResourcePackStackSnapshot) {
+	type key struct{ uuid, version string }
+	offered, kept := map[key]bool{}, map[key]bool{}
+	projectedOffer := offer
+	projectedOffer.texturePacks = nil
+	for _, entry := range offer.texturePacks {
+		id := key{entry.info.UUID.String(), entry.info.Version}
+		offered[id] = true
+		if entry.pack == nil || !keep(entry.pack) {
+			continue
+		}
+		kept[id] = true
+		entry.info.Size = uint64(max(entry.pack.Size(), 0))
+		entry.pack = entry.pack.Clone()
+		projectedOffer.texturePacks = append(projectedOffer.texturePacks, entry)
+	}
+	entries := make([]ResourcePackStackEntry, 0, len(stack.entries))
+	for _, entry := range stack.entries {
+		id := key{entry.uuid, entry.version}
+		if offered[id] && !kept[id] {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	projectedStack := newResourcePackStackSnapshot(entries, stack.required, stack.baseGameVersion, stack.experiments, stack.experimentsPreviouslyToggled, stack.includeEditorPacks)
+	return projectedOffer, projectedStack
+}
