@@ -947,3 +947,100 @@ func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing
 		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
+
+// A relayed startup reaches the caller unchanged, the Conn sends none of the spawn sequence itself, and the
+// caller's own RequestChunkRadius is the first packet the server sees after StartGame.
+func TestRelayStartupDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.T) {
+	startGame := &packet.StartGame{WorldName: "Relayed", LevelID: "level-id", ServerID: "server-id", WorldID: "world-id", ScenarioID: "scenario", OwnerID: "owner", EntityRuntimeID: 7, EntityUniqueID: 7, BaseGameVersion: "1.26.50"}
+	startup := []packet.Packet{
+		&packet.DimensionData{},
+		startGame,
+		&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}},
+		&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+	}
+	serverSaw := make(chan packet.Header, 1)
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder := packet.NewDecoder(conn)
+		encoder := packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{CompressionThreshold: math.MaxUint16, CompressionAlgorithm: packet.CompressionAlgorithmFlate}); err != nil {
+			return err
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		for _, step := range []packet.Packet{&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}, &packet.ResourcePacksInfo{}, &packet.ResourcePackStack{}} {
+			if _, err := decoder.Decode(); err != nil {
+				return err
+			}
+			if err := encodeScriptedPackets(encoder, step); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Decode(); err != nil { // ResourcePackClientResponse completed
+			return err
+		}
+		if err := encodeScriptedPackets(encoder, startup...); err != nil {
+			return err
+		}
+		batch, err := decoder.Decode()
+		if err != nil {
+			return err
+		}
+		var header packet.Header
+		if err := header.Read(bytes.NewBuffer(batch[0])); err != nil {
+			return err
+		}
+		serverSaw <- header
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1, RelayStartup: true}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	for _, want := range startup {
+		got, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("read %T: %v", want, err)
+		}
+		if !bytes.Equal(marshalScripted(got), marshalScripted(want)) {
+			t.Fatalf("relayed %T differs from the server's", want)
+		}
+	}
+	if conn.GameData().WorldName != "Relayed" || conn.shieldID.Load() != 355 {
+		t.Fatalf("relaying Conn did not record StartGame and the item table")
+	}
+	if err := conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 7, MaxChunkRadius: 7}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Flush()
+	if header := <-serverSaw; header.PacketID != packet.IDRequestChunkRadius {
+		t.Fatalf("first packet after StartGame = %d, want the caller's RequestChunkRadius", header.PacketID)
+	}
+	if err := <-network.done; err != nil {
+		t.Fatalf("scripted server: %v", err)
+	}
+}
+
+func marshalScripted(pk packet.Packet) []byte {
+	buf := new(bytes.Buffer)
+	pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	return buf.Bytes()
+}
+
+// A relaying listener that forwards an ItemRegistry decodes the client's shield stacks with it.
+func TestWrittenItemRegistrySetsTheShieldID(t *testing.T) {
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, true)
+	defer conn.Abort()
+	_ = conn.WritePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
+	if got := conn.shieldID.Load(); got != 355 {
+		t.Fatalf("shield ID = %d, want 355", got)
+	}
+}

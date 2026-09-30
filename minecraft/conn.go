@@ -347,6 +347,9 @@ type Conn struct {
 	resourcePackDownload ResourcePackDownloadConfig
 	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
 	httpClient *http.Client
+	// relayStartup delivers StartGame and everything after it to the caller instead of spawning; relaying is
+	// set once StartGame has arrived.
+	relayStartup, relaying bool
 	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
 	resourcePackProgress   func(ResourcePackEvent)
 	resourcePackProgressMu sync.Mutex
@@ -636,6 +639,10 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}()
 
 	for _, pk := range pks {
+		if registry, ok := pk.(*packet.ItemRegistry); ok {
+			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
+			conn.observeShield(registry.Items)
+		}
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
 			conn.hdr.PacketID = converted.ID()
@@ -1265,6 +1272,11 @@ func (conn *Conn) receive(data []byte) error {
 		// it decoded to something else. Restore the payload and deliver it like any other packet.
 		pkData.payload = bytes.NewBuffer(payload)
 	}
+	if conn.relayStartup {
+		if relayed, err := conn.relayStartupPacket(pkData); relayed || err != nil {
+			return err
+		}
+	}
 	if conn.disablePacketHandling {
 		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
 			return err
@@ -1299,6 +1311,54 @@ func (conn *Conn) receive(data []byte) error {
 		return nil
 	}
 	return conn.handle(pkData)
+}
+
+// relayStartupPacket delivers a packet of a relayed startup to the caller unchanged, first recording what
+// the Conn itself needs from StartGame, DimensionData and ItemRegistry to decode later packets.
+func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
+	id := pkData.h.PacketID
+	if !conn.relaying && id != packet.IDStartGame && id != packet.IDDimensionData {
+		return false, nil
+	}
+	switch id {
+	case packet.IDStartGame, packet.IDDimensionData, packet.IDItemRegistry:
+		probe := &packetData{h: pkData.h, full: pkData.full, payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())), owned: true}
+		pks, err := probe.decodePacket(conn)
+		if err != nil {
+			return true, err
+		}
+		for _, pk := range pks {
+			switch pk := pk.(type) {
+			case *packet.StartGame:
+				dimensions := conn.gameData.Dimensions
+				conn.gameData = GameDataFromStartGame(pk)
+				conn.gameData.Dimensions = dimensions
+				conn.relaying, conn.loggedIn = true, true
+			case *packet.DimensionData:
+				conn.gameData.Dimensions = pk.Definitions
+			case *packet.ItemRegistry:
+				conn.observeItems(pk.Items)
+			}
+		}
+	}
+	if !conn.collectPacket(pkData) {
+		conn.queuePacket(pkData)
+	}
+	return true, nil
+}
+
+// observeItems records the item table used to decode shield item stacks.
+func (conn *Conn) observeItems(items []protocol.ItemEntry) {
+	conn.gameData.Items = items
+	conn.observeShield(items)
+}
+
+func (conn *Conn) observeShield(items []protocol.ItemEntry) {
+	for _, item := range items {
+		if item.Name == "minecraft:shield" {
+			conn.shieldID.Store(int32(item.RuntimeID))
+		}
+	}
 }
 
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
@@ -2552,12 +2612,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 // handleItemRegistry handles an incoming ItemRegistry packet. It contains the item definitions that the client
 // should use, including the shield ID which is necessary for reading and writing items in the future.
 func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
-	conn.gameData.Items = pk.Items
-	for _, item := range pk.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-		}
-	}
+	conn.observeItems(pk.Items)
 
 	// _ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
