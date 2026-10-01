@@ -230,3 +230,34 @@ func TestChunkDownloadReportsProgressAndCancellation(t *testing.T) {
 		_ = peer.Close()
 	}
 }
+
+// A Conn without a flush ticker still sends a chunk download's requests: the download flushes them itself.
+func TestChunkDownloadFlushesItsRequestsWithoutATicker(t *testing.T) {
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	sent := make(chan struct{})
+	go func() {
+		buf := make([]byte, 1)
+		if _, err := peer.Read(buf); err == nil {
+			close(sent)
+		}
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	id := uuid.New()
+	conn.packQueue = &resourcePackQueue{
+		packAmount:       1,
+		downloadingPacks: map[string]*downloadingPack{id.String(): {buf: new(bytes.Buffer), size: 10, cacheKey: ResourcePackCacheKey{UUID: id, Version: "1.0.0"}}},
+		awaitingPacks:    make(map[string]*downloadingPack),
+	}
+	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: id.String() + "_1.0.0", DataChunkSize: 5, Size: 10}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-sent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("chunk requests stayed buffered on a Conn with no flush ticker")
+	}
+}
