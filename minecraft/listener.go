@@ -398,11 +398,12 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 // use Conn.ReadPacket (or Conn.ReadBatch when batch reading is enabled) and Conn.WritePacket.
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
-	conn, ok := <-listener.incoming
-	if !ok {
+	select {
+	case <-listener.close:
 		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: net.ErrClosed}
+	case conn := <-listener.incoming:
+		return conn, nil
 	}
-	return conn, nil
 }
 
 // Disconnect disconnects a Minecraft Conn passed by first sending a disconnect with the message passed, and
@@ -496,7 +497,7 @@ func (listener *Listener) listen() {
 	}()
 	defer func() {
 		close(listener.close)
-		close(listener.incoming)
+		// Delivery goroutines may still be sending. The close signal wakes both them and Accept.
 		_ = listener.Close()
 	}()
 	for {
@@ -659,8 +660,7 @@ func (listener *Listener) deliverConn(conn *Conn) bool {
 	}
 	select {
 	case <-listener.close:
-		// The listener was closed while this one was logged in, so the incoming channel will be closed. Just return
-		// so the connection is closed and cleaned up.
+		// The listener closed while this connection was logging in. Return so it is cleaned up.
 		return false
 	case listener.incoming <- conn:
 		// The connection was previously not logged in, but was after receiving this packet, meaning the connection is

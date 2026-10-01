@@ -38,6 +38,65 @@ func TestListenConfigListenNetworkUsesExplicitNetwork(t *testing.T) {
 	}
 }
 
+// Listener shutdown must wake Accept without closing a channel that still has senders.
+func TestListenerShutdownUnblocksAccept(t *testing.T) {
+	listener := newShutdownTestListener()
+	done := make(chan error, 1)
+	go func() {
+		_, err := listener.Accept()
+		done <- err
+	}()
+	listener.listen()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept error = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Accept remained blocked after shutdown")
+	}
+}
+
+// Login goroutines may still be delivering connections when the network listener shuts down.
+func TestListenerShutdownWithPendingDelivery(t *testing.T) {
+	listener := newShutdownTestListener()
+	const deliveries = 32
+	done := make(chan any, deliveries)
+	start := make(chan struct{})
+	for range deliveries {
+		go func() {
+			defer func() { done <- recover() }()
+			<-start
+			if listener.deliverConn(new(Conn)) {
+				t.Error("connection delivered without an Accept caller")
+			}
+		}()
+	}
+	close(start)
+	listener.listen()
+	for range deliveries {
+		select {
+		case recovered := <-done:
+			if recovered != nil {
+				t.Errorf("connection delivery panicked during shutdown: %v", recovered)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("connection delivery remained blocked after shutdown")
+		}
+	}
+}
+
+// newShutdownTestListener creates a listener whose underlying Accept immediately reports closure.
+func newShutdownTestListener() *Listener {
+	return &Listener{
+		cfg:      ListenConfig{StatusProvider: NewStatusProvider("test", "test")},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
+		incoming: make(chan *Conn),
+		close:    make(chan struct{}),
+	}
+}
+
 func TestListenerDisablePacketEncryption(t *testing.T) {
 	t.Parallel()
 
