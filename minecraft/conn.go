@@ -2341,13 +2341,19 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		// fillWindow replenishes one request for each response accepted by the client.
+		// fillWindow replenishes one request for each response accepted by the client. It flushes the
+		// requests itself: this goroutine runs outside packet handling, and the Conn may have no flush ticker.
 		fillWindow := func() error {
+			requested := false
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
 				if err := requestChunk(nextRequest); err != nil {
 					return fmt.Errorf("request chunk %v: %w", nextRequest, err)
 				}
 				nextRequest++
+				requested = true
+			}
+			if requested {
+				return conn.Flush()
 			}
 			return nil
 		}
@@ -2399,6 +2405,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			conn.expect(packet.IDResourcePackStack, packet.IDPlayStatus)
 			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
+				return
+			}
+			if err := conn.Flush(); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: flush completion: %w", id, err))
 				return
 			}
 		}
