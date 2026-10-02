@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestItemEntrySlotCapabilities(t *testing.T) {
 	boolPtr := func(value bool) *bool { return &value }
@@ -65,4 +68,25 @@ func TestItemEntrySlotCapabilities(t *testing.T) {
 
 func wearableComponents(slot any) map[string]any {
 	return map[string]any{"minecraft:wearable": map[string]any{"slot": slot}}
+}
+
+func TestStackRequestItem_ItemStackPreservesEveryWireField(t *testing.T) {
+	result := StackRequestItem{Identifier: "minecraft:stone", MetadataValue: 7, BlockRuntimeID: 123, Count: 4, NBTData: map[string]any{"custom": "value"}, CanBePlacedOn: []string{"minecraft:grass"}, CanBreak: []string{"minecraft:dirt"}, BlockingTick: 45}
+	stack := result.ItemStack(917)
+	if stack.NetworkID != 917 {
+		t.Fatalf("palette network ID=%d", stack.NetworkID)
+	}
+	// Compare every shared descriptor field so future wire fields cannot silently
+	// disappear in this conversion. Identifier is intentionally palette-resolved.
+	typ, src, dst := reflect.TypeOf(result), reflect.ValueOf(result), reflect.ValueOf(stack)
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if name == "Identifier" {
+			continue
+		}
+		got := dst.FieldByName(name)
+		if !got.IsValid() || !reflect.DeepEqual(src.Field(i).Interface(), got.Interface()) {
+			t.Errorf("descriptor field %s lost", name)
+		}
+	}
 }
