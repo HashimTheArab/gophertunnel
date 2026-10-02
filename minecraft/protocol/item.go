@@ -59,6 +59,17 @@ type StackRequestItem struct {
 	BlockingTick int64
 }
 
+// ItemStack resolves a descriptor result into the ordinary wire stack using
+// the caller's session item palette. Reference fields remain shared; callers
+// retaining or mutating the result must detach them through their stack owner.
+func (x StackRequestItem) ItemStack(networkID int32) ItemStack {
+	return ItemStack{
+		ItemType:       ItemType{NetworkID: networkID, MetadataValue: x.MetadataValue},
+		BlockRuntimeID: x.BlockRuntimeID, Count: x.Count, NBTData: x.NBTData,
+		CanBePlacedOn: x.CanBePlacedOn, CanBreak: x.CanBreak, BlockingTick: x.BlockingTick,
+	}
+}
+
 type itemUserData struct {
 	nbtData       map[string]any
 	canBePlacedOn []string
