@@ -43,19 +43,11 @@ type Client struct {
 // SessionID is the session every request of this client names.
 func (c *Client) SessionID() string { return c.sessionID }
 
+// current returns the continuation token from the last completed refresh.
 func (c *Client) current() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.continuation
-}
-
-func (c *Client) advance(continuation string) {
-	if continuation == "" {
-		return
-	}
-	c.mu.Lock()
-	c.continuation = continuation
-	c.mu.Unlock()
 }
 
 // Session is the answer of a session refresh.
@@ -92,11 +84,16 @@ type CategoryInfo struct {
 
 // Refresh fetches the session's current messages and advances its continuation token.
 func (c *Client) Refresh(ctx context.Context) (*Session, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	var session Session
-	body := map[string]string{"sessionId": c.sessionID, "continuationToken": c.current()}
+	body := map[string]string{"sessionId": c.sessionID, "continuationToken": c.continuation}
 	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/session/refresh"), body, &session, request.Options{}); err != nil {
 		return nil, err
 	}
-	c.advance(session.ContinuationToken)
+	if session.ContinuationToken != "" {
+		c.continuation = session.ContinuationToken
+	}
 	return &session, nil
 }

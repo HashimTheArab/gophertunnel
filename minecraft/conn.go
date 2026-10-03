@@ -844,14 +844,7 @@ func (conn *Conn) ResourcePackStack() (ResourcePackStackSnapshot, bool) {
 	if conn.resourcePackStack == nil {
 		return ResourcePackStackSnapshot{}, false
 	}
-	return ResourcePackStackSnapshot{
-		entries:                      slices.Clone(conn.resourcePackStack.entries),
-		required:                     conn.resourcePackStack.required,
-		baseGameVersion:              conn.resourcePackStack.baseGameVersion,
-		experiments:                  slices.Clone(conn.resourcePackStack.experiments),
-		experimentsPreviouslyToggled: conn.resourcePackStack.experimentsPreviouslyToggled,
-		includeEditorPacks:           conn.resourcePackStack.includeEditorPacks,
-	}, true
+	return *conn.resourcePackStack, true
 }
 
 // ConfigureResourcePackOffer replaces the resource packs and required bit for this exact Listener connection.
@@ -883,8 +876,16 @@ func (conn *Conn) ConfigureResourcePackOfferSnapshot(offer ResourcePackOfferSnap
 	if !conn.resourcePackOfferPreparing {
 		return errors.New("configure resource pack offer snapshot outside preparation")
 	}
-	snapshot := offer.clone()
-	snapshot.texturePackRequired = texturePacksRequired
+	for _, entry := range offer.TexturePacks() {
+		if entry.pack == nil {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v has no content; use ProjectResourcePacks", entry.info.UUID, entry.info.Version)
+		}
+		if entry.info.Size != uint64(max(entry.pack.Size(), 0)) {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v advertises size %v, content has %v; use ProjectResourcePacks", entry.info.UUID, entry.info.Version, entry.info.Size, entry.pack.Size())
+		}
+	}
+	snapshot := offer
+	snapshot.info.TexturePackRequired = texturePacksRequired
 	conn.resourcePacks = snapshot.Packs()
 	conn.resourcePackOffer = &snapshot
 	conn.resourcePackStack = nil
@@ -901,19 +902,13 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 	if !conn.resourcePackOfferPreparing {
 		return errors.New("configure resource pack stack outside preparation")
 	}
-	snapshot := newResourcePackStackSnapshot(
-		stack.entries,
-		texturePacksRequired,
-		stack.baseGameVersion,
-		stack.experiments,
-		stack.experimentsPreviouslyToggled,
-		stack.includeEditorPacks,
-	)
+	snapshot := stack
+	snapshot.stack.TexturePackRequired = texturePacksRequired
 	required := texturePacksRequired
 	if conn.resourcePackOffer == nil {
 		conn.resourcePacks = snapshot.Packs()
 	} else {
-		required = required || conn.resourcePackOffer.texturePackRequired
+		required = required || conn.resourcePackOffer.info.TexturePackRequired
 	}
 	conn.resourcePackStack = &snapshot
 	conn.texturePacksRequired = required
@@ -1802,12 +1797,12 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	resourcePacks := slices.Clone(conn.resourcePacks)
 	var resourcePackOffer *ResourcePackOfferSnapshot
 	if conn.resourcePackOffer != nil {
-		snapshot := conn.resourcePackOffer.clone()
+		snapshot := *conn.resourcePackOffer
 		resourcePackOffer = &snapshot
 	}
 	var resourcePackStackEntries []ResourcePackStackEntry
 	if conn.resourcePackStack != nil {
-		resourcePackStackEntries = slices.Clone(conn.resourcePackStack.entries)
+		resourcePackStackEntries = conn.resourcePackStack.Entries()
 	}
 	texturePacksRequired := conn.texturePacksRequired
 	conn.packMu.Unlock()
@@ -1836,8 +1831,8 @@ func (conn *Conn) handleClientToServerHandshake() error {
 				DownloadURL: pack.DownloadURL(),
 			}
 			for _, entry := range resourcePackStackEntries {
-				if entry.pack != nil && entry.uuid == pack.UUID().String() && entry.version == pack.Version() {
-					texturePack.SubPackName = entry.subPackName
+				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+					texturePack.SubPackName = entry.SubPackName()
 					break
 				}
 			}
@@ -2047,6 +2042,7 @@ func (conn *Conn) reportResourcePack(event ResourcePackEvent) {
 	conn.resourcePackProgress(event)
 }
 
+// with returns the next progress event for the same resource pack.
 func (event ResourcePackEvent) with(kind ResourcePackEventKind, size uint64, err error) ResourcePackEvent {
 	event.Kind, event.Size, event.Err = kind, size, err
 	return event
@@ -2068,7 +2064,6 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	conn.packMu.Lock()
 	stackRequired := pk.TexturePackRequired
-	ordered := make([]ResourcePackStackEntry, 0, len(pk.TexturePacks))
 	for _, stackPack := range pk.TexturePacks {
 		var matched *resource.Pack
 		for _, downloaded := range conn.resourcePacks {
@@ -2078,9 +2073,6 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			}
 		}
 		if matched != nil {
-			ordered = append(ordered, ResourcePackStackEntry{
-				pack: matched, uuid: stackPack.UUID, version: stackPack.Version, subPackName: stackPack.SubPackName,
-			})
 			continue
 		}
 		available := false
@@ -2102,20 +2094,10 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 			conn.packMu.Unlock()
 			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", stackPack.UUID, stackPack.Version)
 		}
-		ordered = append(ordered, ResourcePackStackEntry{
-			uuid: stackPack.UUID, version: stackPack.Version, subPackName: stackPack.SubPackName,
-		})
 	}
 	required := conn.texturePacksRequired || stackRequired
 	conn.texturePacksRequired = required
-	snapshot := newResourcePackStackSnapshot(
-		ordered,
-		stackRequired,
-		pk.BaseGameVersion,
-		pk.Experiments,
-		pk.ExperimentsPreviouslyToggled,
-		pk.IncludeEditorPacks,
-	)
+	snapshot := newResourcePackStackSnapshot(pk, conn.resourcePacks)
 	conn.resourcePackStack = &snapshot
 	conn.packMu.Unlock()
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
@@ -2150,53 +2132,21 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		}
 	case packet.PackResponseAllPacksDownloaded:
 		conn.packMu.Lock()
-		hasConfiguredStack := conn.resourcePackStack != nil
-		var stackEntries []ResourcePackStackEntry
-		baseGameVersion := "*"
-		var experiments []protocol.ExperimentData
-		var experimentsPreviouslyToggled, includeEditorPacks bool
-		var resourcePacks []*resource.Pack
-		if hasConfiguredStack {
-			stackEntries = slices.Clone(conn.resourcePackStack.entries)
-			baseGameVersion = conn.resourcePackStack.baseGameVersion
-			experiments = slices.Clone(conn.resourcePackStack.experiments)
-			experimentsPreviouslyToggled = conn.resourcePackStack.experimentsPreviouslyToggled
-			includeEditorPacks = conn.resourcePackStack.includeEditorPacks
-		} else {
-			resourcePacks = slices.Clone(conn.resourcePacks)
+		pk := &packet.ResourcePackStack{
+			TexturePackRequired: conn.texturePacksRequired,
+			BaseGameVersion:     "*",
 		}
-		texturePacksRequired := conn.texturePacksRequired
-		if hasConfiguredStack {
-			texturePacksRequired = conn.resourcePackStack.required
+		if conn.resourcePackStack != nil {
+			pk = conn.resourcePackStack.packet()
+		} else {
+			for _, pack := range conn.resourcePacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()})
+			}
+			for _, exempted := range exemptedPacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: exempted.uuid, Version: exempted.version})
+			}
 		}
 		conn.packMu.Unlock()
-		pk := &packet.ResourcePackStack{
-			TexturePackRequired:          texturePacksRequired,
-			BaseGameVersion:              baseGameVersion,
-			Experiments:                  experiments,
-			ExperimentsPreviouslyToggled: experimentsPreviouslyToggled,
-			IncludeEditorPacks:           includeEditorPacks,
-		}
-		if !hasConfiguredStack {
-			for _, pack := range resourcePacks {
-				resourcePack := protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()}
-				pk.TexturePacks = append(pk.TexturePacks, resourcePack)
-			}
-		} else {
-			for _, entry := range stackEntries {
-				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-					UUID: entry.uuid, Version: entry.version, SubPackName: entry.subPackName,
-				})
-			}
-		}
-		if !hasConfiguredStack {
-			for _, exempted := range exemptedPacks {
-				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-					UUID:    exempted.uuid,
-					Version: exempted.version,
-				})
-			}
-		}
 		if err := conn.WritePacket(pk); err != nil {
 			return fmt.Errorf("send ResourcePackStack: %w", err)
 		}
@@ -2368,6 +2318,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
+				conn.reportResourcePack(pack.event.with(ResourcePackReceived, uint64(len(frag.data)), nil))
 				received++
 				fragments[frag.index] = frag.data
 				// Write the contiguous prefix in index order.
@@ -2453,7 +2404,6 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 	// The data is cloned as the decoder may reuse the packet's backing array once this handler returns.
 	select {
 	case pack.newFrag <- resourcePackChunk{index: pk.ChunkIndex, data: bytes.Clone(pk.Data)}:
-		conn.reportResourcePack(pack.event.with(ResourcePackReceived, uint64(len(pk.Data)), nil))
 		return nil
 	case <-conn.ctx.Done():
 		return conn.ctx.Err()

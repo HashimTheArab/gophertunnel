@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +64,43 @@ func TestRefreshCarriesTheContinuation(t *testing.T) {
 	}
 	if bodies[0]["continuationToken"] != "" || bodies[1]["continuationToken"] != "c-2" || bodies[1]["sessionId"] != client.SessionID() {
 		t.Fatalf("bodies = %v", bodies)
+	}
+}
+
+// Concurrent refreshes must carry each preceding response's continuation token.
+func TestConcurrentRefreshCarriesTheContinuation(t *testing.T) {
+	var mu sync.Mutex
+	var requests int
+	var continuation string
+	client := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if body["continuationToken"] != continuation {
+			t.Errorf("continuation = %q, want %q", body["continuationToken"], continuation)
+		}
+		requests++
+		continuation = strconv.Itoa(requests)
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": Session{ContinuationToken: continuation}})
+	})
+	var callers sync.WaitGroup
+	start := make(chan struct{})
+	for range 8 {
+		callers.Go(func() {
+			<-start
+			if _, err := client.Refresh(context.Background()); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	close(start)
+	callers.Wait()
+	if got := client.current(); got != "8" {
+		t.Fatalf("final continuation = %q, want 8", got)
 	}
 }
 

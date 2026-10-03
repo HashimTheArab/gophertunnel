@@ -184,6 +184,25 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 	}
 }
 
+// Redirects must neither replay a purchase nor turn a redirected read into a successful purchase.
+func TestPurchaseDoesNotFollowRedirects(t *testing.T) {
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		var calls atomic.Int32
+		client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			if r.URL.Path == "/api/v1.0/transaction/virtual" {
+				http.Redirect(w, r, "/redirected", status)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 320})
+		if err != nil || result.Outcome != PurchaseFailed || result.StatusCode != status || calls.Load() != 1 {
+			t.Errorf("status %d: result = %+v calls = %d err = %v", status, result, calls.Load(), err)
+		}
+	}
+}
+
 // The store never follows a redirect off its origin with the service token.
 func TestStoreRefusesOffOriginRedirects(t *testing.T) {
 	var leaked atomic.Int32
