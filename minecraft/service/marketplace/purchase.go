@@ -82,7 +82,7 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	if err != nil {
 		return PurchaseResult{}, fmt.Errorf("encode purchase: %w", err)
 	}
-	target := c.endpoint("/api/v1.0/transaction/virtual")
+	target := c.entitlements.endpoint("/api/v1.0/transaction/virtual")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
 	if err != nil {
 		return PurchaseResult{}, fmt.Errorf("make request: %w", err)
@@ -90,13 +90,13 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
-	token, err := c.src.ServiceToken(ctx)
+	token, err := c.entitlements.src.ServiceToken(ctx)
 	if err != nil {
 		return PurchaseResult{}, fmt.Errorf("request service token: %w", err)
 	}
 	token.SetAuthHeader(req)
 	// Redirects can replay the purchase body or turn the response into an unrelated GET.
-	client := *c.http
+	client := *c.entitlements.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {

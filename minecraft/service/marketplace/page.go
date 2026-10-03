@@ -123,7 +123,7 @@ func (c *Client) Page(ctx context.Context, kind PageKind, id string, state PageR
 		return nil, errors.New("service/marketplace: invalid page request")
 	}
 	var page Page
-	resp, err := c.do(ctx, http.MethodPost, c.endpoint(prefix, id), state, &page, nil)
+	resp, err := c.store.do(ctx, http.MethodPost, c.store.endpoint(prefix, id), state, &page, nil)
 	if err != nil {
 		return nil, err
 	}
