@@ -32,122 +32,91 @@ func (entry ResourcePackOfferEntry) Pack() *resource.Pack {
 // ResourcePackOfferSnapshot is an immutable snapshot of a ResourcePacksInfo advertisement and any downloaded
 // pack content associated with its entries.
 type ResourcePackOfferSnapshot struct {
-	texturePackRequired        bool
-	hasAddons                  bool
-	hasScripts                 bool
-	forceDisableVibrantVisuals bool
-	worldTemplateUUID          uuid.UUID
-	worldTemplateVersion       string
-	texturePacks               []ResourcePackOfferEntry
+	info  packet.ResourcePacksInfo
+	packs resourcePackContent
 }
 
-// newResourcePackOfferSnapshot copies offer metadata and matches downloaded content.
+type resourcePackID struct{ uuid, version string }
+type resourcePackContent map[resourcePackID]*resource.Pack
+
+// snapshotResourcePacks copies pack metadata so snapshots never expose mutable connection state.
+func snapshotResourcePacks(packs []*resource.Pack) resourcePackContent {
+	content := make(resourcePackContent, len(packs))
+	for _, pack := range packs {
+		if pack != nil {
+			id := resourcePackID{pack.UUID().String(), pack.Version()}
+			if content[id] == nil {
+				content[id] = pack.Clone()
+			}
+		}
+	}
+	return content
+}
+
+// newResourcePackOfferSnapshot retains the wire packet and independent downloaded content.
 func newResourcePackOfferSnapshot(pk *packet.ResourcePacksInfo, packs []*resource.Pack) ResourcePackOfferSnapshot {
-	snapshot := ResourcePackOfferSnapshot{
-		texturePackRequired:        pk.TexturePackRequired,
-		hasAddons:                  pk.HasAddons,
-		hasScripts:                 pk.HasScripts,
-		forceDisableVibrantVisuals: pk.ForceDisableVibrantVisuals,
-		worldTemplateUUID:          pk.WorldTemplateUUID,
-		worldTemplateVersion:       pk.WorldTemplateVersion,
-		texturePacks:               make([]ResourcePackOfferEntry, len(pk.TexturePacks)),
-	}
-	for i, info := range pk.TexturePacks {
-		snapshot.texturePacks[i] = ResourcePackOfferEntry{info: info, pack: matchingResourcePack(info, packs)}
-	}
+	snapshot := ResourcePackOfferSnapshot{info: *pk, packs: snapshotResourcePacks(packs)}
+	snapshot.info.TexturePacks = slices.Clone(pk.TexturePacks)
 	return snapshot
 }
 
-// matchingResourcePack returns an independent copy of the matching pack, if available.
-func matchingResourcePack(info protocol.TexturePackInfo, packs []*resource.Pack) *resource.Pack {
-	for _, pack := range packs {
-		if pack != nil && pack.UUID() == info.UUID && pack.Version() == info.Version {
-			return pack.Clone()
-		}
-	}
-	return nil
-}
-
-// clone copies the snapshot and its pack metadata.
-func (snapshot ResourcePackOfferSnapshot) clone() ResourcePackOfferSnapshot {
-	cloned := snapshot
-	cloned.texturePacks = make([]ResourcePackOfferEntry, len(snapshot.texturePacks))
-	for i, entry := range snapshot.texturePacks {
-		cloned.texturePacks[i] = entry
-		if entry.pack != nil {
-			cloned.texturePacks[i].pack = entry.pack.Clone()
-		}
-	}
-	return cloned
-}
-
-// withPacks copies the offer with content matched from the supplied packs.
+// withPacks associates independent content with the immutable offer metadata.
 func (snapshot ResourcePackOfferSnapshot) withPacks(packs []*resource.Pack) ResourcePackOfferSnapshot {
-	cloned := snapshot
-	cloned.texturePacks = make([]ResourcePackOfferEntry, len(snapshot.texturePacks))
-	for i, entry := range snapshot.texturePacks {
-		cloned.texturePacks[i] = ResourcePackOfferEntry{info: entry.info, pack: matchingResourcePack(entry.info, packs)}
-	}
-	return cloned
+	snapshot.packs = snapshotResourcePacks(packs)
+	return snapshot
 }
 
-// packet reconstructs the advertised offer without sharing its entry slice.
+// packet returns the advertised offer without exposing its entry slice.
 func (snapshot ResourcePackOfferSnapshot) packet() *packet.ResourcePacksInfo {
-	pk := &packet.ResourcePacksInfo{
-		TexturePackRequired:        snapshot.texturePackRequired,
-		HasAddons:                  snapshot.hasAddons,
-		HasScripts:                 snapshot.hasScripts,
-		ForceDisableVibrantVisuals: snapshot.forceDisableVibrantVisuals,
-		WorldTemplateUUID:          snapshot.worldTemplateUUID,
-		WorldTemplateVersion:       snapshot.worldTemplateVersion,
-		TexturePacks:               make([]protocol.TexturePackInfo, len(snapshot.texturePacks)),
-	}
-	for i, entry := range snapshot.texturePacks {
-		pk.TexturePacks[i] = entry.info
-	}
-	return pk
+	pk := snapshot.info
+	pk.TexturePacks = slices.Clone(pk.TexturePacks)
+	return &pk
 }
 
 // TexturePackRequired reports the exact required bit in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) TexturePackRequired() bool {
-	return snapshot.texturePackRequired
+	return snapshot.info.TexturePackRequired
 }
 
 // HasAddons reports the exact addon capability bit in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) HasAddons() bool {
-	return snapshot.hasAddons
+	return snapshot.info.HasAddons
 }
 
 // HasScripts reports the exact script capability bit in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) HasScripts() bool {
-	return snapshot.hasScripts
+	return snapshot.info.HasScripts
 }
 
 // ForceDisableVibrantVisuals reports the exact vibrant-visuals policy bit in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) ForceDisableVibrantVisuals() bool {
-	return snapshot.forceDisableVibrantVisuals
+	return snapshot.info.ForceDisableVibrantVisuals
 }
 
 // WorldTemplateUUID returns the exact world-template UUID in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) WorldTemplateUUID() uuid.UUID {
-	return snapshot.worldTemplateUUID
+	return snapshot.info.WorldTemplateUUID
 }
 
 // WorldTemplateVersion returns the exact world-template version in the advertisement.
 func (snapshot ResourcePackOfferSnapshot) WorldTemplateVersion() string {
-	return snapshot.worldTemplateVersion
+	return snapshot.info.WorldTemplateVersion
 }
 
 // TexturePacks returns independently owned entries in advertisement order.
 func (snapshot ResourcePackOfferSnapshot) TexturePacks() []ResourcePackOfferEntry {
-	return slices.Clone(snapshot.texturePacks)
+	entries := make([]ResourcePackOfferEntry, len(snapshot.info.TexturePacks))
+	for i, info := range snapshot.info.TexturePacks {
+		entries[i] = ResourcePackOfferEntry{info: info, pack: snapshot.packs[resourcePackID{info.UUID.String(), info.Version}]}
+	}
+	return entries
 }
 
 // Packs returns independently owned copies of downloaded packs in advertisement order. Entries without
 // downloaded content are omitted.
 func (snapshot ResourcePackOfferSnapshot) Packs() []*resource.Pack {
-	packs := make([]*resource.Pack, 0, len(snapshot.texturePacks))
-	for _, entry := range snapshot.texturePacks {
+	packs := make([]*resource.Pack, 0, len(snapshot.info.TexturePacks))
+	for _, entry := range snapshot.TexturePacks() {
 		if pack := entry.Pack(); pack != nil {
 			packs = append(packs, pack)
 		}
@@ -160,29 +129,30 @@ func (snapshot ResourcePackOfferSnapshot) Packs() []*resource.Pack {
 // content that will be served; stack entries naming a dropped offer entry are dropped, while entries the offer
 // never named (built-in packs) remain.
 func ProjectResourcePacks(offer ResourcePackOfferSnapshot, stack ResourcePackStackSnapshot, keep func(*resource.Pack) bool) (ResourcePackOfferSnapshot, ResourcePackStackSnapshot) {
-	type key struct{ uuid, version string }
-	offered, kept := map[key]bool{}, map[key]bool{}
+	offered, kept := map[resourcePackID]bool{}, resourcePackContent{}
 	projectedOffer := offer
-	projectedOffer.texturePacks = nil
-	for _, entry := range offer.texturePacks {
-		id := key{entry.info.UUID.String(), entry.info.Version}
+	projectedOffer.info.TexturePacks = nil
+	projectedOffer.packs = kept
+	for _, entry := range offer.TexturePacks() {
+		id := resourcePackID{entry.info.UUID.String(), entry.info.Version}
 		offered[id] = true
-		if entry.pack == nil || !keep(entry.pack) {
+		if entry.pack == nil || !keep(entry.Pack()) {
 			continue
 		}
-		kept[id] = true
+		kept[id] = entry.pack
 		entry.info.Size = uint64(max(entry.pack.Size(), 0))
-		entry.pack = entry.pack.Clone()
-		projectedOffer.texturePacks = append(projectedOffer.texturePacks, entry)
+		projectedOffer.info.TexturePacks = append(projectedOffer.info.TexturePacks, entry.info)
 	}
-	entries := make([]ResourcePackStackEntry, 0, len(stack.entries))
-	for _, entry := range stack.entries {
-		id := key{entry.uuid, entry.version}
-		if offered[id] && !kept[id] {
+	projectedStack := stack
+	projectedStack.stack.TexturePacks = nil
+	projectedStack.packs = resourcePackContent{}
+	for _, entry := range stack.stack.TexturePacks {
+		id := resourcePackID{entry.UUID, entry.Version}
+		if offered[id] && kept[id] == nil {
 			continue
 		}
-		entries = append(entries, entry)
+		projectedStack.stack.TexturePacks = append(projectedStack.stack.TexturePacks, entry)
+		projectedStack.packs[id] = stack.packs[id]
 	}
-	projectedStack := newResourcePackStackSnapshot(entries, stack.required, stack.baseGameVersion, stack.experiments, stack.experimentsPreviouslyToggled, stack.includeEditorPacks)
 	return projectedOffer, projectedStack
 }

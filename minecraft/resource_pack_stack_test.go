@@ -2,7 +2,9 @@ package minecraft
 
 import (
 	"context"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -89,7 +91,7 @@ func TestConfigureResourcePackStackKeepsOfferAndStackRequiredBitsIndependent(t *
 			if err := conn.ConfigureResourcePackOfferSnapshot(offer, test.offerRequired); err != nil {
 				t.Fatalf("configure offer: %v", err)
 			}
-			stack := newResourcePackStackSnapshot(nil, test.stackRequired, "*", nil, false, false)
+			stack := newResourcePackStackSnapshot(&packet.ResourcePackStack{TexturePackRequired: test.stackRequired, BaseGameVersion: "*"}, nil)
 			if err := conn.ConfigureResourcePackStack(stack, test.stackRequired); err != nil {
 				t.Fatalf("configure stack: %v", err)
 			}
@@ -146,12 +148,16 @@ func TestProjectResourcePacksKeepsMetadataAndOrder(t *testing.T) {
 		},
 	}
 	offer := newResourcePackOfferSnapshot(info, []*resource.Pack{excludedPack, keptPack})
-	entry := func(id uuid.UUID, pack *resource.Pack) ResourcePackStackEntry {
-		return ResourcePackStackEntry{uuid: id.String(), version: "1.0.0", pack: pack, subPackName: "sub"}
-	}
-	stack := newResourcePackStackSnapshot([]ResourcePackStackEntry{
-		entry(builtinID, nil), entry(excludedID, excludedPack), entry(keptID, keptPack), entry(ignoredID, nil),
-	}, true, "1.26.50", nil, false, false)
+	stack := newResourcePackStackSnapshot(&packet.ResourcePackStack{
+		TexturePackRequired: true,
+		BaseGameVersion:     "1.26.50",
+		TexturePacks: []protocol.StackResourcePack{
+			{UUID: builtinID.String(), Version: "1.0.0", SubPackName: "sub"},
+			{UUID: excludedID.String(), Version: "1.0.0", SubPackName: "sub"},
+			{UUID: keptID.String(), Version: "1.0.0", SubPackName: "sub"},
+			{UUID: ignoredID.String(), Version: "1.0.0", SubPackName: "sub"},
+		},
+	}, []*resource.Pack{excludedPack, keptPack})
 
 	projectedOffer, projectedStack := ProjectResourcePacks(offer, stack, func(pack *resource.Pack) bool { return pack.UUID() == keptID })
 
@@ -173,5 +179,131 @@ func TestProjectResourcePacksKeepsMetadataAndOrder(t *testing.T) {
 	}
 	if len(offer.TexturePacks()) != 3 || len(stack.Entries()) != 4 {
 		t.Fatal("projection modified its inputs")
+	}
+}
+
+// An invalid offer must fail before replacing the connection's previously configured offer or stack.
+func TestConfigureResourcePackOfferSnapshotRejectsUnservableEntries(t *testing.T) {
+	id := uuid.New()
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: pack.Version(), Size: uint64(pack.Size())}}}
+	valid := newResourcePackOfferSnapshot(&info, []*resource.Pack{pack})
+	for _, missing := range []bool{false, true} {
+		conn := testConn()
+		conn.resourcePackOfferPreparing = true
+		if err := conn.ConfigureResourcePackOfferSnapshot(valid, true); err != nil {
+			t.Fatal(err)
+		}
+		stack := newResourcePackStackSnapshot(&packet.ResourcePackStack{BaseGameVersion: "*"}, nil)
+		if err := conn.ConfigureResourcePackStack(stack, false); err != nil {
+			t.Fatal(err)
+		}
+		previousOffer, previousStack := conn.resourcePackOffer, conn.resourcePackStack
+		invalidInfo := *valid.packet()
+		var packs []*resource.Pack
+		if !missing {
+			packs = []*resource.Pack{pack}
+			invalidInfo.TexturePacks[0].Size++
+		}
+		invalid := newResourcePackOfferSnapshot(&invalidInfo, packs)
+		if err := conn.ConfigureResourcePackOfferSnapshot(invalid, false); err == nil || !strings.Contains(err.Error(), "ProjectResourcePacks") {
+			t.Fatalf("missing=%t: configure error = %v", missing, err)
+		}
+		if conn.resourcePackOffer != previousOffer || conn.resourcePackStack != previousStack || !conn.TexturePacksRequired() {
+			t.Fatal("rejected offer changed connection state")
+		}
+		projected, _ := ProjectResourcePacks(invalid, stack, func(*resource.Pack) bool { return true })
+		if err := conn.ConfigureResourcePackOfferSnapshot(projected, false); err != nil {
+			t.Fatalf("projected offer rejected: %v", err)
+		}
+	}
+}
+
+// Snapshot packets preserve every wire field and isolate slices on input and output.
+func TestResourcePackSnapshotsPreserveWireMetadata(t *testing.T) {
+	id := uuid.New()
+	info := packet.ResourcePacksInfo{
+		TexturePackRequired: true, HasAddons: true, HasScripts: true, ForceDisableVibrantVisuals: true,
+		WorldTemplateUUID: id, WorldTemplateVersion: "2.3.4",
+		TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: "1.0.0", Size: 123, SubPackName: "sub", ContentKey: "key", ContentIdentity: "identity", DownloadURL: "https://example.test/pack", HasScripts: true, AddonPack: true, RTXEnabled: true}},
+	}
+	offer := newResourcePackOfferSnapshot(&info, nil)
+	stackInfo := packet.ResourcePackStack{
+		TexturePackRequired: true, BaseGameVersion: "1.26.50", ExperimentsPreviouslyToggled: true, IncludeEditorPacks: true,
+		TexturePacks: []protocol.StackResourcePack{{UUID: id.String(), Version: "1.0.0", SubPackName: "sub"}},
+		Experiments:  []protocol.ExperimentData{{Name: "experiment", Enabled: true}},
+	}
+	stack := newResourcePackStackSnapshot(&stackInfo, nil)
+	if !reflect.DeepEqual(*offer.packet(), info) || !reflect.DeepEqual(*stack.packet(), stackInfo) {
+		t.Fatal("snapshot lost wire metadata")
+	}
+	info.TexturePacks[0].Version = "changed"
+	stackInfo.TexturePacks[0].SubPackName = "changed"
+	stackInfo.Experiments[0].Name = "changed"
+	offer.packet().TexturePacks[0].Version = "changed again"
+	stack.packet().TexturePacks[0].SubPackName = "changed again"
+	stack.packet().Experiments[0].Name = "changed again"
+	stack.Experiments()[0].Name = "changed again"
+	if offer.TexturePacks()[0].Info().Version != "1.0.0" || stack.Entries()[0].SubPackName() != "sub" || stack.Experiments()[0].Name != "experiment" {
+		t.Fatal("snapshot aliases caller-owned packet slices")
+	}
+}
+
+// Projection predicates receive a copy so their mutations cannot change the input snapshot.
+func TestProjectResourcePacksIsolatesPredicateMutations(t *testing.T) {
+	id := uuid.New()
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := newResourcePackOfferSnapshot(&packet.ResourcePacksInfo{
+		TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: pack.Version(), Size: uint64(pack.Size())}},
+	}, []*resource.Pack{pack})
+	original := pack.Modules()[0]
+	projected, _ := ProjectResourcePacks(offer, ResourcePackStackSnapshot{}, func(pack *resource.Pack) bool {
+		pack.Modules()[0].Type = "changed"
+		return true
+	})
+	for _, snapshot := range []ResourcePackOfferSnapshot{offer, projected} {
+		copy := snapshot.TexturePacks()[0].Pack()
+		if copy.Modules()[0] != original {
+			t.Fatal("predicate modified retained pack metadata")
+		}
+		copy.Modules()[0].Type = "changed again"
+		if snapshot.Packs()[0].Modules()[0] != original {
+			t.Fatal("pack accessor modified retained metadata")
+		}
+	}
+}
+
+// Every reference field added to either wire packet must remain isolated by its snapshot.
+func TestResourcePackSnapshotsCopyAllPacketReferences(t *testing.T) {
+	for _, original := range []packet.Packet{&packet.ResourcePacksInfo{}, &packet.ResourcePackStack{}} {
+		value := reflect.ValueOf(original).Elem()
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			switch field.Kind() {
+			case reflect.Slice:
+				field.Set(reflect.MakeSlice(field.Type(), 1, 1))
+			case reflect.Pointer, reflect.Map, reflect.Interface:
+				t.Fatalf("%T.%s needs snapshot ownership coverage", original, value.Type().Field(i).Name)
+			}
+		}
+		var copied packet.Packet
+		switch pk := original.(type) {
+		case *packet.ResourcePacksInfo:
+			copied = newResourcePackOfferSnapshot(pk, nil).packet()
+		case *packet.ResourcePackStack:
+			copied = newResourcePackStackSnapshot(pk, nil).packet()
+		}
+		clone := reflect.ValueOf(copied).Elem()
+		for i := 0; i < value.NumField(); i++ {
+			if field := value.Field(i); field.Kind() == reflect.Slice && field.Pointer() == clone.Field(i).Pointer() {
+				t.Errorf("%T.%s shares snapshot storage", original, value.Type().Field(i).Name)
+			}
+		}
 	}
 }
