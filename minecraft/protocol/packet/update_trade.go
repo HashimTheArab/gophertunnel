@@ -38,6 +38,12 @@ type UpdateTrade struct {
 	SerialisedOffers []byte
 }
 
+// Offers decodes the advertised trading recipes without changing the packet's
+// serialised NBT. Items retain their complete named item compounds.
+func (pk *UpdateTrade) Offers() ([]protocol.TradeOffer, error) {
+	return protocol.DecodeTradeOffers(pk.SerialisedOffers)
+}
+
 // ID ...
 func (*UpdateTrade) ID() uint32 {
 	return IDUpdateTrade
