@@ -65,6 +65,9 @@ func (r *Reader) Bool(x *bool) {
 // errStringTooLong is an error set if a string decoded using the String method has a length that is too long.
 var errStringTooLong = errors.New("string length overflows a 32-bit integer")
 
+// maxByteSliceLength limits length-prefixed byte slices decoded from untrusted packets.
+const maxByteSliceLength = 16 * 1024 * 1024
+
 // StringUTF ...
 func (r *Reader) StringUTF(x *string) {
 	var length int16
@@ -75,7 +78,7 @@ func (r *Reader) StringUTF(x *string) {
 	}
 	r.checkRemaining(l, "string")
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = *(*string)(unsafe.Pointer(&data))
@@ -91,7 +94,7 @@ func (r *Reader) String(x *string) {
 	}
 	r.checkRemaining(l, "string")
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = *(*string)(unsafe.Pointer(&data))
@@ -105,9 +108,9 @@ func (r *Reader) ByteSlice(x *[]byte) {
 	if l > math.MaxInt32 {
 		r.panic(errStringTooLong)
 	}
-	r.checkRemaining(l, "byte slice")
+	r.SliceLength(length, maxByteSliceLength)
 	data := make([]byte, l)
-	if _, err := r.r.Read(data); err != nil {
+	if _, err := io.ReadFull(r.r, data); err != nil {
 		r.panic(err)
 	}
 	*x = data
@@ -214,6 +217,18 @@ func (r *Reader) NBT(m *map[string]any, encoding nbt.Encoding) {
 	}
 }
 
+// RawNBT reads and validates an encoded NBT value without materialising it.
+func (r *Reader) RawNBT(message *nbt.RawMessage, encoding nbt.Encoding) {
+	var err error
+	*message, err = nbt.ReadRaw(r.r, encoding, true)
+	if err == nil {
+		err = message.ValidateCompound(true)
+	}
+	if err != nil {
+		r.panic(err)
+	}
+}
+
 // NBTList reads a list of NBT tags from the underlying buffer.
 func (r *Reader) NBTList(m *[]any, encoding nbt.Encoding) {
 	if err := nbt.NewDecoderWithEncoding(r.r, encoding).Decode(m); err != nil {
@@ -245,14 +260,13 @@ func (r *Reader) PlayerInventoryAction(x *UseItemTransactionData) {
 	OptionalFunc(r, &x.LegacySetItemSlots, func(slots *[]LegacySetItemSlot) {
 		Slice(r, slots)
 	})
-	DoubleOptionalFunc(r, &x.Actions, func(actions *[]InventoryAction) {
-		Slice(r, actions)
-	})
+	Slice(r, &x.Actions)
 	IntegerFunc(&x.ActionType, r.Varint32)
 	IntegerFunc(&x.TriggerType, r.Uint8)
 	r.BlockPos(&x.BlockPosition)
 	IntegerFunc(&x.BlockFace, r.Uint8)
 	r.Varint32(&x.HotBarSlot)
+	r.Uint8(&x.Hand)
 	r.ItemInstance(&x.HeldItem)
 	r.Vec3(&x.Position)
 	r.Vec3(&x.ClickedPosition)
@@ -587,6 +601,10 @@ func (r *Reader) PackSetting(x *PackSetting) {
 	case PackSettingTypeString:
 		var v string
 		r.String(&v)
+		x.Value = v
+	case PackSettingTypeStringList:
+		var v []string
+		FuncSlice(r, &v, r.String)
 		x.Value = v
 	default:
 		r.UnknownEnumOption(t, "pack setting")

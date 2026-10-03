@@ -8,13 +8,22 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/df-mc/go-xsapi/v2/xal/xasu"
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"golang.org/x/oauth2"
 )
 
 func TestRealmAddressRequestsImmediately(t *testing.T) {
-	requests := make(chan string, 1)
+	type recordedRequest struct {
+		method string
+		path   string
+		body   []byte
+	}
+	requests := make(chan recordedRequest, 1)
 	c := &Client{
-		requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
-			requests <- method + " " + path
+		requestFunc: func(_ context.Context, method, path string, body []byte) ([]byte, int, error) {
+			requests <- recordedRequest{method: method, path: path, body: body}
 			return []byte(`{"address":"127.0.0.1:19132","networkProtocol":"DEFAULT"}`), http.StatusOK, nil
 		},
 	}
@@ -31,31 +40,39 @@ func TestRealmAddressRequestsImmediately(t *testing.T) {
 	}
 	select {
 	case got := <-requests:
-		if got != "GET /worlds/42/join" {
-			t.Fatalf("request = %q", got)
+		if got.method != http.MethodPost || got.path != "/worlds/42/join" {
+			t.Fatalf("request = %s %s", got.method, got.path)
+		}
+		var body struct {
+			JoinIntention string            `json:"joinIntention"`
+			PingRegions   []json.RawMessage `json:"pingRegions"`
+		}
+		if err := json.Unmarshal(got.body, &body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if body.JoinIntention != "VANILLA" || body.PingRegions == nil || len(body.PingRegions) != 0 {
+			t.Fatalf("request body = %+v", body)
 		}
 	default:
-		t.Fatal("RealmAddress did not request before waiting for the poll ticker")
+		t.Fatal("RealmAddress did not request before waiting for a retry delay")
 	}
 }
 
-func TestRealmAddressPollsAfterServiceUnavailable(t *testing.T) {
+func TestRealmAddressDoesNotRetryServiceUnavailableWithoutRetryAfter(t *testing.T) {
 	attempts := 0
+	wantErr := errors.New("starting")
 	c := &Client{
 		requestFunc: func(_ context.Context, _, _ string, _ []byte) ([]byte, int, error) {
 			attempts++
-			return nil, http.StatusServiceUnavailable, errors.New("starting")
+			return nil, http.StatusServiceUnavailable, wantErr
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	if _, err := c.RealmAddress(ctx, 42); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("RealmAddress error = %v, want context deadline", err)
+	if _, err := c.RealmAddress(context.Background(), 42); !errors.Is(err, wantErr) {
+		t.Fatalf("RealmAddress error = %v, want %v", err, wantErr)
 	}
 	if attempts != 1 {
-		t.Fatalf("attempts = %d, want exactly one immediate attempt before poll wait", attempts)
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 
@@ -148,5 +165,57 @@ func TestClientOptInToStoryTimelinePreservesSettings(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+type xstsTokenSource struct {
+	parties []string
+}
+
+func (s *xstsTokenSource) Token() (*oauth2.Token, error) {
+	return nil, errors.New("the OAuth token must not be used when an XSTS source is supplied")
+}
+
+func (s *xstsTokenSource) XSTSToken(_ context.Context, relyingParty string) (*xsts.Token, error) {
+	s.parties = append(s.parties, relyingParty)
+	return &xsts.Token{
+		Token:         "shared",
+		NotAfter:      time.Now().Add(time.Hour),
+		DisplayClaims: xsts.DisplayClaims{UserInfo: []xsts.UserInfo{{UserInfo: xasu.UserInfo{UserHash: "hash"}}}},
+	}, nil
+}
+
+// A token source that supplies XSTS tokens is used directly instead of a new SISU session.
+func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
+	src := new(xstsTokenSource)
+	token, err := NewClient(src, nil).xboxToken(context.Background())
+	if err != nil || token.AuthorizationToken.Token != "shared" {
+		t.Fatalf("xboxToken = %v, %v", token, err)
+	}
+	if !reflect.DeepEqual(src.parties, []string{realmsRelyingParty}) {
+		t.Fatalf("relying parties = %v", src.parties)
+	}
+}
+
+// The pending invite count is a bare integer body; anything else is an error, never zero.
+func TestClientPendingInviteCount(t *testing.T) {
+	for body, want := range map[string]int{"3": 3, " 0\n": 0} {
+		c := &Client{requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
+			if method != http.MethodGet || path != "/invites/count/pending" {
+				t.Fatalf("request = %s %s", method, path)
+			}
+			return []byte(body), http.StatusOK, nil
+		}}
+		if got, err := c.PendingInviteCount(context.Background()); err != nil || got != want {
+			t.Fatalf("PendingInviteCount(%q) = %d, %v", body, got, err)
+		}
+	}
+	for _, body := range []string{"", "-1", `{"count":2}`} {
+		c := &Client{requestFunc: func(context.Context, string, string, []byte) ([]byte, int, error) {
+			return []byte(body), http.StatusOK, nil
+		}}
+		if _, err := c.PendingInviteCount(context.Background()); err == nil {
+			t.Fatalf("PendingInviteCount(%q) accepted a malformed body", body)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,69 @@ func TestReadBatchRequiresBatchReading(t *testing.T) {
 
 	if _, err := conn.ReadBatch(); !errors.Is(err, errBatchReadingDisabled) {
 		t.Fatalf("ReadBatch error = %v, want %v", err, errBatchReadingDisabled)
+	}
+}
+
+func TestBatchReadingOwnsBorrowedPackets(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		store func(*Conn, *packetData)
+		load  func(*Conn) *packetData
+	}{
+		{
+			name: "collected",
+			store: func(conn *Conn, data *packetData) {
+				conn.collectPacket(data)
+			},
+			load: func(conn *Conn) *packetData { return conn.pendingBatch[0] },
+		},
+		{
+			name:  "deferred",
+			store: func(conn *Conn, data *packetData) { conn.deferPacket(data) },
+			load:  func(conn *Conn) *packetData { return conn.batchDeferred[0] },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &Conn{batchReading: true}
+			borrowed := []byte{1, 2, 3}
+			data := &packetData{
+				h:       &packet.Header{PacketID: 1},
+				full:    borrowed,
+				payload: bytes.NewBuffer(borrowed[1:]),
+			}
+
+			test.store(conn, data)
+			borrowed[1] = 9
+			stored := test.load(conn)
+			if stored.full[1] != 2 || stored.payload.Bytes()[0] != 2 {
+				t.Fatalf("stored packet aliases decoder buffer: full=%v payload=%v", stored.full, stored.payload.Bytes())
+			}
+		})
+	}
+}
+
+func TestPacketFuncPayloadDoesNotAliasDecoderBuffer(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	var captured []byte
+	conn.packetFunc = func(_ packet.Header, payload []byte, _, _ net.Addr) {
+		captured = payload
+	}
+	frame, err := encodePacket(&packet.Unknown{PacketID: 700, Payload: []byte{1, 2, 3}})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
+
+	if _, err := parseData(frame, conn); err != nil {
+		t.Fatalf("parse packet: %v", err)
+	}
+	clear(frame)
+	if !bytes.Equal(captured, []byte{1, 2, 3}) {
+		t.Fatalf("PacketFunc payload changed with decoder buffer: %v", captured)
 	}
 }
 
@@ -1035,6 +1100,32 @@ func TestClosePanicStillCancelsAndClosesTransport(t *testing.T) {
 	}
 }
 
+func TestZeroValueConnCloseDoesNotPanic(t *testing.T) {
+	conn := &Conn{}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("second Close error = %v, want net.ErrClosed", err)
+	}
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort error = %v, want nil", err)
+	}
+}
+
+func TestHandleEncodeErrorReturnsActiveTransportError(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+
+	want := errors.New("send queue full")
+	err := conn.handleEncodeError(want, "flush")
+	if !errors.Is(err, want) {
+		t.Fatalf("handleEncodeError error = %v, want %v", err, want)
+	}
+}
+
 type writeObservedConn struct {
 	net.Conn
 	started chan struct{}
@@ -1130,6 +1221,46 @@ func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	}
 	if len(conn.resourcePacks) != 1 {
 		t.Fatalf("resourcePacks length = %d, want 1", len(conn.resourcePacks))
+	}
+}
+
+// URL pack downloads must go through the Dialer's HTTPClient so callers can observe or restrict them.
+func TestHandleResourcePacksInfoDownloadsURLPacksWithTheDialerClient(t *testing.T) {
+	t.Parallel()
+
+	urlPackID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	urlPack := testResourcePackArchive(t, urlPackID)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(urlPack)
+	}))
+	defer server.Close()
+
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, time.Second/20, false)
+	defer conn.Close()
+	var requests atomic.Int32
+	conn.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+
+	err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{{
+		UUID:        urlPackID,
+		Version:     "1.0.0",
+		Size:        uint64(len(urlPack)),
+		DownloadURL: server.URL,
+	}}})
+	if err != nil {
+		t.Fatalf("handleResourcePacksInfo: %v", err)
+	}
+	if requests.Load() != 1 || len(conn.resourcePacks) != 1 {
+		t.Fatalf("requests = %d, packs = %d; want the pack fetched once through the dialer client", requests.Load(), len(conn.resourcePacks))
 	}
 }
 
@@ -1246,4 +1377,57 @@ func testResourcePackArchive(t *testing.T, id uuid.UUID) []byte {
 		t.Fatalf("close zip: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// TestConn_AcceptPacketHeader checks filtering before decoding and internal handling.
+func TestConn_AcceptPacketHeader(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint("ready=", ready), func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			defer conn.Close()
+			conn.pool = conn.proto.Packets(false)
+			conn.batchReading = true
+			conn.disablePacketHandling = true
+			conn.handshakeComplete = ready
+			conn.disconnectOnInvalidPacket = true
+			conn.acceptPacketHeader = func(h packet.Header) bool { return h.PacketID == 777 }
+			observed := 0
+			conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { observed++ }
+			for _, id := range []uint32{packet.IDDisconnect, packet.IDPlayStatus, packet.IDNetworkSettings} {
+				var frame bytes.Buffer
+				if err := (&packet.Header{PacketID: id}).Write(&frame); err != nil {
+					t.Fatal(err)
+				}
+				// These bodies are deliberately missing. Filtering must happen before decoding them.
+				if err := conn.receive(frame.Bytes()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if conn.ctx.Err() != nil || conn.loginSuccessReceived || conn.disablePacketHandlingReady || len(conn.pendingBatch) != 0 || len(conn.batchDeferred) != 0 {
+				t.Fatal("rejected packets changed connection state")
+			}
+			if observed != 3 {
+				t.Fatalf("observed %d packets, want 3", observed)
+			}
+			conn.handshakeComplete = true
+			frame, err := encodePacket(&packet.Unknown{PacketID: 777, Payload: []byte{42}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.receive(frame); err != nil {
+				t.Fatal(err)
+			}
+			conn.flushBatch()
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			batch, err := conn.ReadBatch()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(batch) != 1 || batch[0].ID() != 777 {
+				t.Fatalf("unexpected batch: %v", batch)
+			}
+		})
+	}
 }

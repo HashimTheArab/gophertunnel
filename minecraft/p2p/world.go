@@ -138,8 +138,12 @@ type Connection struct {
 	// HostPort is the port of the RakNet listener.
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
+	// RakNetGUID is the GUID of a legacy RakNet listener. Direct WebSocket
+	// signaling also uses the RakNetGUID JSON property on the wire, but that
+	// compatibility detail is decoded into NetherNetID instead.
+	RakNetGUID string `json:"RakNetGUID,omitempty"`
 	// NetherNetID is the network ID of the NetherNet network for the host.
-	NetherNetID NetherNetID `json:"NetherNetId"`
+	NetherNetID NetherNetID `json:"NetherNetId,omitempty"`
 	// PlayerMessagingID is the player messaging ID of the host.
 	// When joining a World, clients use it together with [NetherNetID]
 	// as the destination for signaling messages needed to establish the
@@ -148,12 +152,62 @@ type Connection struct {
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
 }
 
+type connectionAlias Connection
+
+// MarshalJSON encodes the discriminator-dependent connection shape used by
+// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
+// legacy RakNetGUID property, while JSON-RPC signaling uses NetherNetId and
+// PmsgId.
+func (c Connection) MarshalJSON() ([]byte, error) {
+	wire := connectionAlias(c)
+	switch c.Type {
+	case ConnectionTypeSignalingOverWebSocket:
+		wire.RakNetGUID = string(c.NetherNetID)
+		wire.NetherNetID = ""
+		wire.PlayerMessagingID = uuid.Nil
+	case ConnectionTypeSignalingOverJSONRPC:
+		wire.RakNetGUID = ""
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON decodes the discriminator-dependent connection shape used by
+// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
+// legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
+// PmsgId.
+func (c *Connection) UnmarshalJSON(b []byte) error {
+	var wire connectionAlias
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	*c = Connection(wire)
+	if c.Type == ConnectionTypeSignalingOverWebSocket {
+		c.NetherNetID = NetherNetID(c.RakNetGUID)
+		c.RakNetGUID = ""
+	}
+	return nil
+}
+
 // NetherNetID is the NetherNet network ID advertised by a host. It is an opaque
 // identifier: MPSD custom properties encode it as either a JSON number or a JSON
 // string, and its value may be a decimal network ID or a UUID depending on the
 // host. It is always decoded into its string form regardless of the JSON
 // representation used.
 type NetherNetID string
+
+// MarshalJSON preserves the vanilla MPSD shape by encoding decimal network
+// IDs as JSON numbers and opaque IDs such as UUIDs as JSON strings.
+func (id NetherNetID) MarshalJSON() ([]byte, error) {
+	s := string(id)
+	if value, err := strconv.ParseUint(s, 10, 64); err == nil {
+		canonical := strconv.FormatUint(value, 10)
+		if value == 0 || canonical != s {
+			return nil, fmt.Errorf("minecraft/p2p: invalid decimal NetherNetID %q", s)
+		}
+		return []byte(canonical), nil
+	}
+	return json.Marshal(s)
+}
 
 // UnmarshalJSON decodes the NetherNetID from either a JSON number or a JSON
 // string into its string form. It never rejects a representable value; whether
@@ -183,8 +237,11 @@ func (id *NetherNetID) UnmarshalJSON(b []byte) error {
 // by Realm presences where it mirrors PlayerMessagingID.
 func (id NetherNetID) Validate() error {
 	s := string(id)
-	if _, err := strconv.ParseUint(s, 10, 64); err == nil {
-		return nil
+	if value, err := strconv.ParseUint(s, 10, 64); err == nil {
+		if value != 0 && strconv.FormatUint(value, 10) == s {
+			return nil
+		}
+		return fmt.Errorf("minecraft/p2p: NetherNetID %q is not a canonical non-zero uint64", s)
 	}
 	if err := uuid.Validate(s); err == nil {
 		return nil

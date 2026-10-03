@@ -183,14 +183,13 @@ func (w *Writer) PlayerInventoryAction(x *UseItemTransactionData) {
 	OptionalFunc(w, &x.LegacySetItemSlots, func(slots *[]LegacySetItemSlot) {
 		Slice(w, slots)
 	})
-	DoubleOptionalFunc(w, &x.Actions, func(actions *[]InventoryAction) {
-		Slice(w, actions)
-	})
+	Slice(w, &x.Actions)
 	IntegerFunc(&x.ActionType, w.Varint32)
 	IntegerFunc(&x.TriggerType, w.Uint8)
 	w.BlockPos(&x.BlockPosition)
 	IntegerFunc(&x.BlockFace, w.Uint8)
 	w.Varint32(&x.HotBarSlot)
+	w.Uint8(&x.Hand)
 	w.ItemInstance(&x.HeldItem)
 	w.Vec3(&x.Position)
 	w.Vec3(&x.ClickedPosition)
@@ -494,6 +493,10 @@ func (w *Writer) PackSetting(x *PackSetting) {
 		id = PackSettingTypeString
 		w.Varuint32(&id)
 		w.String(&val)
+	case []string:
+		id = PackSettingTypeStringList
+		w.Varuint32(&id)
+		FuncSlice(w, &val, w.String)
 	default:
 		w.UnknownEnumOption(x.Value, "pack setting")
 	}
@@ -600,6 +603,13 @@ func (w *Writer) Varuint32(x *uint32) {
 // NBT writes a map as NBT to the underlying buffer using the encoding passed.
 func (w *Writer) NBT(x *map[string]any, encoding nbt.Encoding) {
 	if err := nbt.NewEncoderWithEncoding(w.w, encoding).Encode(*x); err != nil {
+		panic(err)
+	}
+}
+
+// RawNBT writes an encoded NBT value without materialising it.
+func (w *Writer) RawNBT(message *nbt.RawMessage, _ nbt.Encoding) {
+	if _, err := message.WriteTo(w.w); err != nil {
 		panic(err)
 	}
 }

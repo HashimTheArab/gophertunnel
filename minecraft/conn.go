@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -12,8 +13,10 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,6 +307,8 @@ type Conn struct {
 	// loginSuccessReceived is true after the first successful login status. Some proxies send this status more
 	// than once, but repeated statuses must not restart resource-pack negotiation later in the login sequence.
 	loginSuccessReceived bool
+	// authenticated is set once the Login was verified and, with encryption, the encrypted handshake completed.
+	authenticated atomic.Bool
 	// loggedIn is a bool indicating if the connection was logged in. It is set to true after the entire login
 	// sequence is completed.
 	loggedIn bool
@@ -335,9 +340,20 @@ type Conn struct {
 	// resourcePackDownload controls the number of chunk requests issued by a
 	// Dialer while downloading a resource pack.
 	resourcePackDownload ResourcePackDownloadConfig
+	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
+	httpClient *http.Client
+	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
+	resourcePackProgress   func(ResourcePackEvent)
+	resourcePackProgressMu sync.Mutex
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// prepareResourcePackOffer runs once after the handshake and immediately before ResourcePacksInfo is written.
+	prepareResourcePackOffer   func(context.Context, *Conn) error
+	resourcePackOfferPrepared  bool
+	resourcePackOfferPreparing bool
+	resourcePackOffer          *ResourcePackOfferSnapshot
+	resourcePackStack          *ResourcePackStackSnapshot
 	// resourcePackCache optionally stores resource packs downloaded by a Dialer.
 	resourcePackCache ResourcePackCache
 	// resourcePackDelivery controls resource pack delivery for Listener connections.
@@ -347,6 +363,9 @@ type Conn struct {
 	ignoredResourcePacks []exemptedResourcePack
 
 	cacheEnabled bool
+	// forwardClientCacheStatus skips the ClientCacheStatus normally sent after LoginSuccess; see
+	// Dialer.ForwardClientCacheStatus.
+	forwardClientCacheStatus bool
 
 	// allow filters what connections are allowed to connect to the Server. The
 	// address, identity data, and client data of the connection are passed. If
@@ -359,6 +378,8 @@ type Conn struct {
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
 	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// acceptPacketHeader optionally filters incoming packets before internal handling.
+	acceptPacketHeader func(packet.Header) bool
 
 	shieldID atomic.Int32
 
@@ -785,7 +806,107 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 // Listener, this holds all resource packs set to the Listener. For a Conn obtained using Dial, the resource
 // packs include all packs sent by the server connected to.
 func (conn *Conn) ResourcePacks() []*resource.Pack {
-	return conn.resourcePacks
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	return slices.Clone(conn.resourcePacks)
+}
+
+// ResourcePackOffer returns the exact ResourcePacksInfo advertisement received by a Dialer connection. The
+// snapshot is available after ResourcePacksInfo is handled and owns copies of all downloaded pack content.
+func (conn *Conn) ResourcePackOffer() (ResourcePackOfferSnapshot, bool) {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if conn.resourcePackOffer == nil {
+		return ResourcePackOfferSnapshot{}, false
+	}
+	return conn.resourcePackOffer.withPacks(conn.resourcePacks), true
+}
+
+// TexturePacksRequired reports whether either ResourcePacksInfo or ResourcePackStack required the server packs.
+func (conn *Conn) TexturePacksRequired() bool {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	return conn.texturePacksRequired
+}
+
+// ResourcePackStack returns the resource packs selected by the server in their exact application order.
+// The snapshot is available only after a ResourcePackStack packet has been validated. The returned snapshot
+// owns copies of its packs and may be retained or modified by the caller without affecting the connection.
+func (conn *Conn) ResourcePackStack() (ResourcePackStackSnapshot, bool) {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if conn.resourcePackStack == nil {
+		return ResourcePackStackSnapshot{}, false
+	}
+	return *conn.resourcePackStack, true
+}
+
+// ConfigureResourcePackOffer replaces the resource packs and required bit for this exact Listener connection.
+// It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent.
+func (conn *Conn) ConfigureResourcePackOffer(packs []*resource.Pack, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack offer outside preparation")
+	}
+	for _, pack := range packs {
+		if pack == nil {
+			return errors.New("configure resource pack offer with nil pack")
+		}
+	}
+	conn.resourcePacks = slices.Clone(packs)
+	conn.resourcePackOffer = nil
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = texturePacksRequired
+	return nil
+}
+
+// ConfigureResourcePackOfferSnapshot replaces the ResourcePacksInfo advertisement for this Listener
+// connection. It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent. The
+// required bit is selected locally and does not have to match offer.TexturePackRequired().
+func (conn *Conn) ConfigureResourcePackOfferSnapshot(offer ResourcePackOfferSnapshot, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack offer snapshot outside preparation")
+	}
+	for _, entry := range offer.TexturePacks() {
+		if entry.pack == nil {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v has no content; use ProjectResourcePacks", entry.info.UUID, entry.info.Version)
+		}
+		if entry.info.Size != uint64(max(entry.pack.Size(), 0)) {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v advertises size %v, content has %v; use ProjectResourcePacks", entry.info.UUID, entry.info.Version, entry.info.Size, entry.pack.Size())
+		}
+	}
+	snapshot := offer
+	snapshot.info.TexturePackRequired = texturePacksRequired
+	conn.resourcePacks = snapshot.Packs()
+	conn.resourcePackOffer = &snapshot
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = texturePacksRequired
+	return nil
+}
+
+// ConfigureResourcePackStack replaces the resource-pack offer and its exact application stack for this
+// Listener connection. It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent.
+// The required bit is selected locally and does not have to match stack.Required().
+func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack stack outside preparation")
+	}
+	snapshot := stack
+	snapshot.stack.TexturePackRequired = texturePacksRequired
+	required := texturePacksRequired
+	if conn.resourcePackOffer == nil {
+		conn.resourcePacks = snapshot.Packs()
+	} else {
+		required = required || conn.resourcePackOffer.info.TexturePackRequired
+	}
+	conn.resourcePackStack = &snapshot
+	conn.texturePacksRequired = required
+	return nil
 }
 
 // Write writes a slice of serialised packet data to the Conn. The data is buffered until the next 20th of a
@@ -846,6 +967,9 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 // Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
 // are directly sent.
 func (conn *Conn) Flush() error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("flush")
@@ -884,7 +1008,7 @@ func (conn *Conn) Flush() error {
 
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
-// ordinary shutdown errors. An encoder failure on an active connection remains an invariant violation.
+// ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
 func (conn *Conn) handleEncodeError(err error, op string) error {
 	if err == nil {
 		return nil
@@ -895,7 +1019,7 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
-	panic(fmt.Errorf("error encoding packet batch: %w", err))
+	return conn.wrap(err, op)
 }
 
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
@@ -1062,6 +1186,7 @@ func (conn *Conn) deferBatch(batch []*packetData) {
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
 // mode, the packet becomes part of the deferred batch flushed by the next flushBatch call.
 func (conn *Conn) deferPacket(pk *packetData) {
+	pk = pk.ensureOwned()
 	if conn.batchReading {
 		conn.batchDeferred = append(conn.batchDeferred, pk)
 		return
@@ -1077,6 +1202,9 @@ func (conn *Conn) receive(data []byte) error {
 	pkData, err := parseData(data, conn)
 	if err != nil {
 		return err
+	}
+	if conn.acceptPacketHeader != nil && !conn.acceptPacketHeader(*pkData.h) {
+		return nil
 	}
 	if pkData.h.PacketID == packet.IDDisconnect {
 		// We always handle disconnect packets and close the connection if one comes in. The payload is
@@ -1105,6 +1233,9 @@ func (conn *Conn) receive(data []byte) error {
 		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
+		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+			return err
+		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
@@ -1122,7 +1253,7 @@ func (conn *Conn) receive(data []byte) error {
 			if !conn.collectPacket(pkData) {
 				select {
 				case <-conn.ctx.Done():
-				case conn.packets <- pkData:
+				case conn.packets <- pkData.ensureOwned():
 				}
 			}
 			return nil
@@ -1137,9 +1268,37 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
+// handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
+// raw PlayStatus packet owned by a passthrough caller.
+func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
+	if conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
+		return nil
+	}
+	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
+		return nil
+	}
+	probe := &packetData{
+		h:       pkData.h,
+		full:    pkData.full,
+		payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
+		owned:   true,
+	}
+	pks, err := probe.decodePacket(conn)
+	if err != nil {
+		return nil
+	}
+	for _, pk := range pks {
+		if status, ok := pk.(*packet.PlayStatus); ok && status.Status == packet.PlayStatusLoginSuccess {
+			return conn.handleLoginSuccess()
+		}
+	}
+	return nil
+}
+
 // queuePacket queues a packet for ReadPacket, deferring a packet already queued (if any) so that it is
 // read first. It never blocks the goroutine processing incoming packets.
 func (conn *Conn) queuePacket(data *packetData) {
+	data = data.ensureOwned()
 	select {
 	case <-conn.ctx.Done():
 	case previous := <-conn.packets:
@@ -1159,15 +1318,8 @@ func (conn *Conn) collectPacket(data *packetData) bool {
 	if !conn.batchReading {
 		return false
 	}
-	conn.pendingBatch = append(conn.pendingBatch, data)
+	conn.pendingBatch = append(conn.pendingBatch, data.ensureOwned())
 	return true
-}
-
-// reserveBatch pre-allocates the pending batch for n packets when batch reading is enabled.
-func (conn *Conn) reserveBatch(n int) {
-	if conn.batchReading && conn.pendingBatch == nil && n > 0 {
-		conn.pendingBatch = make([]*packetData, 0, n)
-	}
 }
 
 // flushBatch queues the network batch currently being collected, along with any packets deferred while
@@ -1406,6 +1558,14 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		return fmt.Errorf("parse login request: %w", err)
 	}
 
+	// Mojang has shipped wire changes without bumping the protocol ID, so several
+	// accepted protocols may share the negotiated one. Login is the first point
+	// that carries the client's game version, which is what tells them apart.
+	if err := conn.selectProtocolByGameVersion(); err != nil {
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
+		return err
+	}
+
 	// Make sure the player is logged in with XBOX Live when necessary.
 	if !authResult.XBOXLiveAuthenticated && conn.authEnabled {
 		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
@@ -1434,6 +1594,76 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	return nil
 }
 
+// selectProtocolByGameVersion narrows the negotiated protocol to the accepted
+// one whose version is the newest that the client's game version reaches. It is
+// a no-op unless several accepted protocols share the negotiated ID, and it
+// leaves the negotiation alone when the client reports a version it cannot
+// parse, since that value is client-controlled.
+func (conn *Conn) selectProtocolByGameVersion() error {
+	id := conn.proto.ID()
+	var candidates []Protocol
+	for _, pro := range conn.acceptedProto {
+		if pro.ID() == id {
+			candidates = append(candidates, pro)
+		}
+	}
+	if len(candidates) < 2 {
+		return nil
+	}
+	clientVer, ok := parseGameVersion(conn.clientData.GameVersion)
+	if !ok {
+		return nil
+	}
+
+	var best Protocol
+	var bestVer [3]int
+	for _, pro := range candidates {
+		ver, ok := parseGameVersion(pro.Ver())
+		if !ok || compareGameVersion(ver, clientVer) > 0 {
+			continue
+		}
+		if best == nil || compareGameVersion(ver, bestVer) > 0 {
+			best, bestVer = pro, ver
+		}
+	}
+	if best == nil {
+		return fmt.Errorf("incompatible game version %s for protocol %d", conn.clientData.GameVersion, id)
+	}
+	conn.proto = best
+	conn.pool = best.Packets(true)
+	return nil
+}
+
+// parseGameVersion reads the leading major.minor.patch of a game version,
+// ignoring any build revision after it.
+func parseGameVersion(version string) (parsed [3]int, ok bool) {
+	fields := strings.SplitN(version, ".", 4)
+	if len(fields) < 3 {
+		return parsed, false
+	}
+	for i := range parsed {
+		n, err := strconv.Atoi(fields[i])
+		if err != nil || n < 0 {
+			return parsed, false
+		}
+		parsed[i] = n
+	}
+	return parsed, true
+}
+
+// compareGameVersion orders two parsed game versions.
+func compareGameVersion(a, b [3]int) int {
+	for i := range a {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
 // publicKeyConn is implemented by underlying [net.Conn] of the Conn to provide access
 // to the public key that the connection has proven possession of.
 type publicKeyConn interface {
@@ -1447,44 +1677,111 @@ type publicKeyConn interface {
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
 func (conn *Conn) handleClientToServerHandshake() error {
+	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
+	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
 	if conn.disablePacketHandling {
 		conn.disablePacketHandlingReady = true
 		return nil
 	}
-	// The next expected packet is a resource pack client response.
+	if conn.fetchResourcePacks != nil {
+		conn.packMu.Lock()
+		current := slices.Clone(conn.resourcePacks)
+		conn.packMu.Unlock()
+		fetched := conn.fetchResourcePacks(conn.identityData, conn.clientData, current)
+		for _, pack := range fetched {
+			if pack == nil {
+				return errors.New("fetch resource packs returned a nil pack")
+			}
+		}
+		conn.packMu.Lock()
+		conn.resourcePacks = slices.Clone(fetched)
+		conn.packMu.Unlock()
+	}
+	conn.packMu.Lock()
+	prepareResourcePackOffer := false
+	if !conn.resourcePackOfferPrepared {
+		conn.resourcePackOfferPrepared = true
+		prepareResourcePackOffer = conn.prepareResourcePackOffer != nil
+		conn.resourcePackOfferPreparing = prepareResourcePackOffer
+	}
+	conn.packMu.Unlock()
+	if prepareResourcePackOffer {
+		err := callPrepareResourcePackOffer(conn.prepareResourcePackOffer, conn.ctx, conn)
+		conn.packMu.Lock()
+		conn.resourcePackOfferPreparing = false
+		conn.packMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("prepare resource pack offer: %w", err)
+		}
+	}
+	conn.packMu.Lock()
+	resourcePacks := slices.Clone(conn.resourcePacks)
+	var resourcePackOffer *ResourcePackOfferSnapshot
+	if conn.resourcePackOffer != nil {
+		snapshot := *conn.resourcePackOffer
+		resourcePackOffer = &snapshot
+	}
+	var resourcePackStackEntries []ResourcePackStackEntry
+	if conn.resourcePackStack != nil {
+		resourcePackStackEntries = conn.resourcePackStack.Entries()
+	}
+	texturePacksRequired := conn.texturePacksRequired
+	conn.packMu.Unlock()
+	// The next expected packet is a resource pack client response. Preparation happens before LoginSuccess so
+	// an error cannot expose a partial offer to the peer.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
 		return fmt.Errorf("send PlayStatus (Status=LoginSuccess): %w", err)
 	}
 
-	if conn.fetchResourcePacks != nil {
-		conn.resourcePacks = conn.fetchResourcePacks(conn.identityData, conn.clientData, slices.Clone(conn.resourcePacks))
-	}
-	pk := &packet.ResourcePacksInfo{
-		TexturePackRequired:        conn.texturePacksRequired,
-		ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
-		WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
-		WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
-	}
-	for _, pack := range conn.resourcePacks {
-		texturePack := protocol.TexturePackInfo{
-			UUID:        pack.UUID(),
-			Version:     pack.Version(),
-			Size:        uint64(pack.Size()),
-			DownloadURL: pack.DownloadURL(),
+	var pk *packet.ResourcePacksInfo
+	if resourcePackOffer != nil {
+		pk = resourcePackOffer.packet()
+	} else {
+		pk = &packet.ResourcePacksInfo{
+			TexturePackRequired:        texturePacksRequired,
+			ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
+			WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
+			WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
 		}
-		if pack.Encrypted() {
-			texturePack.ContentKey = pack.ContentKey()
-			texturePack.ContentIdentity = pack.Manifest().Header.UUID.String()
+		for _, pack := range resourcePacks {
+			texturePack := protocol.TexturePackInfo{
+				UUID:        pack.UUID(),
+				Version:     pack.Version(),
+				Size:        uint64(pack.Size()),
+				DownloadURL: pack.DownloadURL(),
+			}
+			for _, entry := range resourcePackStackEntries {
+				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+					texturePack.SubPackName = entry.SubPackName()
+					break
+				}
+			}
+			if pack.Encrypted() {
+				texturePack.ContentKey = pack.ContentKey()
+				texturePack.ContentIdentity = pack.Manifest().Header.UUID.String()
+			}
+			pk.TexturePacks = append(pk.TexturePacks, texturePack)
 		}
-		pk.TexturePacks = append(pk.TexturePacks, texturePack)
 	}
 	// Finally we send the packet after the play status.
 	if err := conn.WritePacket(pk); err != nil {
 		return fmt.Errorf("send ResourcePacksInfo: %w", err)
 	}
 	return nil
+}
+
+// callPrepareResourcePackOffer contains panics from application code so that a bad hook only terminates the
+// connection being prepared, rather than the Listener goroutine running it. The recovered value's type is
+// included instead of its value so an unbounded or panicking String method cannot escape this boundary.
+func callPrepareResourcePackOffer(hook func(context.Context, *Conn) error, ctx context.Context, conn *Conn) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("hook panicked with %T", recovered)
+		}
+	}()
+	return hook(ctx, conn)
 }
 
 // saltClaims holds the claims for the salt sent by the server in the ServerToClientHandshake packet.
@@ -1500,8 +1797,7 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	if err != nil {
 		return fmt.Errorf("parse server token: %w", err)
 	}
-	//lint:ignore S1005 Double assignment is done explicitly to prevent panics.
-	raw, _ := tok.Headers[0].ExtraHeaders["x5u"]
+	raw := tok.Headers[0].ExtraHeaders["x5u"]
 	kStr, _ := raw.(string)
 
 	pub := new(ecdsa.PublicKey)
@@ -1551,6 +1847,12 @@ func (conn *Conn) handleClientCacheStatus(pk *packet.ClientCacheStatus) error {
 // handleResourcePacksInfo handles a ResourcePacksInfo packet sent by the server. The client responds by
 // sending the packs it needs downloaded.
 func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
+	offer := newResourcePackOfferSnapshot(pk, nil)
+	conn.packMu.Lock()
+	conn.resourcePackOffer = &offer
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = pk.TexturePackRequired
+	conn.packMu.Unlock()
 	// First create a new resource pack queue with the information in the packet so we can download them
 	// properly later.
 	totalPacks := len(pk.TexturePacks)
@@ -1592,22 +1894,30 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			case cachedPack != nil:
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(ResourcePackEvent{Kind: ResourcePackFinished, Source: ResourcePackSourceCache, UUID: pack.UUID, Version: pack.Version, Size: uint64(max(cachedPack.Size(), 0))})
 				continue
 			}
 		}
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
+			event := ResourcePackEvent{Source: ResourcePackSourceURL, UUID: pack.UUID, Version: pack.Version}
+			conn.reportResourcePack(event.with(ResourcePackStarted, pack.Size, nil))
+			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
+				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
+			})
+			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
+			}
 			if err != nil {
-				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
-			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
-				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "version", pack.Version, "download_url", pack.DownloadURL, "err", err)
+				conn.reportResourcePack(event.with(ResourcePackFailed, 0, err))
 			} else {
 				newPack = newPack.WithContentKey(pack.ContentKey)
 				conn.resourcePacks = append(conn.resourcePacks, newPack)
 				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(event.with(ResourcePackFinished, 0, nil))
 				continue
 			}
 		}
@@ -1616,24 +1926,48 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
 		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
-			buf:        bytes.NewBuffer(make([]byte, 0, pack.Size)),
+			buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
 			contentKey: pack.ContentKey,
 			cacheKey:   cacheKey,
 		}
 	}
 
 	if len(packsToDownload) != 0 {
-		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame)
+		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame, packet.IDPlayStatus)
 		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
 		return nil
 	}
-	conn.expect(packet.IDResourcePackStack, packet.IDStartGame)
+	conn.expect(packet.IDResourcePackStack, packet.IDStartGame, packet.IDPlayStatus)
 
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
+}
+
+// packHTTPClient returns the client for URL pack downloads.
+func (conn *Conn) packHTTPClient() *http.Client {
+	if conn.httpClient != nil {
+		return conn.httpClient
+	}
+	return http.DefaultClient
+}
+
+// reportResourcePack passes event to the Dialer's ResourcePackProgress, if any.
+func (conn *Conn) reportResourcePack(event ResourcePackEvent) {
+	if conn.resourcePackProgress == nil {
+		return
+	}
+	conn.resourcePackProgressMu.Lock()
+	defer conn.resourcePackProgressMu.Unlock()
+	conn.resourcePackProgress(event)
+}
+
+// with returns the next progress event for the same resource pack.
+func (event ResourcePackEvent) with(kind ResourcePackEventKind, size uint64, err error) ResourcePackEvent {
+	event.Kind, event.Size, event.Err = kind, size, err
+	return event
 }
 
 // storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
@@ -1650,42 +1984,47 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
 // that resource packs are applied in.
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
-	// We currently don't apply resource packs in any way, so instead we just check if all resource packs in
-	// the stacks are also downloaded.
-	for _, pack := range pk.TexturePacks {
-		if !conn.hasPack(pack.UUID, pack.Version, false) {
-			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
+	conn.packMu.Lock()
+	stackRequired := pk.TexturePackRequired
+	for _, stackPack := range pk.TexturePacks {
+		var matched *resource.Pack
+		for _, downloaded := range conn.resourcePacks {
+			if downloaded.UUID().String() == stackPack.UUID && downloaded.Version() == stackPack.Version {
+				matched = downloaded
+				break
+			}
+		}
+		if matched != nil {
+			continue
+		}
+		available := false
+		for _, exempted := range exemptedPacks {
+			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+				available = true
+				break
+			}
+		}
+		if !available {
+			for _, ignored := range conn.ignoredResourcePacks {
+				if ignored.uuid == stackPack.UUID && ignored.version == stackPack.Version {
+					available = true
+					break
+				}
+			}
+		}
+		if !available && stackRequired {
+			conn.packMu.Unlock()
+			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", stackPack.UUID, stackPack.Version)
 		}
 	}
+	required := conn.texturePacksRequired || stackRequired
+	conn.texturePacksRequired = required
+	snapshot := newResourcePackStackSnapshot(pk, conn.resourcePacks)
+	conn.resourcePackStack = &snapshot
+	conn.packMu.Unlock()
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 	return nil
-}
-
-// hasPack checks if the connection has a resource pack downloaded with the UUID and version passed, provided
-// the pack either has or does not have behaviours in it.
-func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool {
-	for _, exempted := range exemptedPacks {
-		if exempted.uuid == uuid && exempted.version == version {
-			// The server may send this resource pack on the stack without sending it in the info, as the client
-			// always has it downloaded.
-			return true
-		}
-	}
-	conn.packMu.Lock()
-	defer conn.packMu.Unlock()
-
-	for _, ignored := range conn.ignoredResourcePacks {
-		if ignored.uuid == uuid && ignored.version == version {
-			return true
-		}
-	}
-	for _, pack := range conn.resourcePacks {
-		if pack.UUID().String() == uuid && pack.Version() == version && pack.HasBehaviours() == hasBehaviours {
-			return true
-		}
-	}
-	return false
 }
 
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
@@ -1698,6 +2037,9 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 		return conn.close(conn.closeErr("resource pack refused"))
 	case packet.PackResponseSendPacks:
 		packs := pk.PacksToDownload
+		if len(packs) == 0 {
+			break
+		}
 		conn.packQueue = &resourcePackQueue{
 			packs:     conn.resourcePacks,
 			chunkSize: conn.resourcePackDelivery.ChunkSize,
@@ -1711,17 +2053,22 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			return err
 		}
 	case packet.PackResponseAllPacksDownloaded:
-		pk := &packet.ResourcePackStack{BaseGameVersion: "*"}
-		for _, pack := range conn.resourcePacks {
-			resourcePack := protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()}
-			pk.TexturePacks = append(pk.TexturePacks, resourcePack)
+		conn.packMu.Lock()
+		pk := &packet.ResourcePackStack{
+			TexturePackRequired: conn.texturePacksRequired,
+			BaseGameVersion:     "*",
 		}
-		for _, exempted := range exemptedPacks {
-			pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-				UUID:    exempted.uuid,
-				Version: exempted.version,
-			})
+		if conn.resourcePackStack != nil {
+			pk = conn.resourcePackStack.packet()
+		} else {
+			for _, pack := range conn.resourcePacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()})
+			}
+			for _, exempted := range exemptedPacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: exempted.uuid, Version: exempted.version})
+			}
 		}
+		conn.packMu.Unlock()
 		if err := conn.WritePacket(pk); err != nil {
 			return fmt.Errorf("send ResourcePackStack: %w", err)
 		}
@@ -1735,6 +2082,8 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 
 // startGame sends a StartGame packet using the game data of the connection.
 func (conn *Conn) startGame() error {
+	// The client may answer before the packets below are all written, so expect its replies first.
+	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 	data := conn.gameData
 	if len(data.Dimensions) > 0 {
 		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
@@ -1754,50 +2103,16 @@ func (conn *Conn) startGame() error {
 	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
 		return err
 	}
-	if err := conn.WritePacket(&packet.StartGame{
-		Difficulty:                   data.Difficulty,
-		EntityUniqueID:               data.EntityUniqueID,
-		EntityRuntimeID:              data.EntityRuntimeID,
-		PlayerGameMode:               data.PlayerGameMode,
-		PlayerPosition:               data.PlayerPosition,
-		Pitch:                        data.Pitch,
-		Yaw:                          data.Yaw,
-		WorldSeed:                    data.WorldSeed,
-		Dimension:                    data.Dimension,
-		WorldSpawn:                   data.WorldSpawn,
-		EditorWorldType:              data.EditorWorldType,
-		CreatedInEditor:              data.CreatedInEditor,
-		ExportedFromEditor:           data.ExportedFromEditor,
-		PersonaDisabled:              data.PersonaDisabled,
-		CustomSkinsDisabled:          data.CustomSkinsDisabled,
-		EmoteChatMuted:               data.EmoteChatMuted,
-		GameRules:                    data.GameRules,
-		Time:                         data.Time,
-		DayCycleLockTime:             data.DayCycleLockTime,
-		Blocks:                       data.CustomBlocks,
-		AchievementsDisabled:         true,
-		Generator:                    1,
-		EducationFeaturesEnabled:     true,
-		MultiPlayerGame:              true,
-		MultiPlayerCorrelationID:     uuid.Must(uuid.NewRandom()).String(),
-		CommandsEnabled:              true,
-		WorldName:                    data.WorldName,
-		LANBroadcastEnabled:          true,
-		PlayerMovementSettings:       data.PlayerMovementSettings,
-		WorldGameMode:                data.WorldGameMode,
-		Hardcore:                     data.Hardcore,
-		XBLBroadcastMode:             data.XBLBroadcastMode,
-		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
-		PlayerPermissions:            data.PlayerPermissions,
-		Experiments:                  data.Experiments,
-		ClientSideGeneration:         data.ClientSideGeneration,
-		ChatRestrictionLevel:         data.ChatRestrictionLevel,
-		DisablePlayerInteractions:    data.DisablePlayerInteractions,
-		BaseGameVersion:              data.BaseGameVersion,
-		GameVersion:                  protocol.CurrentVersion,
-		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
-		PropertyData:                 data.PropertyData,
-	}); err != nil {
+	pk := StartGameFromGameData(data)
+	pk.AchievementsDisabled = true
+	pk.Generator = 1
+	pk.EducationFeaturesEnabled = true
+	pk.MultiPlayerGame = true
+	pk.MultiPlayerCorrelationID = cmp.Or(data.MultiPlayerCorrelationID, uuid.Must(uuid.NewRandom()).String())
+	pk.CommandsEnabled = true
+	pk.LANBroadcastEnabled = true
+	pk.GameVersion = protocol.CurrentVersion
+	if err := conn.WritePacket(pk); err != nil {
 		return err
 	}
 	if err := conn.WritePacket(&packet.ItemRegistry{Items: data.Items}); err != nil {
@@ -1806,14 +2121,16 @@ func (conn *Conn) startGame() error {
 	if err := conn.Flush(); err != nil {
 		return err
 	}
-	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 	return nil
 }
 
 // nextResourcePackDownload moves to the next resource pack to download and sends a resource pack data info
 // packet with information about it.
 func (conn *Conn) nextResourcePackDownload() error {
-	pk, ok := conn.packQueue.NextPack()
+	pk, ok, err := conn.packQueue.NextPack()
+	if err != nil {
+		return fmt.Errorf("prepare ResourcePackDataInfo: %w", err)
+	}
 	if !ok {
 		return fmt.Errorf("no resource packs to download")
 	}
@@ -1843,57 +2160,73 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		pack.size = pk.Size
 	}
 
-	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
-	delete(conn.packQueue.downloadingPacks, id)
 	if pk.DataChunkSize == 0 {
 		return fmt.Errorf("handle ResourcePackDataInfo: zero data chunk size for pack %v", id)
 	}
+
+	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
+	delete(conn.packQueue.downloadingPacks, id)
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
 	// though there's data, and the client will still download normally.
-	chunkCount := pk.Size / uint64(pk.DataChunkSize)
-	if pk.Size%uint64(pk.DataChunkSize) != 0 {
-		chunkCount++
-	}
-	if chunkCount > uint64(^uint32(0)) {
+	chunkCount, ok := resource.ChunkCount(pk.Size, pk.DataChunkSize)
+	if !ok {
 		return fmt.Errorf("handle ResourcePackDataInfo: too many chunks for pack %v", id)
 	}
-	pack.chunkCount = uint32(chunkCount)
+	pack.chunkCount = chunkCount
 	window := uint64(conn.resourcePackDownload.MaxInFlightChunks)
-	if window > chunkCount {
-		window = max(chunkCount, 1)
+	if window > uint64(chunkCount) {
+		window = max(uint64(chunkCount), 1)
 	}
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
+	conn.packMu.Lock()
 	conn.packQueue.awaitingPacks[id] = pack
+	conn.packMu.Unlock()
+	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
+	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
 
 	idCopy := pk.UUID
 	go func() {
+		finished := false
+		defer func() {
+			if !finished {
+				conn.reportResourcePack(pack.event.with(ResourcePackFailed, 0, cmp.Or(context.Cause(conn.ctx), net.ErrClosed)))
+			}
+		}()
 		fragments := make(map[uint32][]byte)
 		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
 			pack.mu.Unlock()
-			return conn.WritePacket(&packet.ResourcePackChunkRequest{
+			if err := conn.WritePacket(&packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
 				ChunkIndex: int32(index),
-			})
+			}); err != nil {
+				pack.mu.Lock()
+				delete(pack.requested, index)
+				pack.mu.Unlock()
+				return err
+			}
+			return nil
 		}
 
 		// fillWindow replenishes one request for each response accepted by the client.
-		fillWindow := func() bool {
+		fillWindow := func() error {
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
-				if requestChunk(nextRequest) != nil {
-					return false
+				if err := requestChunk(nextRequest); err != nil {
+					return fmt.Errorf("request chunk %v: %w", nextRequest, err)
 				}
 				nextRequest++
 			}
-			return true
+			return nil
 		}
 
-		if !fillWindow() {
+		if err := fillWindow(); err != nil {
+			// The transport already refused a write, so abort rather than let the cleanup flush block on it.
+			_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 			return
 		}
 		for nextWrite < pack.chunkCount {
@@ -1901,6 +2234,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
+				conn.reportResourcePack(pack.event.with(ResourcePackReceived, uint64(len(frag.data)), nil))
 				received++
 				fragments[frag.index] = frag.data
 				// Write the contiguous prefix in index order.
@@ -1909,25 +2243,25 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 					delete(fragments, nextWrite)
 					nextWrite++
 				}
-				if !fillWindow() {
+				if err := fillWindow(); err != nil {
+					_ = conn.abort(fmt.Errorf("download resource pack %v: %w", id, err))
 					return
 				}
 			}
 		}
-		conn.packMu.Lock()
 		if pack.buf.Len() != int(pack.size) {
-			conn.log.Error(fmt.Sprintf("download resource pack: incorrect resource pack size: expected %v, got %v", pack.size, pack.buf.Len()), "UUID", id)
-			conn.packMu.Unlock()
+			_ = conn.close(fmt.Errorf("download resource pack %v: incorrect size: expected %v, got %v", id, pack.size, pack.buf.Len()))
 			return
 		}
 		// First parse the resource pack from the total byte buffer we obtained.
 		newPack, err := resource.Read(pack.buf)
 		if err != nil {
-			conn.log.Error("download resource pack: invalid full resource pack data: "+err.Error(), "UUID", id)
-			conn.packMu.Unlock()
+			_ = conn.close(fmt.Errorf("download resource pack %v: parse: %w", id, err))
 			return
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
+		conn.packMu.Lock()
+		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -1935,9 +2269,14 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		conn.packMu.Unlock()
 
 		if packAmount == 0 {
-			conn.expect(packet.IDResourcePackStack)
-			_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
+			conn.expect(packet.IDResourcePackStack, packet.IDPlayStatus)
+			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
+				return
+			}
 		}
+		finished = true
+		conn.reportResourcePack(pack.event.with(ResourcePackFinished, 0, nil))
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil
@@ -1947,7 +2286,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
 	pk.UUID = strings.Split(pk.UUID, "_")[0]
+	conn.packMu.Lock()
 	pack, ok := conn.packQueue.awaitingPacks[pk.UUID]
+	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
 		// download a resource pack.
@@ -2019,32 +2360,14 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 	lastChunk := response.DataOffset+uint64(len(response.Data)) >= uint64(current.Size())
 	if lastChunk {
 		if !conn.packQueue.AllDownloaded() {
-			_ = conn.nextResourcePackDownload()
+			if err := conn.nextResourcePackDownload(); err != nil {
+				return err
+			}
 		} else {
 			conn.expect(packet.IDResourcePackClientResponse)
 		}
 	}
-	if err := waitResourcePackChunkSendDelay(conn.ctx, conn.resourcePackDelivery.ChunkSendDelay); err != nil {
-		return err
-	}
-
 	return nil
-}
-
-// waitResourcePackChunkSendDelay waits before processing the next resource pack chunk request.
-func waitResourcePackChunkSendDelay(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
@@ -2071,6 +2394,50 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
+}
+
+// StartGameFromGameData returns the StartGame packet encoding data, inverting
+// GameDataFromStartGame. Fields GameData does not carry are left zero;
+// TestStartGameGameDataRoundTrip keeps the two mappings in sync.
+func StartGameFromGameData(data GameData) *packet.StartGame {
+	return &packet.StartGame{
+		Difficulty:                   data.Difficulty,
+		WorldName:                    data.WorldName,
+		WorldSeed:                    data.WorldSeed,
+		EntityUniqueID:               data.EntityUniqueID,
+		EntityRuntimeID:              data.EntityRuntimeID,
+		PlayerGameMode:               data.PlayerGameMode,
+		BaseGameVersion:              data.BaseGameVersion,
+		PlayerPosition:               data.PlayerPosition,
+		Pitch:                        data.Pitch,
+		Yaw:                          data.Yaw,
+		Dimension:                    data.Dimension,
+		WorldSpawn:                   data.WorldSpawn,
+		EditorWorldType:              data.EditorWorldType,
+		CreatedInEditor:              data.CreatedInEditor,
+		ExportedFromEditor:           data.ExportedFromEditor,
+		PersonaDisabled:              data.PersonaDisabled,
+		CustomSkinsDisabled:          data.CustomSkinsDisabled,
+		EmoteChatMuted:               data.EmoteChatMuted,
+		GameRules:                    data.GameRules,
+		Time:                         data.Time,
+		DayCycleLockTime:             data.DayCycleLockTime,
+		ServerBlockStateChecksum:     data.ServerBlockStateChecksum,
+		Blocks:                       data.CustomBlocks,
+		PlayerMovementSettings:       data.PlayerMovementSettings,
+		WorldGameMode:                data.WorldGameMode,
+		Hardcore:                     data.Hardcore,
+		XBLBroadcastMode:             data.XBLBroadcastMode,
+		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
+		PlayerPermissions:            data.PlayerPermissions,
+		ChatRestrictionLevel:         data.ChatRestrictionLevel,
+		DisablePlayerInteractions:    data.DisablePlayerInteractions,
+		ClientSideGeneration:         data.ClientSideGeneration,
+		Experiments:                  data.Experiments,
+		UseBlockNetworkIDHashes:      data.UseBlockNetworkIDHashes,
+		PropertyData:                 data.PropertyData,
+		MultiPlayerCorrelationID:     data.MultiPlayerCorrelationID,
+	}
 }
 
 func GameDataFromStartGame(pk *packet.StartGame) GameData {
@@ -2110,6 +2477,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		Experiments:                  pk.Experiments,
 		UseBlockNetworkIDHashes:      pk.UseBlockNetworkIDHashes,
 		PropertyData:                 pk.PropertyData,
+		MultiPlayerCorrelationID:     pk.MultiPlayerCorrelationID,
 	}
 }
 
@@ -2152,7 +2520,9 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	if pk.ChunkRadius < 1 {
 		return fmt.Errorf("expected chunk radius of at least 1, got %v", pk.ChunkRadius)
 	}
-	conn.expect(packet.IDPlayStatus)
+	// Some servers send ResourcePacksInfo before PlayStatus(LoginSuccess); the vanilla client accepts either
+	// order, so both are expected from here on.
+	conn.expect(packet.IDPlayStatus, packet.IDResourcePacksInfo)
 
 	conn.gameData.ChunkRadius = pk.ChunkRadius
 	conn.gameDataReceived.Store(true)
@@ -2179,16 +2549,7 @@ func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsI
 func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	switch pk.Status {
 	case packet.PlayStatusLoginSuccess:
-		if conn.loginSuccessReceived {
-			return nil
-		}
-		conn.loginSuccessReceived = true
-		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
-			return fmt.Errorf("send ClientCacheStatus: %w", err)
-		}
-		// The next packet we expect is the ResourcePacksInfo packet.
-		conn.expect(packet.IDResourcePacksInfo)
-		return conn.Flush()
+		return conn.handleLoginSuccess()
 	case packet.PlayStatusLoginFailedClient:
 		_ = conn.close(conn.closeErr("client outdated"))
 		return fmt.Errorf("client outdated")
@@ -2221,6 +2582,23 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	default:
 		return fmt.Errorf("unknown play status %v", pk.Status)
 	}
+}
+
+// handleLoginSuccess sends the client capabilities required before resource-pack negotiation.
+func (conn *Conn) handleLoginSuccess() error {
+	if conn.loginSuccessReceived {
+		return nil
+	}
+	conn.loginSuccessReceived = true
+	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
+		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
+			return fmt.Errorf("send ClientCacheStatus: %w", err)
+		}
+	}
+	if !conn.disablePacketHandling {
+		conn.expect(packet.IDResourcePacksInfo)
+	}
+	return conn.Flush()
 }
 
 // tryFinaliseClientConn attempts to finalise the client connection by sending
@@ -2318,6 +2696,15 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
+// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
+// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
+// treating the closed transport as an encoding failure.
+func (conn *Conn) closeTransport(cause error) {
+	conn.cancelFunc(cause)
+	_ = conn.conn.Close()
+	_ = conn.close(cause)
+}
+
 func (conn *Conn) close(cause error) error {
 	conn.closeOnce.Do(func() {
 		defer func() {
@@ -2337,8 +2724,12 @@ func (conn *Conn) close(cause error) error {
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
-		conn.cancelFunc(cause)
-		conn.abortErr = conn.conn.Close()
+		if conn.cancelFunc != nil {
+			conn.cancelFunc(cause)
+		}
+		if conn.conn != nil {
+			conn.abortErr = conn.conn.Close()
+		}
 	})
 	return conn.abortErr
 }

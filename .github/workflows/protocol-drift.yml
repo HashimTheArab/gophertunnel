@@ -50,9 +50,11 @@ jobs:
       - name: Check out the BDS-derived schemas
         run: |
           set -euo pipefail
-          # Pinned by branch: each release branch is a dump of one BDS build.
-          git clone --quiet --depth 1 --branch r26_u4 \
+          # Pin the exact BDS 1.26.50.5 dump; release branches advance after hotfixes.
+          git clone --quiet --depth 1 --branch r26_u5 \
             https://github.com/endstonemc/protocol-docs.git schema-oracle
+          git -C schema-oracle fetch --quiet --depth 1 origin becee3c5a119f6d8aefa0130b7978c87b2bda764
+          git -C schema-oracle checkout --quiet --detach FETCH_HEAD
 
       - name: Verify the schemas match this protocol
         run: |

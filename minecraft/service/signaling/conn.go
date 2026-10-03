@@ -222,12 +222,9 @@ func (conn *Conn) handleMessage(message Message) {
 			return
 		}
 		signal.NetworkID = message.From
-
-		conn.notifiersMu.RLock()
-		notifiers := maps.Clone(conn.notifiers)
-		conn.notifiersMu.RUnlock()
-		for _, n := range notifiers {
-			_ = n.NotifySignal(signal)
+		if !conn.notifySignal(signal) {
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID))
 		}
 	case MessageTypeError:
 		if message.ID == uuid.Nil {
@@ -265,6 +262,15 @@ func (conn *Conn) handleMessage(message Message) {
 	default:
 		log.Warn("received message for unknown type")
 	}
+}
+
+// notifySignal sends a signal to a stable snapshot of the registered
+// notifiers and reports whether at least one accepted it.
+func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
+	conn.notifiersMu.RLock()
+	notifiers := maps.Clone(conn.notifiers)
+	conn.notifiersMu.RUnlock()
+	return internal.NotifySignal(notifiers, signal)
 }
 
 // write encodes the given Message and sends it over the WebSocket connection.

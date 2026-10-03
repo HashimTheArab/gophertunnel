@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 
-	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/p2p"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -28,16 +27,7 @@ type Status struct {
 	OnlineCrossPlatformGame bool                 `json:"OnlineCrossPlatformGame"`
 	CrossPlayDisabled       bool                 `json:"CrossPlayDisabled"`
 	TitleID                 int64                `json:"TitleId"`
-	SupportedConnections    []Connection         `json:"SupportedConnections"`
-}
-
-type Connection struct {
-	ConnectionType int             `json:"ConnectionType"`
-	HostIPAddress  string          `json:"HostIpAddress"`
-	HostPort       uint16          `json:"HostPort"`
-	NetherNetID    p2p.NetherNetID `json:"NetherNetId"`
-	RakNetGUID     string          `json:"RakNetGUID,omitempty"`
-	PmsgID         uuid.UUID       `json:"PmsgId,omitempty"`
+	SupportedConnections    []p2p.Connection     `json:"SupportedConnections"`
 }
 
 const (

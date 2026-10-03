@@ -19,6 +19,12 @@ type MultiplayerTokenSource interface {
 	MultiplayerToken(ctx context.Context, key *ecdsa.PublicKey) (jwt string, err error)
 }
 
+// NewMultiplayerTokenSource returns the default MultiplayerTokenSource, issuing tokens from env with the
+// service tokens src supplies; a src implementing [service.TokenInvalidator] recovers from a revoked token.
+func NewMultiplayerTokenSource(env *service.AuthorizationEnvironment, src service.TokenSource) MultiplayerTokenSource {
+	return &multiplayerTokenSource{env: env, src: src}
+}
+
 // multiplayerTokenSource is an implementation of MultiplayerTokenSource used by default, which uses the
 // underlying [service.TokenSource] to log in to the Minecraft: Bedrock Edition's network services.
 type multiplayerTokenSource struct {

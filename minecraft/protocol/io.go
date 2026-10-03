@@ -51,6 +51,7 @@ type IO interface {
 	ByteFloat(x *float32)
 	Bytes(p *[]byte)
 	NBT(m *map[string]any, encoding nbt.Encoding)
+	RawNBT(message *nbt.RawMessage, encoding nbt.Encoding)
 	NBTList(m *[]any, encoding nbt.Encoding)
 	UUID(x *uuid.UUID)
 	RGB(x *color.RGBA)
@@ -206,17 +207,6 @@ func OptionalFunc[T any](r IO, x *Optional[T], f func(*T)) any {
 		f(&x.val)
 	}
 	return x
-}
-
-// DoubleOptionalFunc reads/writes an Optional[T] nested inside an always-present outer optional.
-func DoubleOptionalFunc[T any](r IO, x *Optional[T], f func(*T)) {
-	outer := true
-	r.Bool(&outer)
-	if outer {
-		OptionalFunc(r, x, f)
-	} else {
-		*x = Optional[T]{}
-	}
 }
 
 // OptionalMarshaler reads/writes an Optional assuming *T implements Marshaler.

@@ -5,10 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-playfab/v2/title"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
@@ -23,13 +25,37 @@ func TestNewTokenSourceRejectsNilXboxSigner(t *testing.T) {
 	}
 }
 
-func TestAuthorizationEnvironmentNewTokenSourceAppliesHTTPClientToServiceTokens(t *testing.T) {
+// Every environment field must have an explicit copy or reset policy, including newly added fields.
+func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T) {
 	transport := newTokenSourceTransport{}
 	client := &http.Client{Transport: &transport}
+	originalClient := &http.Client{Timeout: time.Second}
 	env := &AuthorizationEnvironment{
-		PlayFabTitleID: title.Title("20CA2"),
-		HTTPClient:     &http.Client{},
+		ServiceURI:         &url.URL{Scheme: "https", Host: "auth.test"},
+		Issuer:             &url.URL{Scheme: "https", Host: "issuer.test"},
+		PlayFabTitleID:     title.Title("20CA2"),
+		EduPlayFabTitleID:  title.Title("EDU"),
+		HTTPClient:         originalClient,
+		KeyRefreshInterval: 5 * time.Minute,
+		verifier:           &oidc.IDTokenVerifier{},
 	}
+	want := make(map[string]any)
+	value := reflect.ValueOf(env).Elem()
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Type().Field(i)
+		switch field.Name {
+		case "verifier", "verifierMu":
+			// Cached verifier state and its lock belong to the original environment.
+			continue
+		}
+		if !field.IsExported() || value.Field(i).IsZero() {
+			t.Fatalf("AuthorizationEnvironment.%s needs a nonzero fixture and a copy/reset policy", field.Name)
+		}
+		want[field.Name] = value.Field(i).Interface()
+	}
+	want["HTTPClient"] = client
+	env.verifierMu.Lock()
+	defer env.verifierMu.Unlock()
 	src, err := env.NewTokenSource(context.Background(), tokenSourceXboxSigner{}, TokenSourceConfig{HTTPClient: client})
 	if err != nil {
 		t.Fatalf("AuthorizationEnvironment.NewTokenSource() error = %v", err)
@@ -37,9 +63,25 @@ func TestAuthorizationEnvironmentNewTokenSourceAppliesHTTPClientToServiceTokens(
 	defer src.Close()
 
 	underlying := src.TokenSource.(*tokenSource)
-	if underlying.env.HTTPClient != client {
-		t.Fatalf("service token HTTP client = %p, want %p", underlying.env.HTTPClient, client)
+	if underlying.env == env {
+		t.Fatal("token source reused the caller's environment")
 	}
+	copied := reflect.ValueOf(underlying.env).Elem()
+	for field, expected := range want {
+		if got := copied.FieldByName(field).Interface(); !reflect.DeepEqual(got, expected) {
+			t.Errorf("copied %s = %#v, want %#v", field, got, expected)
+		}
+	}
+	if env.HTTPClient != originalClient {
+		t.Fatal("token source changed the caller's HTTP client")
+	}
+	if underlying.env.verifier != nil {
+		t.Fatal("token source copied the cached verifier")
+	}
+	if !underlying.env.verifierMu.TryLock() {
+		t.Fatal("token source copied the held verifier lock")
+	}
+	underlying.env.verifierMu.Unlock()
 }
 
 func TestNewTokenSourceBuildsStandardWorkflow(t *testing.T) {

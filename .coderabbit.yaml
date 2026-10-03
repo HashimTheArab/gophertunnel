@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# `lunar` is this fork's working branch rather than the repository default, so
+# auto review only runs on it if every base branch is opted in explicitly.
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - ".*"

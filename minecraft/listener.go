@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -26,6 +25,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
+
+var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
 type ListenConfig struct {
@@ -52,6 +53,15 @@ type ListenConfig struct {
 	// will be dynamically updated each time a player joins, so that an unlimited amount of players is
 	// accepted into the server.
 	MaximumPlayers int
+	// ListenerGroup shares the active player count between multiple listeners serving one logical server, so
+	// that the MaximumPlayers admission limit and advertised player count apply across all of them. If nil,
+	// the listener uses a private group. All listeners in a group should use the same MaximumPlayers value.
+	ListenerGroup *ListenerGroup
+	// LoginTimeout bounds how long a connection may take from being accepted until its Login is verified and,
+	// with encryption, its encrypted handshake completes. Connections that have not authenticated by then are
+	// closed. The rest of the login sequence, such as resource pack downloads, is not bounded. Zero or negative
+	// disables it; around ten seconds suits most servers.
+	LoginTimeout time.Duration
 
 	// AllowUnknownPackets specifies if connections of this Listener are allowed to send packets not present
 	// in the packet pool. If false (by default), such packets lead to the connection being closed immediately.
@@ -122,9 +132,16 @@ type ListenConfig struct {
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// PrepareResourcePackOffer is called exactly once after the login handshake and FetchResourcePacks, but
+	// before ResourcePacksInfo is written. The connection context is cancelled when the peer disconnects.
+	// Implementations may perform cancellable preparation and call Conn.ConfigureResourcePackOffer,
+	// Conn.ConfigureResourcePackOfferSnapshot or Conn.ConfigureResourcePackStack to replace the offer for this
+	// exact connection. A non-nil error aborts it.
+	PrepareResourcePackOffer func(ctx context.Context, conn *Conn) error
 
-	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
-	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	// AfterHandshake is called after the initial login handshake handler completes. Use PrepareResourcePackOffer
+	// for work that must finish before LoginSuccess and ResourcePacksInfo are written. If AfterHandshake returns a
+	// non-nil error, the connection is aborted.
 	AfterHandshake func(c *Conn) error
 
 	// ConnHandler is called when a connection is ready for caller-owned packet handling. If set, ready connections
@@ -132,7 +149,8 @@ type ListenConfig struct {
 	// reading the connection; returning a non-nil error closes the connection.
 	ConnHandler func(c *Conn) error
 
-	// DisablePacketHandling, if set to true, disables automatic packet handling for the connection.
+	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
+	// connection control, including disconnect and encryption-handshake packets, remains internal.
 	DisablePacketHandling bool
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
@@ -143,10 +161,16 @@ type ListenConfig struct {
 	// packet. The function is called with the header of the packet and its raw payload, the address from which the
 	// packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// or internal handling, including login and disconnect handling. Returning false silently drops only
+	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
+	// it must not block and may run concurrently for different connections. The header is passed
+	// by value and cannot be rewritten through this hook.
+	AcceptPacketHeader func(header packet.Header) bool
 	// PacketBatchFunc is called after each outbound packet batch has been encoded.
 	PacketBatchFunc packet.BatchEncodeObserver
 
-	// MaxDecompressedLen is the maximum length of a decompressed packet to prevent potential exploits. If 0,
+	// MaxDecompressedLen is the maximum length of a decompressed packet batch to prevent potential exploits. If 0,
 	// the default value is 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
 
@@ -175,9 +199,7 @@ type Listener struct {
 	packs   []*resource.Pack
 	packsMu sync.RWMutex
 
-	// playerCount is the amount of players connected to the server. If MaximumPlayers is non-zero and equal
-	// to the playerCount, no more players will be accepted.
-	playerCount atomic.Int32
+	group *ListenerGroup
 
 	incoming chan *Conn
 	close    chan struct{}
@@ -187,6 +209,34 @@ type Listener struct {
 	// for authenticating incoming connections. It will be nil if authentication is
 	// disabled on ListenConfig.
 	verifier *oidc.IDTokenVerifier
+}
+
+// ListenerGroup shares the active player count between listeners serving one logical server.
+type ListenerGroup struct {
+	playerCount atomic.Int32
+}
+
+// PlayerCount returns the number of active connections across the group.
+func (g *ListenerGroup) PlayerCount() int {
+	return int(g.playerCount.Load())
+}
+
+// add increments the player count if it is below max, returning false if the group is full. A max of zero
+// means no limit.
+func (g *ListenerGroup) add(max int) bool {
+	for {
+		current := g.playerCount.Load()
+		if max > 0 && int(current) >= max {
+			return false
+		}
+		if g.playerCount.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func (g *ListenerGroup) remove() {
+	g.playerCount.Add(-1)
 }
 
 // Listen announces on the local network address. The network is typically "raknet".
@@ -216,6 +266,9 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	if cfg.StatusProvider == nil {
 		cfg.StatusProvider = NewStatusProvider("Minecraft Server", "Gophertunnel")
 	}
+	if cfg.ListenerGroup == nil {
+		cfg.ListenerGroup = new(ListenerGroup)
+	}
 	if cfg.Compression == nil {
 		cfg.Compression = packet.DefaultCompression
 	}
@@ -231,11 +284,6 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		cfg.CompressionThreshold = 256
 	} else if cfg.CompressionThreshold < 0 {
 		cfg.CompressionThreshold = 0
-	}
-	if cfg.MaxDecompressedLen == 0 {
-		cfg.MaxDecompressedLen = 16 * 1024 * 1024 // 16MB
-	} else if cfg.MaxDecompressedLen < 0 {
-		cfg.MaxDecompressedLen = math.MaxInt
 	}
 
 	var verifier *oidc.IDTokenVerifier
@@ -262,6 +310,7 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	listener := &Listener{
 		cfg:      cfg,
 		listener: netListener,
+		group:    cfg.ListenerGroup,
 		packs:    slices.Clone(cfg.ResourcePacks),
 		incoming: make(chan *Conn),
 		close:    make(chan struct{}),
@@ -393,7 +442,7 @@ func (listener *Listener) Close() error {
 
 // PlayerCount returns the number of active connections.
 func (listener *Listener) PlayerCount() int {
-	return int(listener.playerCount.Load())
+	return listener.group.PlayerCount()
 }
 
 // updatePongData updates the pong data of the listener using the current only players, maximum players and
@@ -416,16 +465,10 @@ func (listener *Listener) updatePongData() {
 		ipv6Port = port
 	}
 
-	authOnline, authOffline := "1", "0"
-	if listener.cfg.AuthenticationDisabled {
-		authOffline = "1"
-	}
-
 	s := listener.status()
-	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
+	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
-		listener.listener.ID(), s.ServerSubName, "Creative", 1, "1", ipv4Port, ipv6Port, "0",
-		authOnline, authOffline,
+		listener.listener.ID(), s.ServerSubName, gameTypeName(s.GameType), 1, ipv4Port, ipv6Port, "0", "0",
 	))
 
 	if status, ok := listener.listener.(interface {
@@ -487,6 +530,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.acceptPacketHeader = listener.cfg.AcceptPacketHeader
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
@@ -495,6 +539,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.resourcePackDelivery = listener.cfg.ResourcePackDelivery.normalized()
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
+	conn.prepareResourcePackOffer = listener.cfg.PrepareResourcePackOffer
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
 	conn.verifier = listener.verifier
@@ -503,21 +548,37 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
 	conn.batchReading = listener.cfg.EnableBatchReading
 
-	if listener.playerCount.Load() == int32(listener.cfg.MaximumPlayers) && listener.cfg.MaximumPlayers != 0 {
+	if !listener.group.add(listener.cfg.MaximumPlayers) {
 		// The server was full. We kick the player immediately and close the connection.
 		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
 		_ = conn.close(conn.closeErr("server full"))
 		return
 	}
-	listener.playerCount.Add(1)
 	listener.updatePongData()
 
-	go listener.handleConn(conn)
+	var timer *time.Timer
+	if timeout := listener.cfg.LoginTimeout; timeout > 0 {
+		timer = time.AfterFunc(timeout, func() {
+			if !conn.authenticated.Load() {
+				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
+				conn.closeTransport(errLoginTimeout)
+			}
+		})
+	}
+	go func() {
+		listener.handleConn(conn)
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 }
+
+// errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
+var errLoginTimeout = errors.New("login timed out")
 
 // status returns the current ServerStatus of the Listener.
 func (listener *Listener) status() ServerStatus {
-	status := listener.cfg.StatusProvider.ServerStatus(int(listener.playerCount.Load()), listener.cfg.MaximumPlayers)
+	status := listener.cfg.StatusProvider.ServerStatus(listener.group.PlayerCount(), listener.cfg.MaximumPlayers)
 	if status.MaxPlayers == 0 {
 		status.MaxPlayers = status.PlayerCount + 1
 	}
@@ -529,37 +590,26 @@ func (listener *Listener) status() ServerStatus {
 func (listener *Listener) handleConn(conn *Conn) {
 	defer func() {
 		_ = conn.Close()
-		listener.playerCount.Add(-1)
+		listener.group.remove()
 		listener.updatePongData()
 	}()
 	for {
 		// We finally arrived at the packet decoding loop. We constantly decode packets that arrive
 		// and push them to the Conn so that they may be processed.
-		packets, err := conn.dec.Decode()
-		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				conn.log.Error(err.Error())
-			}
-			return
-		}
-		conn.reserveBatch(len(packets))
 		publishBatch := false
-		for _, data := range packets {
+		callbackErr := false
+		if err := conn.dec.DecodeFunc(func(data []byte) error {
 			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
 			passthroughReadyBefore := conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
-				conn.log.Error(err.Error())
-				conn.flushBatch()
-				if publishBatch {
-					listener.deliverConn(conn)
-				}
-				return
+				callbackErr = true
+				return err
 			}
 			if !handshakeCompleteBefore && conn.handshakeComplete && listener.cfg.AfterHandshake != nil {
 				if err := listener.cfg.AfterHandshake(conn); err != nil {
-					// A non-nil AfterHandshake error aborts the connection, so it is not delivered.
-					conn.log.Error(err.Error())
-					return
+					// Login has not completed yet, so publishBatch cannot be set and the connection will not be delivered.
+					callbackErr = true
+					return err
 				}
 			}
 			publish := !loggedInBefore && conn.loggedIn
@@ -570,9 +620,19 @@ func (listener *Listener) handleConn(conn *Conn) {
 				if conn.batchReading {
 					publishBatch = true
 				} else if !listener.deliverConn(conn) {
-					return
+					return errListenerDeliveryClosed
 				}
 			}
+			return nil
+		}); err != nil {
+			conn.flushBatch()
+			if publishBatch {
+				listener.deliverConn(conn)
+			}
+			if callbackErr || (!errors.Is(err, net.ErrClosed) && !errors.Is(err, errListenerDeliveryClosed) && !errors.Is(context.Cause(conn.ctx), errLoginTimeout)) {
+				conn.log.Error(err.Error())
+			}
+			return
 		}
 		// In batch-reading mode, the connection is published only after its batch has been flushed, so
 		// the owner can immediately read the batch that completed the login.

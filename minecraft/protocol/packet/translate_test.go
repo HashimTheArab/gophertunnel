@@ -44,7 +44,6 @@ var translatedIDFields = []string{
 	"Animate.EntityRuntimeID",
 	"AnimateEntity.EntityRuntimeIDs",
 	"BossEvent.BossEntityUniqueID",
-	"BossEvent.PlayerUniqueID",
 	"Camera.CameraEntityUniqueID",
 	"Camera.TargetPlayerUniqueID",
 	"CameraInstruction.AttachToEntity",

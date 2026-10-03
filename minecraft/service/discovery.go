@@ -130,7 +130,7 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, internal.Err(resp)
+		return nil, NewResponseError(resp)
 	}
 
 	var result internal.Result[Discovery]
