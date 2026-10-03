@@ -51,7 +51,7 @@ func (c SessionConfig) PageID(name string) string {
 // SessionConfig returns the store session configuration.
 func (c *Client) SessionConfig(ctx context.Context) (*SessionConfig, error) {
 	var config SessionConfig
-	if _, err := c.do(ctx, http.MethodGet, c.endpoint("/api/v1.0/session/config"), nil, &config,
+	if _, err := c.store.do(ctx, http.MethodGet, c.store.endpoint("/api/v1.0/session/config"), nil, &config,
 		http.Header{"Session-Id": {c.sessionID}}); err != nil {
 		return nil, err
 	}

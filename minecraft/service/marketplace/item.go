@@ -93,7 +93,7 @@ func (c *Client) ContinueRow(ctx context.Context, token, inventoryVersion string
 		Result            *[]Item `json:"result"`
 	}
 	body := map[string]string{"continuationToken": token, "inventoryVersion": inventoryVersion}
-	data, _, err := c.raw(ctx, http.MethodPost, c.endpoint("/api/v2.0/layout/items"), body)
+	data, _, err := c.store.raw(ctx, http.MethodPost, c.store.endpoint("/api/v2.0/layout/items"), body)
 	if err != nil {
 		return nil, "", err
 	}

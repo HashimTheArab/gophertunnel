@@ -19,7 +19,7 @@ func (c *Client) Balances(ctx context.Context) ([]Balance, error) {
 	var result struct {
 		Balances []Balance `json:"virtualCurrencyBalances"`
 	}
-	if _, err := c.do(ctx, http.MethodPost, c.endpoint("/api/v1.0/currencies/virtual/balances"), struct{}{}, &result, nil); err != nil {
+	if _, err := c.entitlements.do(ctx, http.MethodPost, c.entitlements.endpoint("/api/v1.0/currencies/virtual/balances"), struct{}{}, &result, nil); err != nil {
 		return nil, err
 	}
 	return result.Balances, nil
