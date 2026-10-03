@@ -250,6 +250,7 @@ type Conn struct {
 	identityData login.IdentityData
 	clientData   login.ClientData
 
+	gameDataMu       sync.RWMutex
 	gameData         GameData
 	gameDataReceived atomic.Bool
 
@@ -347,9 +348,8 @@ type Conn struct {
 	resourcePackDownload ResourcePackDownloadConfig
 	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
 	httpClient *http.Client
-	// relayStartup delivers StartGame and everything after it to the caller instead of spawning; relaying is
-	// set once StartGame has arrived.
-	relayStartup, relaying bool
+	// relayStartup delivers StartGame and everything after it to the caller instead of spawning.
+	relayStartup bool
 	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
 	resourcePackProgress   func(ResourcePackEvent)
 	resourcePackProgressMu sync.Mutex
@@ -495,6 +495,8 @@ func (conn *Conn) Authenticated() bool {
 // Conn is obtained using Listen, this game data may be set to the Listener. If obtained using Dial, the data
 // is obtained from the server.
 func (conn *Conn) GameData() GameData {
+	conn.gameDataMu.RLock()
+	defer conn.gameDataMu.RUnlock()
 	return conn.gameData
 }
 
@@ -552,15 +554,10 @@ func (conn *Conn) SendStartGame(data GameData) error {
 		panic("(*Conn).SendStartGame must only be called on Listener connections")
 	}
 	if data.WorldName == "" {
-		data.WorldName = conn.gameData.WorldName
+		data.WorldName = conn.GameData().WorldName
 	}
 
-	conn.gameData = data
-	for _, item := range data.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-		}
-	}
+	conn.SetGameData(data)
 	conn.waitingForSpawn.Store(true)
 	return conn.startGame()
 }
@@ -1101,21 +1098,17 @@ func (conn *Conn) ClientCacheEnabled() bool {
 // Listener, this is the radius that the client requested. For connections obtained through a Dialer, this
 // is the radius that the server approved upon.
 func (conn *Conn) ChunkRadius() int {
-	return int(conn.gameData.ChunkRadius)
+	return int(conn.GameData().ChunkRadius)
 }
 
 // SetGameData manually sets the game data for this connection. This is useful when DisablePacketHandling
 // is enabled and you want to populate the internal state without automatic packet handling.
 // This allows GameData() to return meaningful data even when packet handlers aren't running.
 func (conn *Conn) SetGameData(data GameData) {
+	conn.gameDataMu.Lock()
 	conn.gameData = data
-	// When setting gameData with Items, also update shieldID if present
-	for _, item := range data.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-			break
-		}
-	}
+	conn.gameDataMu.Unlock()
+	conn.observeShield(data.Items)
 }
 
 // Context returns the connection's context. The context is canceled when the connection is closed,
@@ -1272,15 +1265,7 @@ func (conn *Conn) receive(data []byte) error {
 		// it decoded to something else. Restore the payload and deliver it like any other packet.
 		pkData.payload = bytes.NewBuffer(payload)
 	}
-	if conn.relayStartup {
-		if relayed, err := conn.relayStartupPacket(pkData); relayed || err != nil {
-			return err
-		}
-	}
 	if conn.disablePacketHandling {
-		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
-			return err
-		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
@@ -1290,6 +1275,16 @@ func (conn *Conn) receive(data []byte) error {
 				// packets start coming in.
 				conn.disablePacketHandlingReady = true
 			}
+		}
+	}
+	if conn.relayStartup {
+		if relayed, err := conn.relayStartupPacket(pkData); relayed || err != nil {
+			return err
+		}
+	}
+	if conn.disablePacketHandling {
+		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+			return err
 		}
 		if conn.disablePacketHandlingReady {
 			if pkData.h.PacketID == packet.IDClientToServerHandshake {
@@ -1317,7 +1312,7 @@ func (conn *Conn) receive(data []byte) error {
 // the Conn itself needs from StartGame, DimensionData and ItemRegistry to decode later packets.
 func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 	id := pkData.h.PacketID
-	if !conn.relaying && id != packet.IDStartGame && id != packet.IDDimensionData {
+	if !conn.loggedIn && id != packet.IDStartGame && id != packet.IDDimensionData {
 		return false, nil
 	}
 	switch id {
@@ -1330,29 +1325,42 @@ func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 		for _, pk := range pks {
 			switch pk := pk.(type) {
 			case *packet.StartGame:
-				dimensions := conn.gameData.Dimensions
-				conn.gameData = GameDataFromStartGame(pk)
-				conn.gameData.Dimensions = dimensions
-				conn.relaying, conn.loggedIn = true, true
+				conn.observeStartGame(pk)
+				conn.loggedIn = true
 			case *packet.DimensionData:
-				conn.gameData.Dimensions = pk.Definitions
+				_ = conn.handleDimensionData(pk)
 			case *packet.ItemRegistry:
 				conn.observeItems(pk.Items)
 			}
 		}
 	}
-	if !conn.collectPacket(pkData) {
+	if !conn.loggedIn && !conn.disablePacketHandlingReady {
+		// Keep early DimensionData beside other deferred login packets in receive order.
+		conn.deferPacket(pkData)
+	} else if !conn.collectPacket(pkData) {
 		conn.queuePacket(pkData)
 	}
 	return true, nil
 }
 
+// observeStartGame records the world settings while preserving dimension definitions received earlier.
+func (conn *Conn) observeStartGame(pk *packet.StartGame) {
+	conn.gameDataMu.Lock()
+	defer conn.gameDataMu.Unlock()
+	dimensions := conn.gameData.Dimensions
+	conn.gameData = GameDataFromStartGame(pk)
+	conn.gameData.Dimensions = dimensions
+}
+
 // observeItems records the item table used to decode shield item stacks.
 func (conn *Conn) observeItems(items []protocol.ItemEntry) {
+	conn.gameDataMu.Lock()
 	conn.gameData.Items = items
+	conn.gameDataMu.Unlock()
 	conn.observeShield(items)
 }
 
+// observeShield records the runtime ID used when reading and writing shield item stacks.
 func (conn *Conn) observeShield(items []protocol.ItemEntry) {
 	for _, item := range items {
 		if item.Name == "minecraft:shield" {
@@ -2212,7 +2220,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 func (conn *Conn) startGame() error {
 	// The client may answer before the packets below are all written, so expect its replies first.
 	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
-	data := conn.gameData
+	data := conn.GameData()
 	if len(data.Dimensions) > 0 {
 		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
 			return err
@@ -2509,7 +2517,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 }
 
 func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
+	conn.gameDataMu.Lock()
 	conn.gameData.Dimensions = pk.Definitions
+	conn.gameDataMu.Unlock()
 	return nil
 }
 
@@ -2522,11 +2532,7 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		pk.BaseGameVersion = "1.17.0" // temp fix for hive
 	}
 
-	// We store dimensions in the conn through handleDimensionData, so we need to
-	// restore it after building GameData from the StartGame packet.
-	dimensions := conn.gameData.Dimensions
-	conn.gameData = GameDataFromStartGame(pk)
-	conn.gameData.Dimensions = dimensions
+	conn.observeStartGame(pk)
 
 	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
@@ -2637,11 +2643,13 @@ func (conn *Conn) handleRequestChunkRadius(pk *packet.RequestChunkRadius) error 
 	}
 	conn.expect(packet.IDSetLocalPlayerAsInitialised)
 	radius := pk.ChunkRadius
+	conn.gameDataMu.Lock()
 	if r := conn.gameData.ChunkRadius; r != 0 {
 		radius = r
 	}
-	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	conn.gameData.ChunkRadius = pk.ChunkRadius
+	conn.gameDataMu.Unlock()
+	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
 	_ = conn.WritePacket(&packet.CreativeContent{})
 	return nil
@@ -2657,7 +2665,9 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	// order, so both are expected from here on.
 	conn.expect(packet.IDPlayStatus, packet.IDResourcePacksInfo)
 
+	conn.gameDataMu.Lock()
 	conn.gameData.ChunkRadius = pk.ChunkRadius
+	conn.gameDataMu.Unlock()
 	conn.gameDataReceived.Store(true)
 
 	conn.tryFinaliseClientConn()
@@ -2668,8 +2678,8 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 // packet in the spawning sequence and it marks the point where a server sided connection is considered
 // logged in.
 func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsInitialised) error {
-	if pk.EntityRuntimeID != conn.gameData.EntityRuntimeID {
-		return fmt.Errorf("entity runtime ID mismatch: expected %v (from StartGame), got %v", conn.gameData.EntityRuntimeID, pk.EntityRuntimeID)
+	if want := conn.GameData().EntityRuntimeID; pk.EntityRuntimeID != want {
+		return fmt.Errorf("entity runtime ID mismatch: expected %v (from StartGame), got %v", want, pk.EntityRuntimeID)
 	}
 	if conn.waitingForSpawn.CompareAndSwap(true, false) {
 		close(conn.spawn)
@@ -2745,7 +2755,7 @@ func (conn *Conn) tryFinaliseClientConn() {
 		close(conn.spawn)
 		conn.loggedIn = true
 		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
-		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.gameData.EntityRuntimeID})
+		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
 	}
 }
 

@@ -135,7 +135,9 @@ func (f *ForeignStatusProvider) update() {
 func ParsePongData(pong []byte) ServerStatus {
 	status, err := ParsePong(pong)
 	if err != nil {
-		return ServerStatus{ServerName: err.Error()}
+		// Keep the existing display text while ParsePong returns conventional lowercase errors.
+		message := err.Error()
+		return ServerStatus{ServerName: strings.ToUpper(message[:1]) + message[1:]}
 	}
 	return status
 }
@@ -145,17 +147,17 @@ func ParsePongData(pong []byte) ServerStatus {
 func ParsePong(pong []byte) (ServerStatus, error) {
 	frag := splitPong(string(pong))
 	if len(frag) < 8 {
-		return ServerStatus{}, errors.New("Invalid pong data")
+		return ServerStatus{}, errors.New("invalid pong data")
 	}
 	serverName := frag[1]
 	serverSubName := frag[7]
 	online, err := strconv.Atoi(frag[4])
 	if err != nil {
-		return ServerStatus{}, errors.New("Invalid player count")
+		return ServerStatus{}, errors.New("invalid player count")
 	}
 	max, err := strconv.Atoi(frag[5])
 	if err != nil {
-		return ServerStatus{}, errors.New("Invalid max player count")
+		return ServerStatus{}, errors.New("invalid max player count")
 	}
 	status := ServerStatus{
 		ServerName:    serverName,
