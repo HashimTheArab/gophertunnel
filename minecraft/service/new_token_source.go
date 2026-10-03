@@ -92,3 +92,10 @@ func (e *AuthorizationEnvironment) NewTokenSource(ctx context.Context, xbox xsap
 func (s *ManagedTokenSource) Close() error {
 	return s.playFab.Close()
 }
+
+// InvalidateServiceToken forwards rejected tokens to the underlying source when it supports invalidation.
+func (s *ManagedTokenSource) InvalidateServiceToken(rejected *Token) {
+	if invalidator, ok := s.TokenSource.(TokenInvalidator); ok {
+		invalidator.InvalidateServiceToken(rejected)
+	}
+}
