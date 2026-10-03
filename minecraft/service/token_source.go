@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/df-mc/go-playfab/v2"
+	"github.com/google/uuid"
 )
 
 // SessionTicketSource supplies PlayFab session tickets; [*playfab.Client] implements it.
@@ -29,9 +30,20 @@ func (e *AuthorizationEnvironment) TokenSource(client *playfab.Client, config To
 // ResumeTokenSource returns a TokenSource like [AuthorizationEnvironment.TokenSource] that starts
 // from a previously issued token, such as one restored from disk. It asks tickets for a session
 // ticket only when that token must be renewed or replaced. The source implements [TokenInvalidator].
+// Missing claims are decoded from the token's JWT; invalid persisted claims discard the token.
 func (e *AuthorizationEnvironment) ResumeTokenSource(tickets SessionTicketSource, config TokenConfig, token *Token) TokenSource {
 	defaultUserConfig(&config.User)
 	defaultDeviceConfig(e, &config.Device)
+
+	if token != nil && token.Claims.PlayerMessagingID == uuid.Nil {
+		// Claims are omitted from JSON. Rebuild them without changing the caller's token.
+		restored := *token
+		if err := decodeClaims(&restored, restored.now()); err != nil {
+			token = nil
+		} else {
+			token = &restored
+		}
+	}
 
 	return &tokenSource{
 		tickets: tickets,

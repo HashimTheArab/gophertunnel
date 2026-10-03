@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type countingTickets struct{ calls atomic.Int32 }
@@ -27,7 +29,10 @@ func TestResumeTokenSourceReusesTheRestoredToken(t *testing.T) {
 	t.Parallel()
 
 	tickets := new(countingTickets)
-	restored := &Token{AuthorizationHeader: "MCToken restored", ValidUntil: time.Now().Add(time.Hour)}
+	restored := &Token{AuthorizationHeader: testAuthorizationHeader(t, time.Now()), ValidUntil: time.Now().Add(time.Hour)}
+	if err := decodeClaims(restored, time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	env := &AuthorizationEnvironment{PlayFabTitleID: "20CA2"}
 	src := env.ResumeTokenSource(tickets, TokenConfig{}, restored)
 	token, err := src.ServiceToken(context.Background())
@@ -37,6 +42,56 @@ func TestResumeTokenSourceReusesTheRestoredToken(t *testing.T) {
 	src.(TokenInvalidator).InvalidateServiceToken(restored)
 	if _, err := src.ServiceToken(context.Background()); err == nil || tickets.calls.Load() != 1 {
 		t.Fatalf("invalidated token was reused: err = %v tickets = %d", err, tickets.calls.Load())
+	}
+}
+
+// JSON persistence omits claims, so resuming must recover the signaling identity from the JWT.
+func TestResumeTokenSourceRestoresPersistedClaims(t *testing.T) {
+	t.Parallel()
+
+	issued := &Token{AuthorizationHeader: testAuthorizationHeader(t, time.Now()), ValidUntil: time.Now().Add(time.Hour)}
+	if err := decodeClaims(issued, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Token
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	tickets := new(countingTickets)
+	env := &AuthorizationEnvironment{PlayFabTitleID: "20CA2"}
+	token, err := env.ResumeTokenSource(tickets, TokenConfig{}, &restored).ServiceToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.Claims.PlayerMessagingID != issued.Claims.PlayerMessagingID || token.AuthorizationHeader != issued.AuthorizationHeader || tickets.calls.Load() != 0 {
+		t.Fatalf("claims were not restored without renewing: pmid = %v tickets = %d", token.Claims.PlayerMessagingID, tickets.calls.Load())
+	}
+	if restored.Claims.PlayerMessagingID != uuid.Nil {
+		t.Fatal("resuming mutated the caller's token")
+	}
+}
+
+// An unusable persisted JWT must be replaced, even when its separate expiry field looks valid.
+func TestResumeTokenSourceReplacesInvalidPersistedClaims(t *testing.T) {
+	t.Parallel()
+
+	for name, header := range map[string]string{
+		"malformed":        "MCToken malformed",
+		"missing identity": "MCToken header.e30.signature",
+		"expired":          testAuthorizationHeaderWithTimes(t, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			tickets := new(countingTickets)
+			env := &AuthorizationEnvironment{PlayFabTitleID: "20CA2"}
+			restored := &Token{AuthorizationHeader: header, ValidUntil: time.Now().Add(time.Hour)}
+			if _, err := env.ResumeTokenSource(tickets, TokenConfig{}, restored).ServiceToken(context.Background()); err == nil || tickets.calls.Load() != 1 {
+				t.Fatalf("invalid token was reused: err = %v tickets = %d", err, tickets.calls.Load())
+			}
+		})
 	}
 }
 

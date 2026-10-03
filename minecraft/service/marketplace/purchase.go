@@ -95,7 +95,10 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 		return PurchaseResult{}, fmt.Errorf("request service token: %w", err)
 	}
 	token.SetAuthHeader(req)
-	resp, err := c.http.Do(req)
+	// Redirects can replay the purchase body or turn the response into an unrelated GET.
+	client := *c.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		return PurchaseResult{Outcome: PurchaseUnknown}, nil
 	}
