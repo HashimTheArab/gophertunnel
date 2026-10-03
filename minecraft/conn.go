@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -339,9 +340,20 @@ type Conn struct {
 	// resourcePackDownload controls the number of chunk requests issued by a
 	// Dialer while downloading a resource pack.
 	resourcePackDownload ResourcePackDownloadConfig
+	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
+	httpClient *http.Client
+	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
+	resourcePackProgress   func(ResourcePackEvent)
+	resourcePackProgressMu sync.Mutex
 	// fetchResourcePacks is an optional function passed from a Listener. If set, the returned resource packs from the function
 	// will determine which resource packs to send to the client based on its identity and client data.
 	fetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// prepareResourcePackOffer runs once after the handshake and immediately before ResourcePacksInfo is written.
+	prepareResourcePackOffer   func(context.Context, *Conn) error
+	resourcePackOfferPrepared  bool
+	resourcePackOfferPreparing bool
+	resourcePackOffer          *ResourcePackOfferSnapshot
+	resourcePackStack          *ResourcePackStackSnapshot
 	// resourcePackCache optionally stores resource packs downloaded by a Dialer.
 	resourcePackCache ResourcePackCache
 	// resourcePackDelivery controls resource pack delivery for Listener connections.
@@ -794,7 +806,107 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 // Listener, this holds all resource packs set to the Listener. For a Conn obtained using Dial, the resource
 // packs include all packs sent by the server connected to.
 func (conn *Conn) ResourcePacks() []*resource.Pack {
-	return conn.resourcePacks
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	return slices.Clone(conn.resourcePacks)
+}
+
+// ResourcePackOffer returns the exact ResourcePacksInfo advertisement received by a Dialer connection. The
+// snapshot is available after ResourcePacksInfo is handled and owns copies of all downloaded pack content.
+func (conn *Conn) ResourcePackOffer() (ResourcePackOfferSnapshot, bool) {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if conn.resourcePackOffer == nil {
+		return ResourcePackOfferSnapshot{}, false
+	}
+	return conn.resourcePackOffer.withPacks(conn.resourcePacks), true
+}
+
+// TexturePacksRequired reports whether either ResourcePacksInfo or ResourcePackStack required the server packs.
+func (conn *Conn) TexturePacksRequired() bool {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	return conn.texturePacksRequired
+}
+
+// ResourcePackStack returns the resource packs selected by the server in their exact application order.
+// The snapshot is available only after a ResourcePackStack packet has been validated. The returned snapshot
+// owns copies of its packs and may be retained or modified by the caller without affecting the connection.
+func (conn *Conn) ResourcePackStack() (ResourcePackStackSnapshot, bool) {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if conn.resourcePackStack == nil {
+		return ResourcePackStackSnapshot{}, false
+	}
+	return *conn.resourcePackStack, true
+}
+
+// ConfigureResourcePackOffer replaces the resource packs and required bit for this exact Listener connection.
+// It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent.
+func (conn *Conn) ConfigureResourcePackOffer(packs []*resource.Pack, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack offer outside preparation")
+	}
+	for _, pack := range packs {
+		if pack == nil {
+			return errors.New("configure resource pack offer with nil pack")
+		}
+	}
+	conn.resourcePacks = slices.Clone(packs)
+	conn.resourcePackOffer = nil
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = texturePacksRequired
+	return nil
+}
+
+// ConfigureResourcePackOfferSnapshot replaces the ResourcePacksInfo advertisement for this Listener
+// connection. It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent. The
+// required bit is selected locally and does not have to match offer.TexturePackRequired().
+func (conn *Conn) ConfigureResourcePackOfferSnapshot(offer ResourcePackOfferSnapshot, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack offer snapshot outside preparation")
+	}
+	for _, entry := range offer.TexturePacks() {
+		if entry.pack == nil {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v has no content; use ProjectResourcePacks", entry.info.UUID, entry.info.Version)
+		}
+		if entry.info.Size != uint64(max(entry.pack.Size(), 0)) {
+			return fmt.Errorf("configure resource pack offer snapshot: pack %v_%v advertises size %v, content has %v; use ProjectResourcePacks", entry.info.UUID, entry.info.Version, entry.info.Size, entry.pack.Size())
+		}
+	}
+	snapshot := offer
+	snapshot.info.TexturePackRequired = texturePacksRequired
+	conn.resourcePacks = snapshot.Packs()
+	conn.resourcePackOffer = &snapshot
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = texturePacksRequired
+	return nil
+}
+
+// ConfigureResourcePackStack replaces the resource-pack offer and its exact application stack for this
+// Listener connection. It may only be called from PrepareResourcePackOffer before ResourcePacksInfo is sent.
+// The required bit is selected locally and does not have to match stack.Required().
+func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, texturePacksRequired bool) error {
+	conn.packMu.Lock()
+	defer conn.packMu.Unlock()
+	if !conn.resourcePackOfferPreparing {
+		return errors.New("configure resource pack stack outside preparation")
+	}
+	snapshot := stack
+	snapshot.stack.TexturePackRequired = texturePacksRequired
+	required := texturePacksRequired
+	if conn.resourcePackOffer == nil {
+		conn.resourcePacks = snapshot.Packs()
+	} else {
+		required = required || conn.resourcePackOffer.info.TexturePackRequired
+	}
+	conn.resourcePackStack = &snapshot
+	conn.texturePacksRequired = required
+	return nil
 }
 
 // Write writes a slice of serialised packet data to the Conn. The data is buffered until the next 20th of a
@@ -1572,39 +1684,104 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		conn.disablePacketHandlingReady = true
 		return nil
 	}
-	// The next expected packet is a resource pack client response.
+	if conn.fetchResourcePacks != nil {
+		conn.packMu.Lock()
+		current := slices.Clone(conn.resourcePacks)
+		conn.packMu.Unlock()
+		fetched := conn.fetchResourcePacks(conn.identityData, conn.clientData, current)
+		for _, pack := range fetched {
+			if pack == nil {
+				return errors.New("fetch resource packs returned a nil pack")
+			}
+		}
+		conn.packMu.Lock()
+		conn.resourcePacks = slices.Clone(fetched)
+		conn.packMu.Unlock()
+	}
+	conn.packMu.Lock()
+	prepareResourcePackOffer := false
+	if !conn.resourcePackOfferPrepared {
+		conn.resourcePackOfferPrepared = true
+		prepareResourcePackOffer = conn.prepareResourcePackOffer != nil
+		conn.resourcePackOfferPreparing = prepareResourcePackOffer
+	}
+	conn.packMu.Unlock()
+	if prepareResourcePackOffer {
+		err := callPrepareResourcePackOffer(conn.prepareResourcePackOffer, conn.ctx, conn)
+		conn.packMu.Lock()
+		conn.resourcePackOfferPreparing = false
+		conn.packMu.Unlock()
+		if err != nil {
+			return fmt.Errorf("prepare resource pack offer: %w", err)
+		}
+	}
+	conn.packMu.Lock()
+	resourcePacks := slices.Clone(conn.resourcePacks)
+	var resourcePackOffer *ResourcePackOfferSnapshot
+	if conn.resourcePackOffer != nil {
+		snapshot := *conn.resourcePackOffer
+		resourcePackOffer = &snapshot
+	}
+	var resourcePackStackEntries []ResourcePackStackEntry
+	if conn.resourcePackStack != nil {
+		resourcePackStackEntries = conn.resourcePackStack.Entries()
+	}
+	texturePacksRequired := conn.texturePacksRequired
+	conn.packMu.Unlock()
+	// The next expected packet is a resource pack client response. Preparation happens before LoginSuccess so
+	// an error cannot expose a partial offer to the peer.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
 	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
 		return fmt.Errorf("send PlayStatus (Status=LoginSuccess): %w", err)
 	}
 
-	if conn.fetchResourcePacks != nil {
-		conn.resourcePacks = conn.fetchResourcePacks(conn.identityData, conn.clientData, slices.Clone(conn.resourcePacks))
-	}
-	pk := &packet.ResourcePacksInfo{
-		TexturePackRequired:        conn.texturePacksRequired,
-		ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
-		WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
-		WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
-	}
-	for _, pack := range conn.resourcePacks {
-		texturePack := protocol.TexturePackInfo{
-			UUID:        pack.UUID(),
-			Version:     pack.Version(),
-			Size:        uint64(pack.Size()),
-			DownloadURL: pack.DownloadURL(),
+	var pk *packet.ResourcePacksInfo
+	if resourcePackOffer != nil {
+		pk = resourcePackOffer.packet()
+	} else {
+		pk = &packet.ResourcePacksInfo{
+			TexturePackRequired:        texturePacksRequired,
+			ForceDisableVibrantVisuals: conn.forceDisableVibrantVisuals,
+			WorldTemplateUUID:          conn.resourcePackWorldTemplateUUID,
+			WorldTemplateVersion:       conn.resourcePackWorldTemplateVersion,
 		}
-		if pack.Encrypted() {
-			texturePack.ContentKey = pack.ContentKey()
-			texturePack.ContentIdentity = pack.Manifest().Header.UUID.String()
+		for _, pack := range resourcePacks {
+			texturePack := protocol.TexturePackInfo{
+				UUID:        pack.UUID(),
+				Version:     pack.Version(),
+				Size:        uint64(pack.Size()),
+				DownloadURL: pack.DownloadURL(),
+			}
+			for _, entry := range resourcePackStackEntries {
+				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+					texturePack.SubPackName = entry.SubPackName()
+					break
+				}
+			}
+			if pack.Encrypted() {
+				texturePack.ContentKey = pack.ContentKey()
+				texturePack.ContentIdentity = pack.Manifest().Header.UUID.String()
+			}
+			pk.TexturePacks = append(pk.TexturePacks, texturePack)
 		}
-		pk.TexturePacks = append(pk.TexturePacks, texturePack)
 	}
 	// Finally we send the packet after the play status.
 	if err := conn.WritePacket(pk); err != nil {
 		return fmt.Errorf("send ResourcePacksInfo: %w", err)
 	}
 	return nil
+}
+
+// callPrepareResourcePackOffer contains panics from application code so that a bad hook only terminates the
+// connection being prepared, rather than the Listener goroutine running it. The recovered value's type is
+// included instead of its value so an unbounded or panicking String method cannot escape this boundary.
+func callPrepareResourcePackOffer(hook func(context.Context, *Conn) error, ctx context.Context, conn *Conn) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("hook panicked with %T", recovered)
+		}
+	}()
+	return hook(ctx, conn)
 }
 
 // saltClaims holds the claims for the salt sent by the server in the ServerToClientHandshake packet.
@@ -1670,6 +1847,12 @@ func (conn *Conn) handleClientCacheStatus(pk *packet.ClientCacheStatus) error {
 // handleResourcePacksInfo handles a ResourcePacksInfo packet sent by the server. The client responds by
 // sending the packs it needs downloaded.
 func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
+	offer := newResourcePackOfferSnapshot(pk, nil)
+	conn.packMu.Lock()
+	conn.resourcePackOffer = &offer
+	conn.resourcePackStack = nil
+	conn.texturePacksRequired = pk.TexturePackRequired
+	conn.packMu.Unlock()
 	// First create a new resource pack queue with the information in the packet so we can download them
 	// properly later.
 	totalPacks := len(pk.TexturePacks)
@@ -1711,22 +1894,30 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			case cachedPack != nil:
 				conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(ResourcePackEvent{Kind: ResourcePackFinished, Source: ResourcePackSourceCache, UUID: pack.UUID, Version: pack.Version, Size: uint64(max(cachedPack.Size(), 0))})
 				continue
 			}
 		}
 
 		// Try to use the Download URL if set
 		if pack.DownloadURL != "" {
-			newPack, err := resource.ReadURLContextLimit(conn.ctx, pack.DownloadURL, pack.Size)
+			event := ResourcePackEvent{Source: ResourcePackSourceURL, UUID: pack.UUID, Version: pack.Version}
+			conn.reportResourcePack(event.with(ResourcePackStarted, pack.Size, nil))
+			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
+				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
+			})
+			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
+			}
 			if err != nil {
-				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "download_url", pack.DownloadURL, "err", err)
-			} else if newPack.UUID() != pack.UUID || newPack.Version() != pack.Version {
-				conn.log.Warn("handle ResourcePacksInfo: downloaded pack from URL did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "downloaded_UUID", newPack.UUID(), "downloaded_version", newPack.Version(), "download_url", pack.DownloadURL)
+				conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "version", pack.Version, "download_url", pack.DownloadURL, "err", err)
+				conn.reportResourcePack(event.with(ResourcePackFailed, 0, err))
 			} else {
 				newPack = newPack.WithContentKey(pack.ContentKey)
 				conn.resourcePacks = append(conn.resourcePacks, newPack)
 				conn.storeResourcePack(cacheKey, newPack)
 				conn.packQueue.packAmount--
+				conn.reportResourcePack(event.with(ResourcePackFinished, 0, nil))
 				continue
 			}
 		}
@@ -1755,6 +1946,30 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	return nil
 }
 
+// packHTTPClient returns the client for URL pack downloads.
+func (conn *Conn) packHTTPClient() *http.Client {
+	if conn.httpClient != nil {
+		return conn.httpClient
+	}
+	return http.DefaultClient
+}
+
+// reportResourcePack passes event to the Dialer's ResourcePackProgress, if any.
+func (conn *Conn) reportResourcePack(event ResourcePackEvent) {
+	if conn.resourcePackProgress == nil {
+		return
+	}
+	conn.resourcePackProgressMu.Lock()
+	defer conn.resourcePackProgressMu.Unlock()
+	conn.resourcePackProgress(event)
+}
+
+// with returns the next progress event for the same resource pack.
+func (event ResourcePackEvent) with(kind ResourcePackEventKind, size uint64, err error) ResourcePackEvent {
+	event.Kind, event.Size, event.Err = kind, size, err
+	return event
+}
+
 // storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
 func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
 	if conn.resourcePackCache == nil || !key.Matches(pack) {
@@ -1769,42 +1984,47 @@ func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pac
 // handleResourcePackStack handles a ResourcePackStack packet sent by the server. The stack defines the order
 // that resource packs are applied in.
 func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
-	// We currently don't apply resource packs in any way. Required stacks must still be complete, while optional
-	// stacks may reference packs the client deliberately did not download.
-	for _, pack := range pk.TexturePacks {
-		if !conn.hasPack(pack.UUID, pack.Version, false) && pk.TexturePackRequired {
-			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", pack.UUID, pack.Version)
+	conn.packMu.Lock()
+	stackRequired := pk.TexturePackRequired
+	for _, stackPack := range pk.TexturePacks {
+		var matched *resource.Pack
+		for _, downloaded := range conn.resourcePacks {
+			if downloaded.UUID().String() == stackPack.UUID && downloaded.Version() == stackPack.Version {
+				matched = downloaded
+				break
+			}
+		}
+		if matched != nil {
+			continue
+		}
+		available := false
+		for _, exempted := range exemptedPacks {
+			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+				available = true
+				break
+			}
+		}
+		if !available {
+			for _, ignored := range conn.ignoredResourcePacks {
+				if ignored.uuid == stackPack.UUID && ignored.version == stackPack.Version {
+					available = true
+					break
+				}
+			}
+		}
+		if !available && stackRequired {
+			conn.packMu.Unlock()
+			return fmt.Errorf("texture pack (UUID=%v, version=%v) not downloaded", stackPack.UUID, stackPack.Version)
 		}
 	}
+	required := conn.texturePacksRequired || stackRequired
+	conn.texturePacksRequired = required
+	snapshot := newResourcePackStackSnapshot(pk, conn.resourcePacks)
+	conn.resourcePackStack = &snapshot
+	conn.packMu.Unlock()
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
 	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 	return nil
-}
-
-// hasPack checks if the connection has a resource pack downloaded with the UUID and version passed, provided
-// the pack either has or does not have behaviours in it.
-func (conn *Conn) hasPack(uuid string, version string, hasBehaviours bool) bool {
-	for _, exempted := range exemptedPacks {
-		if exempted.uuid == uuid && exempted.version == version {
-			// The server may send this resource pack on the stack without sending it in the info, as the client
-			// always has it downloaded.
-			return true
-		}
-	}
-	conn.packMu.Lock()
-	defer conn.packMu.Unlock()
-
-	for _, ignored := range conn.ignoredResourcePacks {
-		if ignored.uuid == uuid && ignored.version == version {
-			return true
-		}
-	}
-	for _, pack := range conn.resourcePacks {
-		if pack.UUID().String() == uuid && pack.Version() == version && pack.HasBehaviours() == hasBehaviours {
-			return true
-		}
-	}
-	return false
 }
 
 // handleResourcePackClientResponse handles an incoming resource pack client response packet. The packet is
@@ -1833,17 +2053,22 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			return err
 		}
 	case packet.PackResponseAllPacksDownloaded:
-		pk := &packet.ResourcePackStack{BaseGameVersion: "*"}
-		for _, pack := range conn.resourcePacks {
-			resourcePack := protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()}
-			pk.TexturePacks = append(pk.TexturePacks, resourcePack)
+		conn.packMu.Lock()
+		pk := &packet.ResourcePackStack{
+			TexturePackRequired: conn.texturePacksRequired,
+			BaseGameVersion:     "*",
 		}
-		for _, exempted := range exemptedPacks {
-			pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{
-				UUID:    exempted.uuid,
-				Version: exempted.version,
-			})
+		if conn.resourcePackStack != nil {
+			pk = conn.resourcePackStack.packet()
+		} else {
+			for _, pack := range conn.resourcePacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()})
+			}
+			for _, exempted := range exemptedPacks {
+				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: exempted.uuid, Version: exempted.version})
+			}
 		}
+		conn.packMu.Unlock()
 		if err := conn.WritePacket(pk); err != nil {
 			return fmt.Errorf("send ResourcePackStack: %w", err)
 		}
@@ -1959,9 +2184,17 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	conn.packMu.Lock()
 	conn.packQueue.awaitingPacks[id] = pack
 	conn.packMu.Unlock()
+	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
+	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
 
 	idCopy := pk.UUID
 	go func() {
+		finished := false
+		defer func() {
+			if !finished {
+				conn.reportResourcePack(pack.event.with(ResourcePackFailed, 0, cmp.Or(context.Cause(conn.ctx), net.ErrClosed)))
+			}
+		}()
 		fragments := make(map[uint32][]byte)
 		nextRequest, nextWrite, received := uint32(0), uint32(0), uint32(0)
 		requestChunk := func(index uint32) error {
@@ -2001,6 +2234,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			case <-conn.ctx.Done():
 				return
 			case frag := <-pack.newFrag:
+				conn.reportResourcePack(pack.event.with(ResourcePackReceived, uint64(len(frag.data)), nil))
 				received++
 				fragments[frag.index] = frag.data
 				// Write the contiguous prefix in index order.
@@ -2041,6 +2275,8 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 				return
 			}
 		}
+		finished = true
+		conn.reportResourcePack(pack.event.with(ResourcePackFinished, 0, nil))
 		conn.storeResourcePack(pack.cacheKey, newPack)
 	}()
 	return nil

@@ -40,7 +40,8 @@ type Dialer struct {
 	ErrorLog *slog.Logger
 
 	// HTTPClient is the HTTP client used for outbound HTTP requests needed by the dialer,
-	// such as fetching OpenID configuration/JWKs when authentication is enabled.
+	// such as fetching OpenID configuration/JWKs when authentication is enabled and
+	// downloading resource packs the server offers by URL.
 	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client
 
@@ -97,6 +98,9 @@ type Dialer struct {
 	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
 	// fall back to a normal download.
 	ResourcePackCache ResourcePackCache
+	// ResourcePackProgress, if set, receives each step of resource pack acquisition from the cache, URLs and
+	// chunks. Calls are serialised but may come from different goroutines; it must not block.
+	ResourcePackProgress func(ResourcePackEvent)
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -348,6 +352,8 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
+	conn.httpClient = d.HTTPClient
+	conn.resourcePackProgress = d.ResourcePackProgress
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
