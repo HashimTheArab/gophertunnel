@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,20 +40,48 @@ const (
 {"id":"b","title":{"NEUTRAL":"Beta"},"price":{"listPrice":990,"currencyId":"Minecoin","saleInfo":{"salePrice":490,"discount":0.5}}}]}`
 )
 
-func newStore(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
+// newStore serves distinct store and entitlements origins and checks every request's service.
+// The returned function closes both servers so transport failures can be tested.
+func newStore(t *testing.T, handler http.HandlerFunc) (*Client, func()) {
 	t.Helper()
-	server := httptest.NewTLSServer(handler)
-	t.Cleanup(server.Close)
-	env := new(Environment)
-	if err := json.Unmarshal([]byte(`{"serviceUri":"`+server.URL+`"}`), env); err != nil {
-		t.Fatal(err)
+	serve := func(serviceName string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			want := "store"
+			switch r.URL.Path {
+			case "/api/v1.0/player/inventory", "/api/v1.0/currencies/virtual/balances", "/api/v1.0/transaction/virtual":
+				want = "entitlements"
+			}
+			if serviceName != want {
+				t.Errorf("%s reached %s, want %s", r.URL.Path, serviceName, want)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if r.Header.Get("Authorization") != "MCToken synthetic" {
+				t.Error("request missing service token")
+			}
+			handler(w, r)
+		}
 	}
-	env.HTTPClient = server.Client()
-	client, err := env.New(fixedTokens{})
+	store := httptest.NewTLSServer(serve("store"))
+	entitlements := httptest.NewTLSServer(serve("entitlements"))
+	closeServers := func() { store.Close(); entitlements.Close() }
+	t.Cleanup(closeServers)
+	env := &Environment{HTTPClient: store.Client()}
+	owned := &EntitlementsEnvironment{HTTPClient: entitlements.Client()}
+	discovery := service.Discovery{ServiceEnvironments: map[string]map[string]json.RawMessage{
+		"store":        {"prod": json.RawMessage(`{"serviceUri":"` + store.URL + `"}`)},
+		"entitlements": {"prod": json.RawMessage(`{"serviceUri":"` + entitlements.URL + `"}`)},
+	}}
+	for _, e := range []service.Environment{env, owned} {
+		if err := discovery.Environment(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client, err := env.New(fixedTokens{}, owned)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client, server
+	return client, closeServers
 }
 
 // Every read decodes the reference schema with the reference method and path.
@@ -177,8 +206,8 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 			t.Fatalf("purchase body = %+v", body)
 		}
 	}
-	client, server := newStore(t, func(http.ResponseWriter, *http.Request) {})
-	server.Close()
+	client, closeServers := newStore(t, func(http.ResponseWriter, *http.Request) {})
+	closeServers()
 	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); err != nil || result.Outcome != PurchaseUnknown {
 		t.Fatalf("unreachable service: result = %+v err = %v", result, err)
 	}
@@ -214,8 +243,59 @@ func TestStoreRefusesOffOriginRedirects(t *testing.T) {
 	if _, err := client.SessionConfig(context.Background()); err == nil || leaked.Load() != 0 {
 		t.Fatalf("redirect followed: err = %v leaked = %d", err, leaked.Load())
 	}
-	if _, err := (&Environment{}).New(fixedTokens{}); err == nil {
-		t.Fatal("a store without an https URI was built")
+	if _, err := client.Balances(context.Background()); err == nil || leaked.Load() != 0 {
+		t.Fatalf("entitlements redirect followed: err = %v leaked = %d", err, leaked.Load())
+	}
+}
+
+// Even the other discovered service is not an allowed redirect target.
+func TestStoreRefusesRedirectsBetweenServices(t *testing.T) {
+	var target, expectedPath string
+	var leaked atomic.Int32
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != expectedPath {
+			leaked.Add(1)
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	})
+	expectedPath = "/api/v1.0/session/config"
+	target = client.entitlements.endpoint("/api/v1.0/player/inventory").String()
+	if _, err := client.SessionConfig(context.Background()); err == nil {
+		t.Fatal("store redirected to entitlements")
+	}
+	expectedPath = "/api/v1.0/player/inventory"
+	target = client.store.endpoint("/api/v1.0/session/config").String()
+	if _, err := client.Inventory(context.Background()); err == nil {
+		t.Fatal("entitlements redirected to store")
+	}
+	if leaked.Load() != 0 {
+		t.Fatalf("followed %d redirects across service origins", leaked.Load())
+	}
+}
+
+// Both services must be discovered and have valid HTTPS origins before a client is built.
+func TestStoreRequiresBothEnvironments(t *testing.T) {
+	valid, _ := url.Parse("https://service.example.test")
+	for _, raw := range []string{"", "http://service.example.test", "https:///missing-host", "https://user@service.example.test"} {
+		invalid, _ := url.Parse(raw)
+		for _, invalidStore := range []bool{false, true} {
+			store := new(Environment)
+			owned := new(EntitlementsEnvironment)
+			store.ServiceURI, owned.ServiceURI = valid, valid
+			if invalidStore {
+				store.ServiceURI = invalid
+			} else {
+				owned.ServiceURI = invalid
+			}
+			if _, err := store.New(fixedTokens{}, owned); err == nil {
+				t.Errorf("accepted invalid URI %q (store=%v)", raw, invalidStore)
+			}
+		}
+	}
+	store := new(Environment)
+	store.ServiceURI = valid
+	if _, err := store.New(fixedTokens{}, nil); err == nil {
+		t.Error("accepted missing entitlements environment")
 	}
 }
 

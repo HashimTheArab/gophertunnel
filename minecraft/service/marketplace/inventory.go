@@ -34,9 +34,9 @@ func (c *Client) Inventory(ctx context.Context) (*Inventory, error) {
 		Receipt            *string         `json:"receipt"`
 		ThirdPartyReceipts json.RawMessage `json:"thirdPartyReceipts"`
 	}
-	target := c.endpoint("/api/v1.0/player/inventory")
+	target := c.entitlements.endpoint("/api/v1.0/player/inventory")
 	target.RawQuery = "includeReceipt=true"
-	resp, err := c.do(ctx, http.MethodGet, target, nil, &result, nil)
+	resp, err := c.entitlements.do(ctx, http.MethodGet, target, nil, &result, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (c *Client) RefreshInventory(ctx context.Context) (string, error) {
 	var result struct {
 		Version *string `json:"version"`
 	}
-	if _, err := c.do(ctx, http.MethodPost, c.endpoint("/api/v1.0/inventory/refresh"), struct{}{}, &result, nil); err != nil {
+	if _, err := c.store.do(ctx, http.MethodPost, c.store.endpoint("/api/v1.0/inventory/refresh"), struct{}{}, &result, nil); err != nil {
 		return "", err
 	}
 	if result.Version == nil {
