@@ -243,12 +243,11 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 	if refreshInterval <= 0 {
 		refreshInterval = 30 * time.Minute
 	}
-	keySet := newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
-	e.keySet = keySet
+	e.keySet = newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
 
 	// We need to append '/' on the issuer if not present.
 	issuer := e.Issuer.JoinPath().String()
-	e.verifier = oidc.NewVerifier(issuer, keySet, &oidc.Config{
+	e.verifier = oidc.NewVerifier(issuer, e.keySet, &oidc.Config{
 		ClientID:             "api://auth-minecraft-services/multiplayer",
 		SupportedSigningAlgs: config.Algorithms,
 	})
