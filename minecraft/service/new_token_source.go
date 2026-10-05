@@ -73,6 +73,7 @@ func (e *AuthorizationEnvironment) NewTokenSource(ctx context.Context, xbox xsap
 		EduPlayFabTitleID:  e.EduPlayFabTitleID,
 		HTTPClient:         auth.ContextClient(ctx),
 		KeyRefreshInterval: e.KeyRefreshInterval,
+		SessionID:          e.SessionID,
 	}
 	playFabConfig := config.PlayFab
 	if playFabConfig.HTTPClient == nil {

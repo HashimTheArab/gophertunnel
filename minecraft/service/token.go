@@ -60,6 +60,10 @@ type AuthorizationEnvironment struct {
 	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client `json:"-"`
 
+	// SessionID is sent as the Session-Id header of authorization requests. If empty, one ID
+	// generated per process is used, as the game names one session per launch.
+	SessionID string `json:"-"`
+
 	// KeyRefreshInterval controls how often public keys used for verifying multiplayer tokens may
 	// be refreshed. If zero, a default of 30 minutes is used.
 	KeyRefreshInterval time.Duration `json:"-"`
@@ -69,6 +73,17 @@ type AuthorizationEnvironment struct {
 	verifier *oidc.IDTokenVerifier
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
+}
+
+// processSessionID is the Session-Id used when [AuthorizationEnvironment.SessionID] is empty.
+var processSessionID = uuid.NewString()
+
+// sessionID returns the Session-Id sent with authorization requests.
+func (e *AuthorizationEnvironment) sessionID() string {
+	if e.SessionID != "" {
+		return e.SessionID
+	}
+	return processSessionID
 }
 
 // httpClient returns the HTTP client used for requests made by AuthorizationEnvironment.
@@ -142,6 +157,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
+	req.Header.Set("Session-Id", e.sessionID())
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -335,6 +351,7 @@ func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Session-Id", e.sessionID())
 	token.SetAuthHeader(req)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
@@ -435,6 +452,9 @@ func defaultDeviceConfig(auth *AuthorizationEnvironment, device *DeviceConfig) {
 	}
 	if device.PlayFabTitleID == "" {
 		device.PlayFabTitleID = auth.PlayFabTitleID
+	}
+	if device.NetworkProtocolVersion == 0 {
+		device.NetworkProtocolVersion = protocol.CurrentProtocol
 	}
 }
 
@@ -649,6 +669,10 @@ type DeviceConfig struct {
 	// It is unclear how this value is determined and how it is used.
 	// For example, HardwareMemoryTier is 5 for 16GB devices.
 	HardwareMemoryTier int `json:"hardwareMemoryTier,omitempty"`
+
+	// NetworkProtocolVersion is the network protocol the game speaks. It defaults to
+	// [protocol.CurrentProtocol].
+	NetworkProtocolVersion int `json:"networkProtocolVersion,omitempty"`
 
 	// Memory is the total amount of the memory available on the device,
 	// represented as a numerical string. It defaults to 16GB if not present.

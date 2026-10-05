@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 func TestDecodeClaimsAllowsSmallIssuedAtSkew(t *testing.T) {
@@ -179,4 +180,50 @@ func testAuthorizationHeaderWithTimes(t *testing.T, issuedAt, expiry time.Time) 
 		t.Fatalf("marshal payload: %v", err)
 	}
 	return "MCToken header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
+// Both authorization calls name one launch session and report the network protocol, as the game does.
+func TestAuthorizationRequestsCarrySessionIDAndProtocol(t *testing.T) {
+	t.Parallel()
+
+	sessions := map[string]string{}
+	var protocolVersion any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sessions[r.URL.Path] = r.Header.Get("Session-Id")
+		now := time.Now().UTC().Truncate(time.Second)
+		if r.URL.Path == "/api/v1.0/multiplayer/session/start" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": &multiplayerToken{
+				IssuedAt: now, SignedToken: "multiplayer-token", ValidUntil: now.Add(time.Hour),
+			}})
+			return
+		}
+		var body struct {
+			Device map[string]any `json:"device"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		protocolVersion = body.Device["networkProtocolVersion"]
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": &Token{
+			AuthorizationHeader: testAuthorizationHeaderWithTimes(t, now, now.Add(time.Hour)),
+			ValidUntil:          now.Add(time.Hour),
+		}})
+	}))
+	defer server.Close()
+
+	serviceURL, _ := url.Parse(server.URL)
+	env := &AuthorizationEnvironment{ServiceURI: serviceURL, HTTPClient: server.Client()}
+	token, err := env.Token(context.Background(), TokenConfig{User: UserConfig{Token: "playfab-token"}})
+	if err != nil {
+		t.Fatalf("Token: %v", err)
+	}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if _, err := env.MultiplayerToken(context.Background(), staticTokenSource{token: token}, &key.PublicKey); err != nil {
+		t.Fatalf("MultiplayerToken: %v", err)
+	}
+	start, mint := sessions["/api/v1.0/session/start"], sessions["/api/v1.0/multiplayer/session/start"]
+	if _, err := uuid.Parse(start); err != nil || start != mint {
+		t.Fatalf("Session-Id start=%q mint=%q, want one UUID on both", start, mint)
+	}
+	if protocolVersion != float64(protocol.CurrentProtocol) {
+		t.Fatalf("device.networkProtocolVersion = %v, want %d", protocolVersion, protocol.CurrentProtocol)
+	}
 }
