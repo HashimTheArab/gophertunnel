@@ -170,7 +170,10 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 
 // Renew requests a refresh of a token that may soon expire. The user config must contain
 // a valid PlayFab token that belong to the same user identity that was previously used
-// for the Token. It is recommended to use TokenSource instead which subsequently renews the token.
+// for the Token.
+//
+// Deprecated: the game replaces expiring tokens through [AuthorizationEnvironment.Token];
+// [TokenSource] does so.
 func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user UserConfig) (*Token, error) {
 	defaultUserConfig(&user)
 	if user.Token == "" {

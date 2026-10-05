@@ -29,7 +29,7 @@ func (e *AuthorizationEnvironment) TokenSource(client *playfab.Client, config To
 
 // ResumeTokenSource returns a TokenSource like [AuthorizationEnvironment.TokenSource] that starts
 // from a previously issued token, such as one restored from disk. It asks tickets for a session
-// ticket only when that token must be renewed or replaced. The source implements [TokenInvalidator].
+// ticket only when that token must be replaced. The source implements [TokenInvalidator].
 // Missing claims are decoded from the token's JWT; invalid persisted claims discard the token.
 func (e *AuthorizationEnvironment) ResumeTokenSource(tickets SessionTicketSource, config TokenConfig, token *Token) TokenSource {
 	defaultUserConfig(&config.User)
@@ -65,7 +65,7 @@ type tokenSource struct {
 }
 
 // ServiceToken supplies a token by either re-using an already requested token, or
-// requesting or renewing the existing token with a valid PlayFab session ticket.
+// starting a new session with a valid PlayFab session ticket.
 func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,15 +82,7 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	s.config.User.TokenType = TokenTypePlayFab
 	s.config.User.Token = ticket
 
-	// Renewal authenticates with the existing token, so it only works before the
-	// token's hard expiry; otherwise, or on a rejected renewal, start fresh.
-	if tokenRenewable(s.token) {
-		if token, err := s.env.Renew(ctx, s.token, s.config.User); err == nil {
-			s.token = token
-			return s.token, nil
-		}
-	}
-
+	// The game replaces an expiring token with a new session rather than renewing it.
 	token, err := s.env.Token(ctx, s.config)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
@@ -110,10 +102,4 @@ func (s *tokenSource) InvalidateServiceToken(rejected *Token) {
 	if s.token != nil && s.token.AuthorizationHeader == rejected.AuthorizationHeader {
 		s.token = nil
 	}
-}
-
-// tokenRenewable reports whether tok can still authenticate a renewal request,
-// i.e. it has not passed its hard expiry (ValidUntil).
-func tokenRenewable(tok *Token) bool {
-	return tok != nil && tok.AuthorizationHeader != "" && tok.now().Before(tok.ValidUntil)
 }
