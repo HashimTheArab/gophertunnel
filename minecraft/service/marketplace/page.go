@@ -39,6 +39,7 @@ type PageRequest struct {
 
 // Page is a server-driven store page.
 type Page struct {
+	ID                string    `json:"id"`
 	PageID            string    `json:"pageId"`
 	PageName          string    `json:"pageName"`
 	InventoryETag     string    `json:"inventoryETag"`
@@ -46,6 +47,7 @@ type Page struct {
 	UserListsVersion  string    `json:"userListsVersion"`
 	SidebarLayoutType string    `json:"sidebarLayoutType"`
 	PageRefresh       bool      `json:"pageRefresh"`
+	RecentlyViewed    bool      `json:"addToRecentlyViewed"`
 	Buttons           []Button  `json:"buttons"`
 	Layout            []Section `json:"layout"`
 
@@ -69,20 +71,58 @@ type Section struct {
 	Rows []Row  `json:"rows"`
 }
 
-// Row is one layout row: components that present it and the catalog queries that fill it. Rows
-// carry no offers; the client runs the queries against the catalog.
+// Row is one layout row. A curated row lists its offers inline in an item list component; a query
+// row carries catalog queries instead, which the client runs to fill it ([Row.SearchQuery]).
 type Row struct {
 	TelemetryID string      `json:"telemetryId"`
-	ControlID   string      `json:"controlId"`
+	ControlID   string      `json:"controlId"` // visual factory, such as StoreRow, HeroRow or PromoBanner
 	Components  []Component `json:"components"`
 	Queries     []Query     `json:"queries"`
 }
 
-// Component is one presentation component of a row, such as itemListComp or headerComp.
-type Component struct {
-	Type       string            `json:"type"`
-	TotalItems int               `json:"totalItems"`
-	Items      []json.RawMessage `json:"items"`
+// Component returns the row's first component of the given type, or nil.
+func (r *Row) Component(kind string) *Component {
+	for i := range r.Components {
+		if r.Components[i].Type == kind {
+			return &r.Components[i]
+		}
+	}
+	return nil
+}
+
+// ItemList returns the row's item list component, paged or not, or nil.
+func (r *Row) ItemList() *Component {
+	for i := range r.Components {
+		if t := r.Components[i].Type; t == ComponentItemList || t == ComponentPagedItemList {
+			return &r.Components[i]
+		}
+	}
+	return nil
+}
+
+// Title returns the row's header text, or "" for a row without a header.
+func (r *Row) Title() string {
+	header := r.Component(ComponentHeader)
+	if header == nil {
+		return ""
+	}
+	if header.HeaderText != "" {
+		return header.HeaderText
+	}
+	if header.Text != nil {
+		return header.Text.Value
+	}
+	return ""
+}
+
+// SearchQuery returns the first of the row's queries that [Query.SearchFilter] can express.
+func (r *Row) SearchQuery() (Query, bool) {
+	for _, query := range r.Queries {
+		if _, ok := query.SearchFilter(); ok {
+			return query, true
+		}
+	}
+	return Query{}, false
 }
 
 // Query is a catalog query a row is filled from.
@@ -116,7 +156,17 @@ type QueryExclusions struct {
 // maxRowQueries is the reference client's per-row query limit.
 const maxRowQueries = 24
 
-// Page loads a layout page by id; the id comes from [SessionConfig.PageID].
+// KnownPage loads the page config maps name to; an unknown name fails with [ErrUnknownPage]
+// before any request.
+func (c *Client) KnownPage(ctx context.Context, config *SessionConfig, name string, state PageRequest) (*Page, error) {
+	id, err := config.PageID(name)
+	if err != nil {
+		return nil, err
+	}
+	return c.Page(ctx, PageByID, id, state)
+}
+
+// Page loads a layout page by id, from [SessionConfig.PageID] or [Link.PageID].
 func (c *Client) Page(ctx context.Context, kind PageKind, id string, state PageRequest) (*Page, error) {
 	prefix, ok := kind.prefix()
 	if !ok || id == "" || strings.ContainsAny(id, "/?#") || id == "." || id == ".." {
