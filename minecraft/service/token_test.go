@@ -180,3 +180,17 @@ func testAuthorizationHeaderWithTimes(t *testing.T, issuedAt, expiry time.Time) 
 	}
 	return "MCToken header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
+
+func TestTokenRemainingUsesTheRetainedServiceClock(t *testing.T) {
+	t.Parallel()
+
+	serviceNow := time.Now().Add(-90 * time.Minute)
+	token := &Token{AuthorizationHeader: "MCToken test", ValidUntil: serviceNow.Add(time.Hour)}
+	if token.Remaining() > 0 || token.Valid() {
+		t.Fatal("token without a service clock should be expired on the local clock")
+	}
+	token.setServerTime(serviceNow)
+	if remaining := token.Remaining(); remaining < 58*time.Minute || remaining > time.Hour || !token.Valid() {
+		t.Fatalf("Remaining() = %v, want about 59m on the service clock", remaining)
+	}
+}

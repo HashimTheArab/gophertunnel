@@ -565,6 +565,12 @@ func (t *Token) Valid() bool {
 	return t.AuthorizationHeader != "" && t.now().Before(t.ValidUntil.Add(-expirationDelta))
 }
 
+// Remaining returns how long the Token stays valid on the service clock [Token.Valid] uses,
+// including the expiry margin. It is negative once the Token is no longer valid.
+func (t *Token) Remaining() time.Duration {
+	return t.ValidUntil.Add(-expirationDelta).Sub(t.now())
+}
+
 // setServerTime records the server time and when it was received.
 func (t *Token) setServerTime(serverTime time.Time) {
 	t.serverTime = serverTime
