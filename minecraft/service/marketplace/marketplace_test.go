@@ -22,17 +22,31 @@ func (fixedTokens) ServiceToken(context.Context) (*service.Token, error) {
 	return &service.Token{AuthorizationHeader: "MCToken synthetic", ValidUntil: time.Now().Add(time.Hour)}, nil
 }
 
-// Fixtures below are authored from the 26.30 client's parsers (SDL::SessionConfig::_initFromJson,
-// SDL::ServiceResponseOfPage, StoreVisualStyle::_parseCustom, InventoryVerifier), not captured payloads.
+// Fixtures below are synthesized in the live service's shapes, not captured payloads.
 const (
-	sessionConfigFixture = `{"continuationToken":"","result":{"knownPages":{"home":"page-1"},"latestTextureVersion":"7",
+	sessionConfigFixture = `{"continuationToken":"","result":{"knownPages":{"storeRoot":"page-1","skinsRoot":"page-2"},"latestTextureVersion":"7",
 "platformSkus":[{"contentType":"Minecoin","sku":"s","bigId":"b"}],"storeVersion":3,"userListsVersion":"u1",
 "storeSearch":{"skinPackTerms":["skins"]},"badgePromoCountdownWindow":86400}}`
-	pageFixture = `{"continuationToken":"","result":{"pageId":"page-1","pageName":"Home","inventoryVersion":"v1",
-"sidebarLayoutType":"Default","buttons":[{"actionType":"Purchase","offerType":"PlatformOffer","offerId":"o1","ownership":"Owned"}],
-"layout":[{"sectionName":"Main","rows":[{"telemetryId":"t1","controlId":"StoreRow",
-"components":[{"type":"itemListComp","totalItems":12,"items":[{"images":[]}]}],
-"queries":[{"queryContentTypes":["MarketplaceDurableCatalog_V1.2"],"itemLimit":12,"orTags":["new"],"notTags":["hidden"],"sortBy":"creationDate"}]}]}]}}`
+	pageFixture = `{"continuationToken":"","result":{"id":"p","pageId":"page-1","pageName":"Home","inventoryVersion":"v1",
+"sidebarLayoutType":"Marketplace","buttons":[{"actionType":"Purchase","offerType":"PlatformOffer","offerId":"o1","ownership":"Owned"}],
+"layout":[{"sectionName":"rows","rows":[
+{"controlId":"Layout","components":[{"type":"topBarSearchComp","$type":"TopBarSearchComponent","isVisible":true,
+ "linksToInfo":{"linksTo":"Search_SearchHome","linkType":"pageId"}}]},
+{"telemetryId":"Row 0","controlId":"PromoBanner","components":[{"type":"promoBannerComp","factoryId":"banner_slim",
+ "mainText":{"value":"Try it","replacements":[]},"mainImage":{"tag":"PromoBannerSlimAsset","type":"Screenshot","url":"https://cdn.example.test/m.gif"},
+ "linksToInfo":{"linksTo":"Internal_Pass","linkType":"internal"}}],"queries":null},
+{"telemetryId":"Row 1","controlId":"StoreRow","components":[
+ {"type":"itemListComp","totalItems":9,"customStoreRowConfiguration":{"seeAllVisible":true,"maxOffers":8},
+  "linksToInfo":{"linksTo":"MultiItemPage_p%7cPagedList_x","linkType":"pageId","screenTitle":{"value":"New"}},
+  "items":[{"id":"a","title":"Alpha","description":"About","creatorName":"Maker","ownership":"NotOwned","flags":["New"],
+   "thumbnail":{"tag":"Thumbnail","type":"Thumbnail","url":"https://cdn.example.test/a.png"},"rating":{"average":4.5,"totalCount":10},
+   "price":{"listPrice":990,"currencyId":"c","virtualCurrencyType":"Minecoin"},"packIdentity":[{"type":"worldtemplate","uuid":"u","version":"1.0.0"}],
+   "linksToInfo":{"linksTo":"ItemDetail_a","linkType":"pageId"}}]},
+ {"type":"carouselComp"},{"type":"headerComp","headerText":"New","text":{"value":"New"}}]},
+{"telemetryId":"Row 2","controlId":"NavButtonRow","components":[{"type":"navButtonListComp","buttons":[{"navButtonName":"Worlds",
+ "image":"textures/ui/mashup_world","images":[{"type":"Unknown","localPath":"textures/ui/mashup_world"}],"linksToInfo":{"linksTo":"MultiItemPage_w","linkType":"pageId"}}]}]},
+{"telemetryId":"t1","controlId":"StoreRow","components":[{"type":"itemListComp","totalItems":12,"items":null}],
+ "queries":[{"queryContentTypes":["MarketplaceDurableCatalog_V1.2"],"itemLimit":12,"orTags":["new"],"notTags":["hidden"],"sortBy":"creationDate"}]}]}]}}`
 	inventoryFixture = `{"result":{"inventory":{"entitlements":[{"id":"11111111-1111-1111-1111-111111111111","packId":"p","CreatorId":"c"}]},
 "receipt":"eyJFbnRpdHlJZCI6ImUifQ=="}}`
 	itemsFixture = `{"continuationToken":"next","result":[{"id":"a","title":{"neutral":"Alpha"},"creatorName":"Maker","price":320,
@@ -118,8 +132,11 @@ func TestStoreReadsDecodeTheReferenceSchema(t *testing.T) {
 	})
 	ctx := context.Background()
 	config, err := client.SessionConfig(ctx)
-	if err != nil || config.PageID("home") != "page-1" || config.PageID("other") != "other" || config.PlatformSKUs[0].BigID != "b" {
+	if err != nil || config.PlatformSKUs[0].BigID != "b" {
 		t.Fatalf("config = %+v err = %v", config, err)
+	}
+	if id, err := config.PageID(PageStoreRoot); err != nil || id != "page-1" {
+		t.Fatalf("store root id = %q err = %v", id, err)
 	}
 	balances, err := client.Balances(ctx)
 	if err != nil || balances[0].Amount != 1500 {
@@ -132,13 +149,37 @@ func TestStoreReadsDecodeTheReferenceSchema(t *testing.T) {
 	if version, err := client.RefreshInventory(ctx); err != nil || version != "v2" {
 		t.Fatalf("refresh = %q err = %v", version, err)
 	}
-	page, err := client.Page(ctx, PageByID, config.PageID("home"), PageRequest{Entitlements: []string{inventory.Entitlements[0].ID}, InventoryVersion: inventory.ETag})
+	page, err := client.KnownPage(ctx, config, PageStoreRoot, PageRequest{Entitlements: []string{inventory.Entitlements[0].ID}, InventoryVersion: inventory.ETag})
 	if err != nil || page.HeaderListsVersion != "u2" || page.Buttons[0].Ownership != "Owned" {
 		t.Fatalf("page = %+v err = %v", page, err)
 	}
-	row := page.Layout[0].Rows[0]
-	if row.ControlID != "StoreRow" || row.Components[0].TotalItems != 12 || row.Queries[0].OrTags[0] != "new" {
-		t.Fatalf("row = %+v", row)
+	rows := page.Layout[0].Rows
+	if top := rows[0].Component(ComponentTopBarSearch); top == nil || !top.Visible || len(top.Raw) == 0 {
+		t.Fatalf("top bar = %+v", top)
+	}
+	if banner := rows[1].Component(ComponentPromoBanner); banner == nil || banner.MainText.Value != "Try it" ||
+		banner.MainImage.URL == "" || banner.LinksTo.LinkType != "internal" {
+		t.Fatalf("banner = %+v", banner)
+	}
+	curated := rows[2]
+	list := curated.ItemList()
+	if curated.Title() != "New" || list == nil || list.TotalItems != 9 || !list.RowConfig.SeeAllVisible || len(curated.Queries) != 0 {
+		t.Fatalf("curated row = %+v", curated)
+	}
+	item := list.Items[0]
+	if item.Title.Neutral() != "Alpha" || item.Description.Neutral() != "About" || item.Thumbnail.URL == "" ||
+		item.Rating.TotalCount != 10 || item.Price.ListPrice != 990 || item.PackIdentity[0].UUID != "u" || string(item.Ownership) != `"NotOwned"` {
+		t.Fatalf("item = %+v", item)
+	}
+	if seeAll, ok := list.LinksTo.PageID(); !ok || seeAll != "MultiItemPage_p|PagedList_x" {
+		t.Fatalf("see all = %q ok = %v", seeAll, ok)
+	}
+	if nav := rows[3].Component(ComponentNavButtonList); nav == nil || nav.Buttons[0].Images[0].LocalPath == "" {
+		t.Fatalf("nav = %+v", nav)
+	}
+	query, ok := rows[4].SearchQuery()
+	if !ok || query.OrTags[0] != "new" || rows[4].ItemList().Items != nil || rows[4].Title() != "" {
+		t.Fatalf("query row = %+v", rows[4])
 	}
 	items, next, err := client.ContinueRow(ctx, "t", "v1")
 	if err != nil || next != "next" || items[0].Price.ListPrice != 320 || items[1].Price.Sale.SalePrice != 490 || items[1].Title.Neutral() != "Beta" {
@@ -184,6 +225,51 @@ func TestStoreSurfacesDecodeAndServiceErrors(t *testing.T) {
 	}
 	if _, err := client.Page(ctx, PageByID, "../x", PageRequest{}); err == nil {
 		t.Error("a path-changing page id was requested")
+	}
+}
+
+// A page name the session config lacks fails locally, naming the known keys, and never reaches the
+// service, which answers any unmapped id with 400.
+func TestUnknownPageSendsNoRequest(t *testing.T) {
+	var layoutRequests atomic.Int32
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v2.0/layout/pages/") {
+			layoutRequests.Add(1)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	config := &SessionConfig{KnownPages: map[string]string{PageStoreRoot: "store-id", PageSkinsRoot: "skins-id", PageWishlist: ""}}
+	_, err := client.KnownPage(context.Background(), config, "home", PageRequest{})
+	if !errors.Is(err, ErrUnknownPage) {
+		t.Fatalf("err = %v, want ErrUnknownPage", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, `"home"`) || !strings.Contains(msg, "skinsRoot, storeRoot, wishlist") || strings.Contains(msg, "store-id") {
+		t.Fatalf("error must name the missing key and the known keys only: %q", msg)
+	}
+	if _, err := config.PageID(PageWishlist); !errors.Is(err, ErrUnknownPage) {
+		t.Fatalf("an empty page id resolved: %v", err)
+	}
+	if n := layoutRequests.Load(); n != 0 {
+		t.Fatalf("sent %d layout requests for an unknown page", n)
+	}
+}
+
+// A "See All" link's escaped page id reaches the service as the same id.
+func TestLinkPageIDRoundTrips(t *testing.T) {
+	var path string
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_, _ = io.WriteString(w, `{"result":{"pageId":"x","layout":[]}}`)
+	})
+	id, ok := (&Link{LinksTo: "MultiItemPage_p%7cPagedList_x", LinkType: "pageId"}).PageID()
+	if !ok {
+		t.Fatal("page link not resolved")
+	}
+	if _, err := client.Page(context.Background(), PageByID, id, PageRequest{}); err != nil || path != "/api/v2.0/layout/pages/MultiItemPage_p|PagedList_x" {
+		t.Fatalf("path = %q err = %v", path, err)
+	}
+	if _, ok := (&Link{LinksTo: "Internal_Pass", LinkType: "internal"}).PageID(); ok {
+		t.Fatal("an internal link resolved to a page id")
 	}
 }
 
