@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1026,10 +1027,151 @@ func TestRelayStartupDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.
 	}
 }
 
+// marshalScripted encodes a packet payload for comparing forwarded startup packets.
 func marshalScripted(pk packet.Packet) []byte {
 	buf := new(bytes.Buffer)
 	pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
 	return buf.Bytes()
+}
+
+// GameData remains readable while relayed startup packets arrive after Dial has returned.
+func TestRelayStartupGameDataWhileRegistryArrives(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.relayStartup = true
+	conn.loggedIn = true
+	registry := &packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}}
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: registry.ID()}).Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	registry.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	frame := buf.Bytes()
+	done := make(chan error, 1)
+	go func() {
+		for range 1000 {
+			if err := conn.receive(frame); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	for range 1000 {
+		_ = conn.GameData()
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.GameData().Items; len(got) != 1 || got[0].RuntimeID != 355 {
+		t.Fatalf("relayed item registry = %v", got)
+	}
+}
+
+// Packets deferred before StartGame keep their order in either reading mode.
+func TestRelayStartupPreservesPreStartGamePacketOrder(t *testing.T) {
+	for _, mode := range []struct{ batchReading, disablePacketHandling, handshakeComplete bool }{
+		{}, {batchReading: true}, {disablePacketHandling: true}, {batchReading: true, disablePacketHandling: true},
+		{disablePacketHandling: true, handshakeComplete: true}, {batchReading: true, disablePacketHandling: true, handshakeComplete: true},
+	} {
+		t.Run(fmt.Sprintf("batch=%t/passthrough=%t/handshake=%t", mode.batchReading, mode.disablePacketHandling, mode.handshakeComplete), func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+			defer conn.Abort()
+			conn.pool = DefaultProtocol.Packets(false)
+			conn.relayStartup = true
+			conn.batchReading = mode.batchReading
+			conn.disablePacketHandling = mode.disablePacketHandling
+			conn.handshakeComplete = mode.handshakeComplete
+			conn.disablePacketHandlingReady = mode.disablePacketHandling && !mode.handshakeComplete
+			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			startup := []packet.Packet{&packet.DimensionData{}, &packet.VoxelShapes{}, &packet.DimensionData{}, &packet.StartGame{}}
+			for _, pk := range startup {
+				buf := new(bytes.Buffer)
+				if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+					t.Fatal(err)
+				}
+				pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+				if err := conn.receive(buf.Bytes()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			conn.flushBatch()
+			var got []packet.Packet
+			if mode.batchReading {
+				var err error
+				got, err = conn.ReadBatch()
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for range startup {
+					pk, err := conn.ReadPacket()
+					if err != nil {
+						t.Fatal(err)
+					}
+					got = append(got, pk)
+				}
+			}
+			if !slices.Equal(packetIDs(got), packetIDs(startup)) {
+				t.Fatalf("relayed startup order = %v, want %v", packetIDs(got), packetIDs(startup))
+			}
+		})
+	}
+}
+
+// A dial can return immediately after the handshake, before any application packet arrives.
+func TestRelayStartupWakesPassthroughReaderAfterHandshake(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.relayStartup, conn.disablePacketHandling, conn.handshakeComplete = true, true, true
+	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{})}
+	conn.ctx = readContext
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		pk, err := conn.ReadPacket()
+		if err == nil && pk.ID() != packet.IDDimensionData {
+			err = fmt.Errorf("first relayed packet = %v, want DimensionData", pk.ID())
+		}
+		done <- err
+	}()
+	<-readContext.ready
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: packet.IDDimensionData}).Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	(&packet.DimensionData{}).Marshal(DefaultProtocol.NewWriter(buf, 0))
+	if err := conn.receive(buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("waiting reader: %v", err)
+	}
+}
+
+// readWaitContext signals when ReadPacket has checked deferred packets and starts waiting for input.
+type readWaitContext struct {
+	context.Context
+	ready chan struct{}
+	once  sync.Once
+}
+
+// Done marks entry into the blocking read select before returning the connection's cancellation channel.
+func (ctx *readWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.ready) })
+	return ctx.Context.Done()
 }
 
 // A relaying listener that forwards an ItemRegistry decodes the client's shield stacks with it.
