@@ -28,6 +28,30 @@ type Environment struct {
 	HTTPClient *http.Client `json:"-"`
 }
 
+// ServiceName implements [service.Environment] and returns "gatherings".
+func (e *Environment) ServiceName() string {
+	return "gatherings"
+}
+
+// UnmarshalJSON decodes the discovered environment, requiring an absolute https ServiceURI.
+func (e *Environment) UnmarshalJSON(b []byte) error {
+	var data struct {
+		ServiceURI string `json:"serviceUri"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return err
+	}
+	u, err := url.Parse(data.ServiceURI)
+	if err != nil {
+		return fmt.Errorf("parse ServiceURI: %w", err)
+	}
+	if u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("service/gatherings: ServiceURI must be an absolute https URL")
+	}
+	e.ServiceURI = u
+	return nil
+}
+
 // DefaultEnvironment is the default [Environment] used when callers do not
 // provide one explicitly. It may become outdated if Mojang changes the service endpoint.
 var DefaultEnvironment = &Environment{

@@ -8,6 +8,10 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/df-mc/go-xsapi/v2/xal/xasu"
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"golang.org/x/oauth2"
 )
 
 func TestRealmAddressRequestsImmediately(t *testing.T) {
@@ -161,5 +165,57 @@ func TestClientOptInToStoryTimelinePreservesSettings(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+type xstsTokenSource struct {
+	parties []string
+}
+
+func (s *xstsTokenSource) Token() (*oauth2.Token, error) {
+	return nil, errors.New("the OAuth token must not be used when an XSTS source is supplied")
+}
+
+func (s *xstsTokenSource) XSTSToken(_ context.Context, relyingParty string) (*xsts.Token, error) {
+	s.parties = append(s.parties, relyingParty)
+	return &xsts.Token{
+		Token:         "shared",
+		NotAfter:      time.Now().Add(time.Hour),
+		DisplayClaims: xsts.DisplayClaims{UserInfo: []xsts.UserInfo{{UserInfo: xasu.UserInfo{UserHash: "hash"}}}},
+	}, nil
+}
+
+// A token source that supplies XSTS tokens is used directly instead of a new SISU session.
+func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
+	src := new(xstsTokenSource)
+	token, err := NewClient(src, nil).xboxToken(context.Background())
+	if err != nil || token.AuthorizationToken.Token != "shared" {
+		t.Fatalf("xboxToken = %v, %v", token, err)
+	}
+	if !reflect.DeepEqual(src.parties, []string{realmsRelyingParty}) {
+		t.Fatalf("relying parties = %v", src.parties)
+	}
+}
+
+// The pending invite count is a bare integer body; anything else is an error, never zero.
+func TestClientPendingInviteCount(t *testing.T) {
+	for body, want := range map[string]int{"3": 3, " 0\n": 0} {
+		c := &Client{requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
+			if method != http.MethodGet || path != "/invites/count/pending" {
+				t.Fatalf("request = %s %s", method, path)
+			}
+			return []byte(body), http.StatusOK, nil
+		}}
+		if got, err := c.PendingInviteCount(context.Background()); err != nil || got != want {
+			t.Fatalf("PendingInviteCount(%q) = %d, %v", body, got, err)
+		}
+	}
+	for _, body := range []string{"", "-1", `{"count":2}`} {
+		c := &Client{requestFunc: func(context.Context, string, string, []byte) ([]byte, int, error) {
+			return []byte(body), http.StatusOK, nil
+		}}
+		if _, err := c.PendingInviteCount(context.Background()); err == nil {
+			t.Fatalf("PendingInviteCount(%q) accepted a malformed body", body)
+		}
 	}
 }
