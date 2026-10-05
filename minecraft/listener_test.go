@@ -3,16 +3,24 @@ package minecraft
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
+	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
 func TestListenConfigListenNetworkUsesExplicitNetwork(t *testing.T) {
@@ -70,7 +78,7 @@ func TestListenerDisablePacketEncryption(t *testing.T) {
 				incoming: make(chan *Conn, 1),
 				close:    make(chan struct{}),
 			}
-			listener.createConn(encryptionDisablingConn{Conn: server, disabled: tt.disableInTransport})
+			serveAuthenticated(listener, encryptionDisablingConn{Conn: server, disabled: tt.disableInTransport})
 
 			if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
 				t.Fatalf("write packet: %v", err)
@@ -110,6 +118,7 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
+	conn.handshakeComplete = true
 	go listener.handleConn(conn)
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
@@ -155,6 +164,7 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
+	conn.handshakeComplete = true
 	go listener.handleConn(conn)
 
 	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
@@ -202,9 +212,17 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	conn.pool = conn.proto.Packets(true)
 	conn.disablePacketHandling = true
 	conn.expect(packet.IDClientToServerHandshake)
+	key := [32]byte{1}
+	conn.dec.EnableEncryption(key)
 	go listener.handleConn(conn)
 
-	if err := writePacket(client, &packet.ClientToServerHandshake{}); err != nil {
+	frame, err := encodePacket(&packet.ClientToServerHandshake{})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
+	enc := packet.NewEncoder(client)
+	enc.EnableEncryption(key)
+	if err := enc.Encode([][]byte{frame}); err != nil {
 		t.Fatalf("write packet: %v", err)
 	}
 
@@ -250,7 +268,7 @@ func TestListenerReadBatchPreservesNetworkBatch(t *testing.T) {
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.createConn(server)
+	serveAuthenticated(listener, server)
 
 	if err := writePackets(client,
 		&packet.ResourcePacksInfo{},
@@ -338,7 +356,7 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.createConn(server)
+	serveAuthenticated(listener, server)
 
 	if err := writePackets(client,
 		&packet.ResourcePacksInfo{},
@@ -384,7 +402,7 @@ func newBatchReadingListener(t *testing.T, mutate func(*ListenConfig)) (*Listene
 	if mutate != nil {
 		mutate(&listener.cfg)
 	}
-	listener.createConn(server)
+	serveAuthenticated(listener, server)
 	return listener, client
 }
 
@@ -651,4 +669,224 @@ func (listenTestNetwork) PingContext(context.Context, string) ([]byte, error) {
 
 func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 	return n.listen(address)
+}
+
+// serveAuthenticated serves netConn as a connection whose login was already verified, so tests of what
+// follows can publish it with any post-login packet.
+func serveAuthenticated(listener *Listener, netConn net.Conn) {
+	conn := listener.newListenerConn(netConn)
+	conn.handshakeComplete = true
+	listener.group.add(0)
+	go listener.handleConn(conn)
+}
+
+// A peer that connects but never logs in must be closed once LoginTimeout passes.
+func TestListenerLoginTimeoutClosesSilentConnection(t *testing.T) {
+	t.Parallel()
+
+	listener, network := newPipeListener(t, ListenConfig{LoginTimeout: 50 * time.Millisecond}, true)
+	peer := network.connect()
+	defer peer.Close()
+
+	if !peer.closedWithin(time.Second) {
+		t.Fatal("silent connection was not closed after the login timeout")
+	}
+	waitForCount(t, "player count", 0, listener.PlayerCount)
+}
+
+// LoginTimeout ends at authentication: the rest of the login sequence, such as resource packs, is not bounded.
+func TestListenerLoginTimeoutEndsAtAuthentication(t *testing.T) {
+	t.Parallel()
+
+	_, network := newPipeListener(t, ListenConfig{LoginTimeout: 100 * time.Millisecond}, true)
+	peer := network.connect()
+	defer peer.Close()
+	peer.logIn(t)
+
+	// The client never answers the resource pack offer that follows authentication.
+	if peer.closedWithin(300 * time.Millisecond) {
+		t.Fatal("authenticated connection was closed by the login timeout")
+	}
+}
+
+// A handshake batched in plaintext with the Login proves nothing, so the connection must not authenticate.
+func TestListenerRejectsHandshakeBatchedWithLogin(t *testing.T) {
+	t.Parallel()
+
+	for _, passthrough := range []bool{true, false} {
+		listener, network := newPipeListener(t, ListenConfig{DisablePacketHandling: passthrough, EnableBatchReading: passthrough}, false)
+		peer := network.connect()
+		defer peer.Close()
+		peer.logIn(t, &packet.ClientToServerHandshake{}, &packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
+
+		if !peer.closedWithin(time.Second) {
+			t.Fatalf("passthrough=%v: connection with a plaintext handshake was not closed", passthrough)
+		}
+		select {
+		case conn := <-listener.incoming:
+			t.Fatalf("passthrough=%v: published a connection whose login key was never proven (proven=%v)", passthrough, conn.LoginKeyProven())
+		default:
+		}
+	}
+}
+
+// newPipeListener returns a listener with authentication disabled served over in-memory pipes. Pipes that
+// disable encryption stand in for transports such as NetherNet.
+func newPipeListener(t *testing.T, cfg ListenConfig, disableEncryption bool) (*Listener, *pipeTestNetwork) {
+	t.Helper()
+	network := &pipeTestNetwork{conns: make(chan net.Conn), closed: make(chan struct{}), disableEncryption: disableEncryption}
+	cfg.AuthenticationDisabled = true
+	cfg.AllowUnknownPackets = true
+	listener, err := cfg.ListenNetwork(network, "")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener, network
+}
+
+// pipeTestNetwork hands in-memory connections to a listener.
+type pipeTestNetwork struct {
+	conns             chan net.Conn
+	closed            chan struct{}
+	once              sync.Once
+	disableEncryption bool
+}
+
+// connect hands a new connection to the listener and returns its client side, which discards what it reads.
+func (n *pipeTestNetwork) connect() *pipePeer {
+	client, server := net.Pipe()
+	n.conns <- encryptionDisablingConn{Conn: server, disabled: n.disableEncryption}
+	peer := &pipePeer{Conn: client, closed: make(chan struct{})}
+	go func() {
+		_, _ = io.Copy(io.Discard, client)
+		close(peer.closed)
+	}()
+	return peer
+}
+
+func (n *pipeTestNetwork) DialContext(context.Context, string) (net.Conn, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (n *pipeTestNetwork) PingContext(context.Context, string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (n *pipeTestNetwork) Listen(string) (NetworkListener, error) { return n, nil }
+
+func (n *pipeTestNetwork) Accept() (net.Conn, error) {
+	select {
+	case c := <-n.conns:
+		return c, nil
+	case <-n.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (n *pipeTestNetwork) Close() error {
+	n.once.Do(func() { close(n.closed) })
+	return nil
+}
+
+func (n *pipeTestNetwork) Addr() net.Addr  { return &net.UDPAddr{IP: net.IPv4zero, Port: 19132} }
+func (n *pipeTestNetwork) ID() int64       { return 1 }
+func (n *pipeTestNetwork) PongData([]byte) {}
+
+// pipePeer is the client side of a pipeTestNetwork connection.
+type pipePeer struct {
+	net.Conn
+	closed chan struct{}
+}
+
+// closedWithin reports whether the listener closed the connection within timeout.
+func (p *pipePeer) closedWithin(timeout time.Duration) bool {
+	select {
+	case <-p.closed:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// logIn sends RequestNetworkSettings, then an offline Login batched with extra.
+func (p *pipePeer) logIn(t *testing.T, extra ...packet.Packet) {
+	t.Helper()
+	enc := packet.NewEncoder(p.Conn)
+	frame, err := encodePacket(&packet.RequestNetworkSettings{ClientProtocol: protocol.CurrentProtocol})
+	if err != nil {
+		t.Fatalf("encode RequestNetworkSettings: %v", err)
+	}
+	if err := enc.Encode([][]byte{frame}); err != nil {
+		t.Fatalf("write RequestNetworkSettings: %v", err)
+	}
+	enc.EnableCompression(packet.DefaultCompression, math.MaxInt)
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	var identityData login.IdentityData
+	defaultIdentityData(&identityData)
+	var clientData login.ClientData
+	defaultClientData("127.0.0.1:19132", identityData.DisplayName, &clientData)
+	frames := make([][]byte, 0, 1+len(extra))
+	for _, pk := range append([]packet.Packet{&packet.Login{ClientProtocol: protocol.CurrentProtocol, ConnectionRequest: login.EncodeOffline(identityData, clientData, key)}}, extra...) {
+		frame, err := encodePacket(pk)
+		if err != nil {
+			t.Fatalf("encode %T: %v", pk, err)
+		}
+		frames = append(frames, frame)
+	}
+	if err := enc.Encode(frames); err != nil {
+		t.Fatalf("write Login: %v", err)
+	}
+}
+
+// waitForCount waits for count to reach want.
+func waitForCount(t *testing.T, what string, want int, count func() int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for count() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s = %d, want %d", what, count(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A client sending post-login packet IDs before logging in must not be published by a passthrough listener.
+func TestListenerPassthroughDoesNotPublishBeforeLogin(t *testing.T) {
+	t.Parallel()
+
+	listener, network := newPipeListener(t, ListenConfig{DisablePacketHandling: true, EnableBatchReading: true}, true)
+	peer := network.connect()
+	defer peer.Close()
+	if err := writePackets(peer, &packet.ResourcePacksInfo{}); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+	select {
+	case conn := <-listener.incoming:
+		t.Fatalf("published a connection that never logged in (xuid=%q)", conn.IdentityData().XUID)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// Work after authentication, such as fetching resource packs, must not run into the login deadline.
+func TestListenerLoginTimeoutEndsBeforePostAuthCallbacks(t *testing.T) {
+	t.Parallel()
+
+	_, network := newPipeListener(t, ListenConfig{
+		LoginTimeout: 50 * time.Millisecond,
+		FetchResourcePacks: func(_ login.IdentityData, _ login.ClientData, current []*resource.Pack) []*resource.Pack {
+			time.Sleep(200 * time.Millisecond)
+			return current
+		},
+	}, true)
+	peer := network.connect()
+	defer peer.Close()
+	peer.logIn(t)
+	if peer.closedWithin(400 * time.Millisecond) {
+		t.Fatal("client that authenticated in time was closed while resource packs were fetched")
+	}
 }
