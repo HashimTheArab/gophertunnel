@@ -1190,11 +1190,8 @@ func (conn *Conn) takeBatch() ([]*packetData, bool) {
 // queueBatch queues a complete network batch for ReadBatch without blocking the processing goroutine.
 func (conn *Conn) queueBatch(batch []*packetData) {
 	conn.readQueueMu.Lock()
-	if len(conn.readBatches) == 0 {
-		conn.readBatches = make([][]*packetData, batchQueueRetainedCapacity)
-	}
 	if conn.readBatchLen == len(conn.readBatches) {
-		grown := make([][]*packetData, len(conn.readBatches)*2)
+		grown := make([][]*packetData, max(len(conn.readBatches)*2, batchQueueRetainedCapacity))
 		copied := copy(grown, conn.readBatches[conn.readBatchHead:])
 		copy(grown[copied:], conn.readBatches[:conn.readBatchHead])
 		clear(conn.readBatches)
@@ -1303,8 +1300,9 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
-// relayStartupPacket delivers a packet of a relayed startup to the caller unchanged, first recording what
-// the Conn itself needs from StartGame, DimensionData and ItemRegistry to decode later packets.
+// relayStartupPacket records what the Conn needs from a relayed StartGame, DimensionData or ItemRegistry to
+// decode later packets, and reports whether it deferred a packet that arrived before StartGame. Every other
+// relayed packet is left to the passthrough or logged-in delivery, so it keeps their ordering.
 func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 	id := pkData.h.PacketID
 	if !conn.loggedIn && id != packet.IDStartGame && id != packet.IDDimensionData {
@@ -1312,8 +1310,7 @@ func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 	}
 	switch id {
 	case packet.IDStartGame, packet.IDDimensionData, packet.IDItemRegistry:
-		probe := &packetData{h: pkData.h, full: pkData.full, payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())), owned: true}
-		pks, err := probe.decodePacket(conn)
+		pks, err := pkData.probe(conn)
 		if err != nil {
 			return true, err
 		}
@@ -1329,12 +1326,11 @@ func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 			}
 		}
 	}
-	if !conn.loggedIn && !conn.disablePacketHandlingReady {
-		// Keep early DimensionData beside other deferred login packets in receive order.
-		conn.deferPacket(pkData)
-	} else if !conn.collectPacket(pkData) {
-		conn.queuePacket(pkData)
+	if conn.loggedIn || conn.disablePacketHandlingReady {
+		return false, nil
 	}
+	// Keep early DimensionData beside other deferred login packets in receive order.
+	conn.deferPacket(pkData)
 	return true, nil
 }
 
@@ -1373,13 +1369,7 @@ func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
 	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
 		return nil
 	}
-	probe := &packetData{
-		h:       pkData.h,
-		full:    pkData.full,
-		payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
-		owned:   true,
-	}
-	pks, err := probe.decodePacket(conn)
+	pks, err := pkData.probe(conn)
 	if err != nil {
 		return nil
 	}

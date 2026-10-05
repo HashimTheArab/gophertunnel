@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1161,16 +1162,58 @@ func TestRelayStartupWakesPassthroughReaderAfterHandshake(t *testing.T) {
 	}
 }
 
-// readWaitContext signals when ReadPacket has checked deferred packets and starts waiting for input.
+// A passthrough reader preempted after checking deferred packets still reads relayed packets in order.
+func TestRelayStartupPassthroughKeepsOrderForPreemptedReader(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.relayStartup, conn.disablePacketHandling, conn.handshakeComplete = true, true, true
+	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{}), hold: make(chan struct{})}
+	conn.ctx = readContext
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan packet.Packet, 1)
+	go func() {
+		pk, _ := conn.ReadPacket()
+		read <- pk
+	}()
+	<-readContext.ready
+	for _, pk := range []packet.Packet{&packet.DimensionData{}, &packet.StartGame{}} {
+		buf := new(bytes.Buffer)
+		if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+			t.Fatal(err)
+		}
+		pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+		if err := conn.receive(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(readContext.hold)
+	if pk := <-read; pk == nil || pk.ID() != packet.IDDimensionData {
+		t.Fatalf("first relayed packet = %T, want DimensionData", pk)
+	}
+}
+
+// readWaitContext signals when ReadPacket has checked deferred packets and starts waiting for input,
+// optionally holding the reader there until hold is closed.
 type readWaitContext struct {
 	context.Context
-	ready chan struct{}
-	once  sync.Once
+	ready, hold chan struct{}
+	entered     atomic.Bool
 }
 
 // Done marks entry into the blocking read select before returning the connection's cancellation channel.
+// Only the first caller is held, so the receiving goroutine is never blocked behind the reader.
 func (ctx *readWaitContext) Done() <-chan struct{} {
-	ctx.once.Do(func() { close(ctx.ready) })
+	if ctx.entered.CompareAndSwap(false, true) {
+		close(ctx.ready)
+		if ctx.hold != nil {
+			<-ctx.hold
+		}
+	}
 	return ctx.Context.Done()
 }
 
