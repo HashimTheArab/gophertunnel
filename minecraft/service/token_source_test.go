@@ -118,27 +118,35 @@ func (s *rotatingTokenSource) InvalidateServiceToken(rejected *Token) {
 func TestMultiplayerTokenRetriesOnceAfterInvalidatingARejectedToken(t *testing.T) {
 	t.Parallel()
 
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		if r.Header.Get("Authorization") != "MCToken fresh" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"result": &multiplayerToken{
-			IssuedAt: time.Now(), SignedToken: "multiplayer-token", ValidUntil: time.Now().Add(time.Hour),
-		}})
-	}))
-	defer server.Close()
-	serviceURL, _ := url.Parse(server.URL)
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	env := &AuthorizationEnvironment{ServiceURI: serviceURL, HTTPClient: server.Client()}
-	src := new(rotatingTokenSource)
-	token, err := env.MultiplayerToken(context.Background(), src, &key.PublicKey)
-	if err != nil || token != "multiplayer-token" {
-		t.Fatalf("MultiplayerToken = %q, %v", token, err)
-	}
-	if src.invalidated.Load() != 1 || src.issued.Load() != 1 || requests.Load() != 2 {
-		t.Fatalf("invalidated=%d issued=%d requests=%d", src.invalidated.Load(), src.issued.Load(), requests.Load())
+	for _, name := range []string{"direct", "managed"} {
+		t.Run(name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Header.Get("Authorization") != "MCToken fresh" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": &multiplayerToken{
+					IssuedAt: time.Now(), SignedToken: "multiplayer-token", ValidUntil: time.Now().Add(time.Hour),
+				}})
+			}))
+			defer server.Close()
+			serviceURL, _ := url.Parse(server.URL)
+			key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			env := &AuthorizationEnvironment{ServiceURI: serviceURL, HTTPClient: server.Client()}
+			src := new(rotatingTokenSource)
+			var source TokenSource = src
+			if name == "managed" {
+				source = &ManagedTokenSource{TokenSource: src}
+			}
+			token, err := env.MultiplayerToken(context.Background(), source, &key.PublicKey)
+			if err != nil || token != "multiplayer-token" {
+				t.Fatalf("MultiplayerToken = %q, %v", token, err)
+			}
+			if src.invalidated.Load() != 1 || src.issued.Load() != 1 || requests.Load() != 2 {
+				t.Fatalf("invalidated=%d issued=%d requests=%d", src.invalidated.Load(), src.issued.Load(), requests.Load())
+			}
+		})
 	}
 }

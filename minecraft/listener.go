@@ -411,10 +411,10 @@ func PreloadAuthVerifier(ctx context.Context) error {
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
 	select {
-	case <-listener.close:
-		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: net.ErrClosed}
 	case conn := <-listener.incoming:
 		return conn, nil
+	case <-listener.close:
+		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: net.ErrClosed}
 	}
 }
 
@@ -507,11 +507,7 @@ func (listener *Listener) listen() {
 			}
 		}
 	}()
-	defer func() {
-		close(listener.close)
-		// Delivery goroutines may still be sending. The close signal wakes both them and Accept.
-		_ = listener.Close()
-	}()
+	defer listener.shutdown()
 	for {
 		netConn, err := listener.listener.Accept()
 		if err != nil {
@@ -656,6 +652,14 @@ func (listener *Listener) handleConn(conn *Conn) {
 	}
 }
 
+// shutdown marks the listener closed once listen stops accepting. listener.incoming is never closed: a
+// connection finishing its login at this point may still be in deliverConn's select, and a send on a closed
+// channel panics, taking the whole process down. Accept watches listener.close instead.
+func (listener *Listener) shutdown() {
+	close(listener.close)
+	_ = listener.Close()
+}
+
 // deliverConn delivers conn to the configured owner. ConnHandler, when set, replaces the Accept path entirely:
 // connections delivered through it are not published to listener.incoming.
 func (listener *Listener) deliverConn(conn *Conn) bool {
@@ -672,7 +676,8 @@ func (listener *Listener) deliverConn(conn *Conn) bool {
 	}
 	select {
 	case <-listener.close:
-		// The listener closed while this connection was logging in. Return so it is cleaned up.
+		// The listener was closed while this one was logged in. Just return so the connection is closed and
+		// cleaned up.
 		return false
 	case listener.incoming <- conn:
 		// The connection was previously not logged in, but was after receiving this packet, meaning the connection is
