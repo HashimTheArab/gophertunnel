@@ -220,6 +220,8 @@ type Conn struct {
 	abortOnce           sync.Once
 	gracefulCloseErr    error
 	abortErr            error
+	transportAbortOnce  sync.Once
+	transportAbortErr   error
 	ctx                 context.Context
 	cancelFunc          context.CancelCauseFunc
 	receiveTerminal     atomic.Pointer[receiveTerminal]
@@ -2891,27 +2893,41 @@ func (conn *Conn) close(cause error) error {
 			if recovered := recover(); recovered != nil {
 				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
 			}
-			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.terminate(cause, false))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
 	})
 	return conn.gracefulCloseErr
 }
 
-// abort closes the Conn without flushing the packets still buffered. Flush writes to the underlying
-// connection and takes conn.encMu to do it, so it blocks for as long as the peer refuses to read or
-// another goroutine holds that write in progress. Callers giving up on a connection precisely because
-// the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
+// abort skips buffered packets and uses immediate transport teardown when supported.
 func (conn *Conn) abort(cause error) error {
+	return conn.terminate(cause, true)
+}
+
+func (conn *Conn) terminate(cause error, immediate bool) error {
+	transport, canAbort := conn.conn.(interface{ Abort() error })
 	conn.abortOnce.Do(func() {
 		if conn.cancelFunc != nil {
 			conn.cancelFunc(conn.terminalCause(cause))
 		}
 		if conn.conn != nil {
-			conn.abortErr = conn.conn.Close()
+			if immediate && canAbort {
+				_ = conn.abortTransport(transport)
+			} else {
+				conn.abortErr = conn.conn.Close()
+			}
 		}
 	})
+	if immediate && canAbort {
+		return errors.Join(conn.abortErr, conn.abortTransport(transport))
+	}
 	return conn.abortErr
+}
+
+func (conn *Conn) abortTransport(transport interface{ Abort() error }) error {
+	conn.transportAbortOnce.Do(func() { conn.transportAbortErr = transport.Abort() })
+	return conn.transportAbortErr
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed
