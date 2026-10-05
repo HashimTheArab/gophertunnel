@@ -376,7 +376,7 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
-				return err
+				return packetReceiveCause(err, data)
 			}
 			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
 			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
@@ -404,13 +404,19 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 			return nil
 		}); err != nil {
+			if callbackErr || !errors.Is(err, net.ErrClosed) {
+				closeCause = err
+				if !callbackErr {
+					closeCause = &ReceiveError{stage: "decoder", cause: err}
+				}
+				conn.recordReceiveTerminal(closeCause)
+			}
 			conn.flushBatch()
 			if callbackErr || !errors.Is(err, net.ErrClosed) {
 				if cancelContext {
-					closeCause = err
-					cancel(err)
+					cancel(closeCause)
 				} else {
-					conn.log.Error(err.Error())
+					conn.log.Error(closeCause.Error())
 				}
 			}
 			return

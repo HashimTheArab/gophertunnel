@@ -25,6 +25,9 @@ func (p *PreparedDial) listen() {
 					err := p.receiveBeforeLogin(data)
 					p.mu.Unlock()
 					callbackErr = err != nil
+					if err != nil {
+						return packetReceiveCause(err, data)
+					}
 					return err
 				}
 				p.mu.Unlock()
@@ -32,7 +35,7 @@ func (p *PreparedDial) listen() {
 			loggedInBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.handshakeComplete, conn.disablePacketHandlingReady
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
-				return err
+				return packetReceiveCause(err, data)
 			}
 			if ((!handshakeCompleteBefore && conn.handshakeComplete) || (!passthroughReadyBefore && conn.disablePacketHandlingReady)) && conn.disablePacketHandling && connected != nil {
 				close(connected)
@@ -47,13 +50,19 @@ func (p *PreparedDial) listen() {
 			}
 			return nil
 		}); err != nil {
+			if callbackErr || !errors.Is(err, net.ErrClosed) {
+				closeCause = err
+				if !callbackErr {
+					closeCause = &ReceiveError{stage: "decoder", cause: err}
+				}
+				conn.recordReceiveTerminal(closeCause)
+			}
 			p.flushBatch()
 			if callbackErr || !errors.Is(err, net.ErrClosed) {
 				if cancelContext {
-					closeCause = err
-					p.cancel(err)
+					p.cancel(closeCause)
 				} else {
-					conn.log.Error(err.Error())
+					conn.log.Error(closeCause.Error())
 				}
 			}
 			return

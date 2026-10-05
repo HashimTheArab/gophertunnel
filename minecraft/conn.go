@@ -222,6 +222,7 @@ type Conn struct {
 	abortErr         error
 	ctx              context.Context
 	cancelFunc       context.CancelCauseFunc
+	receiveTerminal  atomic.Pointer[receiveTerminal]
 
 	conn        net.Conn
 	log         *slog.Logger
@@ -2868,7 +2869,7 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 // before the transport is closed, so a flush blocked on a peer that stopped reading returns without
 // treating the closed transport as an encoding failure.
 func (conn *Conn) closeTransport(cause error) {
-	conn.cancelFunc(cause)
+	conn.cancelFunc(conn.terminalCause(cause))
 	_ = conn.conn.Close()
 	_ = conn.close(cause)
 }
@@ -2893,7 +2894,7 @@ func (conn *Conn) close(cause error) error {
 func (conn *Conn) abort(cause error) error {
 	conn.abortOnce.Do(func() {
 		if conn.cancelFunc != nil {
-			conn.cancelFunc(cause)
+			conn.cancelFunc(conn.terminalCause(cause))
 		}
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
@@ -2907,8 +2908,8 @@ func (conn *Conn) abort(cause error) error {
 func (conn *Conn) closeErr(op string) error {
 	select {
 	case <-conn.ctx.Done():
-		return conn.wrap(context.Cause(conn.ctx), op)
+		return conn.wrap(conn.terminalCause(context.Cause(conn.ctx)), op)
 	default:
-		return conn.wrap(net.ErrClosed, op)
+		return conn.wrap(conn.terminalCause(net.ErrClosed), op)
 	}
 }
