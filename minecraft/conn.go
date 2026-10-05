@@ -668,28 +668,29 @@ func (conn *Conn) WritePacketRaw(data []byte) error {
 		return conn.closeErr("write raw packet")
 	default:
 	}
-	if conn.packetFunc != nil || rawPacketID(data) == packet.IDItemRegistry {
-		conn.observeRawWrite(data)
-	}
 	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	// Observe under sendMu, as WritePacket does, so the shield ID follows the order packets are queued in.
+	conn.observeRawWrite(data)
 	conn.bufferedSend = append(conn.bufferedSend, data)
-	conn.sendMu.Unlock()
 	return nil
 }
 
 // observeRawWrite runs the write-side observation encodePacketsTo performs for a decoded packet.
 func (conn *Conn) observeRawWrite(data []byte) {
+	if conn.packetFunc == nil && rawPacketID(data) != packet.IDItemRegistry {
+		return
+	}
 	buf := bytes.NewBuffer(data)
 	var header packet.Header
 	if header.Read(buf) != nil {
 		return
 	}
 	if header.PacketID == packet.IDItemRegistry {
-		if pks, err := decodeRawPayload(conn, &packet.ItemRegistry{}, buf.Bytes()); err == nil {
-			for _, pk := range pks {
-				if registry, ok := pk.(*packet.ItemRegistry); ok {
-					conn.observeShield(registry.Items)
-				}
+		pks, _ := decodeRawServerPacket(conn, header.PacketID, buf.Bytes())
+		for _, pk := range pks {
+			if registry, ok := pk.(*packet.ItemRegistry); ok {
+				conn.observeShield(registry.Items)
 			}
 		}
 	}

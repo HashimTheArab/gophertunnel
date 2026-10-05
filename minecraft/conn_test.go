@@ -1780,3 +1780,92 @@ func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
 		t.Fatal("WritePacketRaw after Close returned no error")
 	}
 }
+
+// Concurrent raw writes leave the shield ID of the registry queued last.
+func TestWritePacketRawShieldFollowsQueueOrder(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	registry := func(id int16) []byte {
+		frame, err := encodePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: id}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return frame
+	}
+	first, second := registry(355), registry(356)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+	}
+	firstDone, secondDone := make(chan struct{}), make(chan struct{})
+	go func() { _ = conn.WritePacketRaw(first); close(firstDone) }()
+	<-entered
+	go func() { _ = conn.WritePacketRaw(second); close(secondDone) }()
+	// Give the second write the chance to overtake the first, which is still being observed.
+	select {
+	case <-secondDone:
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-firstDone
+	<-secondDone
+
+	want := int32(356)
+	if bytes.Equal(conn.bufferedSend[len(conn.bufferedSend)-1], first) {
+		want = 355
+	}
+	if got := conn.shieldID.Load(); got != want {
+		t.Fatalf("shield ID = %d, but the registry queued last has %d", got, want)
+	}
+}
+
+// prefixedItemRegistry is an ItemRegistry whose wire layout differs from the latest protocol's.
+type prefixedItemRegistry struct{ packet.ItemRegistry }
+
+func (pk *prefixedItemRegistry) Marshal(io protocol.IO) {
+	var prefix uint8
+	io.Uint8(&prefix)
+	pk.ItemRegistry.Marshal(io)
+}
+
+// prefixedRegistryProtocol registers prefixedItemRegistry as its server ItemRegistry.
+type prefixedRegistryProtocol struct{ Protocol }
+
+func (p prefixedRegistryProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		pool[packet.IDItemRegistry] = func() packet.Packet { return &prefixedItemRegistry{} }
+	}
+	return pool
+}
+
+func (p prefixedRegistryProtocol) ConvertToLatest(pk packet.Packet, conn *Conn) []packet.Packet {
+	if registry, ok := pk.(*prefixedItemRegistry); ok {
+		return []packet.Packet{&registry.ItemRegistry}
+	}
+	return p.Protocol.ConvertToLatest(pk, conn)
+}
+
+// A raw ItemRegistry is read with the active protocol's layout, not the latest one.
+func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), prefixedRegistryProtocol{DefaultProtocol}, -1, false)
+	defer conn.Abort()
+	frame, err := encodePacket(&prefixedItemRegistry{packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WritePacketRaw(frame); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.shieldID.Load(); got != 355 {
+		t.Fatalf("shield ID after an active-protocol registry = %d, want 355", got)
+	}
+}
