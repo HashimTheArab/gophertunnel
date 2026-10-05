@@ -303,3 +303,13 @@ func TestReceiveTerminalMessageIsSafeAndKeepsTypedCause(t *testing.T) {
 		t.Fatal("terminal message exposed packet contents")
 	}
 }
+
+func TestReceiveTerminalDoesNotReplaceEarlierLocalCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	conn := &Conn{ctx: ctx, cancelFunc: cancel}
+	cancel(context.Canceled)
+	conn.recordReceiveTerminal(&ReceiveError{stage: "decoder", cause: io.EOF})
+	if !errors.Is(conn.terminalCause(context.Cause(ctx)), context.Canceled) {
+		t.Fatal("late transport read failure replaced the earlier local cancellation")
+	}
+}

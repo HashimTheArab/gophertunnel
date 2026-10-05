@@ -40,6 +40,9 @@ type receiveTerminal struct{ cause error }
 
 // recordReceiveTerminal precedes teardown so a final flush cannot replace the receive failure.
 func (conn *Conn) recordReceiveTerminal(err error) {
+	if conn.ctx.Err() != nil {
+		return
+	}
 	conn.receiveTerminal.CompareAndSwap(nil, &receiveTerminal{cause: err})
 }
 
