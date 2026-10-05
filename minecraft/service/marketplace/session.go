@@ -3,7 +3,12 @@ package marketplace
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
 	"net/http"
+	"slices"
+	"strings"
 )
 
 // SessionConfig is the store's per-session configuration.
@@ -39,13 +44,43 @@ type PlatformSKU struct {
 	BigID       string `json:"bigId"`
 }
 
-// PageID returns the page id to request for a known page name; a name the config does not map is
-// used as the id itself, as the client does.
-func (c SessionConfig) PageID(name string) string {
-	if id, ok := c.KnownPages[name]; ok && id != "" {
-		return id
+// Known page names: the session-config knownPages keys the vanilla client requests pages by.
+const (
+	PageCoinScreen                            = "coinScreen"
+	PageColorPicker                           = "colorPicker"
+	PageCSBPacks                              = "csbPacks"
+	PageDressingRoomClassicSkinsSearchHome    = "dressingRoomClassicSkinsSearchHome"
+	PageDressingRoomClassicSkinsSearchResults = "dressingRoomClassicSkinsSearchResults"
+	PageDressingRoomCoinScreen                = "dressingRoomCoinScreen"
+	PageDressingRoomSearchHome                = "dressingRoomSearchHome"
+	PageDressingRoomSearchResults             = "dressingRoomSearchResults"
+	PageExpandedAppearanceView                = "expandedAppearanceView"
+	PageFollowedCreators                      = "followedCreators"
+	PageInventory                             = "inventory"
+	PageInventorySearchHome                   = "inventorySearchHome"
+	PageInventorySearchResults                = "inventorySearchResults"
+	PagePauseMenu                             = "pauseMenu"
+	PagePersonaProfile                        = "personaProfile"
+	PagePersonaSubscriptionContent            = "personaSubscriptionContent"
+	PageRealmsPlusPacks                       = "realmsPlusPacks"
+	PageSearchHome                            = "searchHome"
+	PageSearchResults                         = "searchResults"
+	PageSkinsRoot                             = "skinsRoot"
+	PageStoreRoot                             = "storeRoot" // the Marketplace home
+	PageWishlist                              = "wishlist"
+)
+
+// ErrUnknownPage is returned for a page name the session config does not map to an id.
+var ErrUnknownPage = errors.New("service/marketplace: unknown page")
+
+// PageID returns the page id the config maps name to, or an error wrapping [ErrUnknownPage] that
+// lists the known names. The service rejects any other id, so the name is never used as one.
+func (c SessionConfig) PageID(name string) (string, error) {
+	if id := c.KnownPages[name]; id != "" {
+		return id, nil
 	}
-	return name
+	names := slices.Sorted(maps.Keys(c.KnownPages))
+	return "", fmt.Errorf("%w %q (known pages: %s)", ErrUnknownPage, name, strings.Join(names, ", "))
 }
 
 // SessionConfig returns the store session configuration.

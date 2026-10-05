@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Item is a catalog item as the store service lists it for a row continuation.
+// Item is a catalog offer as a layout row lists it inline or a row continuation returns it.
 type Item struct {
 	ID           string          `json:"id"`
 	ContentType  string          `json:"contentType"`
@@ -17,20 +17,54 @@ type Item struct {
 	Description  Localized       `json:"description"`
 	Tags         []string        `json:"tags"`
 	Platforms    []string        `json:"platforms"`
+	Thumbnail    *Image          `json:"thumbnail"`
 	Images       []Image         `json:"images"`
 	StartDate    string          `json:"startDate"`
 	CreationDate string          `json:"creationDate"`
 	CreatorName  string          `json:"creatorName"`
+	CreatorPage  string          `json:"creatorPage"` // page id of the creator's page
 	StoreID      string          `json:"storeId"`
-	Ownership    json.RawMessage `json:"ownership"`
+	Ownership    json.RawMessage `json:"ownership"` // "Owned" or "NotOwned" on layout pages
 	Purchasable  *bool           `json:"purchasable"`
-	Price        *Price          `json:"price"`
+	Price        *Price          `json:"price"` // nil on bundles, which carry PlayFabSKU instead
+	Rating       *Rating         `json:"rating"`
+	Flags        []string        `json:"flags"` // badges such as "New"
 	PackType     string          `json:"packType"`
+	PackIdentity []PackIdentity  `json:"packIdentity"`
 	PlayFabSKU   string          `json:"playFabSku"`
+	LinksTo      *Link           `json:"linksToInfo"` // the offer's detail page
 }
 
-// Localized is a text keyed by locale; "neutral" is the fallback.
+// Rating is an offer's aggregate star rating.
+type Rating struct {
+	Average    float64 `json:"average"`
+	TotalCount int     `json:"totalCount"`
+}
+
+// PackIdentity is one pack an offer installs.
+type PackIdentity struct {
+	Type    string `json:"type"` // such as worldtemplate, resourcepack, behaviorpack or skinpack
+	UUID    string `json:"uuid"`
+	Version string `json:"version"`
+}
+
+// Localized is a text keyed by locale; "neutral" is the fallback. A plain JSON string, as layout
+// pages send, decodes as the neutral text.
 type Localized map[string]string
+
+// UnmarshalJSON decodes a locale map or a plain string.
+func (l *Localized) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '"' {
+		var text string
+		if err := json.Unmarshal(b, &text); err != nil {
+			return err
+		}
+		*l = Localized{"neutral": text}
+		return nil
+	}
+	return json.Unmarshal(b, (*map[string]string)(l))
+}
 
 // Neutral returns the neutral text.
 func (l Localized) Neutral() string {
@@ -42,20 +76,23 @@ func (l Localized) Neutral() string {
 	return ""
 }
 
-// Image is one catalog image; Type is Thumbnail, Banner or Icon.
+// Image is one catalog image, such as a Thumbnail, Screenshot or Banner, or an icon from the
+// client's resource packs named by LocalPath.
 type Image struct {
 	ID                string `json:"id"`
 	Tag               string `json:"tag"`
 	Type              string `json:"type"`
 	URL               string `json:"url"`
 	URLWithResolution string `json:"urlWithResolution"`
+	LocalPath         string `json:"localPath"`
 }
 
 // Price is an item's price: a bare amount, or a list price with its currency and optional sale.
 type Price struct {
-	ListPrice  uint64    `json:"listPrice"`
-	CurrencyID string    `json:"currencyId"`
-	Sale       *SaleInfo `json:"saleInfo"`
+	ListPrice           uint64    `json:"listPrice"`
+	CurrencyID          string    `json:"currencyId"`
+	VirtualCurrencyType string    `json:"virtualCurrencyType"` // such as Minecoin
+	Sale                *SaleInfo `json:"saleInfo"`
 }
 
 // SaleInfo is a limited-time sale price.
