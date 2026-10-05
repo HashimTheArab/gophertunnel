@@ -67,6 +67,8 @@ type AuthorizationEnvironment struct {
 	// verifier verifies OpenID Multiplayer Token issued by the authorization service.
 	// It is cached and kept by [Environment.Verifier] to reduce network time.
 	verifier *oidc.IDTokenVerifier
+	// keySet holds the signing keys behind verifier.
+	keySet *refreshingKeySet
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
 }
@@ -242,6 +244,7 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 		refreshInterval = 30 * time.Minute
 	}
 	keySet := newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
+	e.keySet = keySet
 
 	// We need to append '/' on the issuer if not present.
 	issuer := e.Issuer.JoinPath().String()
@@ -250,6 +253,24 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 		SupportedSigningAlgs: config.Algorithms,
 	})
 	return e.verifier, nil
+}
+
+// PreloadVerifier resolves the multiplayer token verifier and fetches its signing keys, so the first
+// verification needs no network round trip. Keys already fetched are kept.
+func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
+	if _, err := e.VerifierContext(ctx); err != nil {
+		return err
+	}
+	e.verifierMu.Lock()
+	keySet := e.keySet
+	e.verifierMu.Unlock()
+	if keys, _ := keySet.keysFromCache(); len(keys) != 0 {
+		return nil
+	}
+	if _, err := keySet.keysFromRemote(ctx); err != nil {
+		return fmt.Errorf("fetch jwks: %w", err)
+	}
+	return nil
 }
 
 // configuration returns the OpenID configuration published by the authorization
