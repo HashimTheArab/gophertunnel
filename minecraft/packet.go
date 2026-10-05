@@ -35,8 +35,14 @@ func rawPacketID(data []byte) uint32 {
 	return uint32(value) & 0x3ff
 }
 
-// decodeRawPayload decodes payload into pk with conn's protocol and converts it to the latest protocol.
-func decodeRawPayload(conn *Conn, pk packet.Packet, payload []byte) (pks []packet.Packet, err error) {
+// decodeRawServerPacket decodes the payload of a server packet with conn's protocol, using that protocol's
+// layout for the packet, and converts it to the latest protocol.
+func decodeRawServerPacket(conn *Conn, id uint32, payload []byte) (pks []packet.Packet, err error) {
+	newPacket, ok := conn.proto.Packets(false)[id]
+	if !ok {
+		return nil, unknownPacketError{id: id}
+	}
+	pk := newPacket()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("decode packet %T: %v", pk, recovered)
@@ -106,6 +112,11 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 		return nil, err
 	}
 	return pks, err
+}
+
+// probe decodes a copy of p's payload, leaving p intact for delivery and applying no disconnect policies.
+func (p *packetData) probe(conn *Conn) ([]packet.Packet, error) {
+	return (&packetData{h: p.h, full: p.full, payload: bytes.NewBuffer(bytes.Clone(p.payload.Bytes())), owned: true}).decodePacket(conn)
 }
 
 // decodePacket decodes p without applying connection-level disconnect policies.
