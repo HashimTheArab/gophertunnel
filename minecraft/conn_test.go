@@ -1673,3 +1673,110 @@ func TestConn_AcceptPacketHeader(t *testing.T) {
 		})
 	}
 }
+
+func TestReadBatchRawKeepsBytesAndDecodesOnlySelected(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+
+	text := &packet.Text{TextType: packet.TextTypeRaw, Message: "hi", XUID: "1"}
+	var frames [][]byte
+	for _, pk := range []packet.Packet{&packet.Unknown{PacketID: 777, Payload: []byte{1, 2, 3}}, text, &packet.Transfer{Address: "a.test", Port: 1}} {
+		frame, err := encodePacket(pk)
+		if err != nil {
+			t.Fatalf("encode %T: %v", pk, err)
+		}
+		frames = append(frames, frame)
+	}
+	malformed := append(bytes.Clone(frames[1]), 0xff)
+	for _, frame := range [][]byte{frames[0], malformed, frames[1], frames[2]} {
+		borrowed := bytes.Clone(frame)
+		if err := conn.receive(borrowed); err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+		clear(borrowed)
+	}
+	conn.flushBatch()
+
+	packets, err := conn.ReadBatchRaw(func(id uint32) bool { return id == packet.IDText })
+	if err != nil {
+		t.Fatalf("ReadBatchRaw: %v", err)
+	}
+	// The selected malformed Text is skipped like ReadBatch skips it; the rest keep their order and bytes.
+	if len(packets) != 3 {
+		t.Fatalf("ReadBatchRaw returned %d packets, want 3", len(packets))
+	}
+	for i, raw := range packets {
+		if !bytes.Equal(raw.Data, frames[i]) {
+			t.Fatalf("packet %d bytes = %x, want %x", i, raw.Data, frames[i])
+		}
+		if (raw.Decoded != nil) != (raw.ID == packet.IDText) {
+			t.Fatalf("packet %d (ID %d) decoded = %v", i, raw.ID, raw.Decoded)
+		}
+	}
+	if got, ok := packets[1].Decoded[0].(*packet.Text); !ok || got.Message != text.Message || got.XUID != text.XUID {
+		t.Fatalf("decoded Text = %#v", packets[1].Decoded)
+	}
+}
+
+func TestReadBatchRawRequiresBatchReading(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	if _, err := conn.ReadBatchRaw(nil); !errors.Is(err, errBatchReadingDisabled) {
+		t.Fatalf("ReadBatchRaw error = %v, want %v", err, errBatchReadingDisabled)
+	}
+}
+
+func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	// Subclient bits survive: the raw header is never re-encoded.
+	raw := []byte{0xe2, 0x9c, 0x01, 9, 8, 7}
+	registry, err := encodePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
+	if err != nil {
+		t.Fatalf("encode registry: %v", err)
+	}
+	before, err := encodePacket(&packet.SetTime{Time: 1})
+	if err != nil {
+		t.Fatalf("encode SetTime: %v", err)
+	}
+	batch := make(chan [][]byte, 1)
+	go func() {
+		packets, _ := packet.NewDecoder(peer).Decode()
+		batch <- packets
+	}()
+	if err := conn.WritePacket(&packet.SetTime{Time: 1}); err != nil {
+		t.Fatalf("WritePacket: %v", err)
+	}
+	for _, data := range [][]byte{raw, registry} {
+		if err := conn.WritePacketRaw(data); err != nil {
+			t.Fatalf("WritePacketRaw: %v", err)
+		}
+	}
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := <-batch
+	if len(got) != 3 || !bytes.Equal(got[0], before) || !bytes.Equal(got[1], raw) || !bytes.Equal(got[2], registry) {
+		t.Fatalf("wire batch = %x, want [%x %x %x]", got, before, raw, registry)
+	}
+	if id := conn.shieldID.Load(); id != 355 {
+		t.Fatalf("shield ID after raw ItemRegistry = %d, want 355", id)
+	}
+	_ = conn.Close()
+	if err := conn.WritePacketRaw(raw); err == nil {
+		t.Fatal("WritePacketRaw after Close returned no error")
+	}
+}
