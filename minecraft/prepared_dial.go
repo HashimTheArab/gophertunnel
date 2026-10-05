@@ -198,6 +198,8 @@ func (p *PreparedDial) prepareTransport(network Network) error {
 	conn.disconnectOnInvalidPacket = true
 	p.mu.Lock()
 	p.conn, p.listenerDone = conn, make(chan struct{})
+	conn.receiveDone = p.listenerDone
+	conn.receiveDrainStop = make(chan struct{})
 	if p.ctx.Err() != nil {
 		close(p.listenerDone)
 		p.mu.Unlock()

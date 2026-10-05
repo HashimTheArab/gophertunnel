@@ -312,6 +312,8 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	readyForLogin, connected := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	conn.receiveDone = make(chan struct{})
+	conn.receiveDrainStop = make(chan struct{})
 	go listenConn(conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)
@@ -366,6 +368,9 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 	closeCause := error(net.ErrClosed)
 	defer func() {
 		_ = conn.close(closeCause)
+		if conn.receiveDone != nil {
+			close(conn.receiveDone)
+		}
 	}()
 	cancelContext := true
 	for {

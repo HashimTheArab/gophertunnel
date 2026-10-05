@@ -216,13 +216,16 @@ var disconnectReasons = map[int32]string{
 type Conn struct {
 	// closeOnce and abortOnce coordinate graceful and immediate shutdown independently. Abort must remain able to
 	// close the raw transport while Close is blocked flushing it.
-	closeOnce        sync.Once
-	abortOnce        sync.Once
-	gracefulCloseErr error
-	abortErr         error
-	ctx              context.Context
-	cancelFunc       context.CancelCauseFunc
-	receiveTerminal  atomic.Pointer[receiveTerminal]
+	closeOnce           sync.Once
+	abortOnce           sync.Once
+	gracefulCloseErr    error
+	abortErr            error
+	ctx                 context.Context
+	cancelFunc          context.CancelCauseFunc
+	receiveTerminal     atomic.Pointer[receiveTerminal]
+	receiveDone         chan struct{}
+	receiveDrainStop    chan struct{}
+	receiveDrainStopped atomic.Bool
 
 	conn        net.Conn
 	log         *slog.Logger
@@ -881,6 +884,9 @@ func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
 		select {
 		case <-conn.batchReady:
 		case <-conn.ctx.Done():
+			if err := conn.waitRemoteReceiveDrain(); err != nil {
+				return nil, conn.wrap(err, op)
+			}
 			if batch, ok := conn.takeBatch(); ok {
 				return batch, nil
 			}
@@ -1117,12 +1123,14 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 // Close closes the Conn and its underlying connection. Before closing, it also calls Flush() so that any
 // packets currently pending are sent out.
 func (conn *Conn) Close() error {
+	conn.stopReceiveDrain()
 	return conn.close(net.ErrClosed)
 }
 
 // Abort immediately cancels the Conn context and closes its raw transport without flushing buffered packets.
 // It is safe to call concurrently with Close and may be used to unblock a Close waiting on a backpressured peer.
 func (conn *Conn) Abort() error {
+	conn.stopReceiveDrain()
 	return conn.abort(net.ErrClosed)
 }
 
@@ -1340,13 +1348,15 @@ func (conn *Conn) receive(data []byte) error {
 			// Make the packets received earlier in this batch readable before the connection closes.
 			conn.flushBatch()
 			disconnectMessage := conn.disconnectPacketMessage(disconnectPacket)
-			_ = conn.close(conn.wrap(&DisconnectPacketError{
+			cause := packetReceiveCause(conn.wrap(&DisconnectPacketError{
 				Reason:                  disconnectPacket.Reason,
 				HideDisconnectionScreen: disconnectPacket.HideDisconnectionScreen,
 				Message:                 disconnectPacket.Message,
 				FilteredMessage:         disconnectPacket.FilteredMessage,
 				DisplayMessage:          disconnectMessage,
-			}, "receive"))
+			}, "receive"), data)
+			conn.recordReceiveTerminal(cause)
+			_ = conn.close(cause)
 			return nil
 		}
 		// The Disconnect packet is not in this connection's pool (clients do not normally send one), so
@@ -1513,7 +1523,7 @@ func (conn *Conn) flushBatch() {
 		// was. Deferred packets stay readable after a close, matching deferredPackets in single-packet
 		// mode.
 		batch = append(deferred, batch...)
-	} else if conn.ctx.Err() != nil {
+	} else if conn.ctx.Err() != nil && !conn.remoteTransportClosed() {
 		// The connection closed: drop collected packets, matching queuePacket dropping post-close
 		// traffic in single-packet mode.
 		return
@@ -2869,6 +2879,7 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 // before the transport is closed, so a flush blocked on a peer that stopped reading returns without
 // treating the closed transport as an encoding failure.
 func (conn *Conn) closeTransport(cause error) {
+	conn.stopReceiveDrain()
 	conn.cancelFunc(conn.terminalCause(cause))
 	_ = conn.conn.Close()
 	_ = conn.close(cause)
