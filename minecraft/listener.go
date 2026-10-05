@@ -393,6 +393,18 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 	return err
 }
 
+// PreloadAuthVerifier resolves and caches the authorization environment, its multiplayer token verifier and
+// the verifier's signing keys, so the first authenticated dial pays none of those round trips.
+func PreloadAuthVerifier(ctx context.Context) error {
+	e, err := authEnv(ctx)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return e.PreloadVerifier(ctx)
+}
+
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
 // use Conn.ReadPacket (or Conn.ReadBatch when batch reading is enabled) and Conn.WritePacket.
