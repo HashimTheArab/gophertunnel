@@ -127,3 +127,24 @@ func TestReportEventsAndMalformedRefresh(t *testing.T) {
 		t.Fatalf("event body = %+v", body)
 	}
 }
+
+// Every messaging request names its session in Session-Id and the player's locale, as the game does.
+func TestRequestsCarrySessionAndLanguageHeaders(t *testing.T) {
+	var headers []http.Header
+	client := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		headers = append(headers, r.Header.Clone())
+		_, _ = w.Write([]byte(refreshFixture))
+	})
+	client.env.Language = "pt-BR"
+	if _, err := client.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReportEvents(context.Background(), Event{Type: "Impression", InstanceID: "i1"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, header := range headers {
+		if header.Get("Session-Id") != client.SessionID() || header.Get("Accept-Language") != "pt-BR" {
+			t.Fatalf("request %d Session-Id = %q, Accept-Language = %q", i, header.Get("Session-Id"), header.Get("Accept-Language"))
+		}
+	}
+}
