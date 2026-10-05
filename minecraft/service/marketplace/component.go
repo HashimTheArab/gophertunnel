@@ -18,6 +18,12 @@ const (
 	ComponentTopBarMinecoin  = "topBarMinecoinComp"
 	ComponentTopBarSearch    = "topBarSearchComp"
 	ComponentTopBarInventory = "topBarInventoryComp"
+	ComponentSearchBar       = "searchBarComp"
+	ComponentItemSummary     = "itemSummaryComp"
+	ComponentPurchaseInfo    = "purchaseInfoComp"
+	ComponentItemDescription = "itemDescriptionComp"
+	ComponentImageGallery    = "imageGalleryComp"
+	ComponentRating          = "ratingComp"
 )
 
 // Component is one presentation component of a layout row. Members are filled per Type; Raw keeps
@@ -31,6 +37,19 @@ type Component struct {
 	TotalItems int        `json:"totalItems"`
 	Items      []Item     `json:"items"`
 	RowConfig  *RowConfig `json:"customStoreRowConfiguration"`
+	// pagedItemListComp: the token [Client.ContinueRow] loads the next items with.
+	ContinuationToken string `json:"continuationToken"`
+
+	// itemSummaryComp: the offer a detail page presents.
+	Item *Item `json:"item"`
+	// purchaseInfoComp: the offer's price.
+	Price *Price `json:"price"`
+	// itemDescriptionComp.
+	Description string `json:"description"`
+	// imageGalleryComp: the offer's screenshots.
+	Images []Image `json:"images"`
+	// ratingComp.
+	Rating *Rating `json:"rating"`
 
 	// headerComp.
 	HeaderText string `json:"headerText"`

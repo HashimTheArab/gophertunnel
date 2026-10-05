@@ -15,7 +15,7 @@ type Item struct {
 	ContentType  string          `json:"contentType"`
 	Title        Localized       `json:"title"`
 	Description  Localized       `json:"description"`
-	Tags         []string        `json:"tags"`
+	Tags         []Tag           `json:"tags"`
 	Platforms    []string        `json:"platforms"`
 	Thumbnail    *Image          `json:"thumbnail"`
 	Images       []Image         `json:"images"`
@@ -33,6 +33,24 @@ type Item struct {
 	PackIdentity []PackIdentity  `json:"packIdentity"`
 	PlayFabSKU   string          `json:"playFabSku"`
 	LinksTo      *Link           `json:"linksToInfo"` // the offer's detail page
+}
+
+// Tag is an offer tag. Detail pages send it with the page listing the tagged offers; other answers
+// send the bare name.
+type Tag struct {
+	Name    string `json:"name"`
+	LinksTo *Link  `json:"linksToInfo"`
+}
+
+// UnmarshalJSON decodes a tag object or a bare name.
+func (t *Tag) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '"' {
+		*t = Tag{}
+		return json.Unmarshal(b, &t.Name)
+	}
+	type plain Tag
+	return json.Unmarshal(b, (*plain)(t))
 }
 
 // Rating is an offer's aggregate star rating.

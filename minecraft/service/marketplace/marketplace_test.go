@@ -177,8 +177,7 @@ func TestStoreReadsDecodeTheReferenceSchema(t *testing.T) {
 	if nav := rows[3].Component(ComponentNavButtonList); nav == nil || nav.Buttons[0].Images[0].LocalPath == "" {
 		t.Fatalf("nav = %+v", nav)
 	}
-	query, ok := rows[4].SearchQuery()
-	if !ok || query.OrTags[0] != "new" || rows[4].ItemList().Items != nil || rows[4].Title() != "" {
+	if len(rows[4].Queries) != 1 || rows[4].Queries[0].OrTags[0] != "new" || rows[4].ItemList().Items != nil || rows[4].Title() != "" {
 		t.Fatalf("query row = %+v", rows[4])
 	}
 	items, next, err := client.ContinueRow(ctx, "t", "v1")
@@ -385,14 +384,76 @@ func TestStoreRequiresBothEnvironments(t *testing.T) {
 	}
 }
 
-// A row query maps onto a quoted PlayFab filter, and unsupported members are refused.
-func TestQuerySearchFilter(t *testing.T) {
-	filter, ok := Query{ContentTypes: []string{"A"}, OrTags: []string{"x", "o'k"}, NotTags: []string{"h"}, ItemLimit: 80, SortDirection: "ASC"}.SearchFilter()
-	if !ok || filter.Filter != "ContentType eq 'A' and (Tags/any(t: t eq 'x') or Tags/any(t: t eq 'o''k')) and not Tags/any(t: t eq 'h')" ||
-		filter.Count != maxSearchCount || filter.OrderBy != "startDate asc" {
-		t.Fatalf("filter = %+v ok = %v", filter, ok)
+// Synthesized in the live service's search and detail page shapes, not captured payloads.
+const (
+	searchPageFixture = `{"result":{"pageId":"Search_SearchResults","layout":[{"sectionName":"rows","rows":[
+{"controlId":"SearchBar","components":[{"type":"searchBarComp","search":"castle","sortBy":"relevance","sortDirection":"DESC","filters":{}}]},
+{"controlId":"GridList","components":[{"type":"pagedItemListComp","totalItems":785,"continuationToken":"more",
+ "items":[{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","title":"CASTLE","ownership":"NotOwned",
+  "price":{"listPrice":660,"currencyId":"c","virtualCurrencyType":"Minecoin"}}]}]}]}]}}`
+	detailPageFixture = `{"result":{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","pageId":"ItemDetail_9490fb47-4ba4-419f-bd3f-e0b8557a4304",
+"layout":[{"sectionName":"rows","rows":[
+{"controlId":"ItemSummary","components":[
+ {"type":"itemSummaryComp","item":{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","title":"CASTLE","creatorName":"Novasoft",
+  "tags":[{"name":"Roleplay","linksToInfo":{"linksTo":"Tag_subgenre.roleplay","linkType":"pageId"}}]}},
+ {"type":"purchaseInfoComp","price":{"listPrice":660,"currencyId":"c","virtualCurrencyType":"Minecoin"}}]},
+{"controlId":"ItemDescription","components":[{"type":"headerComp","headerText":"Description"},
+ {"type":"itemDescriptionComp","description":"A castle.","playerCount":"1-22"}]},
+{"controlId":"ImageGallery","components":[{"type":"imageGalleryComp","images":[{"type":"Unknown","url":"https://cdn.example.test/s0.jpg"}]}]},
+{"controlId":"RatingRow","components":[{"type":"ratingComp","rating":{"average":4.0,"totalCount":102}}]}]}]}}`
+)
+
+// Search renders the session config's searchResults page with the game's search body.
+func TestSearchPostsTheSearchResultsPage(t *testing.T) {
+	var body map[string]any
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2.0/layout/pages/results-page" {
+			t.Errorf("search reached %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = io.WriteString(w, searchPageFixture)
+	})
+	config := &SessionConfig{KnownPages: map[string]string{"searchResults": "results-page"}}
+	page, err := client.Search(context.Background(), config, SearchRequest{Search: "castle"}, PageRequest{Entitlements: []string{}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := (Query{RarityFilters: []string{"epic"}}).SearchFilter(); ok {
-		t.Fatal("a rarity query was mapped")
+	want := map[string]any{"search": "castle", "sortBy": "Relevance", "sortDirection": "Desc", "filterPastRealmsPlus": false,
+		"filterCurrentRealmsPlus": false, "filters": map[string]any{}, "entitlements": []any{}, "inventoryVersion": "", "listVersion": ""}
+	for key, value := range want {
+		got, _ := json.Marshal(body[key])
+		if expected, _ := json.Marshal(value); string(got) != string(expected) {
+			t.Errorf("body[%q] = %s, want %s", key, got, expected)
+		}
+	}
+	results := page.Component(ComponentPagedItemList)
+	if results == nil || results.ContinuationToken != "more" || results.TotalItems != 785 || results.Items[0].Title.Neutral() != "CASTLE" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+// An offer's detail page decodes its summary, price, description, gallery and rating components.
+func TestItemDetailDecodesComponents(t *testing.T) {
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2.0/layout/pages/productId/9490fb47-4ba4-419f-bd3f-e0b8557a4304" {
+			t.Errorf("detail reached %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, detailPageFixture)
+	})
+	page, err := client.Page(context.Background(), PageByProductID, "9490fb47-4ba4-419f-bd3f-e0b8557a4304", PageRequest{Entitlements: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, purchase := page.Component(ComponentItemSummary), page.Component(ComponentPurchaseInfo)
+	description, gallery, rating := page.Component(ComponentItemDescription), page.Component(ComponentImageGallery), page.Component(ComponentRating)
+	if summary == nil || summary.Item == nil || summary.Item.CreatorName != "Novasoft" || summary.Item.Tags[0].Name != "Roleplay" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if purchase == nil || purchase.Price == nil || purchase.Price.ListPrice != 660 {
+		t.Fatalf("purchase = %+v", purchase)
+	}
+	if description == nil || description.Description != "A castle." || gallery == nil || len(gallery.Images) != 1 ||
+		rating == nil || rating.Rating == nil || rating.Rating.TotalCount != 102 {
+		t.Fatalf("description = %+v gallery = %+v rating = %+v", description, gallery, rating)
 	}
 }
