@@ -1,11 +1,12 @@
 package minecraft
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -169,8 +170,9 @@ func TestFirstUseTrustKeepsTheMostRecentlyUsedKeys(t *testing.T) {
 	}
 }
 
-// trustListener serves a NetherNet listener behind HTTP signaling; strip removes the answer's identity.
-func trustListener(t *testing.T, strip bool) string {
+// trustListener serves a NetherNet listener behind HTTP signaling; edit rewrites each answer line
+// and reports false to drop it.
+func trustListener(t *testing.T, edit func(line string) (string, bool)) string {
 	t.Helper()
 	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
 	t.Cleanup(func() { _ = signaling.Close() })
@@ -189,13 +191,13 @@ func trustListener(t *testing.T, strip bool) string {
 		}
 	}()
 	var handler http.Handler = signaling
-	if strip {
+	if edit != nil {
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			recorder := httptest.NewRecorder()
 			signaling.ServeHTTP(recorder, r)
 			var kept []string
 			for _, line := range strings.Split(recorder.Body.String(), "\r\n") {
-				if !strings.HasPrefix(line, "a=identity:") {
+				if line, keep := edit(line); keep {
 					kept = append(kept, line)
 				}
 			}
@@ -217,7 +219,7 @@ func dialWithTrust(t *testing.T, address string, trust ServerTrust) (net.Conn, e
 
 // The prompt names the probed URL, Trust joins, and the trusted key makes the next join silent.
 func TestAddressNetworkAsksServerTrustWithTheProbedURL(t *testing.T) {
-	address := trustListener(t, false)
+	address := trustListener(t, nil)
 	confirm := &confirmRecorder{answer: true}
 	trust := &FirstUseTrust{Store: new(memoryTrustStore), Confirm: confirm.confirm}
 	for range 2 {
@@ -233,7 +235,7 @@ func TestAddressNetworkAsksServerTrustWithTheProbedURL(t *testing.T) {
 }
 
 func TestAddressNetworkDeclinedServerTrustFailsTheDial(t *testing.T) {
-	address := trustListener(t, false)
+	address := trustListener(t, nil)
 	conn, err := dialWithTrust(t, address, &FirstUseTrust{Confirm: (&confirmRecorder{}).confirm})
 	if conn != nil {
 		_ = conn.Close()
@@ -245,7 +247,9 @@ func TestAddressNetworkDeclinedServerTrustFailsTheDial(t *testing.T) {
 
 // With ServerTrust set, a server that presents no identity is refused without asking.
 func TestAddressNetworkServerTrustRefusesIdentitylessServers(t *testing.T) {
-	address := trustListener(t, true)
+	address := trustListener(t, func(line string) (string, bool) {
+		return line, !strings.HasPrefix(line, "a=identity:")
+	})
 	confirm := &confirmRecorder{answer: true}
 	conn, err := dialWithTrust(t, address, &FirstUseTrust{Confirm: confirm.confirm})
 	if conn != nil {
@@ -264,27 +268,6 @@ func TestAddressNetworkServerTrustRefusesIdentitylessServers(t *testing.T) {
 	_ = conn.Close()
 }
 
-func TestServerTokenKeyAcceptsBothCPKForms(t *testing.T) {
-	private, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity, err := nethernet.GenerateServerIdentity(private, "self")
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := serverTokenKey(identity.Token)
-	if err != nil {
-		t.Fatalf("serverTokenKey: %v", err)
-	}
-	if !key.Equal(&private.PublicKey) {
-		t.Fatal("serverTokenKey returned another key")
-	}
-	if _, err := parseClaimedKey(bytes.TrimSpace([]byte(`"not base64"`))); err == nil {
-		t.Fatal("parseClaimedKey accepted a malformed cpk")
-	}
-}
-
 type slowTrust struct {
 	delay time.Duration
 	asked int
@@ -299,7 +282,7 @@ func (s *slowTrust) TrustServer(context.Context, string, *ecdsa.PublicKey) (bool
 // A trust decision returning after the server's negotiation window is followed by one fresh
 // negotiation that does not ask again.
 func TestAddressNetworkRedialsAfterASlowTrustDecision(t *testing.T) {
-	address := trustListener(t, false)
+	address := trustListener(t, nil)
 	trust := &slowTrust{delay: 200 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
@@ -314,37 +297,42 @@ func TestAddressNetworkRedialsAfterASlowTrustDecision(t *testing.T) {
 	}
 }
 
-// A dial that fails after a quick trust decision, as when signaling latency already aged the
-// negotiation, is retried once without asking again.
-func TestAddressNetworkRetriesAFailedDialAfterATrustDecision(t *testing.T) {
-	trust := &slowTrust{}
-	attempts, token := 0, testServerToken(t)
-	network := httpNetherNet{trust: trust, nethernet: NetherNet{Log: slog.New(slog.DiscardHandler)}, url: "http://example.com:19132"}
-	conn, err := network.dial(func(transport NetherNet) (net.Conn, error) {
-		attempts++
-		_, err := transport.Dialer.VerifyServerToken(t.Context(), token, "self")
+// An identity whose fingerprint assertion does not verify fails the dial before trust is asked, so
+// a replayed token is never stored.
+func TestAddressNetworkNeverTrustsAnUnverifiedIdentity(t *testing.T) {
+	address := trustListener(t, func(line string) (string, bool) {
+		encoded, ok := strings.CutPrefix(line, "a=identity:")
+		if !ok {
+			return line, true
+		}
+		envelope, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, err
+			t.Errorf("decode identity: %v", err)
+			return line, true
 		}
-		if attempts == 1 {
-			return nil, errors.New("start ICE: connecting canceled by caller")
+		var outer map[string]any
+		if err := json.Unmarshal(envelope, &outer); err != nil {
+			t.Errorf("parse identity: %v", err)
+			return line, true
 		}
-		return nil, nil
+		var assertion map[string]string
+		if err := json.Unmarshal([]byte(outer["assertion"].(string)), &assertion); err != nil {
+			t.Errorf("parse assertion: %v", err)
+			return line, true
+		}
+		signature := assertion["fingerprints"]
+		assertion["fingerprints"] = signature[:len(signature)-4] + "AAAA"
+		rewritten, _ := json.Marshal(assertion)
+		outer["assertion"] = string(rewritten)
+		envelope, _ = json.Marshal(outer)
+		return "a=identity:" + base64.StdEncoding.EncodeToString(envelope), true
 	})
-	if err != nil || conn != nil || attempts != 2 || trust.asked != 1 {
-		t.Fatalf("dial = %v, %v after %d attempts and %d prompts; want one retry and one prompt", conn, err, attempts, trust.asked)
+	store, confirm := new(memoryTrustStore), &confirmRecorder{answer: true}
+	conn, err := dialWithTrust(t, address, &FirstUseTrust{Store: store, Confirm: confirm.confirm})
+	if conn != nil {
+		_ = conn.Close()
 	}
-}
-
-func testServerToken(t *testing.T) string {
-	t.Helper()
-	private, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || len(confirm.asked) != 0 || len(store.keys) != 0 {
+		t.Fatalf("dial error = %v after %d prompts with %d keys stored; want a failure before trust", err, len(confirm.asked), len(store.keys))
 	}
-	identity, err := nethernet.GenerateServerIdentity(private, "self")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return identity.Token
 }
