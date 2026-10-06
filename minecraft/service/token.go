@@ -168,56 +168,6 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	return result.Data, nil
 }
 
-// Renew requests a refresh of a token that may soon expire. The user config must contain
-// a valid PlayFab token that belong to the same user identity that was previously used
-// for the Token.
-//
-// Deprecated: the game replaces expiring tokens through [AuthorizationEnvironment.Token];
-// [TokenSource] does so.
-func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user UserConfig) (*Token, error) {
-	defaultUserConfig(&user)
-	if user.Token == "" {
-		return nil, errors.New("minecraft/service: UserConfig.Token is empty")
-	}
-
-	buf := &bytes.Buffer{}
-	if err := json.NewEncoder(buf).Encode(user); err != nil {
-		return nil, fmt.Errorf("encode request body: %w", err)
-	}
-	requestURL := e.ServiceURI.JoinPath("/api/v1.0/session/renew").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	token.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, NewResponseError(resp)
-	}
-	var result internal.Result[*Token]
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response body: %w", err)
-	}
-	validationTime, hasServerTime := responseValidationTime(resp)
-	if result.Data != nil && hasServerTime {
-		result.Data.setServerTime(validationTime)
-	}
-	if result.Data == nil || result.Data.AuthorizationHeader == "" || !validationTime.Before(result.Data.ValidUntil.Add(-expirationDelta)) {
-		return nil, errors.New("minecraft/service: invalid renew token result")
-	}
-	if err := decodeClaims(result.Data, validationTime); err != nil {
-		return nil, fmt.Errorf("minecraft/service: decode JWT token claims: %w", err)
-	}
-	return result.Data, nil
-}
-
 // Verifier returns an [oidc.IDTokenVerifier] that can be used to verify the multiplayer
 // token sent from clients in the Login packet to authenticate themselves with a remote
 // OpenID configuration.
@@ -446,7 +396,7 @@ func defaultDeviceConfig(auth *AuthorizationEnvironment, device *DeviceConfig) {
 //
 // A Token may be issued using [AuthorizationEnvironment.Token] with a [TokenConfig].
 // As each Token has expiration, it is recommended to use a [TokenSource]
-// so it can be renewed subsequently when it becomes invalid.
+// so it is replaced when it becomes invalid.
 type Token struct {
 	// AuthorizationHeader is the JWT string that is used as the 'Authorization' header
 	// to the requests ongoing to various network services for Minecraft: Bedrock Edition.
@@ -457,8 +407,8 @@ type Token struct {
 
 	// ValidUntil is the expiration time of the Token.
 	// Once the current time surpasses the expiration time, the Token
-	// is no longer valid, and needs to be either requested again or renewed
-	// before the Token expires in a specific delta.
+	// is no longer valid, and needs to be requested again before the Token
+	// expires in a specific delta.
 	ValidUntil time.Time `json:"validUntil"`
 
 	// Treatments is a list of treatments that have been assigned to the Token.

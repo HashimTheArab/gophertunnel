@@ -92,7 +92,7 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 }
 
 // InvalidateServiceToken drops rejected if it is still cached, so the next call issues a new
-// token instead of renewing one the service refused.
+// token instead of reusing one the service refused.
 func (s *tokenSource) InvalidateServiceToken(rejected *Token) {
 	if rejected == nil {
 		return
