@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -13,6 +14,46 @@ type packetData struct {
 	full    []byte
 	payload *bytes.Buffer
 	owned   bool
+}
+
+// RawPacket is one packet of a network batch read by Conn.ReadBatchRaw.
+type RawPacket struct {
+	// Data is the packet's header and payload exactly as received, owned by the caller.
+	Data []byte
+	// ID is the packet ID from the header.
+	ID uint32
+	// Decoded holds the packet decoded and converted to the latest protocol, when it was selected.
+	Decoded []packet.Packet
+}
+
+// rawPacketID returns the packet ID of an encoded packet, or 0 if its header is malformed.
+func rawPacketID(data []byte) uint32 {
+	value, n := binary.Uvarint(data)
+	if n <= 0 {
+		return 0
+	}
+	return uint32(value) & 0x3ff
+}
+
+// decodeRawServerPacket decodes the payload of a server packet with conn's protocol, using that protocol's
+// layout for the packet, and converts it to the latest protocol.
+func decodeRawServerPacket(conn *Conn, id uint32, payload []byte) (pks []packet.Packet, err error) {
+	newPacket, ok := conn.proto.Packets(false)[id]
+	if !ok {
+		return nil, unknownPacketError{id: id}
+	}
+	pk := newPacket()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("decode packet %T: %v", pk, recovered)
+		}
+	}()
+	buf := bytes.NewBuffer(payload)
+	pk.Marshal(conn.proto.NewReader(buf, conn.shieldID.Load(), conn.readerLimits))
+	if buf.Len() != 0 {
+		return nil, fmt.Errorf("decode packet %T: %v unread bytes left", pk, buf.Len())
+	}
+	return conn.proto.ConvertToLatest(pk, conn), nil
 }
 
 // parseData parses the packet data slice passed into a packetData struct.

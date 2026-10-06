@@ -660,6 +660,46 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}
 }
 
+// WritePacketRaw buffers one encoded packet, header and payload as RawPacket.Data holds it, for the next
+// flush, which compresses and encrypts it with the rest of the batch. It bypasses protocol conversion and
+// actor ID translation. The Conn takes ownership of data.
+func (conn *Conn) WritePacketRaw(data []byte) error {
+	select {
+	case <-conn.ctx.Done():
+		return conn.closeErr("write raw packet")
+	default:
+	}
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	// Observe under sendMu, as WritePacket does, so the shield ID follows the order packets are queued in.
+	conn.observeRawWrite(data)
+	conn.bufferedSend = append(conn.bufferedSend, data)
+	return nil
+}
+
+// observeRawWrite runs the write-side observation encodePacketsTo performs for a decoded packet.
+func (conn *Conn) observeRawWrite(data []byte) {
+	if conn.packetFunc == nil && rawPacketID(data) != packet.IDItemRegistry {
+		return
+	}
+	buf := bytes.NewBuffer(data)
+	var header packet.Header
+	if header.Read(buf) != nil {
+		return
+	}
+	if header.PacketID == packet.IDItemRegistry {
+		pks, _ := decodeRawServerPacket(conn, header.PacketID, buf.Bytes())
+		for _, pk := range pks {
+			if registry, ok := pk.(*packet.ItemRegistry); ok {
+				conn.observeShield(registry.Items)
+			}
+		}
+	}
+	if conn.packetFunc != nil {
+		conn.packetFunc(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
+	}
+}
+
 // WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
 // that queue immediately. This preserves ordering relative to packets that were already queued through
 // WritePacket while still sending the data right away.
@@ -766,26 +806,10 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
 	}
 	for {
-		batch, ok := conn.takeBatch()
-		if !ok {
-			// Prefer batches already queued over reporting a closed connection or an expired deadline,
-			// so that packets received before a disconnect are still delivered. A batch is flushed
-			// before the context is cancelled, so once either fires a queued batch is already visible
-			// and a final queue check drains it ahead of the error.
-			select {
-			case <-conn.batchReady:
-				continue
-			case <-conn.ctx.Done():
-				if batch, ok = conn.takeBatch(); !ok {
-					return nil, conn.closeErr("read packets")
-				}
-			case <-conn.readDeadline:
-				if batch, ok = conn.takeBatch(); !ok {
-					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
-				}
-			}
+		batch, err := conn.nextBatch("read packets")
+		if err != nil {
+			return nil, err
 		}
-
 		packets := make([]packet.Packet, 0, len(batch))
 		for _, data := range batch {
 			pks, err := data.decode(conn)
@@ -802,6 +826,68 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		}
 		if len(packets) != 0 {
 			return packets, nil
+		}
+	}
+}
+
+// ReadBatchRaw reads one network batch like ReadBatch, but leaves each packet encoded unless decode
+// reports true for its ID. A selected packet that fails to decode, or decodes to nothing, is skipped as
+// ReadBatch skips it. Raw packets bypass protocol conversion and actor ID translation, so relaying them
+// to another Conn is only valid when both share a protocol. A nil decode selects no packets.
+func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error) {
+	if !conn.batchReading {
+		return nil, conn.wrap(errBatchReadingDisabled, "read raw packets")
+	}
+	for {
+		batch, err := conn.nextBatch("read raw packets")
+		if err != nil {
+			return nil, err
+		}
+		packets := make([]RawPacket, 0, len(batch))
+		for _, data := range batch {
+			raw := RawPacket{ID: data.h.PacketID, Data: data.full}
+			if decode != nil && decode(raw.ID) {
+				pks, err := data.decode(conn)
+				if err != nil {
+					conn.log.Error("read raw packets: " + err.Error())
+					if conn.ctx.Err() != nil {
+						break
+					}
+					continue
+				}
+				if len(pks) == 0 {
+					continue
+				}
+				raw.Decoded = pks
+			}
+			packets = append(packets, raw)
+		}
+		if len(packets) != 0 {
+			return packets, nil
+		}
+	}
+}
+
+// nextBatch blocks until a network batch is queued. Batches queued before a close or an expired deadline
+// are still returned: a batch is flushed before the context is cancelled, so a final queue check drains it
+// ahead of the error.
+func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
+	for {
+		if batch, ok := conn.takeBatch(); ok {
+			return batch, nil
+		}
+		select {
+		case <-conn.batchReady:
+		case <-conn.ctx.Done():
+			if batch, ok := conn.takeBatch(); ok {
+				return batch, nil
+			}
+			return nil, conn.closeErr(op)
+		case <-conn.readDeadline:
+			if batch, ok := conn.takeBatch(); ok {
+				return batch, nil
+			}
+			return nil, conn.wrap(context.DeadlineExceeded, op)
 		}
 	}
 }
