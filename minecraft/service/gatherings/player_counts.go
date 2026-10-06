@@ -24,32 +24,74 @@ type ExperiencePlayerCount struct {
 	PlayerCount  *int64    `json:"playerCount"`
 }
 
+// playerCountsRefresh is one request shared by every caller waiting on it; waiters is guarded by countsMu.
+type playerCountsRefresh struct {
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+	err     error
+}
+
 // PlayerCounts returns all experience populations, refreshing at most once per interval.
-// Failed refreshes return the previous counts and an error; cache hits return the previous counts.
+// Failed refreshes and abandoned waits return the previous counts and an error. Concurrent callers
+// share one request, which is cancelled, and no longer throttles, once every caller has abandoned it.
 func (c *Client) PlayerCounts(ctx context.Context) ([]ExperiencePlayerCount, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	c.countsMu.Lock()
-	now := time.Now()
-	if c.countsNow != nil {
-		now = c.countsNow()
+	refresh := c.countsRefresh
+	if refresh == nil {
+		now := time.Now()
+		if c.countsNow != nil {
+			now = c.countsNow()
+		}
+		if !c.countsRequested.IsZero() && now.Sub(c.countsRequested) < PlayerCountsRefreshInterval {
+			counts := clonePlayerCounts(c.counts)
+			c.countsMu.Unlock()
+			return counts, nil
+		}
+		c.countsRequested = now
+		fetchCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		refresh = &playerCountsRefresh{done: make(chan struct{}), cancel: cancel}
+		c.countsRefresh = refresh
+		go c.refreshPlayerCounts(fetchCtx, refresh)
 	}
-	if !c.countsRequested.IsZero() && now.Sub(c.countsRequested) < PlayerCountsRefreshInterval {
-		counts := clonePlayerCounts(c.counts)
-		c.countsMu.Unlock()
-		return counts, nil
-	}
-	c.countsRequested = now
+	refresh.waiters++
 	c.countsMu.Unlock()
 
+	select {
+	case <-refresh.done:
+		c.countsMu.Lock()
+		defer c.countsMu.Unlock()
+		return clonePlayerCounts(c.counts), refresh.err
+	case <-ctx.Done():
+		c.countsMu.Lock()
+		defer c.countsMu.Unlock()
+		refresh.waiters--
+		if refresh.waiters == 0 && c.countsRefresh == refresh {
+			refresh.cancel()
+			c.countsRefresh = nil
+			c.countsRequested = time.Time{}
+		}
+		return clonePlayerCounts(c.counts), ctx.Err()
+	}
+}
+
+// refreshPlayerCounts completes refresh, keeping the previous counts when it fails.
+func (c *Client) refreshPlayerCounts(ctx context.Context, refresh *playerCountsRefresh) {
+	defer refresh.cancel()
 	counts, err := c.fetchPlayerCounts(ctx)
 	c.countsMu.Lock()
 	defer c.countsMu.Unlock()
 	if err == nil {
 		c.counts = counts
 	}
-	return clonePlayerCounts(c.counts), err
+	refresh.err = err
+	if c.countsRefresh == refresh {
+		c.countsRefresh = nil
+	}
+	close(refresh.done)
 }
 
 // fetchPlayerCounts requests the shared population snapshot without per-experience requests.

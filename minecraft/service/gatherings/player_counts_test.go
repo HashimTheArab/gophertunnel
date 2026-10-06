@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -110,37 +111,108 @@ func TestPlayerCountsRejectsMalformedEnvelopeAndSanitizesErrors(t *testing.T) {
 	}
 }
 
+// waitForCountWaiters blocks until n callers share the active refresh.
+func waitForCountWaiters(t *testing.T, client *Client, n int) {
+	t.Helper()
+	for {
+		client.countsMu.Lock()
+		waiters := 0
+		if client.countsRefresh != nil {
+			waiters = client.countsRefresh.waiters
+		}
+		client.countsMu.Unlock()
+		if waiters == n {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+// Concurrent callers wait for the one active request and receive its counts, even with an empty cache.
 func TestPlayerCountsCoalescesConcurrentCallsAndCancels(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/player_counts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	started, release := make(chan struct{}), make(chan struct{})
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		close(started)
 		<-release
-		_, _ = w.Write([]byte(`{"result":[]}`))
+		_, _ = w.Write(fixture)
 	}))
 	defer server.Close()
 	base, _ := url.Parse(server.URL)
 	client := (&Environment{ServiceURI: base, HTTPClient: server.Client()}).New(fixedTokens{})
-	done := make(chan error, 1)
-	go func() { _, err := client.PlayerCounts(context.Background()); done <- err }()
-	<-started
-	if counts, err := client.PlayerCounts(context.Background()); err != nil || counts != nil {
-		t.Fatal("in-flight request did not reuse absent cache")
+	type result struct {
+		counts []ExperiencePlayerCount
+		err    error
 	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() { counts, err := client.PlayerCounts(context.Background()); results <- result{counts, err} }()
+	}
+	<-started
+	waitForCountWaiters(t, client, 2)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := client.PlayerCounts(cancelled); !errors.Is(err, context.Canceled) {
 		t.Fatal("cancelled caller was accepted")
 	}
+	abandoned, abandon := context.WithCancel(context.Background())
+	abandonedDone := make(chan error, 1)
+	go func() { _, err := client.PlayerCounts(abandoned); abandonedDone <- err }()
+	waitForCountWaiters(t, client, 3)
+	abandon()
+	if err := <-abandonedDone; !errors.Is(err, context.Canceled) {
+		t.Fatal("abandoned wait did not return its own cancellation")
+	}
 	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	for range 2 {
+		r := <-results
+		if r.err != nil || len(r.counts) != 3 || *r.counts[0].PlayerCount != 14252 {
+			t.Fatalf("waiter result = %#v, %v", r.counts, r.err)
+		}
 	}
 	if requests.Load() != 1 {
 		t.Fatal("concurrent calls issued duplicate requests")
 	}
-	if counts, err := client.PlayerCounts(context.Background()); err != nil || counts == nil || len(counts) != 0 {
-		t.Fatal("empty success was not preserved")
+}
+
+// A refresh every caller abandoned must not throttle the next caller or discard cached counts.
+func TestPlayerCountsCancelledRefreshClearsThrottle(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/player_counts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 2 {
+			close(started)
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write(fixture)
+	}))
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+	client := (&Environment{ServiceURI: base, HTTPClient: server.Client()}).New(fixedTokens{})
+	now := time.Unix(1, 0)
+	client.countsNow = func() time.Time { return now }
+	if _, err := client.PlayerCounts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(PlayerCountsRefreshInterval)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-started; cancel() }()
+	counts, err := client.PlayerCounts(ctx)
+	if !errors.Is(err, context.Canceled) || len(counts) != 3 || *counts[0].PlayerCount != 14252 {
+		t.Fatalf("cancelled refresh = %#v, %v", counts, err)
+	}
+	counts, err = client.PlayerCounts(context.Background())
+	if err != nil || len(counts) != 3 || requests.Load() != 3 {
+		t.Fatalf("refresh after cancellation = %v, requests %d", err, requests.Load())
 	}
 }
