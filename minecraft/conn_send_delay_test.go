@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net"
 	"testing"
@@ -251,6 +252,27 @@ func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
 	// Close releases what is held this way, so the failure must reach its caller.
 	if err := d.set(0); err == nil {
 		t.Fatal("releasing a batch that failed to write reported no error")
+	}
+}
+
+func TestDelayWriter_DropRejectsWritesAfterDelayChanges(t *testing.T) {
+	for _, delay := range []time.Duration{0, time.Hour} {
+		t.Run(delay.String(), func(t *testing.T) {
+			var transport bytes.Buffer
+			d := &delayWriter{w: &transport}
+			defer d.drop()
+			observe := func() { t.Error("dropped writer reported delivery") }
+			d.setObservers([]func(){observe})
+			d.drop()
+			_ = d.set(delay)
+			d.setObservers([]func(){observe})
+			if n, err := d.Write([]byte{1}); n != 0 || !errors.Is(err, net.ErrClosed) {
+				t.Errorf("Write after drop = (%d, %v), want (0, net.ErrClosed)", n, err)
+			}
+			if transport.Len() != 0 || len(d.held) != 0 || len(d.nextObservers) != 0 {
+				t.Fatal("dropped writer sent or retained a batch or delivery observer")
+			}
+		})
 	}
 }
 

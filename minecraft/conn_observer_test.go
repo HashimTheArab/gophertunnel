@@ -1,6 +1,8 @@
 package minecraft
 
 import (
+	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -71,6 +73,71 @@ func TestConn_AbortDiscardsDeliveryObservers(t *testing.T) {
 	case <-sent:
 		t.Fatal("aborted packet reported delivery")
 	default:
+	}
+}
+
+func TestConn_AbortDiscardsInFlightDelayedWrites(t *testing.T) {
+	operations := []struct {
+		name  string
+		write func(*Conn, func()) error
+	}{
+		{"Flush", func(conn *Conn, sent func()) error {
+			if err := conn.WritePacketObserved(testPacket(700), nil, sent); err != nil {
+				return err
+			}
+			return conn.Flush()
+		}},
+		{"WritePacketDirect", func(conn *Conn, _ func()) error {
+			return conn.WritePacketDirect(testPacket(700))
+		}},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			conn, _ := newSendDelayConn(t)
+			conn.SetSendDelay(time.Hour)
+			encoded, resume := make(chan struct{}), make(chan struct{})
+			resumeEncoding := sync.OnceFunc(func() { close(resume) })
+			t.Cleanup(resumeEncoding)
+			conn.SetPacketBatchFunc(func(packet.BatchEncodeStats) {
+				// Pause after encoding but before the delay writer receives the batch.
+				close(encoded)
+				<-resume
+			})
+			sent := make(chan struct{}, 1)
+			finished := make(chan error, 1)
+			go func() {
+				defer close(finished)
+				finished <- operation.write(conn, func() { sent <- struct{}{} })
+			}()
+			select {
+			case <-encoded:
+			case <-time.After(time.Second):
+				t.Fatal("write did not reach batch encoding")
+			}
+			if err := conn.Abort(); err != nil {
+				t.Fatal(err)
+			}
+			resumeEncoding()
+			select {
+			case err := <-finished:
+				if !errors.Is(err, net.ErrClosed) {
+					t.Errorf("write after abort = %v, want net.ErrClosed", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("write did not finish after abort")
+			}
+			conn.delay.mu.Lock()
+			held, observers := len(conn.delay.held), len(conn.delay.nextObservers)
+			conn.delay.mu.Unlock()
+			if held != 0 || observers != 0 {
+				t.Errorf("aborted connection retained %d delayed batches and %d pending observers", held, observers)
+			}
+			select {
+			case <-sent:
+				t.Fatal("aborted write reported delivery")
+			default:
+			}
+		})
 	}
 }
 

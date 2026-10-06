@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"io"
+	"net"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,7 @@ type delayWriter struct {
 	held          []heldWrite
 	nextObservers []func()
 	timer         *time.Timer
-	// err is the first error writing a held batch failed with, returned from every later Write.
+	// err is the first held-write failure or net.ErrClosed after drop, returned from every later Write.
 	err error
 }
 
@@ -48,6 +49,9 @@ type heldWrite struct {
 // The connection's encoder lock serializes this with encoding and clearing on failure.
 func (d *delayWriter) setObservers(observers []func()) {
 	d.mu.Lock()
+	if d.err != nil {
+		observers = nil
+	}
 	d.nextObservers = observers
 	d.mu.Unlock()
 }
@@ -120,11 +124,15 @@ func (d *delayWriter) releaseLocked(all bool) error {
 	return d.err
 }
 
-// drop discards everything held, for a Conn that will never send it.
+// drop discards everything held and rejects later writes, including encodes already in flight.
 func (d *delayWriter) drop() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.held = nil
+	d.nextObservers = nil
+	if d.err == nil {
+		d.err = net.ErrClosed
+	}
 	if d.timer != nil {
 		d.timer.Stop()
 	}
