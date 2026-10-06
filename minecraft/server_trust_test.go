@@ -336,3 +336,25 @@ func TestAddressNetworkNeverTrustsAnUnverifiedIdentity(t *testing.T) {
 		t.Fatalf("dial error = %v after %d prompts with %d keys stored; want a failure before trust", err, len(confirm.asked), len(store.keys))
 	}
 }
+
+type cancellingTrust struct{ cancel context.CancelFunc }
+
+func (c cancellingTrust) TrustServer(context.Context, string, *ecdsa.PublicKey) (bool, error) {
+	c.cancel()
+	return true, nil
+}
+
+// A dial whose context ends while trust is decided returns the context's error, not a connection.
+func TestAddressNetworkDialEndsWithItsContextDuringTrust(t *testing.T) {
+	address := trustListener(t, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	network := AddressNetwork{ServerTrust: cancellingTrust{cancel}, NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
+	conn, err := network.DialContext(ctx, address)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dial error = %v, want context.Canceled", err)
+	}
+}

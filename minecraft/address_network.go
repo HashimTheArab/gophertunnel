@@ -239,6 +239,10 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 			}
 			return nil, ErrServerNotTrusted
 		}
+		if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
 		if redialed || time.Since(start) <= n.redialAfter() {
 			return conn, nil
 		}
