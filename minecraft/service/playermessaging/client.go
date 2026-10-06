@@ -19,6 +19,8 @@ type Environment struct {
 	internal.ServiceEnvironment
 	// HTTPClient sends the requests; nil uses http.DefaultClient.
 	HTTPClient *http.Client `json:"-"`
+	// Language is the player's locale sent as Accept-Language, such as "en-US"; empty sends none.
+	Language string `json:"-"`
 }
 
 // ServiceName implements [service.Environment] and returns "messaging".
@@ -42,6 +44,15 @@ type Client struct {
 
 // SessionID is the session every request of this client names.
 func (c *Client) SessionID() string { return c.sessionID }
+
+// options returns the headers the game sends with every messaging request.
+func (c *Client) options() request.Options {
+	header := http.Header{"Session-Id": {c.sessionID}}
+	if c.env.Language != "" {
+		header.Set("Accept-Language", c.env.Language)
+	}
+	return request.Options{Header: header}
+}
 
 // current returns the continuation token from the last completed refresh.
 func (c *Client) current() string {
@@ -89,7 +100,7 @@ func (c *Client) Refresh(ctx context.Context) (*Session, error) {
 
 	var session Session
 	body := map[string]string{"sessionId": c.sessionID, "continuationToken": c.continuation}
-	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/session/refresh"), body, &session, request.Options{}); err != nil {
+	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/session/refresh"), body, &session, c.options()); err != nil {
 		return nil, err
 	}
 	if session.ContinuationToken != "" {

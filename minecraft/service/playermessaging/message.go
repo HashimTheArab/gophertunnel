@@ -122,6 +122,6 @@ func (c *Client) ReportEvents(ctx context.Context, events ...Event) error {
 		})
 	}
 	body := map[string]any{"SessionId": c.sessionID, "continuationToken": c.current(), "events": entries}
-	_, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/messages/event"), body, nil, request.Options{})
+	_, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/messages/event"), body, nil, c.options())
 	return err
 }
