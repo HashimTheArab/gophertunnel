@@ -338,8 +338,11 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return fmt.Errorf("decode request parameters: %w", err)
 		}
 		signal := &nethernet.Signal{NetworkID: envelope.From.String()}
+		// Dropped without acknowledgement; an error here would log the raw payload.
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
-			return fmt.Errorf("decode signal: %w", err)
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID), slog.String("reason", "undecodable"))
+			return nil
 		}
 
 		if !conn.notifySignal(signal) {

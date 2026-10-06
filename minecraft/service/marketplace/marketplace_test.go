@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -283,7 +284,8 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 			w.Header().Set("InventoryETag", "e9")
 			w.WriteHeader(status)
 		})
-		result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", StoreID: "s1", Amount: 320, Tags: CustomTags{TitleID: "20CA2", Seq: 1}})
+		client.identity.TitleID = "20CA2"
+		result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", StoreID: "s1", Amount: 320})
 		if err != nil || result.Outcome != want || result.StatusCode != status || calls.Load() != 1 {
 			t.Fatalf("status %d: result = %+v calls = %d err = %v", status, result, calls.Load(), err)
 		}
@@ -508,5 +510,153 @@ func TestItemSalePriceOnlyInsideItsWindow(t *testing.T) {
 		if got := price.AmountAt(now); got != want {
 			t.Errorf("AmountAt(%s) = %d, want %d", at, got, want)
 		}
+	}
+}
+
+// Inventory, inventory refresh and purchase requests name the newest inventory version as the
+// game does; balances send it empty.
+func TestStoreRequestsCarryTheInventoryVersion(t *testing.T) {
+	sent := map[string][]string{}
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		values, present := r.Header["Inventoryetag"]
+		if !present {
+			values = []string{"<absent>"}
+		}
+		sent[r.URL.Path] = append(sent[r.URL.Path], values...)
+		switch r.URL.Path {
+		case "/api/v1.0/player/inventory":
+			w.Header().Set("InventoryETag", "v7")
+			_, _ = io.WriteString(w, inventoryFixture)
+		case "/api/v1.0/inventory/refresh":
+			_, _ = io.WriteString(w, `{"result":{"version":"v8"}}`)
+		case "/api/v1.0/currencies/virtual/balances":
+			_, _ = io.WriteString(w, `{"result":{"virtualCurrencyBalances":[]}}`)
+		}
+	})
+	ctx := context.Background()
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Balances(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PurchaseVirtual(ctx, Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RefreshInventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"/api/v1.0/player/inventory":            {"", "v8"},
+		"/api/v1.0/currencies/virtual/balances": {""},
+		"/api/v1.0/transaction/virtual":         {"v7"},
+		"/api/v1.0/inventory/refresh":           {"v7"},
+	}
+	for path, values := range want {
+		if fmt.Sprint(sent[path]) != fmt.Sprint(values) {
+			t.Errorf("%s inventoryETag = %q, want %q", path, sent[path], values)
+		}
+	}
+	if client.InventoryVersion() != "v7" {
+		t.Errorf("InventoryVersion() = %q, want v7 from the last inventory read", client.InventoryVersion())
+	}
+}
+
+// Pages render against the newest inventory and user-lists versions the services answered with.
+func TestPageStateCarriesTheNewestVersions(t *testing.T) {
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1.0/session/config":
+			_, _ = io.WriteString(w, `{"result":{"knownPages":{},"userListsVersion":"lists-1"}}`)
+		case "/api/v1.0/player/inventory":
+			w.Header().Set("InventoryETag", "v3")
+			_, _ = io.WriteString(w, inventoryFixture)
+		default:
+			w.Header().Set("X-UserLists-Version", "lists-2")
+			_, _ = io.WriteString(w, `{"result":{"pageId":"p","layout":[]}}`)
+		}
+	})
+	ctx := context.Background()
+	if _, err := client.SessionConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := client.PageState(nil); state.Entitlements == nil || state.InventoryVersion != "v3" || state.ListVersion != "lists-1" {
+		t.Fatalf("state = %+v", state)
+	}
+	if _, err := client.Page(ctx, PageByID, "p", client.PageState(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if state := client.PageState([]string{"a"}); state.ListVersion != "lists-2" || state.Entitlements[0] != "a" {
+		t.Fatalf("state after page = %+v", state)
+	}
+}
+
+// A purchase's custom tags come from the client's identity, with a fresh correlation id and a
+// rising sequence; the result names the correlation id.
+func TestPurchaseTagsComeFromTheIdentity(t *testing.T) {
+	var bodies []purchaseBody
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		var body purchaseBody
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+	})
+	client.identity = Identity{XUID: "2535", TitleID: "20CA2"}.withDefaults()
+	first, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	tags := bodies[0].CustomTags
+	if tags.Xuid != "2535" || tags.TitleID != "20CA2" || tags.BuildPlat != 7 || tags.DnAPlat != "Windows10" ||
+		tags.EditionType != "Bedrock" || tags.ClientID == "" || tags.DeviceSessionID != client.SessionID() ||
+		tags.CorrelationID == "" || tags.CorrelationID != first.CorrelationID || tags.Seq != 1 || bodies[1].CustomTags.Seq != 2 {
+		t.Fatalf("tags = %+v, %+v; result = %+v", tags, bodies[1].CustomTags, first)
+	}
+}
+
+// A refreshed session config with a newer user-lists version replaces the cached one, and an
+// identity set on the environment reaches purchases made by a client from New.
+func TestSessionStateFollowsRefreshesAndEnvironmentIdentity(t *testing.T) {
+	version := "lists-1"
+	var tags CustomTags
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1.0/transaction/virtual" {
+			var body purchaseBody
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			tags = body.CustomTags
+			return
+		}
+		_, _ = io.WriteString(w, `{"result":{"knownPages":{},"userListsVersion":"`+version+`"}}`)
+	})
+	for _, v := range []string{"lists-1", "lists-2"} {
+		version = v
+		if _, err := client.SessionConfig(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if state := client.PageState(nil); state.ListVersion != "lists-2" {
+		t.Fatalf("ListVersion = %q, want lists-2", state.ListVersion)
+	}
+	env := &Environment{Identity: Identity{XUID: "2535", TitleID: "20CA2"}}
+	env.ServiceURI, env.HTTPClient = client.store.base, client.store.http
+	owned := &EntitlementsEnvironment{HTTPClient: client.entitlements.http}
+	owned.ServiceURI = client.entitlements.base
+	fromNew, err := env.New(fixedTokens{}, owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fromNew.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if tags.Xuid != "2535" || tags.TitleID != "20CA2" || tags.BuildPlat != 7 {
+		t.Fatalf("tags = %+v", tags)
 	}
 }

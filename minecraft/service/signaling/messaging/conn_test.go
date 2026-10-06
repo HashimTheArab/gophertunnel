@@ -69,49 +69,55 @@ type acceptingNotifier struct{}
 // NotifySignal accepts the signal.
 func (acceptingNotifier) NotifySignal(*nethernet.Signal) bool { return true }
 
+// Rejected or undecodable signals are dropped unacknowledged, without an error that would log
+// the raw payload.
 func TestConnHandleInnerMessageDoesNotAcknowledgeRejectedSignal(t *testing.T) {
-	signal := &nethernet.Signal{
-		Type:         "remote-controlled-type",
-		ConnectionID: 42,
-		Data:         "offer",
-	}
-	params, err := json.Marshal(map[string]any{
-		"netherNetId": "network",
-		"message":     signal.String(),
-	})
-	if err != nil {
-		t.Fatalf("marshal params: %v", err)
-	}
-	var logs bytes.Buffer
-	conn := &Conn{
-		d: Dialer{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		}))},
-		notifiers: make(map[uint32]nethernet.Notifier),
-	}
-	err = conn.handleInnerMessage(context.Background(), &envelope{
-		From: uuid.New(),
-		ID:   uuid.New(),
-		Message: &jrpc2.ParsedRequest{
-			Method: MethodSignalingWebRTC,
-			Params: params,
-		},
-	})
-	if err != nil {
-		t.Fatalf("handleInnerMessage() error = %v, want nil", err)
-	}
-	if strings.Contains(logs.String(), signal.Data) {
-		t.Fatal("rejected signal log contains the signal payload")
-	}
-	if strings.Contains(logs.String(), signal.Type) {
-		t.Fatal("rejected signal log contains the remote-controlled signal type")
-	}
-	var entry map[string]any
-	if err := json.NewDecoder(&logs).Decode(&entry); err != nil {
-		t.Fatalf("decode log entry: %v", err)
-	}
-	if got := entry["msg"]; got != "incoming signal was not accepted" {
-		t.Fatalf("log message = %v, want incoming signal was not accepted", got)
+	for _, typ := range []string{nethernet.SignalTypeOffer, "remote-controlled-type"} {
+		t.Run(typ, func(t *testing.T) {
+			signal := &nethernet.Signal{
+				Type:         typ,
+				ConnectionID: 42,
+				Data:         "sensitive-payload",
+			}
+			params, err := json.Marshal(map[string]any{
+				"netherNetId": "network",
+				"message":     signal.String(),
+			})
+			if err != nil {
+				t.Fatalf("marshal params: %v", err)
+			}
+			var logs bytes.Buffer
+			conn := &Conn{
+				d: Dialer{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+					Level: slog.LevelDebug,
+				}))},
+				notifiers: make(map[uint32]nethernet.Notifier),
+			}
+			err = conn.handleInnerMessage(context.Background(), &envelope{
+				From: uuid.New(),
+				ID:   uuid.New(),
+				Message: &jrpc2.ParsedRequest{
+					Method: MethodSignalingWebRTC,
+					Params: params,
+				},
+			})
+			if err != nil {
+				t.Fatalf("handleInnerMessage() error = %v, want nil", err)
+			}
+			if strings.Contains(logs.String(), signal.Data) {
+				t.Fatal("rejected signal log contains the signal payload")
+			}
+			if strings.Contains(logs.String(), signal.Type) {
+				t.Fatal("rejected signal log contains the remote-controlled signal type")
+			}
+			var entry map[string]any
+			if err := json.NewDecoder(&logs).Decode(&entry); err != nil {
+				t.Fatalf("decode log entry: %v", err)
+			}
+			if got := entry["msg"]; got != "incoming signal was not accepted" {
+				t.Fatalf("log message = %v, want incoming signal was not accepted", got)
+			}
+		})
 	}
 }
 
