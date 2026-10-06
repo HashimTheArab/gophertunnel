@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 func TestDecodeClaimsAllowsSmallIssuedAtSkew(t *testing.T) {
@@ -179,6 +181,114 @@ func testAuthorizationHeaderWithTimes(t *testing.T, issuedAt, expiry time.Time) 
 		t.Fatalf("marshal payload: %v", err)
 	}
 	return "MCToken header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
+
+type fixedTickets struct{}
+
+func (fixedTickets) SessionTicket(context.Context) (string, error) { return "ticket", nil }
+
+// newSessionServer serves session/start and multiplayer/session/start and returns, per call,
+// the Session-Id it received and the session/start device.networkProtocolVersion.
+func newSessionServer(t *testing.T) (*AuthorizationEnvironment, func() ([]string, any)) {
+	var (
+		mu              sync.Mutex
+		sessions        []string
+		protocolVersion any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		sessions = append(sessions, r.Header.Get("Session-Id"))
+		mu.Unlock()
+		now := time.Now().UTC().Truncate(time.Second)
+		if r.URL.Path == "/api/v1.0/multiplayer/session/start" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": &multiplayerToken{
+				IssuedAt: now, SignedToken: "multiplayer-token", ValidUntil: now.Add(time.Hour),
+			}})
+			return
+		}
+		var body struct {
+			Device map[string]any `json:"device"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		protocolVersion = body.Device["networkProtocolVersion"]
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": &Token{
+			AuthorizationHeader: testAuthorizationHeaderWithTimes(t, now, now.Add(time.Hour)),
+			ValidUntil:          now.Add(time.Hour),
+		}})
+	}))
+	t.Cleanup(server.Close)
+	serviceURL, _ := url.Parse(server.URL)
+	env := &AuthorizationEnvironment{ServiceURI: serviceURL, HTTPClient: server.Client()}
+	return env, func() ([]string, any) {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), sessions...), protocolVersion
+	}
+}
+
+// startAndMint issues a service token and a multiplayer token through src.
+func startAndMint(t *testing.T, env *AuthorizationEnvironment, src TokenSource) {
+	t.Helper()
+	if _, err := src.ServiceToken(context.Background()); err != nil {
+		t.Fatalf("ServiceToken: %v", err)
+	}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if _, err := env.MultiplayerToken(context.Background(), src, &key.PublicKey); err != nil {
+		t.Fatalf("MultiplayerToken: %v", err)
+	}
+}
+
+// Accounts sharing one process and environment must not share a Session-Id.
+func TestTokenSourcesNameTheirOwnSession(t *testing.T) {
+	t.Parallel()
+
+	env, recorded := newSessionServer(t)
+	startAndMint(t, env, env.ResumeTokenSource(fixedTickets{}, TokenConfig{}, nil))
+	startAndMint(t, env, env.ResumeTokenSource(fixedTickets{}, TokenConfig{}, nil))
+	sessions, protocolVersion := recorded()
+	if len(sessions) != 4 || sessions[0] != sessions[1] || sessions[2] != sessions[3] || sessions[0] == sessions[2] {
+		t.Fatalf("Session-Ids = %q, want one per source shared by its start and mint", sessions)
+	}
+	for _, id := range sessions {
+		if _, err := uuid.Parse(id); err != nil {
+			t.Fatalf("Session-Id %q is not a UUID", id)
+		}
+	}
+	if protocolVersion != float64(protocol.CurrentProtocol) {
+		t.Fatalf("device.networkProtocolVersion = %v, want %d", protocolVersion, protocol.CurrentProtocol)
+	}
+}
+
+// A source keeps its session when it replaces its token, as the game does within one launch.
+func TestTokenSourceKeepsSessionAcrossRefreshes(t *testing.T) {
+	t.Parallel()
+
+	env, recorded := newSessionServer(t)
+	src := env.ResumeTokenSource(fixedTickets{}, TokenConfig{}, nil)
+	first, err := src.ServiceToken(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceToken: %v", err)
+	}
+	src.(TokenInvalidator).InvalidateServiceToken(first)
+	startAndMint(t, env, src)
+	sessions, _ := recorded()
+	if len(sessions) != 3 || sessions[0] == "" || sessions[0] != sessions[1] || sessions[1] != sessions[2] {
+		t.Fatalf("Session-Ids = %q, want one across both starts and the mint", sessions)
+	}
+}
+
+// A caller-supplied session, such as a proxy's per-login ID, is sent as given.
+func TestTokenSourceHonoursCallerSessionID(t *testing.T) {
+	t.Parallel()
+
+	env, recorded := newSessionServer(t)
+	src := &ManagedTokenSource{TokenSource: env.ResumeTokenSource(fixedTickets{}, TokenConfig{SessionID: "caller-session"}, nil)}
+	startAndMint(t, env, src)
+	if sessions, _ := recorded(); len(sessions) != 2 || sessions[0] != "caller-session" || sessions[1] != "caller-session" {
+		t.Fatalf("Session-Ids = %q, want caller-session on start and mint", sessions)
+	}
 }
 
 func TestTokenRemainingUsesTheRetainedServiceClock(t *testing.T) {
