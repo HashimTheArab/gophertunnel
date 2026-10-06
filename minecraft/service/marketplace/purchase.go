@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
@@ -22,7 +24,33 @@ type Purchase struct {
 	StoreID             string
 	Amount              uint64
 	UnitDurationSeconds *uint64 // subscription offers only
-	Tags                CustomTags
+}
+
+// Identity is the device and account every purchase names in its custom tags.
+type Identity struct {
+	XUID        string
+	TitleID     string // the PlayFab title id
+	DeviceID    string // telemetry client id; empty draws a random one
+	BuildPlat   int    // numeric build platform; zero is 7, the Windows 10 device service tokens claim
+	DnAPlat     string // zero is service.PlatformWindows10
+	EditionType string // zero is "Bedrock"
+}
+
+// withDefaults fills the identity's empty members.
+func (id Identity) withDefaults() Identity {
+	if id.DeviceID == "" {
+		id.DeviceID = uuid.NewString()
+	}
+	if id.BuildPlat == 0 {
+		id.BuildPlat = 7
+	}
+	if id.DnAPlat == "" {
+		id.DnAPlat = service.PlatformWindows10
+	}
+	if id.EditionType == "" {
+		id.EditionType = "Bedrock"
+	}
+	return id
 }
 
 // CustomTags is the client telemetry block every purchase carries.
@@ -55,6 +83,7 @@ type PurchaseResult struct {
 	Outcome       PurchaseOutcome
 	StatusCode    int
 	InventoryETag string
+	CorrelationID string // the id the purchase's custom tags named
 }
 
 type purchaseBody struct {
@@ -75,7 +104,12 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	if p.OfferID == "" || p.Amount == 0 {
 		return PurchaseResult{}, errors.New("service/marketplace: purchase needs an offer and a positive amount")
 	}
-	body := purchaseBody{OfferID: p.OfferID, StoreID: p.StoreID, CustomTags: p.Tags, UnitDurationInSeconds: p.UnitDurationSeconds}
+	id := c.identity
+	tags := CustomTags{
+		ClientID: id.DeviceID, DeviceSessionID: c.sessionID, CorrelationID: uuid.NewString(), TitleID: id.TitleID,
+		BuildPlat: id.BuildPlat, EditionType: id.EditionType, Seq: c.seq.Add(1), DnAPlat: id.DnAPlat, Xuid: id.XUID,
+	}
+	body := purchaseBody{OfferID: p.OfferID, StoreID: p.StoreID, CustomTags: tags, UnitDurationInSeconds: p.UnitDurationSeconds}
 	body.VirtualCurrency.Type = CurrencyMinecoin
 	body.VirtualCurrency.Amount = strconv.FormatUint(p.Amount, 10)
 	encoded, err := json.Marshal(body)
@@ -101,11 +135,11 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	if err != nil {
-		return PurchaseResult{Outcome: PurchaseUnknown}, nil
+		return PurchaseResult{Outcome: PurchaseUnknown, CorrelationID: tags.CorrelationID}, nil
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	result := PurchaseResult{StatusCode: resp.StatusCode, InventoryETag: resp.Header.Get(inventoryETagHeader)}
+	result := PurchaseResult{StatusCode: resp.StatusCode, InventoryETag: resp.Header.Get(inventoryETagHeader), CorrelationID: tags.CorrelationID}
 	c.noteInventoryVersion(result.InventoryETag)
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:

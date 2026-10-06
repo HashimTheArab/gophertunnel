@@ -194,5 +194,6 @@ func (c *Client) page(ctx context.Context, kind PageKind, id string, body any) (
 	page.HeaderInventoryETag = resp.Header.Get(inventoryETagHeader)
 	c.noteInventoryVersion(page.HeaderInventoryETag)
 	page.HeaderListsVersion = resp.Header.Get("X-UserLists-Version")
+	c.noteListsVersion(page.HeaderListsVersion)
 	return &page, nil
 }

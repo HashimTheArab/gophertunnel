@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/service"
@@ -22,6 +23,8 @@ type Environment struct {
 	internal.ServiceEnvironment
 	// HTTPClient sends the requests; nil uses http.DefaultClient.
 	HTTPClient *http.Client `json:"-"`
+	// Identity is what purchases of clients made by New name in their custom tags.
+	Identity Identity `json:"-"`
 }
 
 // ServiceName implements [service.Environment] and returns "store".
@@ -51,7 +54,20 @@ func (e *Environment) New(src service.TokenSource, entitlements *EntitlementsEnv
 	if err != nil {
 		return nil, err
 	}
-	return &Client{store: store, entitlements: owned, sessionID: uuid.NewString()}, nil
+	return &Client{store: store, entitlements: owned, sessionID: uuid.NewString(), identity: e.Identity.withDefaults()}, nil
+}
+
+// Open discovers the store and entitlements services and returns a Client authorized by src whose
+// purchases name identity.
+func Open(discovery *service.Discovery, src service.TokenSource, identity Identity) (*Client, error) {
+	store, owned := &Environment{Identity: identity}, new(EntitlementsEnvironment)
+	if err := discovery.Environment(store); err != nil {
+		return nil, fmt.Errorf("service/marketplace: resolve store service: %w", err)
+	}
+	if err := discovery.Environment(owned); err != nil {
+		return nil, fmt.Errorf("service/marketplace: resolve entitlements service: %w", err)
+	}
+	return store.New(src, owned)
 }
 
 // Client uses the store and entitlements services; it is safe for concurrent use.
@@ -59,8 +75,33 @@ type Client struct {
 	store, entitlements *serviceClient
 	sessionID           string
 
+	identity Identity
+	seq      atomic.Uint32 // purchase sequence number
+
 	mu               sync.Mutex
 	inventoryVersion string // newest inventory version an answer carried
+	listsVersion     string // newest user-lists version an answer carried
+}
+
+// PageState returns the state the game renders layout pages against: the owned offer ids with the
+// newest inventory and user-lists versions.
+func (c *Client) PageState(entitlements []string) PageRequest {
+	if entitlements == nil {
+		entitlements = []string{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return PageRequest{Entitlements: entitlements, InventoryVersion: c.inventoryVersion, ListVersion: c.listsVersion}
+}
+
+// noteListsVersion keeps version as the newest unless it is empty.
+func (c *Client) noteListsVersion(version string) {
+	if version == "" {
+		return
+	}
+	c.mu.Lock()
+	c.listsVersion = version
+	c.mu.Unlock()
 }
 
 // InventoryVersion returns the newest inventory version the services answered with: an inventory
