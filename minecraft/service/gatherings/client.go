@@ -96,6 +96,7 @@ type Client struct {
 	countsMu        sync.Mutex
 	counts          []ExperiencePlayerCount
 	countsRequested time.Time
+	countsRefresh   *playerCountsRefresh
 	countsNow       func() time.Time
 }
 

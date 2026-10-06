@@ -75,7 +75,8 @@ func TestBatchSDKFixtureAndRequest(t *testing.T) {
 
 func TestBatchRejectsMalformedAndRedactsHTTPError(t *testing.T) {
 	requested := []RequestedStatistics{{uuid.New(), []string{"stat"}}}
-	for _, body := range []string{`{}`, `{"users":null}`, `{"users":{}}`, `{"users":[]} trailing`} {
+	// Bedrock's statistics client accepts only string or null user IDs and rejects the whole response otherwise.
+	for _, body := range []string{`{}`, `{"users":null}`, `{"users":{}}`, `{"users":[]} trailing`, `{"users":[{"xuid":2533274792693551,"scids":[]}]}`} {
 		client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(http.StatusOK, body), nil })})
 		if _, err := client.Batch(context.Background(), []string{"1"}, requested); err == nil {
 			t.Errorf("accepted %s", body)
