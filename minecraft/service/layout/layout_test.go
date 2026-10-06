@@ -77,3 +77,28 @@ func TestLayoutDecodesTheServerTab(t *testing.T) {
 		t.Fatalf("experiences = %+v", experiences)
 	}
 }
+
+// A link's escaped id reaches the service as the same layout, percent signs included.
+func TestLayoutKeepsEscapedLinkIDs(t *testing.T) {
+	var path string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.EscapedPath()
+		_, _ = io.WriteString(w, `{"result":{"layoutStructure":{"body":{"fabs":[]}}}}`)
+	}))
+	defer server.Close()
+	env := new(Environment)
+	if err := json.Unmarshal([]byte(`{"serviceUri":"`+server.URL+`"}`), env); err != nil {
+		t.Fatal(err)
+	}
+	env.HTTPClient = server.Client()
+	id, ok := Link{Type: "layout", ID: "detail%25promo%3d"}.LayoutID()
+	if !ok || id != "detail%promo=" {
+		t.Fatalf("id = %q ok = %v", id, ok)
+	}
+	if _, err := env.New(fixedTokens{}).Layout(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/v1.0/layout/detail%25promo=" {
+		t.Fatalf("path = %q", path)
+	}
+}

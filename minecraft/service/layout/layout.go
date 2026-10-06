@@ -55,7 +55,7 @@ func (c *Client) Layout(ctx context.Context, id string) (*Layout, error) {
 	var result struct {
 		Structure *Layout `json:"layoutStructure"`
 	}
-	target := c.env.ServiceURI.JoinPath("/api/v1.0/layout", id)
+	target := c.env.ServiceURI.JoinPath("/api/v1.0/layout", url.PathEscape(id))
 	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, target, struct{}{}, &result, request.Options{}); err != nil {
 		return nil, err
 	}
