@@ -67,6 +67,8 @@ type AuthorizationEnvironment struct {
 	// verifier verifies OpenID Multiplayer Token issued by the authorization service.
 	// It is cached and kept by [Environment.Verifier] to reduce network time.
 	verifier *oidc.IDTokenVerifier
+	// keySet holds the signing keys behind verifier.
+	keySet *refreshingKeySet
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
 }
@@ -246,15 +248,33 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 	if refreshInterval <= 0 {
 		refreshInterval = 30 * time.Minute
 	}
-	keySet := newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
+	e.keySet = newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
 
 	// We need to append '/' on the issuer if not present.
 	issuer := e.Issuer.JoinPath().String()
-	e.verifier = oidc.NewVerifier(issuer, keySet, &oidc.Config{
+	e.verifier = oidc.NewVerifier(issuer, e.keySet, &oidc.Config{
 		ClientID:             "api://auth-minecraft-services/multiplayer",
 		SupportedSigningAlgs: config.Algorithms,
 	})
 	return e.verifier, nil
+}
+
+// PreloadVerifier resolves the multiplayer token verifier and fetches its signing keys, so the first
+// verification needs no network round trip. Keys already fetched are kept.
+func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
+	if _, err := e.VerifierContext(ctx); err != nil {
+		return err
+	}
+	e.verifierMu.Lock()
+	keySet := e.keySet
+	e.verifierMu.Unlock()
+	if keys, _ := keySet.keysFromCache(); len(keys) != 0 {
+		return nil
+	}
+	if _, err := keySet.keysFromRemote(ctx); err != nil {
+		return fmt.Errorf("fetch jwks: %w", err)
+	}
+	return nil
 }
 
 // configuration returns the OpenID configuration published by the authorization
@@ -558,6 +578,12 @@ const serviceTokenClockSkew = 5 * time.Minute
 // Valid returns a bool indicating if the Token is valid.
 func (t *Token) Valid() bool {
 	return t.AuthorizationHeader != "" && t.now().Before(t.ValidUntil.Add(-expirationDelta))
+}
+
+// Remaining returns how long the Token stays valid on the service clock [Token.Valid] uses,
+// including the expiry margin. It is negative once the Token is no longer valid.
+func (t *Token) Remaining() time.Duration {
+	return t.ValidUntil.Add(-expirationDelta).Sub(t.now())
 }
 
 // setServerTime records the server time and when it was received.

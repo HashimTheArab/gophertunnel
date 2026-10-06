@@ -38,13 +38,14 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 		HTTPClient:         originalClient,
 		KeyRefreshInterval: 5 * time.Minute,
 		verifier:           &oidc.IDTokenVerifier{},
+		keySet:             &refreshingKeySet{},
 	}
 	want := make(map[string]any)
 	value := reflect.ValueOf(env).Elem()
 	for i := 0; i < value.NumField(); i++ {
 		field := value.Type().Field(i)
 		switch field.Name {
-		case "verifier", "verifierMu":
+		case "verifier", "keySet", "verifierMu":
 			// Cached verifier state and its lock belong to the original environment.
 			continue
 		}
@@ -75,7 +76,7 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 	if env.HTTPClient != originalClient {
 		t.Fatal("token source changed the caller's HTTP client")
 	}
-	if underlying.env.verifier != nil {
+	if underlying.env.verifier != nil || underlying.env.keySet != nil {
 		t.Fatal("token source copied the cached verifier")
 	}
 	if !underlying.env.verifierMu.TryLock() {
