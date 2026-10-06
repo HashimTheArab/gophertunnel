@@ -493,28 +493,33 @@ func startScriptedLogin(conn net.Conn) (*packet.Decoder, *packet.Encoder, error)
 	if _, err := decoder.Decode(); err != nil {
 		return nil, nil, fmt.Errorf("read Login: %w", err)
 	}
+	return decoder, encoder, finishScriptedLogin(decoder, encoder)
+}
+
+// finishScriptedLogin plays the server's side of a login from LoginSuccess to the StartGame replies.
+func finishScriptedLogin(decoder *packet.Decoder, encoder *packet.Encoder) error {
 	if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
-		return nil, nil, fmt.Errorf("write login success: %w", err)
+		return fmt.Errorf("write login success: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ClientCacheStatus: %w", err)
+		return fmt.Errorf("read ClientCacheStatus: %w", err)
 	}
 	if err := encodeScriptedPackets(encoder, &packet.ResourcePacksInfo{}); err != nil {
-		return nil, nil, fmt.Errorf("write ResourcePacksInfo: %w", err)
+		return fmt.Errorf("write ResourcePacksInfo: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ResourcePackClientResponse: %w", err)
+		return fmt.Errorf("read ResourcePackClientResponse: %w", err)
 	}
 	if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{}); err != nil {
-		return nil, nil, fmt.Errorf("write StartGame: %w", err)
+		return fmt.Errorf("write StartGame: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ResourcePackStack response: %w", err)
+		return fmt.Errorf("read ResourcePackStack response: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read StartGame responses: %w", err)
+		return fmt.Errorf("read StartGame responses: %w", err)
 	}
-	return decoder, encoder, nil
+	return nil
 }
 
 func encodeScriptedPackets(encoder *packet.Encoder, packets ...packet.Packet) error {
@@ -562,6 +567,7 @@ func expectScriptedClose(conn net.Conn, decoder *packet.Decoder) error {
 type scriptedDialNetwork struct {
 	script func(net.Conn) error
 	done   chan error
+	wrap   func(net.Conn) net.Conn // optional client-side transport wrapper
 }
 
 const remappedTransferID = 0x3ff
@@ -594,6 +600,9 @@ func (n *scriptedDialNetwork) DialContext(context.Context, string) (net.Conn, er
 		defer server.Close()
 		n.done <- n.script(server)
 	}()
+	if n.wrap != nil {
+		return n.wrap(pipeConn{Conn: client}), nil
+	}
 	return pipeConn{Conn: client}, nil
 }
 
@@ -1229,3 +1238,63 @@ func TestWrittenItemRegistrySetsTheShieldID(t *testing.T) {
 		t.Fatalf("shield ID = %d, want 355", got)
 	}
 }
+
+// A NetherNet server that repeats NetworkSettings as a bare packet after Login is joined as vanilla
+// joins it: the message has no compression byte, so it is dropped and the login carries on. The
+// bytes are those a live server sends.
+func TestDialContextDropsBareNetworkSettingsOverNetherNet(t *testing.T) {
+	framedSettings := []byte{0x0c, 0x8f, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	bareSettings := []byte{0x8f, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	network := newScriptedDialNetwork(func(raw net.Conn) error {
+		conn := unbatchedConn{raw}
+		decoder, encoder := packet.NewDecoder(conn), packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read RequestNetworkSettings: %w", err)
+		}
+		if _, err := conn.Write(framedSettings); err != nil {
+			return fmt.Errorf("write NetworkSettings: %w", err)
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read Login: %w", err)
+		}
+		if _, err := conn.Write(bareSettings); err != nil {
+			return fmt.Errorf("write bare NetworkSettings: %w", err)
+		}
+		if err := finishScriptedLogin(decoder, encoder); err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(raw, decoder)
+	})
+	network.wrap = func(c net.Conn) net.Conn { return unbatchedConn{c} }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork: %v (scripted server: %v)", err, <-network.done)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+// unbatchedConn frames packets as NetherNet does: no batch header and no packet encryption.
+type unbatchedConn struct{ net.Conn }
+
+func (unbatchedConn) BatchHeader() []byte     { return nil }
+func (unbatchedConn) DisableEncryption() bool { return true }

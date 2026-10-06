@@ -20,6 +20,12 @@ type TokenInvalidator interface {
 	InvalidateServiceToken(rejected *Token)
 }
 
+// SessionIdentifier is implemented by token sources bound to one game session, so the requests
+// they authorize name the same Session-Id.
+type SessionIdentifier interface {
+	SessionID() string
+}
+
 // TokenSource returns an implementation of TokenSource, which subsequently supplies the token
 // by either newly requesting or refreshing an existing, cached token. The given [playfab.Client]
 // will be used for logging into Bedrock Edition's network services with the user's PlayFab account.
@@ -29,11 +35,14 @@ func (e *AuthorizationEnvironment) TokenSource(client *playfab.Client, config To
 
 // ResumeTokenSource returns a TokenSource like [AuthorizationEnvironment.TokenSource] that starts
 // from a previously issued token, such as one restored from disk. It asks tickets for a session
-// ticket only when that token must be renewed or replaced. The source implements [TokenInvalidator].
+// ticket only when that token must be replaced. The source implements [TokenInvalidator].
 // Missing claims are decoded from the token's JWT; invalid persisted claims discard the token.
 func (e *AuthorizationEnvironment) ResumeTokenSource(tickets SessionTicketSource, config TokenConfig, token *Token) TokenSource {
 	defaultUserConfig(&config.User)
 	defaultDeviceConfig(e, &config.Device)
+	if config.SessionID == "" {
+		config.SessionID = uuid.NewString()
+	}
 
 	if token != nil && token.Claims.PlayerMessagingID == uuid.Nil {
 		// Claims are omitted from JSON. Rebuild them without changing the caller's token.
@@ -65,7 +74,7 @@ type tokenSource struct {
 }
 
 // ServiceToken supplies a token by either re-using an already requested token, or
-// requesting or renewing the existing token with a valid PlayFab session ticket.
+// starting a new session with a valid PlayFab session ticket.
 func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,15 +91,7 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	s.config.User.TokenType = TokenTypePlayFab
 	s.config.User.Token = ticket
 
-	// Renewal authenticates with the existing token, so it only works before the
-	// token's hard expiry; otherwise, or on a rejected renewal, start fresh.
-	if tokenRenewable(s.token) {
-		if token, err := s.env.Renew(ctx, s.token, s.config.User); err == nil {
-			s.token = token
-			return s.token, nil
-		}
-	}
-
+	// The game replaces an expiring token with a new session rather than renewing it.
 	token, err := s.env.Token(ctx, s.config)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
@@ -99,8 +100,11 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	return s.token, nil
 }
 
+// SessionID returns the Session-Id every request of this source sends.
+func (s *tokenSource) SessionID() string { return s.config.SessionID }
+
 // InvalidateServiceToken drops rejected if it is still cached, so the next call issues a new
-// token instead of renewing one the service refused.
+// token instead of reusing one the service refused.
 func (s *tokenSource) InvalidateServiceToken(rejected *Token) {
 	if rejected == nil {
 		return
@@ -110,10 +114,4 @@ func (s *tokenSource) InvalidateServiceToken(rejected *Token) {
 	if s.token != nil && s.token.AuthorizationHeader == rejected.AuthorizationHeader {
 		s.token = nil
 	}
-}
-
-// tokenRenewable reports whether tok can still authenticate a renewal request,
-// i.e. it has not passed its hard expiry (ValidUntil).
-func tokenRenewable(tok *Token) bool {
-	return tok != nil && tok.AuthorizationHeader != "" && tok.now().Before(tok.ValidUntil)
 }

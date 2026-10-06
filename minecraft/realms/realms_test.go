@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal/xasu"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
 
@@ -216,6 +218,49 @@ func TestClientPendingInviteCount(t *testing.T) {
 		}}
 		if _, err := c.PendingInviteCount(context.Background()); err == nil {
 			t.Fatalf("PendingInviteCount(%q) accepted a malformed body", body)
+		}
+	}
+}
+
+type fixedXSTS struct{}
+
+func (fixedXSTS) Token() (*oauth2.Token, error) { return nil, errors.New("unused") }
+
+func (fixedXSTS) XSTSToken(context.Context, string) (*xsts.Token, error) {
+	return &xsts.Token{Token: "stub", NotAfter: time.Now().Add(time.Hour),
+		DisplayClaims: xsts.DisplayClaims{UserInfo: []xsts.UserInfo{{UserInfo: xasu.UserInfo{UserHash: "stub"}}}}}, nil
+}
+
+// A client built from discovery sends every request to the discovered Realms endpoint.
+func TestEnvironmentClientUsesTheDiscoveredEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write([]byte(`{"servers":[{"id":7,"name":"R"}]}`))
+	}))
+	defer server.Close()
+	discovery := service.Discovery{ServiceEnvironments: map[string]map[string]json.RawMessage{
+		"realms_frontend_bedrock_legacy": {"prod": json.RawMessage(`{"serviceUri":"` + server.URL + `/"}`)},
+	}}
+	env := new(Environment)
+	if err := discovery.Environment(env); err != nil {
+		t.Fatal(err)
+	}
+	client, err := env.NewClient(fixedXSTS{}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realms, err := client.Realms(context.Background())
+	if err != nil || len(realms) != 1 || len(paths) != 1 || paths[0] != "/worlds" {
+		t.Fatalf("realms = %+v paths = %v err = %v", realms, paths, err)
+	}
+}
+
+// An endpoint discovery left out or made relative must fail instead of falling back to the built-in host.
+func TestEnvironmentRejectsUnusableServiceURI(t *testing.T) {
+	for _, uri := range []string{"", "/", "pocket.realms.minecraft.net", "http://pocket.realms.minecraft.net", "https://"} {
+		if c, err := (&Environment{ServiceURI: uri}).NewClient(fixedXSTS{}, nil); err == nil || c != nil {
+			t.Errorf("serviceUri %q: client = %v, err = %v; want an error", uri, c, err)
 		}
 	}
 }

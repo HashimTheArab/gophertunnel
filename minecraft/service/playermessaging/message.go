@@ -30,12 +30,22 @@ type Message struct {
 	Status         string            `json:"status"`
 	Items          []MessageItem     `json:"messageItemList"`
 	Style          json.RawMessage   `json:"style"`
+	Colors         map[string]Color  `json:"colors"` // button art colours by part, such as the ribbon
 }
 
-// MessageText is a message's header and body.
+// Color is one colour of a message's button art.
+type Color struct {
+	RGB RGB `json:"hexColor"`
+}
+
+// RGB is a colour's channels.
+type RGB struct{ R, G, B uint8 }
+
+// MessageText is a message's header, body and the ribbon text of its button art.
 type MessageText struct {
 	Header string `json:"header"`
 	Body   string `json:"body"`
+	Banner string `json:"bannerText"`
 }
 
 // Button is one message button; Action says how Link opens.
@@ -66,6 +76,15 @@ type MessageItem struct {
 	FooterCTA    json.RawMessage `json:"FooterCTA"`
 	FooterHeader string          `json:"footerHeader"`
 	FooterBody   string          `json:"footerBody"`
+}
+
+// SaleBannerText returns the item's sale banner text, or "" when the banner is not text.
+func (i MessageItem) SaleBannerText() string {
+	var text string
+	if json.Unmarshal(i.SaleBanner, &text) != nil {
+		return ""
+	}
+	return text
 }
 
 // EventType is a message interaction reported to the service.
@@ -122,6 +141,6 @@ func (c *Client) ReportEvents(ctx context.Context, events ...Event) error {
 		})
 	}
 	body := map[string]any{"SessionId": c.sessionID, "continuationToken": c.current(), "events": entries}
-	_, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/messages/event"), body, nil, request.Options{})
+	_, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, c.env.ServiceURI.JoinPath("/api/v1.0/messages/event"), body, nil, c.options())
 	return err
 }
