@@ -497,3 +497,16 @@ func TestItemSalePriceOfZeroIsFree(t *testing.T) {
 		}
 	}
 }
+
+// A sale prices the offer only inside its window; before it starts or after it expires the list
+// price applies.
+func TestItemSalePriceOnlyInsideItsWindow(t *testing.T) {
+	half := int64(490)
+	price := Price{ListPrice: 990, Sale: &SaleInfo{StartDate: "2026-10-01T00:00:00Z", ExpirationDate: "2026-10-08T00:00:00Z", SalePrice: &half}}
+	for at, want := range map[string]int64{"2026-09-30T23:59:59Z": 990, "2026-10-01T00:00:00Z": 490, "2026-10-07T12:00:00Z": 490, "2026-10-08T00:00:00Z": 990} {
+		now, _ := time.Parse(time.RFC3339, at)
+		if got := price.AmountAt(now); got != want {
+			t.Errorf("AmountAt(%s) = %d, want %d", at, got, want)
+		}
+	}
+}

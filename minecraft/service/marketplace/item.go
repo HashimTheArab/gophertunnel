@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Item is a catalog offer as a layout row lists it inline or a row continuation returns it.
@@ -138,11 +139,19 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, (*plain)(p))
 }
 
-// Amount returns what the offer sells for now: the sale price during a sale, including a free
-// one, else the list price.
-func (p *Price) Amount() int64 {
-	if p.Sale != nil && p.Sale.SalePrice != nil && *p.Sale.SalePrice >= 0 {
-		return *p.Sale.SalePrice
+// Amount returns what the offer sells for now; see [Price.AmountAt].
+func (p *Price) Amount() int64 { return p.AmountAt(time.Now()) }
+
+// AmountAt returns what the offer sells for at now: the sale price, a free sale included, while
+// the sale's window holds it, else the list price. A missing or unreadable bound leaves that side
+// of the window open.
+func (p *Price) AmountAt(now time.Time) int64 {
+	if s := p.Sale; s != nil && s.SalePrice != nil && *s.SalePrice >= 0 {
+		start, startErr := time.Parse(time.RFC3339, s.StartDate)
+		end, endErr := time.Parse(time.RFC3339, s.ExpirationDate)
+		if (startErr != nil || !now.Before(start)) && (endErr != nil || now.Before(end)) {
+			return *s.SalePrice
+		}
 	}
 	return int64(p.ListPrice)
 }
