@@ -127,3 +127,40 @@ func TestReportEventsAndMalformedRefresh(t *testing.T) {
 		t.Fatalf("event body = %+v", body)
 	}
 }
+
+// Every messaging request names its session in Session-Id and the player's locale, as the game does.
+func TestRequestsCarrySessionAndLanguageHeaders(t *testing.T) {
+	var headers []http.Header
+	client := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		headers = append(headers, r.Header.Clone())
+		_, _ = w.Write([]byte(refreshFixture))
+	})
+	client.env.Language = "pt-BR"
+	if _, err := client.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReportEvents(context.Background(), Event{Type: "Impression", InstanceID: "i1"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, header := range headers {
+		if header.Get("Session-Id") != client.SessionID() || header.Get("Accept-Language") != "pt-BR" {
+			t.Fatalf("request %d Session-Id = %q, Accept-Language = %q", i, header.Get("Session-Id"), header.Get("Accept-Language"))
+		}
+	}
+}
+
+// Button art carries ribbon text and per-part colours, and a multi-item entry its sale banner.
+func TestMessagesDecodeBannerAndColors(t *testing.T) {
+	var message Message
+	if err := json.Unmarshal([]byte(`{"id":"m","messageText":{"header":"H","bannerText":"New!"},
+"colors":{"ribbon":{"hexColor":{"r":255,"g":128,"b":0}}},
+"messageItemList":[{"saleBanner":"50% off"},{"saleBanner":{"unexpected":true}}]}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Text.Banner != "New!" || message.Colors["ribbon"].RGB != (RGB{R: 255, G: 128, B: 0}) {
+		t.Fatalf("message = %+v", message)
+	}
+	if message.Items[0].SaleBannerText() != "50% off" || message.Items[1].SaleBannerText() != "" {
+		t.Fatalf("sale banners = %q, %q", message.Items[0].SaleBannerText(), message.Items[1].SaleBannerText())
+	}
+}
