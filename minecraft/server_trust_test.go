@@ -296,7 +296,7 @@ func (s *slowTrust) TrustServer(context.Context, string, *ecdsa.PublicKey) (bool
 	return true, nil
 }
 
-// A trust decision slower than the server's negotiation window is followed by one fresh
+// A trust decision returning after the server's negotiation window is followed by one fresh
 // negotiation that does not ask again.
 func TestAddressNetworkRedialsAfterASlowTrustDecision(t *testing.T) {
 	address := trustListener(t, false)
@@ -312,4 +312,39 @@ func TestAddressNetworkRedialsAfterASlowTrustDecision(t *testing.T) {
 	if trust.asked != 1 {
 		t.Fatalf("asked %d times, want once", trust.asked)
 	}
+}
+
+// A dial that fails after a quick trust decision, as when signaling latency already aged the
+// negotiation, is retried once without asking again.
+func TestAddressNetworkRetriesAFailedDialAfterATrustDecision(t *testing.T) {
+	trust := &slowTrust{}
+	attempts, token := 0, testServerToken(t)
+	network := httpNetherNet{trust: trust, nethernet: NetherNet{Log: slog.New(slog.DiscardHandler)}, url: "http://example.com:19132"}
+	conn, err := network.dial(func(transport NetherNet) (net.Conn, error) {
+		attempts++
+		_, err := transport.Dialer.VerifyServerToken(t.Context(), token, "self")
+		if err != nil {
+			return nil, err
+		}
+		if attempts == 1 {
+			return nil, errors.New("start ICE: connecting canceled by caller")
+		}
+		return nil, nil
+	})
+	if err != nil || conn != nil || attempts != 2 || trust.asked != 1 {
+		t.Fatalf("dial = %v, %v after %d attempts and %d prompts; want one retry and one prompt", conn, err, attempts, trust.asked)
+	}
+}
+
+func testServerToken(t *testing.T) string {
+	t.Helper()
+	private, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := nethernet.GenerateServerIdentity(private, "self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.Token
 }
