@@ -97,8 +97,8 @@ func (decoder *Decoder) DisableBatchPacketLimit() {
 	decoder.checkPacketLimit = false
 }
 
-// ErrBatchDropped wraps the error of a batch whose compression could not be decoded. The vanilla
-// client drops such a batch and keeps the connection, so the batch is lost but the stream is intact.
+// ErrBatchDropped wraps the error of a batch whose compression byte or payload could not be decoded.
+// The vanilla client drops such a batch and keeps the connection; output over the size limit stays fatal.
 var ErrBatchDropped = errors.New("packet: batch dropped")
 
 const (
@@ -201,7 +201,9 @@ func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
 				return nil, nil, fmt.Errorf("%w: unknown compression algorithm %v", ErrBatchDropped, data[0])
 			}
 			data, pooled, err = decoder.decompressBatch(compression, data[1:])
-			if err != nil {
+			if errors.Is(err, ErrDecompressedSizeExceeded) {
+				return nil, pooled, fmt.Errorf("decompress batch: %w", err)
+			} else if err != nil {
 				return nil, pooled, fmt.Errorf("%w: decompress: %w", ErrBatchDropped, err)
 			}
 		}

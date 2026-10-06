@@ -262,3 +262,21 @@ func (r *messageReader) Read(b []byte) (int, error) {
 	r.messages = r.messages[1:]
 	return n, nil
 }
+
+// A batch that decompresses past the limit stays fatal, so a peer cannot repeat it on one connection.
+func TestDecoderKeepsDecompressionLimitFatal(t *testing.T) {
+	for _, compression := range []Compression{FlateCompression, SnappyCompression} {
+		var batch bytes.Buffer
+		encoder := NewEncoder(&batch)
+		encoder.EnableCompression(compression, 0)
+		if err := encoder.Encode([][]byte{bytes.Repeat([]byte{1}, 4096)}); err != nil {
+			t.Fatal(err)
+		}
+		decoder := NewDecoder(bytes.NewReader(batch.Bytes()))
+		decoder.EnableCompression(compression, 1024)
+		_, err := decoder.Decode()
+		if !errors.Is(err, ErrDecompressedSizeExceeded) || errors.Is(err, ErrBatchDropped) {
+			t.Fatalf("%T: Decode error = %v, want a fatal size-limit error", compression, err)
+		}
+	}
+}
