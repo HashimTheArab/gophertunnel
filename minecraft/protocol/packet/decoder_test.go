@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -223,4 +224,41 @@ func TestDecoderSkipsEmptyPacketsWhenBatchPacketLimitDisabled(t *testing.T) {
 	if !bytes.Equal(packets[0], payload) {
 		t.Fatalf("packets[0] = %v, want %v", packets[0], payload)
 	}
+}
+
+// A compressed batch the decoder cannot decompress is reported as dropped, and the next batch on
+// the stream still decodes, as the vanilla client keeps the connection.
+func TestDecoderDropsUndecodableCompressedBatch(t *testing.T) {
+	var valid bytes.Buffer
+	encoder := NewEncoder(&valid)
+	encoder.EnableCompression(FlateCompression, 0)
+	if err := encoder.Encode([][]byte{{0x42}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, dropped := range map[string][]byte{
+		"bare packet":   {header, 0x8f, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		"corrupt flate": {header, byte(CompressionAlgorithmFlate), 0xff, 0xff, 0xff},
+	} {
+		decoder := NewDecoder(&messageReader{messages: [][]byte{dropped, valid.Bytes()}})
+		decoder.EnableCompression(FlateCompression, 1<<20)
+		if _, err := decoder.Decode(); !errors.Is(err, ErrBatchDropped) {
+			t.Fatalf("%s: Decode error = %v, want ErrBatchDropped", name, err)
+		}
+		packets, err := decoder.Decode()
+		if err != nil || len(packets) != 1 || !bytes.Equal(packets[0], []byte{0x42}) {
+			t.Fatalf("%s: next batch = %x, %v; want the following packet", name, packets, err)
+		}
+	}
+}
+
+// messageReader returns one message per Read, as a packet transport does.
+type messageReader struct{ messages [][]byte }
+
+func (r *messageReader) Read(b []byte) (int, error) {
+	if len(r.messages) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b, r.messages[0])
+	r.messages = r.messages[1:]
+	return n, nil
 }

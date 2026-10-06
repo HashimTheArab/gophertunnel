@@ -622,6 +622,10 @@ func (listener *Listener) handleConn(conn *Conn) {
 			}
 			return nil
 		}); err != nil {
+			if !callbackErr && errors.Is(err, packet.ErrBatchDropped) {
+				conn.log.Debug("dropped undecodable batch", "error", err)
+				continue
+			}
 			conn.flushBatch()
 			if publishBatch {
 				listener.deliverConn(conn)

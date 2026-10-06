@@ -486,6 +486,10 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 			return nil
 		}); err != nil {
+			if !callbackErr && errors.Is(err, packet.ErrBatchDropped) {
+				conn.log.Debug("dropped undecodable batch", "error", err)
+				continue
+			}
 			conn.flushBatch()
 			if callbackErr || !errors.Is(err, net.ErrClosed) {
 				if cancelContext {

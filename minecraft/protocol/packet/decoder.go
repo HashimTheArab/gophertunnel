@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -95,6 +96,10 @@ func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int)
 func (decoder *Decoder) DisableBatchPacketLimit() {
 	decoder.checkPacketLimit = false
 }
+
+// ErrBatchDropped wraps the error of a batch whose compression could not be decoded. The vanilla
+// client drops such a batch and keeps the connection, so the batch is lost but the stream is intact.
+var ErrBatchDropped = errors.New("packet: batch dropped")
 
 const (
 	// header is the header of compressed 'batches' from Minecraft.
@@ -193,11 +198,11 @@ func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
 		} else {
 			compression, ok := CompressionByID(uint16(data[0]))
 			if !ok {
-				return nil, nil, fmt.Errorf("decompress batch: unknown compression algorithm %v", data[0])
+				return nil, nil, fmt.Errorf("%w: unknown compression algorithm %v", ErrBatchDropped, data[0])
 			}
 			data, pooled, err = decoder.decompressBatch(compression, data[1:])
 			if err != nil {
-				return nil, pooled, fmt.Errorf("decompress batch: %w", err)
+				return nil, pooled, fmt.Errorf("%w: decompress: %w", ErrBatchDropped, err)
 			}
 		}
 	}
