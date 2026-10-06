@@ -41,6 +41,8 @@ type exemptedResourcePack struct {
 	version string
 }
 
+const batchQueueRetainedCapacity = 8
+
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
@@ -248,6 +250,7 @@ type Conn struct {
 	identityData login.IdentityData
 	clientData   login.ClientData
 
+	gameDataMu       sync.RWMutex
 	gameData         GameData
 	gameDataReceived atomic.Bool
 
@@ -266,8 +269,9 @@ type Conn struct {
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.
 	packets chan *packetData
-	// packetBatches holds the packets from one decoder batch when batch reading is enabled.
-	packetBatches chan []*packetData
+	// batchReady signals that readBatches contains a batch. The buffered signal is level-triggered:
+	// readBatches remains the source of truth and may contain more than one batch.
+	batchReady chan struct{}
 	// batchReading, if true, preserves incoming network batch boundaries: packets must be read through
 	// ReadBatch and the single-packet read methods are unavailable.
 	batchReading bool
@@ -278,15 +282,17 @@ type Conn struct {
 	// batch reading is enabled. Like pendingBatch, it is owned by the processing goroutine.
 	batchDeferred []*packetData
 
-	deferredPacketMu sync.Mutex
+	// readQueueMu protects deferredPackets and readBatches.
+	readQueueMu sync.Mutex
 	// deferredPackets is a list of packets that were pushed back during the login sequence because they
 	// were not used by the connection yet. These packets are read the first when calling to Read or
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
-	// deferredBatches is the batch-reading counterpart of deferredPackets: batches that ReadBatch
-	// returns before the batches queued in packetBatches.
-	deferredBatches [][]*packetData
-	readDeadline    <-chan time.Time
+	// readBatches is ring storage holding complete network batches in receive order.
+	readBatches   [][]*packetData
+	readBatchHead int
+	readBatchLen  int
+	readDeadline  <-chan time.Time
 
 	// sendMu protects bufferedSend/bufferedSendSpare.
 	sendMu sync.Mutex
@@ -342,6 +348,8 @@ type Conn struct {
 	resourcePackDownload ResourcePackDownloadConfig
 	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
 	httpClient *http.Client
+	// relayStartup delivers StartGame and everything after it to the caller instead of spawning.
+	relayStartup bool
 	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
 	resourcePackProgress   func(ResourcePackEvent)
 	resourcePackProgressMu sync.Mutex
@@ -411,7 +419,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		salt:                 make([]byte, 16),
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
-		packetBatches:        make(chan []*packetData, 8),
+		batchReady:           make(chan struct{}, 1),
+		readBatches:          make([][]*packetData, batchQueueRetainedCapacity),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
 		conn:                 netConn,
@@ -487,6 +496,8 @@ func (conn *Conn) Authenticated() bool {
 // Conn is obtained using Listen, this game data may be set to the Listener. If obtained using Dial, the data
 // is obtained from the server.
 func (conn *Conn) GameData() GameData {
+	conn.gameDataMu.RLock()
+	defer conn.gameDataMu.RUnlock()
 	return conn.gameData
 }
 
@@ -544,15 +555,10 @@ func (conn *Conn) SendStartGame(data GameData) error {
 		panic("(*Conn).SendStartGame must only be called on Listener connections")
 	}
 	if data.WorldName == "" {
-		data.WorldName = conn.gameData.WorldName
+		data.WorldName = conn.GameData().WorldName
 	}
 
-	conn.gameData = data
-	for _, item := range data.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-		}
-	}
+	conn.SetGameData(data)
 	conn.waitingForSpawn.Store(true)
 	return conn.startGame()
 }
@@ -631,6 +637,10 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}()
 
 	for _, pk := range pks {
+		if registry, ok := pk.(*packet.ItemRegistry); ok {
+			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
+			conn.observeShield(registry.Items)
+		}
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
 			conn.hdr.PacketID = converted.ID()
@@ -756,29 +766,22 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
 	}
 	for {
-		batch, ok := conn.takeDeferredBatch()
+		batch, ok := conn.takeBatch()
 		if !ok {
 			// Prefer batches already queued over reporting a closed connection or an expired deadline,
 			// so that packets received before a disconnect are still delivered. A batch is flushed
 			// before the context is cancelled, so once either fires a queued batch is already visible
-			// and a final non-blocking receive drains it ahead of the error.
+			// and a final queue check drains it ahead of the error.
 			select {
-			case batch = <-conn.packetBatches:
-			default:
-				select {
-				case batch = <-conn.packetBatches:
-				case <-conn.ctx.Done():
-					select {
-					case batch = <-conn.packetBatches:
-					default:
-						return nil, conn.closeErr("read packets")
-					}
-				case <-conn.readDeadline:
-					select {
-					case batch = <-conn.packetBatches:
-					default:
-						return nil, conn.wrap(context.DeadlineExceeded, "read packets")
-					}
+			case <-conn.batchReady:
+				continue
+			case <-conn.ctx.Done():
+				if batch, ok = conn.takeBatch(); !ok {
+					return nil, conn.closeErr("read packets")
+				}
+			case <-conn.readDeadline:
+				if batch, ok = conn.takeBatch(); !ok {
+					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
 				}
 			}
 		}
@@ -1091,21 +1094,17 @@ func (conn *Conn) ClientCacheEnabled() bool {
 // Listener, this is the radius that the client requested. For connections obtained through a Dialer, this
 // is the radius that the server approved upon.
 func (conn *Conn) ChunkRadius() int {
-	return int(conn.gameData.ChunkRadius)
+	return int(conn.GameData().ChunkRadius)
 }
 
 // SetGameData manually sets the game data for this connection. This is useful when DisablePacketHandling
 // is enabled and you want to populate the internal state without automatic packet handling.
 // This allows GameData() to return meaningful data even when packet handlers aren't running.
 func (conn *Conn) SetGameData(data GameData) {
+	conn.gameDataMu.Lock()
 	conn.gameData = data
-	// When setting gameData with Items, also update shieldID if present
-	for _, item := range data.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-			break
-		}
-	}
+	conn.gameDataMu.Unlock()
+	conn.observeShield(data.Items)
 }
 
 // Context returns the connection's context. The context is canceled when the connection is closed,
@@ -1145,8 +1144,8 @@ func (conn *Conn) disconnectPacketMessage(pk *packet.Disconnect) string {
 // takeDeferredPacket locks the deferred packets lock and takes the next packet from the list of deferred
 // packets. If none was found, it returns false, and if one was found, the data and true is returned.
 func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
-	conn.deferredPacketMu.Lock()
-	defer conn.deferredPacketMu.Unlock()
+	conn.readQueueMu.Lock()
+	defer conn.readQueueMu.Unlock()
 
 	if len(conn.deferredPackets) == 0 {
 		return nil, false
@@ -1160,28 +1159,54 @@ func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
 	return data, true
 }
 
-// takeDeferredBatch takes the next batch from the list of deferred batches, reporting whether one was
-// found.
-func (conn *Conn) takeDeferredBatch() ([]*packetData, bool) {
-	conn.deferredPacketMu.Lock()
-	defer conn.deferredPacketMu.Unlock()
+// takeBatch takes the next complete network batch from the read queue.
+func (conn *Conn) takeBatch() ([]*packetData, bool) {
+	conn.readQueueMu.Lock()
+	defer conn.readQueueMu.Unlock()
 
-	if len(conn.deferredBatches) == 0 {
+	if conn.readBatchLen == 0 {
 		return nil, false
 	}
-	batch := conn.deferredBatches[0]
-	// Explicitly clear out the batch at offset 0 so that it may be garbage collected, like
+	batch := conn.readBatches[conn.readBatchHead]
+	// Explicitly clear out the consumed batch so that it may be garbage collected, like
 	// takeDeferredPacket does.
-	conn.deferredBatches[0] = nil
-	conn.deferredBatches = conn.deferredBatches[1:]
+	conn.readBatches[conn.readBatchHead] = nil
+	conn.readBatchHead = (conn.readBatchHead + 1) % len(conn.readBatches)
+	conn.readBatchLen--
+	if conn.readBatchLen == 0 {
+		// Reuse the old channel's small steady-state capacity, but release a queue that grew during
+		// a burst once it has been completely drained.
+		if len(conn.readBatches) > batchQueueRetainedCapacity {
+			conn.readBatches = make([][]*packetData, batchQueueRetainedCapacity)
+		}
+		conn.readBatchHead = 0
+		select {
+		case <-conn.batchReady:
+		default:
+		}
+	}
 	return batch, true
 }
 
-// deferBatch defers a batch so that it is returned by ReadBatch before any batch queued after it.
-func (conn *Conn) deferBatch(batch []*packetData) {
-	conn.deferredPacketMu.Lock()
-	conn.deferredBatches = append(conn.deferredBatches, batch)
-	conn.deferredPacketMu.Unlock()
+// queueBatch queues a complete network batch for ReadBatch without blocking the processing goroutine.
+func (conn *Conn) queueBatch(batch []*packetData) {
+	conn.readQueueMu.Lock()
+	if conn.readBatchLen == len(conn.readBatches) {
+		grown := make([][]*packetData, max(len(conn.readBatches)*2, batchQueueRetainedCapacity))
+		copied := copy(grown, conn.readBatches[conn.readBatchHead:])
+		copy(grown[copied:], conn.readBatches[:conn.readBatchHead])
+		clear(conn.readBatches)
+		conn.readBatches = grown
+		conn.readBatchHead = 0
+	}
+	tail := (conn.readBatchHead + conn.readBatchLen) % len(conn.readBatches)
+	conn.readBatches[tail] = batch
+	conn.readBatchLen++
+	select {
+	case conn.batchReady <- struct{}{}:
+	default:
+	}
+	conn.readQueueMu.Unlock()
 }
 
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
@@ -1192,9 +1217,9 @@ func (conn *Conn) deferPacket(pk *packetData) {
 		conn.batchDeferred = append(conn.batchDeferred, pk)
 		return
 	}
-	conn.deferredPacketMu.Lock()
+	conn.readQueueMu.Lock()
 	conn.deferredPackets = append(conn.deferredPackets, pk)
-	conn.deferredPacketMu.Unlock()
+	conn.readQueueMu.Unlock()
 }
 
 // receive receives an incoming serialised packet from the underlying connection. If the connection is not yet
@@ -1234,9 +1259,6 @@ func (conn *Conn) receive(data []byte) error {
 		pkData.payload = bytes.NewBuffer(payload)
 	}
 	if conn.disablePacketHandling {
-		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
-			return err
-		}
 		if conn.handshakeComplete || conn.loggedIn {
 			conn.disablePacketHandlingReady = true
 		} else if !conn.disablePacketHandlingReady {
@@ -1246,6 +1268,16 @@ func (conn *Conn) receive(data []byte) error {
 				// packets start coming in.
 				conn.disablePacketHandlingReady = true
 			}
+		}
+	}
+	if conn.relayStartup {
+		if relayed, err := conn.relayStartupPacket(pkData); relayed || err != nil {
+			return err
+		}
+	}
+	if conn.disablePacketHandling {
+		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+			return err
 		}
 		if conn.disablePacketHandlingReady {
 			if pkData.h.PacketID == packet.IDClientToServerHandshake {
@@ -1269,6 +1301,66 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
+// relayStartupPacket records what the Conn needs from a relayed StartGame, DimensionData or ItemRegistry to
+// decode later packets, and reports whether it deferred a packet that arrived before StartGame. Every other
+// relayed packet is left to the passthrough or logged-in delivery, so it keeps their ordering.
+func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
+	id := pkData.h.PacketID
+	if !conn.loggedIn && id != packet.IDStartGame && id != packet.IDDimensionData {
+		return false, nil
+	}
+	switch id {
+	case packet.IDStartGame, packet.IDDimensionData, packet.IDItemRegistry:
+		pks, err := pkData.probe(conn)
+		if err != nil {
+			return true, err
+		}
+		for _, pk := range pks {
+			switch pk := pk.(type) {
+			case *packet.StartGame:
+				conn.observeStartGame(pk)
+				conn.loggedIn = true
+			case *packet.DimensionData:
+				_ = conn.handleDimensionData(pk)
+			case *packet.ItemRegistry:
+				conn.observeItems(pk.Items)
+			}
+		}
+	}
+	if conn.loggedIn || conn.disablePacketHandlingReady {
+		return false, nil
+	}
+	// Keep early DimensionData beside other deferred login packets in receive order.
+	conn.deferPacket(pkData)
+	return true, nil
+}
+
+// observeStartGame records the world settings while preserving dimension definitions received earlier.
+func (conn *Conn) observeStartGame(pk *packet.StartGame) {
+	conn.gameDataMu.Lock()
+	defer conn.gameDataMu.Unlock()
+	dimensions := conn.gameData.Dimensions
+	conn.gameData = GameDataFromStartGame(pk)
+	conn.gameData.Dimensions = dimensions
+}
+
+// observeItems records the item table used to decode shield item stacks.
+func (conn *Conn) observeItems(items []protocol.ItemEntry) {
+	conn.gameDataMu.Lock()
+	conn.gameData.Items = items
+	conn.gameDataMu.Unlock()
+	conn.observeShield(items)
+}
+
+// observeShield records the runtime ID used when reading and writing shield item stacks.
+func (conn *Conn) observeShield(items []protocol.ItemEntry) {
+	for _, item := range items {
+		if item.Name == "minecraft:shield" {
+			conn.shieldID.Store(int32(item.RuntimeID))
+		}
+	}
+}
+
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
 // raw PlayStatus packet owned by a passthrough caller.
 func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
@@ -1278,13 +1370,7 @@ func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
 	if _, registered := conn.pool[packet.IDPlayStatus]; !registered {
 		return nil
 	}
-	probe := &packetData{
-		h:       pkData.h,
-		full:    pkData.full,
-		payload: bytes.NewBuffer(bytes.Clone(pkData.payload.Bytes())),
-		owned:   true,
-	}
-	pks, err := probe.decodePacket(conn)
+	pks, err := pkData.probe(conn)
 	if err != nil {
 		return nil
 	}
@@ -1333,29 +1419,19 @@ func (conn *Conn) flushBatch() {
 	if len(deferred) == 0 && len(batch) == 0 {
 		return
 	}
-	// Move a batch still queued to the deferred list first, so that the entries below cannot overtake
-	// it. This goroutine is the only sender, meaning the channel never holds more than one batch and
-	// the send below cannot block.
-	select {
-	case previous := <-conn.packetBatches:
-		conn.deferBatch(previous)
-	default:
-	}
 	if len(deferred) != 0 {
 		// Packets deferred during a wire batch precede the ones collected from it, so combining them
-		// keeps one network batch mapped to one ReadBatch result. The combined batch goes through the
-		// unbounded deferred list because deferral happens during login, before the connection is
-		// delivered and read, where a send to the bounded channel could block. Deferred packets stay
-		// readable after a close, matching deferredPackets in single-packet mode.
-		conn.deferBatch(append(deferred, batch...))
-		return
-	}
-	if conn.ctx.Err() != nil {
+		// keeps one network batch mapped to one ReadBatch result. Deferral happens during login, before
+		// the connection is delivered and read, so the FIFO remains unbounded as the old deferred list
+		// was. Deferred packets stay readable after a close, matching deferredPackets in single-packet
+		// mode.
+		batch = append(deferred, batch...)
+	} else if conn.ctx.Err() != nil {
 		// The connection closed: drop collected packets, matching queuePacket dropping post-close
 		// traffic in single-packet mode.
 		return
 	}
-	conn.packetBatches <- batch
+	conn.queueBatch(batch)
 }
 
 // handle tries to handle the incoming packetData.
@@ -2106,7 +2182,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 func (conn *Conn) startGame() error {
 	// The client may answer before the packets below are all written, so expect its replies first.
 	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
-	data := conn.gameData
+	data := conn.GameData()
 	if len(data.Dimensions) > 0 {
 		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
 			return err
@@ -2237,13 +2313,19 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			return nil
 		}
 
-		// fillWindow replenishes one request for each response accepted by the client.
+		// fillWindow replenishes one request for each response accepted by the client. It flushes the
+		// requests itself: this goroutine runs outside packet handling, and the Conn may have no flush ticker.
 		fillWindow := func() error {
+			requested := false
 			for nextRequest < pack.chunkCount && uint64(nextRequest-received) < window {
 				if err := requestChunk(nextRequest); err != nil {
 					return fmt.Errorf("request chunk %v: %w", nextRequest, err)
 				}
 				nextRequest++
+				requested = true
+			}
+			if requested {
+				return conn.Flush()
 			}
 			return nil
 		}
@@ -2296,6 +2378,10 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			conn.expect(packet.IDResourcePackStack, packet.IDPlayStatus)
 			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
+				return
+			}
+			if err := conn.Flush(); err != nil {
+				_ = conn.abort(fmt.Errorf("download resource pack %v: flush completion: %w", id, err))
 				return
 			}
 		}
@@ -2395,7 +2481,9 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 }
 
 func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
+	conn.gameDataMu.Lock()
 	conn.gameData.Dimensions = pk.Definitions
+	conn.gameDataMu.Unlock()
 	return nil
 }
 
@@ -2408,11 +2496,7 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 		pk.BaseGameVersion = "1.17.0" // temp fix for hive
 	}
 
-	// We store dimensions in the conn through handleDimensionData, so we need to
-	// restore it after building GameData from the StartGame packet.
-	dimensions := conn.gameData.Dimensions
-	conn.gameData = GameDataFromStartGame(pk)
-	conn.gameData.Dimensions = dimensions
+	conn.observeStartGame(pk)
 
 	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
@@ -2508,12 +2592,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 // handleItemRegistry handles an incoming ItemRegistry packet. It contains the item definitions that the client
 // should use, including the shield ID which is necessary for reading and writing items in the future.
 func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
-	conn.gameData.Items = pk.Items
-	for _, item := range pk.Items {
-		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
-		}
-	}
+	conn.observeItems(pk.Items)
 
 	// _ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
@@ -2528,11 +2607,13 @@ func (conn *Conn) handleRequestChunkRadius(pk *packet.RequestChunkRadius) error 
 	}
 	conn.expect(packet.IDSetLocalPlayerAsInitialised)
 	radius := pk.ChunkRadius
+	conn.gameDataMu.Lock()
 	if r := conn.gameData.ChunkRadius; r != 0 {
 		radius = r
 	}
-	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	conn.gameData.ChunkRadius = pk.ChunkRadius
+	conn.gameDataMu.Unlock()
+	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
 	_ = conn.WritePacket(&packet.CreativeContent{})
 	return nil
@@ -2548,7 +2629,9 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	// order, so both are expected from here on.
 	conn.expect(packet.IDPlayStatus, packet.IDResourcePacksInfo)
 
+	conn.gameDataMu.Lock()
 	conn.gameData.ChunkRadius = pk.ChunkRadius
+	conn.gameDataMu.Unlock()
 	conn.gameDataReceived.Store(true)
 
 	conn.tryFinaliseClientConn()
@@ -2559,8 +2642,8 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 // packet in the spawning sequence and it marks the point where a server sided connection is considered
 // logged in.
 func (conn *Conn) handleSetLocalPlayerAsInitialised(pk *packet.SetLocalPlayerAsInitialised) error {
-	if pk.EntityRuntimeID != conn.gameData.EntityRuntimeID {
-		return fmt.Errorf("entity runtime ID mismatch: expected %v (from StartGame), got %v", conn.gameData.EntityRuntimeID, pk.EntityRuntimeID)
+	if want := conn.GameData().EntityRuntimeID; pk.EntityRuntimeID != want {
+		return fmt.Errorf("entity runtime ID mismatch: expected %v (from StartGame), got %v", want, pk.EntityRuntimeID)
 	}
 	if conn.waitingForSpawn.CompareAndSwap(true, false) {
 		close(conn.spawn)
@@ -2636,7 +2719,7 @@ func (conn *Conn) tryFinaliseClientConn() {
 		close(conn.spawn)
 		conn.loggedIn = true
 		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
-		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.gameData.EntityRuntimeID})
+		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
 	}
 }
 

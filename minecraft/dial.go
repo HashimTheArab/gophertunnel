@@ -146,6 +146,12 @@ type Dialer struct {
 	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
 	// DisablePacketHandling is set.
 	EnableClientCache bool
+	// RelayStartup hands the game's startup to the caller unchanged: login, encryption and resource packs stay
+	// automatic, but from StartGame on (and any DimensionData before it) every packet is delivered to the caller
+	// as received and the Conn sends none of the spawn sequence itself: no loading-screen acknowledgements,
+	// RequestChunkRadius or SetLocalPlayerAsInitialised. The dial returns when StartGame arrives. It is meant for
+	// proxies that forward the real client's own spawn sequence.
+	RelayStartup bool
 	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
 	// ClientCacheStatus. Relays that forward the real client's status set this so the server negotiates
 	// the cache once. It only applies with DisablePacketHandling; normal logins need the packet.
@@ -356,6 +362,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.httpClient = d.HTTPClient
 	conn.resourcePackProgress = d.ResourcePackProgress
+	conn.relayStartup = d.RelayStartup
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
