@@ -10,7 +10,7 @@ import (
 type InventorySlot struct {
 	// WindowID is the ID of the window that the packet modifies. It must point to one of the windows that the
 	// client currently has opened.
-	WindowID uint32
+	WindowID byte
 	// Slot is the index of the slot that the packet modifies. The new item will be set to the slot at this
 	// index.
 	Slot uint32
@@ -31,7 +31,7 @@ func (*InventorySlot) ID() uint32 {
 }
 
 func (pk *InventorySlot) Marshal(io protocol.IO) {
-	io.Varuint32(&pk.WindowID)
+	io.Uint8(&pk.WindowID)
 	io.Varuint32(&pk.Slot)
 	protocol.OptionalMarshaler(io, &pk.Container)
 	protocol.OptionalFunc(io, &pk.StorageItem, io.ItemInstance)

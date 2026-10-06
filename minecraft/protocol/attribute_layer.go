@@ -1,5 +1,7 @@
 package protocol
 
+import "slices"
+
 const (
 	AttributeLayerPayloadTypeUpdateLayers = iota
 	AttributeLayerPayloadTypeUpdateSettings
@@ -42,26 +44,49 @@ const (
 	AttributeColourOperationMultiply
 )
 
+// Operation names on the wire, indexed by the matching Attribute*Operation constant.
+var (
+	boolAttributeOperations   = []string{"override", "alpha_blend", "and", "nand", "or", "nor", "xor", "xnor"}
+	floatAttributeOperations  = []string{"override", "alpha_blend", "add", "subtract", "multiply", "minimum", "maximum"}
+	colourAttributeOperations = []string{"override", "alpha_blend", "add", "subtract", "multiply"}
+)
+
+// attributeOperation reads or writes an operation constant as its name in names.
+func attributeOperation(r IO, x *int32, names []string) {
+	var name string
+	if *x >= 0 && int(*x) < len(names) {
+		name = names[*x]
+	}
+	r.String(&name)
+	index := slices.Index(names, name)
+	if index < 0 {
+		r.InvalidValue(name, "attribute operation", "unknown operation")
+		return
+	}
+	*x = int32(index)
+}
+
 // AttributeData represents a polymorphic attribute value.
 type AttributeData struct {
 	// Type is the attribute data type. It is one of the AttributeDataType constants.
 	Type uint32
 	// BoolValue is the boolean value if Type is AttributeDataTypeBool.
 	BoolValue bool
-	// BoolOperation is the optional operation for boolean attributes.
-	BoolOperation Optional[int32]
+	// BoolOperation is the operation for boolean attributes. It is one of the AttributeBoolOperation constants.
+	BoolOperation int32
 	// FloatValue is the float value if Type is AttributeDataTypeFloat.
 	FloatValue float32
-	// FloatOperation is the optional operation for float attributes.
-	FloatOperation Optional[int32]
+	// FloatOperation is the operation for float attributes. It is one of the AttributeFloatOperation constants.
+	FloatOperation int32
 	// FloatConstraintMin is the optional minimum constraint for float attributes.
 	FloatConstraintMin Optional[float32]
 	// FloatConstraintMax is the optional maximum constraint for float attributes.
 	FloatConstraintMax Optional[float32]
 	// ColourValue is the colour value if Type is AttributeDataTypeColour.
 	ColourValue int32
-	// ColourOperation is the optional operation for colour attributes.
-	ColourOperation Optional[int32]
+	// ColourOperation is the operation for colour attributes. It is one of the AttributeColourOperation
+	// constants.
+	ColourOperation int32
 }
 
 // Marshal encodes/decodes an AttributeData.
@@ -70,15 +95,15 @@ func (x *AttributeData) Marshal(r IO) {
 	switch x.Type {
 	case AttributeDataTypeBool:
 		r.Bool(&x.BoolValue)
-		OptionalFunc(r, &x.BoolOperation, r.Int32)
+		attributeOperation(r, &x.BoolOperation, boolAttributeOperations)
 	case AttributeDataTypeFloat:
 		r.Float32(&x.FloatValue)
-		OptionalFunc(r, &x.FloatOperation, r.Int32)
+		attributeOperation(r, &x.FloatOperation, floatAttributeOperations)
 		OptionalFunc(r, &x.FloatConstraintMin, r.Float32)
 		OptionalFunc(r, &x.FloatConstraintMax, r.Float32)
 	case AttributeDataTypeColour:
 		r.Int32(&x.ColourValue)
-		OptionalFunc(r, &x.ColourOperation, r.Int32)
+		attributeOperation(r, &x.ColourOperation, colourAttributeOperations)
 	default:
 		r.UnknownEnumOption(x.Type, "attribute data type")
 	}

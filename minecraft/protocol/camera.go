@@ -126,6 +126,13 @@ func easingTypeFromString(io IO, x *int32, s string) {
 	}
 }
 
+// easingType reads or writes an easing type as its string name.
+func easingType(r IO, x *int32) {
+	name := easingTypeToString(*x)
+	r.String(&name)
+	easingTypeFromString(r, x, name)
+}
+
 // easingTypeToString looks up an easing type constant and returns the string representation.
 func easingTypeToString(x int32) string {
 	switch x {
@@ -557,17 +564,15 @@ type CameraRotationOption struct {
 	Value mgl32.Vec3
 	// Time is the time for this rotation option.
 	Time float32
-	// EaseType is the optional easing function name used to interpolate towards this rotation key frame.
+	// EaseType is the easing function used to interpolate towards this rotation key frame.
 	EaseType int32
 }
 
 // Marshal encodes/decodes a CameraRotationOption.
 func (x *CameraRotationOption) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
 	r.Vec3(&x.Value)
 	r.Float32(&x.Time)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
+	easingType(r, &x.EaseType)
 }
 
 // CameraProgressOption represents a progress keyframe option for camera spline instructions.
@@ -576,46 +581,80 @@ type CameraProgressOption struct {
 	Value float32
 	// Time is the time for this progress option.
 	Time float32
-	// EaseType is the optional easing function name used to interpolate towards this progress key frame.
+	// EaseType is the easing function used to interpolate towards this progress key frame.
 	EaseType int32
 }
 
 // Marshal encodes/decodes a CameraProgressOption.
 func (x *CameraProgressOption) Marshal(r IO) {
-	easingType := easingTypeToString(x.EaseType)
 	r.Float32(&x.Value)
 	r.Float32(&x.Time)
-	r.String(&easingType)
-	easingTypeFromString(r, &x.EaseType, easingType)
+	easingType(r, &x.EaseType)
 }
 
 // CameraSplineInstruction represents a camera instruction that creates a spline path for the camera to follow.
 type CameraSplineInstruction struct {
 	// TotalTime is the total time for the spline animation.
 	TotalTime float32
-	// SplineType is the optional spline interpolation type.
-	SplineType Optional[uint8]
+	// SplineType is the spline interpolation type.
+	SplineType uint8
 	// Curve is a list of points that define the spline curve.
 	Curve []mgl32.Vec3
 	// ProgressKeyFrames is a list of progress key frames for the spline.
 	ProgressKeyFrames []CameraProgressOption
 	// RotationOptions is a list of rotation options for the spline.
 	RotationOptions []CameraRotationOption
-	// SplineIdentifier is an optional identifier for referencing the spline by name.
-	SplineIdentifier Optional[string]
-	// LoadFromJson optionally determines whether the spline should be loaded from a JSON definition.
-	LoadFromJson Optional[bool]
+	// SplineIdentifier is the identifier for referencing the spline by name. It may be empty.
+	SplineIdentifier string
+	// LoadFromJson determines whether the spline should be loaded from a JSON definition.
+	LoadFromJson bool
 }
 
 // Marshal encodes/decodes a CameraSplineInstruction.
 func (x *CameraSplineInstruction) Marshal(r IO) {
 	r.Float32(&x.TotalTime)
-	OptionalFunc(r, &x.SplineType, r.Uint8)
+	r.Uint8(&x.SplineType)
 	FuncSlice(r, &x.Curve, r.Vec3)
 	Slice(r, &x.ProgressKeyFrames)
 	Slice(r, &x.RotationOptions)
-	OptionalFunc(r, &x.SplineIdentifier, r.String)
-	OptionalFunc(r, &x.LoadFromJson, r.Bool)
+	r.String(&x.SplineIdentifier)
+	r.Bool(&x.LoadFromJson)
+}
+
+// CameraSplineProgressKeyFrame is a progress key frame of a CameraSplineDefinition.
+type CameraSplineProgressKeyFrame struct {
+	// Progress is the progress along the spline, from 0 to 1.
+	Progress float32
+	// Time is the time in seconds at which the progress is reached.
+	Time float32
+	// EaseType is the optional easing function used to interpolate towards this key frame. The client uses
+	// linear easing when it is absent.
+	EaseType Optional[int32]
+}
+
+// Marshal encodes/decodes a CameraSplineProgressKeyFrame.
+func (x *CameraSplineProgressKeyFrame) Marshal(r IO) {
+	r.Float32(&x.Progress)
+	r.Float32(&x.Time)
+	OptionalFunc(r, &x.EaseType, func(v *int32) { easingType(r, v) })
+}
+
+// CameraSplineRotationKeyFrame is a rotation key frame of a CameraSplineDefinition.
+type CameraSplineRotationKeyFrame struct {
+	// Rotation is the rotation applied at this key frame.
+	Rotation mgl32.Vec3
+	// Time is the time in seconds at which the rotation is applied.
+	Time float32
+	// EaseType is the optional easing function used to interpolate towards this key frame. The client uses
+	// linear easing when it is absent.
+	EaseType Optional[int32]
+}
+
+// Marshal encodes/decodes a CameraSplineRotationKeyFrame.
+func (x *CameraSplineRotationKeyFrame) Marshal(r IO) {
+	r.Vec3(&x.Rotation)
+	r.Float32(&x.Time)
+	OptionalFunc(r, &x.EaseType, func(v *int32) { easingType(r, v) })
 }
 
 // CameraSplineDefinition represents a named camera spline definition.
@@ -624,21 +663,21 @@ type CameraSplineDefinition struct {
 	Name string
 	// TotalTime is the total time for the spline animation.
 	TotalTime float32
-	// SplineType is the optional spline interpolation type.
-	SplineType Optional[string]
+	// SplineType is the spline interpolation type. It is one of the SplineType constants.
+	SplineType string
 	// ControlPoints is a list of points that define the spline curve.
 	ControlPoints []mgl32.Vec3
 	// ProgressKeyFrames is a list of progress key frames for the spline.
-	ProgressKeyFrames []CameraProgressOption
+	ProgressKeyFrames []CameraSplineProgressKeyFrame
 	// RotationKeyFrames is a list of rotation key frames for the spline.
-	RotationKeyFrames []CameraRotationOption
+	RotationKeyFrames []CameraSplineRotationKeyFrame
 }
 
 // Marshal encodes/decodes a CameraSplineDefinition.
 func (x *CameraSplineDefinition) Marshal(r IO) {
 	r.String(&x.Name)
 	r.Float32(&x.TotalTime)
-	OptionalFunc(r, &x.SplineType, r.String)
+	r.String(&x.SplineType)
 	FuncSlice(r, &x.ControlPoints, r.Vec3)
 	Slice(r, &x.ProgressKeyFrames)
 	Slice(r, &x.RotationKeyFrames)
