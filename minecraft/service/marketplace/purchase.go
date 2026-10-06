@@ -90,6 +90,7 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
+	req.Header[inventoryETagHeader] = []string{c.InventoryVersion()}
 	token, err := c.entitlements.src.ServiceToken(ctx)
 	if err != nil {
 		return PurchaseResult{}, fmt.Errorf("request service token: %w", err)
@@ -104,7 +105,8 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	result := PurchaseResult{StatusCode: resp.StatusCode, InventoryETag: resp.Header.Get("InventoryETag")}
+	result := PurchaseResult{StatusCode: resp.StatusCode, InventoryETag: resp.Header.Get(inventoryETagHeader)}
+	c.noteInventoryVersion(result.InventoryETag)
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		result.Outcome = PurchaseSucceeded
