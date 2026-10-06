@@ -1,73 +1,61 @@
 package marketplace
 
 import (
-	"strings"
-
-	"github.com/df-mc/go-playfab/v2/catalog"
+	"context"
+	"encoding/json"
 )
 
-// maxSearchCount is PlayFab's per-page search limit.
-const maxSearchCount = 50
+// Sort orders of a store search.
+const (
+	SortRelevance       = "Relevance"
+	SortAlphabetical    = "Alphabetical"
+	SortAverageRating   = "AverageRating"
+	SortPrice           = "Price"
+	SortStartDate       = "StartDate"
+	SortInstalledStatus = "InstalledStatus"
+)
 
-// SearchFilter maps the query onto a PlayFab catalog search, or reports false when it uses members
-// with no known catalog field (rarity, piece type or creator filters). The reference client's exact
-// search request is unconfirmed; this uses PlayFab's documented OData filter over ContentType, Tags
-// and Id.
-func (q Query) SearchFilter() (catalog.SearchFilter, bool) {
-	if len(q.RarityFilters) > 0 || len(q.PieceTypeFilters) > 0 || len(q.CreatorIDs) > 0 ||
-		len(q.Exclusions.CreatorIDs) > 0 || len(q.Exclusions.PieceTypeFilters) > 0 {
-		return catalog.SearchFilter{}, false
-	}
-	var clauses []string
-	if len(q.ContentTypes) > 0 {
-		clauses = append(clauses, anyOf("ContentType eq %s", q.ContentTypes))
-	}
-	if len(q.OrTags) > 0 {
-		clauses = append(clauses, anyOf("Tags/any(t: t eq %s)", q.OrTags))
-	}
-	for _, tag := range q.AndTags {
-		clauses = append(clauses, "Tags/any(t: t eq "+literal(tag)+")")
-	}
-	for _, tag := range q.NotTags {
-		clauses = append(clauses, "not Tags/any(t: t eq "+literal(tag)+")")
-	}
-	if len(q.ProductIDs) > 0 {
-		clauses = append(clauses, anyOf("Id eq %s", q.ProductIDs))
-	}
-	for _, id := range q.Exclusions.ProductIDs {
-		clauses = append(clauses, "Id ne "+literal(id))
-	}
-	sortBy, direction := q.SortBy, strings.ToLower(q.SortDirection)
-	if sortBy == "" {
-		sortBy = "startDate"
-	}
-	if direction != "asc" {
-		direction = "desc"
-	}
-	count := q.ItemLimit
-	if count <= 0 || (q.TopCount > 0 && q.TopCount < count) {
-		count = q.TopCount
-	}
-	return catalog.SearchFilter{
-		Count:   min(max(count, 0), maxSearchCount),
-		Filter:  strings.Join(clauses, " and "),
-		OrderBy: sortBy + " " + direction,
-		Term:    q.SearchString,
-	}, true
+// Sort directions of a store search.
+const (
+	SortDescending = "Desc"
+	SortAscending  = "Asc"
+)
+
+// SearchRequest is a store search as the game's search screen sends it.
+type SearchRequest struct {
+	Search                  string `json:"search"`
+	SortBy                  string `json:"sortBy"`        // one of the Sort constants; empty is SortRelevance
+	SortDirection           string `json:"sortDirection"` // SortDescending or SortAscending; empty is SortDescending
+	FilterPastRealmsPlus    bool   `json:"filterPastRealmsPlus"`
+	FilterCurrentRealmsPlus bool   `json:"filterCurrentRealmsPlus"`
+	// InstalledPackIDs is sent only with SortInstalledStatus.
+	InstalledPackIDs []string `json:"installedPackIds,omitempty"`
+	// Filters holds the range and tag filters by name; nil sends none.
+	Filters map[string]json.RawMessage `json:"filters"`
 }
 
-func anyOf(format string, values []string) string {
-	parts := make([]string, len(values))
-	for i, value := range values {
-		parts[i] = strings.Replace(format, "%s", literal(value), 1)
+// Search renders the session config's "searchResults" page for search. The results are the page's
+// [ComponentPagedItemList]; [Client.ContinueRow] loads the rest from its continuation token.
+func (c *Client) Search(ctx context.Context, config *SessionConfig, search SearchRequest, state PageRequest) (*Page, error) {
+	id, err := config.PageID("searchResults")
+	if err != nil {
+		return nil, err
 	}
-	if len(parts) == 1 {
-		return parts[0]
+	if search.SortBy == "" {
+		search.SortBy = SortRelevance
 	}
-	return "(" + strings.Join(parts, " or ") + ")"
-}
-
-// literal quotes s as an OData string literal.
-func literal(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	if search.SortDirection == "" {
+		search.SortDirection = SortDescending
+	}
+	if search.SortBy != SortInstalledStatus {
+		search.InstalledPackIDs = nil
+	}
+	if search.Filters == nil {
+		search.Filters = map[string]json.RawMessage{}
+	}
+	body := struct {
+		PageRequest
+		SearchRequest
+	}{state, search}
+	return c.page(ctx, PageByID, id, body)
 }

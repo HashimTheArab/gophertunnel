@@ -71,8 +71,7 @@ type Section struct {
 	Rows []Row  `json:"rows"`
 }
 
-// Row is one layout row. A curated row lists its offers inline in an item list component; a query
-// row carries catalog queries instead, which the client runs to fill it ([Row.SearchQuery]).
+// Row is one layout row. A curated row lists its offers inline in an item list component.
 type Row struct {
 	TelemetryID string      `json:"telemetryId"`
 	ControlID   string      `json:"controlId"` // visual factory, such as StoreRow, HeroRow or PromoBanner
@@ -85,6 +84,18 @@ func (r *Row) Component(kind string) *Component {
 	for i := range r.Components {
 		if r.Components[i].Type == kind {
 			return &r.Components[i]
+		}
+	}
+	return nil
+}
+
+// Component returns the first component of the given type on any row of the page, or nil.
+func (p *Page) Component(kind string) *Component {
+	for i := range p.Layout {
+		for j := range p.Layout[i].Rows {
+			if component := p.Layout[i].Rows[j].Component(kind); component != nil {
+				return component
+			}
 		}
 	}
 	return nil
@@ -113,16 +124,6 @@ func (r *Row) Title() string {
 		return header.Text.Value
 	}
 	return ""
-}
-
-// SearchQuery returns the first of the row's queries that [Query.SearchFilter] can express.
-func (r *Row) SearchQuery() (Query, bool) {
-	for _, query := range r.Queries {
-		if _, ok := query.SearchFilter(); ok {
-			return query, true
-		}
-	}
-	return Query{}, false
 }
 
 // Query is a catalog query a row is filled from.
@@ -166,14 +167,20 @@ func (c *Client) KnownPage(ctx context.Context, config *SessionConfig, name stri
 	return c.Page(ctx, PageByID, id, state)
 }
 
-// Page loads a layout page by id, from [SessionConfig.PageID] or [Link.PageID].
+// Page loads a layout page by id, from [SessionConfig.PageID] or [Link.PageID]. An offer's detail
+// page is loaded with [PageByProductID] and the offer id.
 func (c *Client) Page(ctx context.Context, kind PageKind, id string, state PageRequest) (*Page, error) {
+	return c.page(ctx, kind, id, state)
+}
+
+// page posts body to a layout page endpoint.
+func (c *Client) page(ctx context.Context, kind PageKind, id string, body any) (*Page, error) {
 	prefix, ok := kind.prefix()
 	if !ok || id == "" || strings.ContainsAny(id, "/?#") || id == "." || id == ".." {
 		return nil, errors.New("service/marketplace: invalid page request")
 	}
 	var page Page
-	resp, err := c.store.do(ctx, http.MethodPost, c.store.endpoint(prefix, id), state, &page, nil)
+	resp, err := c.store.do(ctx, http.MethodPost, c.store.endpoint(prefix, id), body, &page, nil)
 	if err != nil {
 		return nil, err
 	}
