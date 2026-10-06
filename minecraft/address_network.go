@@ -133,8 +133,9 @@ func probeEndpoint(ctx context.Context, client *http.Client, endpoint string) er
 	if err != nil {
 		return err
 	}
-	// The answer counts only once its body has arrived, so a stalled body loses to the timeout.
-	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, maxSignalingBody))
+	// The answer counts only once its whole body has arrived; the probe deadline bounds the read,
+	// so a stalled or endless body loses to the timeout.
+	_, err = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
 	if err != nil {
 		return fmt.Errorf("%s: read body: %w", endpoint, err)
