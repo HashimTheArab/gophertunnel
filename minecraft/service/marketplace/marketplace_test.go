@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -508,5 +509,57 @@ func TestItemSalePriceOnlyInsideItsWindow(t *testing.T) {
 		if got := price.AmountAt(now); got != want {
 			t.Errorf("AmountAt(%s) = %d, want %d", at, got, want)
 		}
+	}
+}
+
+// Inventory, inventory refresh and purchase requests name the newest inventory version as the
+// game does; balances send it empty.
+func TestStoreRequestsCarryTheInventoryVersion(t *testing.T) {
+	sent := map[string][]string{}
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		values, present := r.Header["Inventoryetag"]
+		if !present {
+			values = []string{"<absent>"}
+		}
+		sent[r.URL.Path] = append(sent[r.URL.Path], values...)
+		switch r.URL.Path {
+		case "/api/v1.0/player/inventory":
+			w.Header().Set("InventoryETag", "v7")
+			_, _ = io.WriteString(w, inventoryFixture)
+		case "/api/v1.0/inventory/refresh":
+			_, _ = io.WriteString(w, `{"result":{"version":"v8"}}`)
+		case "/api/v1.0/currencies/virtual/balances":
+			_, _ = io.WriteString(w, `{"result":{"virtualCurrencyBalances":[]}}`)
+		}
+	})
+	ctx := context.Background()
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Balances(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PurchaseVirtual(ctx, Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RefreshInventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"/api/v1.0/player/inventory":            {"", "v8"},
+		"/api/v1.0/currencies/virtual/balances": {""},
+		"/api/v1.0/transaction/virtual":         {"v7"},
+		"/api/v1.0/inventory/refresh":           {"v7"},
+	}
+	for path, values := range want {
+		if fmt.Sprint(sent[path]) != fmt.Sprint(values) {
+			t.Errorf("%s inventoryETag = %q, want %q", path, sent[path], values)
+		}
+	}
+	if client.InventoryVersion() != "v7" {
+		t.Errorf("InventoryVersion() = %q, want v7 from the last inventory read", client.InventoryVersion())
 	}
 }

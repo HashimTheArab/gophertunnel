@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/service"
@@ -57,7 +58,37 @@ func (e *Environment) New(src service.TokenSource, entitlements *EntitlementsEnv
 type Client struct {
 	store, entitlements *serviceClient
 	sessionID           string
+
+	mu               sync.Mutex
+	inventoryVersion string // newest inventory version an answer carried
 }
+
+// InventoryVersion returns the newest inventory version the services answered with: an inventory
+// read's InventoryETag, a refresh's version, a purchase's or a layout page's InventoryETag.
+func (c *Client) InventoryVersion() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inventoryVersion
+}
+
+// noteInventoryVersion keeps version as the newest unless it is empty.
+func (c *Client) noteInventoryVersion(version string) {
+	if version == "" {
+		return
+	}
+	c.mu.Lock()
+	c.inventoryVersion = version
+	c.mu.Unlock()
+}
+
+// inventoryHeader names the newest inventory version, as the game's inventory, refresh and
+// purchase requests do.
+func (c *Client) inventoryHeader() http.Header {
+	return http.Header{inventoryETagHeader: {c.InventoryVersion()}}
+}
+
+// inventoryETagHeader carries an inventory version on requests and answers.
+const inventoryETagHeader = "InventoryETag"
 
 // SessionID is the Session-Id the client sends with its session config request.
 func (c *Client) SessionID() string { return c.sessionID }

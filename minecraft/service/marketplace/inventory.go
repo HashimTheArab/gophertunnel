@@ -36,10 +36,11 @@ func (c *Client) Inventory(ctx context.Context) (*Inventory, error) {
 	}
 	target := c.entitlements.endpoint("/api/v1.0/player/inventory")
 	target.RawQuery = "includeReceipt=true"
-	resp, err := c.entitlements.do(ctx, http.MethodGet, target, nil, &result, nil)
+	resp, err := c.entitlements.do(ctx, http.MethodGet, target, nil, &result, c.inventoryHeader())
 	if err != nil {
 		return nil, err
 	}
+	c.noteInventoryVersion(resp.Header.Get(inventoryETagHeader))
 	if result.Inventory == nil || result.Receipt == nil {
 		return nil, errMissing("inventory result lacks inventory or receipt")
 	}
@@ -47,7 +48,7 @@ func (c *Client) Inventory(ctx context.Context) (*Inventory, error) {
 		Entitlements:       result.Inventory.Entitlements,
 		Receipt:            *result.Receipt,
 		ThirdPartyReceipts: result.ThirdPartyReceipts,
-		ETag:               resp.Header.Get("InventoryETag"),
+		ETag:               resp.Header.Get(inventoryETagHeader),
 	}, nil
 }
 
@@ -56,11 +57,12 @@ func (c *Client) RefreshInventory(ctx context.Context) (string, error) {
 	var result struct {
 		Version *string `json:"version"`
 	}
-	if _, err := c.store.do(ctx, http.MethodPost, c.store.endpoint("/api/v1.0/inventory/refresh"), struct{}{}, &result, nil); err != nil {
+	if _, err := c.store.do(ctx, http.MethodPost, c.store.endpoint("/api/v1.0/inventory/refresh"), struct{}{}, &result, c.inventoryHeader()); err != nil {
 		return "", err
 	}
 	if result.Version == nil {
 		return "", errMissing("inventory refresh lacks a version")
 	}
+	c.noteInventoryVersion(*result.Version)
 	return *result.Version, nil
 }
