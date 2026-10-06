@@ -27,6 +27,9 @@ type AddressNetwork struct {
 	// HTTPClient sends the probe and signaling requests; nil uses http.DefaultTransport.
 	// Redirects are never followed.
 	HTTPClient *http.Client
+	// ServerTrust, when set, decides whether to join a NetherNet server and replaces the NetherNet
+	// dialer's server identity checks; servers without an identity are then refused, as in vanilla.
+	ServerTrust ServerTrust
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
@@ -47,7 +50,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 		}
 		return n.RakNet, nil
 	}
-	return httpNetherNet{nethernet: n.NetherNet, endpoint: explicitPort(endpoint), client: client}, nil
+	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust}, nil
 }
 
 // DialContext ...
@@ -170,8 +173,10 @@ func splitServerAddress(address string) (string, uint16) {
 // httpNetherNet dials NetherNet through one server's HTTP signaling endpoint.
 type httpNetherNet struct {
 	nethernet NetherNet
-	endpoint  string // base URL with an explicit port, the dial address endpoint.Client expects
+	url       string // the URL that answered the probe
+	endpoint  string // url with an explicit port, the dial address endpoint.Client expects
 	client    *http.Client
+	trust     ServerTrust
 }
 
 // transport returns NetherNet signaling through the endpoint, opening fresh signaling per dial.
@@ -180,6 +185,23 @@ func (n httpNetherNet) transport() NetherNet {
 	transport.Signaling = nil
 	transport.DialSignaling = func(context.Context, string) (SignalingConn, error) {
 		return endpointSignaling{endpoint.ClientConfig{HTTPClient: n.client, Logger: n.nethernet.Log}.New()}, nil
+	}
+	if n.trust != nil {
+		transport.Dialer.AllowIdentitylessServer = false
+		transport.Dialer.VerifyServerToken = func(ctx context.Context, token, _ string) (*ecdsa.PublicKey, error) {
+			key, err := serverTokenKey(token)
+			if err != nil {
+				return nil, err
+			}
+			trusted, err := n.trust.TrustServer(ctx, n.url, key)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrServerNotTrusted, err)
+			}
+			if !trusted {
+				return nil, ErrServerNotTrusted
+			}
+			return key, nil
+		}
 	}
 	return transport
 }
