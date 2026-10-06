@@ -246,8 +246,21 @@ func TestEnvironmentClientUsesTheDiscoveredEndpoint(t *testing.T) {
 	if err := discovery.Environment(env); err != nil {
 		t.Fatal(err)
 	}
-	realms, err := env.NewClient(fixedXSTS{}, server.Client()).Realms(context.Background())
+	client, err := env.NewClient(fixedXSTS{}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	realms, err := client.Realms(context.Background())
 	if err != nil || len(realms) != 1 || len(paths) != 1 || paths[0] != "/worlds" {
 		t.Fatalf("realms = %+v paths = %v err = %v", realms, paths, err)
+	}
+}
+
+// An endpoint discovery left out or made relative must fail instead of falling back to the built-in host.
+func TestEnvironmentRejectsUnusableServiceURI(t *testing.T) {
+	for _, uri := range []string{"", "/", "pocket.realms.minecraft.net", "http://pocket.realms.minecraft.net", "https://"} {
+		if c, err := (&Environment{ServiceURI: uri}).NewClient(fixedXSTS{}, nil); err == nil || c != nil {
+			t.Errorf("serviceUri %q: client = %v, err = %v; want an error", uri, c, err)
+		}
 	}
 }

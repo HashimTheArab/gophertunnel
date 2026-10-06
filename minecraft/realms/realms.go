@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,11 +56,18 @@ type Environment struct {
 // ServiceName implements [service.Environment] and returns "realms_frontend_bedrock_legacy".
 func (*Environment) ServiceName() string { return "realms_frontend_bedrock_legacy" }
 
-// NewClient returns a Client like [NewClient] that sends its requests to the discovered endpoint.
-func (e *Environment) NewClient(src oauth2.TokenSource, httpClient *http.Client) *Client {
+// NewClient returns a Client like [NewClient] that sends its requests to the discovered endpoint. It fails
+// rather than fall back to the built-in host when discovery gave no absolute https endpoint, so the Xbox
+// authorization is only ever sent where discovery pointed.
+func (e *Environment) NewClient(src oauth2.TokenSource, httpClient *http.Client) (*Client, error) {
+	base := strings.TrimRight(e.ServiceURI, "/")
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("realms: discovered serviceUri %q is not an absolute https endpoint", e.ServiceURI)
+	}
 	c := NewClient(src, httpClient)
-	c.baseURL = strings.TrimRight(e.ServiceURI, "/")
-	return c
+	c.baseURL = base
+	return c, nil
 }
 
 var (
