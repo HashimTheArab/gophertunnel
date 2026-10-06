@@ -90,10 +90,6 @@ func (c *Client) SessionConfig(ctx context.Context) (*SessionConfig, error) {
 		http.Header{"Session-Id": {c.sessionID}}); err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	if c.listsVersion == "" {
-		c.listsVersion = config.UserListsVersion
-	}
-	c.mu.Unlock()
+	c.noteListsVersion(config.UserListsVersion)
 	return &config, nil
 }

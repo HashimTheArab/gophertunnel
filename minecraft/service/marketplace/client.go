@@ -23,6 +23,8 @@ type Environment struct {
 	internal.ServiceEnvironment
 	// HTTPClient sends the requests; nil uses http.DefaultClient.
 	HTTPClient *http.Client `json:"-"`
+	// Identity is what purchases of clients made by New name in their custom tags.
+	Identity Identity `json:"-"`
 }
 
 // ServiceName implements [service.Environment] and returns "store".
@@ -52,25 +54,20 @@ func (e *Environment) New(src service.TokenSource, entitlements *EntitlementsEnv
 	if err != nil {
 		return nil, err
 	}
-	return &Client{store: store, entitlements: owned, sessionID: uuid.NewString(), identity: Identity{}.withDefaults()}, nil
+	return &Client{store: store, entitlements: owned, sessionID: uuid.NewString(), identity: e.Identity.withDefaults()}, nil
 }
 
 // Open discovers the store and entitlements services and returns a Client authorized by src whose
 // purchases name identity.
 func Open(discovery *service.Discovery, src service.TokenSource, identity Identity) (*Client, error) {
-	store, owned := new(Environment), new(EntitlementsEnvironment)
+	store, owned := &Environment{Identity: identity}, new(EntitlementsEnvironment)
 	if err := discovery.Environment(store); err != nil {
 		return nil, fmt.Errorf("service/marketplace: resolve store service: %w", err)
 	}
 	if err := discovery.Environment(owned); err != nil {
 		return nil, fmt.Errorf("service/marketplace: resolve entitlements service: %w", err)
 	}
-	client, err := store.New(src, owned)
-	if err != nil {
-		return nil, err
-	}
-	client.identity = identity.withDefaults()
-	return client, nil
+	return store.New(src, owned)
 }
 
 // Client uses the store and entitlements services; it is safe for concurrent use.

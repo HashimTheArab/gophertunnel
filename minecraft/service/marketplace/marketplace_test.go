@@ -621,3 +621,42 @@ func TestPurchaseTagsComeFromTheIdentity(t *testing.T) {
 		t.Fatalf("tags = %+v, %+v; result = %+v", tags, bodies[1].CustomTags, first)
 	}
 }
+
+// A refreshed session config with a newer user-lists version replaces the cached one, and an
+// identity set on the environment reaches purchases made by a client from New.
+func TestSessionStateFollowsRefreshesAndEnvironmentIdentity(t *testing.T) {
+	version := "lists-1"
+	var tags CustomTags
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1.0/transaction/virtual" {
+			var body purchaseBody
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			tags = body.CustomTags
+			return
+		}
+		_, _ = io.WriteString(w, `{"result":{"knownPages":{},"userListsVersion":"`+version+`"}}`)
+	})
+	for _, v := range []string{"lists-1", "lists-2"} {
+		version = v
+		if _, err := client.SessionConfig(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if state := client.PageState(nil); state.ListVersion != "lists-2" {
+		t.Fatalf("ListVersion = %q, want lists-2", state.ListVersion)
+	}
+	env := &Environment{Identity: Identity{XUID: "2535", TitleID: "20CA2"}}
+	env.ServiceURI, env.HTTPClient = client.store.base, client.store.http
+	owned := &EntitlementsEnvironment{HTTPClient: client.entitlements.http}
+	owned.ServiceURI = client.entitlements.base
+	fromNew, err := env.New(fixedTokens{}, owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fromNew.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if tags.Xuid != "2535" || tags.TitleID != "20CA2" || tags.BuildPlat != 7 {
+		t.Fatalf("tags = %+v", tags)
+	}
+}
