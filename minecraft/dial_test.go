@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -904,7 +906,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	defer cancel()
 	conn, err := (Dialer{
 		FlushRate:                -1,
-		DisablePacketHandling:    true,
+		Handoff:                  HandoffAfterLogin,
 		EnableBatchReading:       true,
 		ForwardClientCacheStatus: true,
 	}).DialContextNetwork(ctx, network, "example.com:19132")
@@ -925,7 +927,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	}
 }
 
-func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing.T) {
+func TestDialContextForwardClientCacheStatusIgnoredOutsideHandoffAfterLogin(t *testing.T) {
 	network := newScriptedDialNetwork(func(conn net.Conn) error {
 		// startScriptedLogin reads the ClientCacheStatus a normal login must still send.
 		decoder, encoder, err := startScriptedLogin(conn)
@@ -961,7 +963,7 @@ func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing
 
 // A relayed startup reaches the caller unchanged, the Conn sends none of the spawn sequence itself, and the
 // caller's own RequestChunkRadius is the first packet the server sees after StartGame.
-func TestRelayStartupDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.T) {
+func TestHandoffAtStartGameDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.T) {
 	startGame := &packet.StartGame{WorldName: "Relayed", LevelID: "level-id", ServerID: "server-id", WorldID: "world-id", ScenarioID: "scenario", OwnerID: "owner", EntityRuntimeID: 7, EntityUniqueID: 7, BaseGameVersion: "1.26.50"}
 	startup := []packet.Packet{
 		&packet.DimensionData{},
@@ -1008,7 +1010,7 @@ func TestRelayStartupDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, err := (Dialer{FlushRate: -1, RelayStartup: true}).DialContextNetwork(ctx, network, "example.com:19132")
+	conn, err := (Dialer{FlushRate: -1, Handoff: HandoffAtStartGame}).DialContextNetwork(ctx, network, "example.com:19132")
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -1045,14 +1047,14 @@ func marshalScripted(pk packet.Packet) []byte {
 }
 
 // GameData remains readable while relayed startup packets arrive after Dial has returned.
-func TestRelayStartupGameDataWhileRegistryArrives(t *testing.T) {
+func TestHandoffAtStartGameGameDataWhileRegistryArrives(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()
 	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
 	defer conn.Abort()
 	conn.pool = DefaultProtocol.Packets(false)
-	conn.relayStartup = true
-	conn.loggedIn = true
+	conn.handoff = HandoffAtStartGame
+	conn.loggedIn, conn.handedOff = true, true
 	registry := &packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}}
 	buf := new(bytes.Buffer)
 	if err := (&packet.Header{PacketID: registry.ID()}).Write(buf); err != nil {
@@ -1081,69 +1083,140 @@ func TestRelayStartupGameDataWhileRegistryArrives(t *testing.T) {
 	}
 }
 
-// Packets deferred before StartGame keep their order in either reading mode.
-func TestRelayStartupPreservesPreStartGamePacketOrder(t *testing.T) {
-	for _, mode := range []struct{ batchReading, disablePacketHandling, handshakeComplete bool }{
-		{}, {batchReading: true}, {disablePacketHandling: true}, {batchReading: true, disablePacketHandling: true},
-		{disablePacketHandling: true, handshakeComplete: true}, {batchReading: true, disablePacketHandling: true, handshakeComplete: true},
+// Startup packets reach the caller in receive order under every Handoff in either reading mode, including
+// packets deferred before StartGame and a handoff triggered by a server skipping the handshake.
+func TestHandoffPreservesStartupPacketOrder(t *testing.T) {
+	type mode struct {
+		handoff                   Handoff
+		handedOff, skipsHandshake bool
+	}
+	for _, m := range []mode{
+		{handoff: HandoffNone},
+		{handoff: HandoffAtStartGame},
+		{handoff: HandoffAfterLogin, handedOff: true},
+		{handoff: HandoffAfterLogin, skipsHandshake: true},
 	} {
-		t.Run(fmt.Sprintf("batch=%t/passthrough=%t/handshake=%t", mode.batchReading, mode.disablePacketHandling, mode.handshakeComplete), func(t *testing.T) {
-			client, peer := net.Pipe()
-			defer peer.Close()
-			conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
-			defer conn.Abort()
-			conn.pool = DefaultProtocol.Packets(false)
-			conn.relayStartup = true
-			conn.batchReading = mode.batchReading
-			conn.disablePacketHandling = mode.disablePacketHandling
-			conn.handshakeComplete = mode.handshakeComplete
-			conn.disablePacketHandlingReady = mode.disablePacketHandling && !mode.handshakeComplete
-			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			startup := []packet.Packet{&packet.DimensionData{}, &packet.VoxelShapes{}, &packet.DimensionData{}, &packet.StartGame{}}
-			for _, pk := range startup {
-				buf := new(bytes.Buffer)
-				if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+		for _, batchReading := range []bool{false, true} {
+			t.Run(fmt.Sprintf("handoff=%d/handedOff=%t/skipsHandshake=%t/batch=%t", m.handoff, m.handedOff, m.skipsHandshake, batchReading), func(t *testing.T) {
+				client, peer := net.Pipe()
+				defer peer.Close()
+				go func() { _, _ = io.Copy(io.Discard, peer) }() // a regressed login's writes must not block receive
+				conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+				defer conn.Abort()
+				conn.pool = DefaultProtocol.Packets(false)
+				conn.handoff, conn.handedOff, conn.batchReading = m.handoff, m.handedOff, batchReading
+				if m.skipsHandshake {
+					// Login sent: StartGame answers it without the handshake, after three unexpected packets.
+					conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
+				}
+				if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 					t.Fatal(err)
 				}
-				pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
-				if err := conn.receive(buf.Bytes()); err != nil {
-					t.Fatal(err)
+				startup := []packet.Packet{&packet.DimensionData{}, &packet.VoxelShapes{}, &packet.DimensionData{}, &packet.StartGame{}}
+				for _, pk := range startup {
+					buf := new(bytes.Buffer)
+					if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+						t.Fatal(err)
+					}
+					pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+					if err := conn.receive(buf.Bytes()); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			conn.flushBatch()
-			var got []packet.Packet
-			if mode.batchReading {
-				var err error
-				got, err = conn.ReadBatch()
-				if err != nil {
-					t.Fatal(err)
+				conn.flushBatch()
+				if m.skipsHandshake && !conn.handedOff {
+					t.Fatal("StartGame answering Login did not hand off")
 				}
-			} else {
-				for range startup {
-					pk, err := conn.ReadPacket()
+				var got []packet.Packet
+				if batchReading {
+					var err error
+					got, err = conn.ReadBatch()
 					if err != nil {
 						t.Fatal(err)
 					}
-					got = append(got, pk)
+				} else {
+					for range startup {
+						pk, err := conn.ReadPacket()
+						if err != nil {
+							t.Fatal(err)
+						}
+						got = append(got, pk)
+					}
 				}
-			}
-			if !slices.Equal(packetIDs(got), packetIDs(startup)) {
-				t.Fatalf("relayed startup order = %v, want %v", packetIDs(got), packetIDs(startup))
-			}
-		})
+				if !slices.Equal(packetIDs(got), packetIDs(startup)) {
+					t.Fatalf("startup order = %v, want %v", packetIDs(got), packetIDs(startup))
+				}
+			})
+		}
+	}
+}
+
+// An encrypting server hands off after the handshake: ServerToClientHandshake stays internal and the login's
+// answers reach the caller in order.
+func TestHandoffAfterLoginReturnsAfterEncryptionHandshake(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &Listener{
+		key: key,
+		cfg: ListenConfig{
+			ErrorLog:               slog.New(slog.DiscardHandler),
+			StatusProvider:         NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			AuthenticationDisabled: true,
+			Compression:            packet.DefaultCompression,
+			FlushRate:              -1,
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
+		incoming: make(chan *Conn, 1),
+		close:    make(chan struct{}),
+	}
+	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		listener.createConn(pipeConn{Conn: server})
+		return pipeConn{Conn: client}, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1, Handoff: HandoffAfterLogin}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []uint32{packet.IDPlayStatus, packet.IDResourcePacksInfo} {
+		pk, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("read packet %d: %v", want, err)
+		}
+		if pk.ID() != want {
+			t.Fatalf("handed-off packet = %d, want %d", pk.ID(), want)
+		}
+	}
+}
+
+// Handoff values outside the defined modes are rejected before dialing.
+func TestDialRejectsUnknownHandoff(t *testing.T) {
+	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
+		t.Fatal("dialed with an unknown Handoff")
+		return nil, nil
+	}}
+	if _, err := (Dialer{Handoff: HandoffAfterLogin + 1}).DialContextNetwork(context.Background(), network, "example.com:19132"); err == nil {
+		t.Fatal("dial accepted an unknown Handoff")
 	}
 }
 
 // A dial can return immediately after the handshake, before any application packet arrives.
-func TestRelayStartupWakesPassthroughReaderAfterHandshake(t *testing.T) {
+func TestHandoffAfterLoginWakesReaderAfterHandshake(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()
 	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
 	defer conn.Abort()
 	conn.pool = DefaultProtocol.Packets(false)
-	conn.relayStartup, conn.disablePacketHandling, conn.handshakeComplete = true, true, true
+	conn.handoff, conn.handedOff = HandoffAfterLogin, true
 	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{})}
 	conn.ctx = readContext
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -1153,7 +1226,7 @@ func TestRelayStartupWakesPassthroughReaderAfterHandshake(t *testing.T) {
 	go func() {
 		pk, err := conn.ReadPacket()
 		if err == nil && pk.ID() != packet.IDDimensionData {
-			err = fmt.Errorf("first relayed packet = %v, want DimensionData", pk.ID())
+			err = fmt.Errorf("first handed-off packet = %v, want DimensionData", pk.ID())
 		}
 		done <- err
 	}()
@@ -1171,14 +1244,14 @@ func TestRelayStartupWakesPassthroughReaderAfterHandshake(t *testing.T) {
 	}
 }
 
-// A passthrough reader preempted after checking deferred packets still reads relayed packets in order.
-func TestRelayStartupPassthroughKeepsOrderForPreemptedReader(t *testing.T) {
+// A reader preempted after checking deferred packets still reads handed-off packets in order.
+func TestHandoffAfterLoginKeepsOrderForPreemptedReader(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()
 	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
 	defer conn.Abort()
 	conn.pool = DefaultProtocol.Packets(false)
-	conn.relayStartup, conn.disablePacketHandling, conn.handshakeComplete = true, true, true
+	conn.handoff, conn.handedOff = HandoffAfterLogin, true
 	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{}), hold: make(chan struct{})}
 	conn.ctx = readContext
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -1202,7 +1275,7 @@ func TestRelayStartupPassthroughKeepsOrderForPreemptedReader(t *testing.T) {
 	}
 	close(readContext.hold)
 	if pk := <-read; pk == nil || pk.ID() != packet.IDDimensionData {
-		t.Fatalf("first relayed packet = %T, want DimensionData", pk)
+		t.Fatalf("first handed-off packet = %T, want DimensionData", pk)
 	}
 }
 

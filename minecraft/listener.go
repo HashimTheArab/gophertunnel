@@ -149,9 +149,9 @@ type ListenConfig struct {
 	// reading the connection; returning a non-nil error closes the connection.
 	ConnHandler func(c *Conn) error
 
-	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
-	// connection control, including disconnect and encryption-handshake packets, remains internal.
-	DisablePacketHandling bool
+	// Handoff is the point in the login at which connections stop handling packets themselves and are delivered.
+	// Only HandoffNone and HandoffAfterLogin apply to a Listener.
+	Handoff Handoff
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
@@ -279,6 +279,9 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	}
 	if cfg.FlushRate == 0 {
 		cfg.FlushRate = time.Second / 20
+	}
+	if cfg.Handoff != HandoffNone && cfg.Handoff != HandoffAfterLogin {
+		return nil, fmt.Errorf("listen: Handoff %d does not apply to a Listener", cfg.Handoff)
 	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 256
@@ -521,7 +524,7 @@ func (listener *Listener) listen() {
 
 // createConn creates a connection for the net.Conn passed and adds it to the listener, so that it may be
 // accepted once its login sequence is complete.
-func (listener *Listener) createConn(netConn net.Conn) {
+func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	listener.packsMu.RLock()
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
@@ -554,14 +557,14 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.verifier = listener.verifier
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
-	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
+	conn.handoff = listener.cfg.Handoff
 	conn.batchReading = listener.cfg.EnableBatchReading
 
 	if !listener.group.add(listener.cfg.MaximumPlayers) {
 		// The server was full. We kick the player immediately and close the connection.
 		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
 		_ = conn.close(conn.closeErr("server full"))
-		return
+		return conn
 	}
 	listener.updatePongData()
 
@@ -580,6 +583,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 			timer.Stop()
 		}
 	}()
+	return conn
 }
 
 // errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
@@ -608,8 +612,7 @@ func (listener *Listener) handleConn(conn *Conn) {
 		publishBatch := false
 		callbackErr := false
 		if err := conn.dec.DecodeFunc(func(data []byte) error {
-			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
-			passthroughReadyBefore := conn.disablePacketHandlingReady
+			loggedInBefore, handshakeCompleteBefore, handedOffBefore := conn.loggedIn, conn.handshakeComplete, conn.handedOff
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
 				return err
@@ -621,11 +624,7 @@ func (listener *Listener) handleConn(conn *Conn) {
 					return err
 				}
 			}
-			publish := !loggedInBefore && conn.loggedIn
-			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
-				publish = true
-			}
-			if publish {
+			if (!loggedInBefore && conn.loggedIn) || (!handedOffBefore && conn.handedOff) {
 				if conn.batchReading {
 					publishBatch = true
 				} else if !listener.deliverConn(conn) {
