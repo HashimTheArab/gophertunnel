@@ -261,3 +261,55 @@ func TestChunkDownloadFlushesItsRequestsWithoutATicker(t *testing.T) {
 		t.Fatal("chunk requests stayed buffered on a Conn with no flush ticker")
 	}
 }
+
+type recordingPackCache struct {
+	mu     sync.Mutex
+	stored []ResourcePackCacheKey
+}
+
+func (*recordingPackCache) Load(context.Context, ResourcePackCacheKey) (*resource.Pack, error) {
+	return nil, nil
+}
+func (c *recordingPackCache) Store(_ context.Context, key ResourcePackCacheKey, _ *resource.Pack) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stored = append(c.stored, key)
+	return nil
+}
+
+// A chunk-downloaded pack is in the cache before Dial hands out the Conn, so an immediate Close cannot cancel its store.
+func TestChunkDownloadStoresBeforeDialReturns(t *testing.T) {
+	id := uuid.New()
+	archive := testResourcePackArchive(t, id)
+	client, peer := net.Pipe()
+	defer peer.Close()
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	cache := &recordingPackCache{}
+	conn.resourcePackCache = cache
+	key := ResourcePackCacheKey{UUID: id, Version: "1.0.0", Size: uint64(len(archive))}
+	pack := &downloadingPack{buf: new(bytes.Buffer), size: key.Size, cacheKey: key}
+	conn.packQueue = &resourcePackQueue{
+		packAmount:       1,
+		downloadingPacks: map[string]*downloadingPack{id.String(): pack},
+		awaitingPacks:    make(map[string]*downloadingPack),
+	}
+	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: id.String() + "_1.0.0", DataChunkSize: uint32(len(archive)), Size: key.Size}); err != nil {
+		t.Fatal(err)
+	}
+	waitForResourcePackRequest(t, pack, 0)
+	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{UUID: id.String() + "_1.0.0", Data: archive}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conn.awaitPackStores(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if !slices.Equal(cache.stored, []ResourcePackCacheKey{key}) {
+		t.Fatalf("stored %v before Dial returned, want %v", cache.stored, key)
+	}
+}

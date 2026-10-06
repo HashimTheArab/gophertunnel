@@ -30,6 +30,7 @@ func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
 // ResourcePackCache allows a Dialer to reuse resource packs downloaded earlier. Cache failures are
 // non-fatal: a nil pack or an error from Load falls back to a normal download, and errors from Store are
 // only logged.
+// Packs downloaded during a login are stored before the Dial returns.
 type ResourcePackCache interface {
 	// Load returns the pack stored under key, or nil if it is not cached.
 	Load(ctx context.Context, key ResourcePackCacheKey) (*resource.Pack, error)
