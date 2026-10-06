@@ -112,6 +112,22 @@ func TestProbeNetherNetGivesUpAtTimeout(t *testing.T) {
 	}
 }
 
+// A 2xx whose body never finishes must not select NetherNet once the probe has timed out.
+func TestProbeNetherNetRejectsStalledBody(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	host, port := serverHostPort(t, server.Listener.Addr())
+	if endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), host, port, 150*time.Millisecond); err == nil {
+		t.Fatalf("stalled body answered at %q", endpoint)
+	}
+}
+
 func TestAddressNetworkSelectsRakNetWhenProbeFails(t *testing.T) {
 	t.Parallel()
 	network := AddressNetwork{RakNet: RakNet{MaxMTU: 1400}}
