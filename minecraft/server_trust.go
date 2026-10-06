@@ -57,7 +57,7 @@ func (t *FirstUseTrust) TrustServer(ctx context.Context, url string, key *ecdsa.
 		return false, err
 	}
 	t.mu.Lock()
-	keys := t.load()
+	keys, _ := t.load()
 	for i, known := range keys {
 		if known == encoded {
 			keys = append(append(keys[:i:i], keys[i+1:]...), encoded)
@@ -79,7 +79,10 @@ func (t *FirstUseTrust) TrustServer(ctx context.Context, url string, key *ecdsa.
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	keys = t.load()
+	keys, loaded := t.load()
+	if !loaded {
+		return true, nil // saving now would replace keys that could not be read
+	}
 	for _, known := range keys {
 		if known == encoded {
 			return true, nil
@@ -93,16 +96,17 @@ func (t *FirstUseTrust) TrustServer(ctx context.Context, url string, key *ecdsa.
 	return true, nil
 }
 
-func (t *FirstUseTrust) load() []string {
+// load reports false when the stored keys could not be read.
+func (t *FirstUseTrust) load() ([]string, bool) {
 	if t.Store == nil {
-		return nil
+		return nil, false
 	}
 	keys, err := t.Store.LoadTrustedKeys()
 	if err != nil {
 		t.logger().Warn("load trusted server keys", "error", err)
-		return nil
+		return nil, false
 	}
-	return keys
+	return keys, true
 }
 
 func (t *FirstUseTrust) save(keys []string) {
