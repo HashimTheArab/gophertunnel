@@ -1,25 +1,20 @@
 package minecraft
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
-
-	"github.com/go-jose/go-jose/v4"
-	"github.com/go-jose/go-jose/v4/jwt"
 )
 
-// ServerTrust decides whether to join a NetherNet server reached by address. It is asked while the
-// server's answer is negotiated, with the URL that answered the probe and the public key the server
-// proved it holds; a server that presents no identity is refused without asking.
+// ServerTrust decides whether to join a NetherNet server reached by address. It is asked once the
+// connection is up, with the URL that answered the probe and the public key the server proved it
+// holds; a server that presents no identity is refused without asking.
 type ServerTrust interface {
 	TrustServer(ctx context.Context, url string, key *ecdsa.PublicKey) (bool, error)
 }
@@ -135,54 +130,4 @@ func EncodeTrustedKey(key *ecdsa.PublicKey) (string, error) {
 		return "", fmt.Errorf("encode server key: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(der), nil
-}
-
-// serverTokenKey returns the public key in a server identity token's cpk claim, which may be a JWK
-// or base64 PKIX DER, after checking the token is signed by that key.
-func serverTokenKey(token string) (*ecdsa.PublicKey, error) {
-	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES384})
-	if err != nil {
-		return nil, fmt.Errorf("parse server identity token: %w", err)
-	}
-	var claims struct {
-		PublicKey json.RawMessage `json:"cpk"`
-	}
-	if err := parsed.UnsafeClaimsWithoutVerification(&claims); err != nil {
-		return nil, fmt.Errorf("read server identity token: %w", err)
-	}
-	key, err := parseClaimedKey(claims.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-	if err := parsed.Claims(key, new(map[string]any)); err != nil {
-		return nil, fmt.Errorf("verify server identity token: %w", err)
-	}
-	return key, nil
-}
-
-func parseClaimedKey(raw json.RawMessage) (*ecdsa.PublicKey, error) {
-	raw = bytes.TrimSpace(raw)
-	var encoded string
-	if err := json.Unmarshal(raw, &encoded); err == nil {
-		der, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, fmt.Errorf("decode cpk: %w", err)
-		}
-		key, err := x509.ParsePKIXPublicKey(der)
-		if err != nil {
-			return nil, fmt.Errorf("parse cpk: %w", err)
-		}
-		if ecKey, ok := key.(*ecdsa.PublicKey); ok {
-			return ecKey, nil
-		}
-		return nil, errors.New("cpk is not an ECDSA key")
-	}
-	var jwk jose.JSONWebKey
-	if err := json.Unmarshal(raw, &jwk); err != nil {
-		return nil, fmt.Errorf("parse cpk: %w", err)
-	}
-	if ecKey, ok := jwk.Key.(*ecdsa.PublicKey); ok {
-		return ecKey, nil
-	}
-	return nil, errors.New("cpk is not an ECDSA key")
 }
