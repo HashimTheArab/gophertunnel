@@ -148,3 +148,19 @@ func TestRequestsCarrySessionAndLanguageHeaders(t *testing.T) {
 		}
 	}
 }
+
+// Button art carries ribbon text and per-part colours, and a multi-item entry its sale banner.
+func TestMessagesDecodeBannerAndColors(t *testing.T) {
+	var message Message
+	if err := json.Unmarshal([]byte(`{"id":"m","messageText":{"header":"H","bannerText":"New!"},
+"colors":{"ribbon":{"hexColor":{"r":255,"g":128,"b":0}}},
+"messageItemList":[{"saleBanner":"50% off"},{"saleBanner":{"unexpected":true}}]}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Text.Banner != "New!" || message.Colors["ribbon"].RGB != (RGB{R: 255, G: 128, B: 0}) {
+		t.Fatalf("message = %+v", message)
+	}
+	if message.Items[0].SaleBannerText() != "50% off" || message.Items[1].SaleBannerText() != "" {
+		t.Fatalf("sale banners = %q, %q", message.Items[0].SaleBannerText(), message.Items[1].SaleBannerText())
+	}
+}
