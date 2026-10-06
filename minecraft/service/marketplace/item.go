@@ -121,6 +121,25 @@ type SaleInfo struct {
 	StoreID        string  `json:"storeId"`
 	Discount       float64 `json:"discount"`
 	Category       string  `json:"category"`
+
+	priced bool // the answer carried salePrice, which may be zero for a free sale
+}
+
+// UnmarshalJSON decodes the sale and records whether it named a price.
+func (s *SaleInfo) UnmarshalJSON(b []byte) error {
+	type plain SaleInfo
+	var fields struct {
+		plain
+		SalePrice *int64 `json:"salePrice"`
+	}
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return err
+	}
+	*s = SaleInfo(fields.plain)
+	if fields.SalePrice != nil {
+		s.SalePrice, s.priced = *fields.SalePrice, true
+	}
+	return nil
 }
 
 // UnmarshalJSON decodes the price object or, as the reference client accepts, a bare amount.
@@ -138,9 +157,10 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, (*plain)(p))
 }
 
-// Amount returns what the offer sells for now: the sale price during a sale, else the list price.
+// Amount returns what the offer sells for now: the sale price during a sale, including a free
+// one, else the list price.
 func (p *Price) Amount() int64 {
-	if p.Sale != nil && p.Sale.SalePrice > 0 {
+	if p.Sale != nil && p.Sale.priced && p.Sale.SalePrice >= 0 {
 		return p.Sale.SalePrice
 	}
 	return int64(p.ListPrice)

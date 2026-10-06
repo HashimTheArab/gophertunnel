@@ -472,3 +472,17 @@ func TestItemPriceAndThumbnail(t *testing.T) {
 		t.Fatal("list price or missing thumbnail misread")
 	}
 }
+
+// An offer on sale for free sells at zero; a sale without a price leaves the list price.
+func TestItemSalePriceOfZeroIsFree(t *testing.T) {
+	var free, unpriced Price
+	if err := json.Unmarshal([]byte(`{"listPrice":990,"saleInfo":{"salePrice":0}}`), &free); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"listPrice":990,"saleInfo":{"discount":0.5}}`), &unpriced); err != nil {
+		t.Fatal(err)
+	}
+	if free.Amount() != 0 || unpriced.Amount() != 990 {
+		t.Fatalf("free = %d, unpriced = %d", free.Amount(), unpriced.Amount())
+	}
+}
