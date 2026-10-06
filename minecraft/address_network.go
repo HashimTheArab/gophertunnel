@@ -6,15 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/df-mc/go-nethernet"
+	"github.com/df-mc/go-nethernet/endpoint"
 )
 
 // AddressNetwork is a Network for a server named by host:port. Like the vanilla client joining
@@ -49,7 +47,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 		}
 		return n.RakNet, nil
 	}
-	return httpNetherNet{nethernet: n.NetherNet, endpoint: endpoint, client: client}, nil
+	return httpNetherNet{nethernet: n.NetherNet, endpoint: explicitPort(endpoint), client: client}, nil
 }
 
 // DialContext ...
@@ -172,7 +170,7 @@ func splitServerAddress(address string) (string, uint16) {
 // httpNetherNet dials NetherNet through one server's HTTP signaling endpoint.
 type httpNetherNet struct {
 	nethernet NetherNet
-	endpoint  string
+	endpoint  string // base URL with an explicit port, the dial address endpoint.Client expects
 	client    *http.Client
 }
 
@@ -181,27 +179,24 @@ func (n httpNetherNet) transport() NetherNet {
 	transport := n.nethernet
 	transport.Signaling = nil
 	transport.DialSignaling = func(context.Context, string) (SignalingConn, error) {
-		return newHTTPSignaling(n.client, n.endpoint), nil
+		return endpointSignaling{endpoint.ClientConfig{HTTPClient: n.client, Logger: n.nethernet.Log}.New()}, nil
 	}
 	return transport
 }
 
-// remoteNetworkID returns the random ID vanilla addresses an HTTP signaling server by.
-func remoteNetworkID() string { return strconv.FormatUint(rand.Uint64(), 10) }
-
 // DialContext ignores address: the endpoint already names the server.
 func (n httpNetherNet) DialContext(ctx context.Context, _ string) (net.Conn, error) {
-	return n.transport().DialContext(ctx, remoteNetworkID())
+	return n.transport().DialContext(ctx, n.endpoint)
 }
 
 // DialContextIdentity ...
 func (n httpNetherNet) DialContextIdentity(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
-	return n.transport().DialContextIdentity(ctx, remoteNetworkID(), token, key)
+	return n.transport().DialContextIdentity(ctx, n.endpoint, token, key)
 }
 
 // DialContextIdentityProvider ...
 func (n httpNetherNet) DialContextIdentityProvider(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
-	return n.transport().DialContextIdentityProvider(ctx, remoteNetworkID(), token, key, identityProvider)
+	return n.transport().DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
 }
 
 // PingContext ...
@@ -214,115 +209,22 @@ func (httpNetherNet) Listen(string) (NetworkListener, error) {
 	return nil, errors.New("minecraft: NetherNet HTTP signaling: listen not supported")
 }
 
-// maxSignalingBody bounds bodies read from a signaling endpoint.
-const maxSignalingBody = 1 << 20
-
-// httpSignaling carries one negotiation over a server's HTTP signaling endpoint: the offer is
-// POSTed to {endpoint}/v1/join/{id} and the response body is the answer. The endpoint has no
-// channel for later signals, so candidates travel in the SDPs and trickle ICE is disabled.
-type httpSignaling struct {
-	client   *http.Client
-	endpoint string
-	localID  string
-	ctx      context.Context
-	cancel   context.CancelFunc
-
-	mu        sync.Mutex
-	notifiers map[uint64]nethernet.Notifier
-	next      uint64
-}
-
-func newHTTPSignaling(client *http.Client, endpoint string) *httpSignaling {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &httpSignaling{
-		client:    client,
-		endpoint:  endpoint,
-		localID:   remoteNetworkID(),
-		ctx:       ctx,
-		cancel:    cancel,
-		notifiers: make(map[uint64]nethernet.Notifier),
-	}
-}
-
-// Signal sends an offer and delivers the answer; other signals have no channel and are dropped.
-func (s *httpSignaling) Signal(ctx context.Context, signal *nethernet.Signal) error {
-	if signal.Type != nethernet.SignalTypeOffer {
-		return nil
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint+"/v1/join/"+signal.NetworkID, strings.NewReader(signal.Data))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/sdp")
-	response, err := s.client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	answer, err := io.ReadAll(io.LimitReader(response.Body, maxSignalingBody))
-	if err != nil {
-		return fmt.Errorf("read answer: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return fmt.Errorf("signaling endpoint answered status %d", response.StatusCode)
-	}
-	if len(answer) == 0 {
-		return errors.New("signaling endpoint answered without an SDP")
-	}
-	s.notify(&nethernet.Signal{
-		Type:         nethernet.SignalTypeAnswer,
-		ConnectionID: signal.ConnectionID,
-		Data:         string(answer),
-		NetworkID:    signal.NetworkID,
-	})
-	return nil
-}
-
-func (s *httpSignaling) notify(signal *nethernet.Signal) {
-	s.mu.Lock()
-	notifiers := make([]nethernet.Notifier, 0, len(s.notifiers))
-	for _, notifier := range s.notifiers {
-		notifiers = append(notifiers, notifier)
-	}
-	s.mu.Unlock()
-	for _, notifier := range notifiers {
-		notifier.NotifySignal(signal)
-	}
-}
-
-// Notify ...
-func (s *httpSignaling) Notify(n nethernet.Notifier) (stop func()) {
-	s.mu.Lock()
-	id := s.next
-	s.next++
-	s.notifiers[id] = n
-	s.mu.Unlock()
-	return func() {
-		s.mu.Lock()
-		delete(s.notifiers, id)
-		s.mu.Unlock()
-	}
-}
-
-// Context ...
-func (s *httpSignaling) Context() context.Context { return s.ctx }
-
-// Credentials returns nil: the endpoint advertises no ICE servers.
-func (s *httpSignaling) Credentials(context.Context) (*nethernet.Credentials, error) {
-	return nil, nil
-}
-
-// NetworkID ...
-func (s *httpSignaling) NetworkID() string { return s.localID }
-
-// PongData ...
-func (s *httpSignaling) PongData([]byte) {}
-
-// DisableTrickleICE ...
-func (s *httpSignaling) DisableTrickleICE() bool { return true }
+// endpointSignaling owns an endpoint.Client for one dial; the client holds no connection to close.
+type endpointSignaling struct{ *endpoint.Client }
 
 // Close ...
-func (s *httpSignaling) Close() error {
-	s.cancel()
-	return nil
+func (endpointSignaling) Close() error { return nil }
+
+// explicitPort adds the scheme's default port to a probed URL that names none.
+func explicitPort(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Port() != "" {
+		return rawURL
+	}
+	port := "443"
+	if u.Scheme == "http" {
+		port = "80"
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), port)
+	return u.String()
 }
