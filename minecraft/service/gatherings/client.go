@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
+	"time"
 
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-playfab/v2/catalog"
@@ -90,6 +92,12 @@ type Client struct {
 	src    service.TokenSource
 	client *http.Client
 	env    *Environment
+
+	countsMu        sync.Mutex
+	counts          []ExperiencePlayerCount
+	countsRequested time.Time
+	countsRefresh   *playerCountsRefresh
+	countsNow       func() time.Time
 }
 
 // ParseExperience parses the display properties of item into an [Experience].
