@@ -364,6 +364,7 @@ type Conn struct {
 	resourcePackStack          *ResourcePackStackSnapshot
 	// resourcePackCache optionally stores resource packs downloaded by a Dialer.
 	resourcePackCache ResourcePackCache
+	packStores        sync.WaitGroup // chunked downloads not yet stored; a Dial returns only once it drains
 	// resourcePackDelivery controls resource pack delivery for Listener connections.
 	resourcePackDelivery ResourcePackDeliveryConfig
 	// ignoredResourcePacks is a slice of resource packs that are not being downloaded due to the downloadResourcePack
@@ -2046,6 +2047,27 @@ func (event ResourcePackEvent) with(kind ResourcePackEventKind, size uint64, err
 	return event
 }
 
+// awaitPackStores waits for chunked downloads to reach the ResourcePackCache. They store after the
+// completion response so the write overlaps the rest of the login, but must finish before Close can cancel it.
+func (conn *Conn) awaitPackStores(ctx context.Context) error {
+	if conn.resourcePackCache == nil {
+		return nil
+	}
+	stored := make(chan struct{})
+	go func() {
+		conn.packStores.Wait()
+		close(stored)
+	}()
+	select {
+	case <-stored:
+		return nil
+	case <-ctx.Done():
+		return conn.wrap(context.Cause(ctx), "dial")
+	case <-conn.ctx.Done():
+		return conn.closeErr("dial")
+	}
+}
+
 // storeResourcePack stores a downloaded pack in the Conn's ResourcePackCache, if any.
 func (conn *Conn) storeResourcePack(key ResourcePackCacheKey, pack *resource.Pack) {
 	if conn.resourcePackCache == nil || !key.Matches(pack) {
@@ -2264,7 +2286,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
 
 	idCopy := pk.UUID
+	conn.packStores.Add(1)
 	go func() {
+		defer conn.packStores.Done()
 		finished := false
 		defer func() {
 			if !finished {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 
 // Client is an instance of the realms api with a token.
 type Client struct {
+	baseURL        string // Realms endpoint without a trailing slash
 	tokenSrc       oauth2.TokenSource
 	xblToken       *auth.XBLToken
 	httpClient     *http.Client
@@ -43,8 +45,30 @@ const (
 	defaultRealmRetryAfter = 5 * time.Second
 )
 
-// realmsBaseURL is a variable so tests may point the client at a stub server.
+// realmsBaseURL is the endpoint of clients made by [NewClient]; tests may point it at a stub server.
 var realmsBaseURL = "https://bedrock.frontendlegacy.realms.minecraft-services.net"
+
+// Environment is the Realms endpoint the game discovers, as [service.Discovery.Environment] fills it.
+type Environment struct {
+	ServiceURI string `json:"serviceUri"`
+}
+
+// ServiceName implements [service.Environment] and returns "realms_frontend_bedrock_legacy".
+func (*Environment) ServiceName() string { return "realms_frontend_bedrock_legacy" }
+
+// NewClient returns a Client like [NewClient] that sends its requests to the discovered endpoint. It fails
+// rather than fall back to the built-in host when discovery gave no absolute https endpoint, so the Xbox
+// authorization is only ever sent where discovery pointed.
+func (e *Environment) NewClient(src oauth2.TokenSource, httpClient *http.Client) (*Client, error) {
+	base := strings.TrimRight(e.ServiceURI, "/")
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("realms: discovered serviceUri %q is not an absolute https endpoint", e.ServiceURI)
+	}
+	c := NewClient(src, httpClient)
+	c.baseURL = base
+	return c, nil
+}
 
 var (
 	ErrPlayerNotInRealm = errors.New("player not in realm")
@@ -388,7 +412,11 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 	if path[0] != '/' {
 		path = "/" + path
 	}
-	req, err := http.NewRequestWithContext(ctx, method, realmsBaseURL+path, bytes.NewReader(requestBody))
+	base := r.baseURL
+	if base == "" {
+		base = realmsBaseURL
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, 0, err
 	}

@@ -93,6 +93,14 @@ func (s *ManagedTokenSource) Close() error {
 	return s.playFab.Close()
 }
 
+// SessionID returns the underlying source's Session-Id, or "" when it names none.
+func (s *ManagedTokenSource) SessionID() string {
+	if id, ok := s.TokenSource.(SessionIdentifier); ok {
+		return id.SessionID()
+	}
+	return ""
+}
+
 // InvalidateServiceToken forwards rejected tokens to the underlying source when it supports invalidation.
 func (s *ManagedTokenSource) InvalidateServiceToken(rejected *Token) {
 	if invalidator, ok := s.TokenSource.(TokenInvalidator); ok {
