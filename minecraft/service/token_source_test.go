@@ -150,3 +150,40 @@ func TestMultiplayerTokenRetriesOnceAfterInvalidatingARejectedToken(t *testing.T
 		})
 	}
 }
+
+type fixedTicket struct{}
+
+func (fixedTicket) SessionTicket(context.Context) (string, error) { return "ticket", nil }
+
+// An expiring token is replaced through session/start; the game never renews through the auth service.
+func TestTokenSourceReissuesExpiringTokenWithoutRenew(t *testing.T) {
+	t.Parallel()
+
+	var renews, starts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().UTC().Truncate(time.Second)
+		switch r.URL.Path {
+		case "/api/v1.0/session/renew":
+			renews.Add(1)
+		case "/api/v1.0/session/start":
+			starts.Add(1)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": &Token{
+			AuthorizationHeader: testAuthorizationHeaderWithTimes(t, now, now.Add(time.Hour)),
+			ValidUntil:          now.Add(time.Hour),
+		}})
+	}))
+	defer server.Close()
+
+	serviceURL, _ := url.Parse(server.URL)
+	now := time.Now()
+	expiring := &Token{AuthorizationHeader: testAuthorizationHeaderWithTimes(t, now.Add(-time.Hour), now.Add(30*time.Second)), ValidUntil: now.Add(30 * time.Second)}
+	env := &AuthorizationEnvironment{ServiceURI: serviceURL, HTTPClient: server.Client(), PlayFabTitleID: "20CA2"}
+	src := env.ResumeTokenSource(fixedTicket{}, TokenConfig{}, expiring)
+	if _, err := src.ServiceToken(context.Background()); err != nil {
+		t.Fatalf("ServiceToken: %v", err)
+	}
+	if renews.Load() != 0 || starts.Load() != 1 {
+		t.Fatalf("renew calls = %d, start calls = %d; want 0 and 1", renews.Load(), starts.Load())
+	}
+}
