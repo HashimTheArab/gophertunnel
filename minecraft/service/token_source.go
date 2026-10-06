@@ -20,6 +20,12 @@ type TokenInvalidator interface {
 	InvalidateServiceToken(rejected *Token)
 }
 
+// SessionIdentifier is implemented by token sources bound to one game session, so the requests
+// they authorize name the same Session-Id.
+type SessionIdentifier interface {
+	SessionID() string
+}
+
 // TokenSource returns an implementation of TokenSource, which subsequently supplies the token
 // by either newly requesting or refreshing an existing, cached token. The given [playfab.Client]
 // will be used for logging into Bedrock Edition's network services with the user's PlayFab account.
@@ -34,6 +40,9 @@ func (e *AuthorizationEnvironment) TokenSource(client *playfab.Client, config To
 func (e *AuthorizationEnvironment) ResumeTokenSource(tickets SessionTicketSource, config TokenConfig, token *Token) TokenSource {
 	defaultUserConfig(&config.User)
 	defaultDeviceConfig(e, &config.Device)
+	if config.SessionID == "" {
+		config.SessionID = uuid.NewString()
+	}
 
 	if token != nil && token.Claims.PlayerMessagingID == uuid.Nil {
 		// Claims are omitted from JSON. Rebuild them without changing the caller's token.
@@ -98,6 +107,9 @@ func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
 	s.token = token
 	return s.token, nil
 }
+
+// SessionID returns the Session-Id every request of this source sends.
+func (s *tokenSource) SessionID() string { return s.config.SessionID }
 
 // InvalidateServiceToken drops rejected if it is still cached, so the next call issues a new
 // token instead of renewing one the service refused.

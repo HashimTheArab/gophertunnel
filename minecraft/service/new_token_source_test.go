@@ -37,7 +37,6 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 		EduPlayFabTitleID:  title.Title("EDU"),
 		HTTPClient:         originalClient,
 		KeyRefreshInterval: 5 * time.Minute,
-		SessionID:          "session",
 		verifier:           &oidc.IDTokenVerifier{},
 	}
 	want := make(map[string]any)

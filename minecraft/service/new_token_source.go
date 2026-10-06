@@ -73,7 +73,6 @@ func (e *AuthorizationEnvironment) NewTokenSource(ctx context.Context, xbox xsap
 		EduPlayFabTitleID:  e.EduPlayFabTitleID,
 		HTTPClient:         auth.ContextClient(ctx),
 		KeyRefreshInterval: e.KeyRefreshInterval,
-		SessionID:          e.SessionID,
 	}
 	playFabConfig := config.PlayFab
 	if playFabConfig.HTTPClient == nil {
@@ -92,6 +91,14 @@ func (e *AuthorizationEnvironment) NewTokenSource(ctx context.Context, xbox xsap
 // Close stops background work owned by the underlying PlayFab client.
 func (s *ManagedTokenSource) Close() error {
 	return s.playFab.Close()
+}
+
+// SessionID returns the underlying source's Session-Id, or "" when it names none.
+func (s *ManagedTokenSource) SessionID() string {
+	if id, ok := s.TokenSource.(SessionIdentifier); ok {
+		return id.SessionID()
+	}
+	return ""
 }
 
 // InvalidateServiceToken forwards rejected tokens to the underlying source when it supports invalidation.

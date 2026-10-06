@@ -60,10 +60,6 @@ type AuthorizationEnvironment struct {
 	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client `json:"-"`
 
-	// SessionID is sent as the Session-Id header of authorization requests. If empty, one ID
-	// generated per process is used, as the game names one session per launch.
-	SessionID string `json:"-"`
-
 	// KeyRefreshInterval controls how often public keys used for verifying multiplayer tokens may
 	// be refreshed. If zero, a default of 30 minutes is used.
 	KeyRefreshInterval time.Duration `json:"-"`
@@ -73,17 +69,6 @@ type AuthorizationEnvironment struct {
 	verifier *oidc.IDTokenVerifier
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
-}
-
-// processSessionID is the Session-Id used when [AuthorizationEnvironment.SessionID] is empty.
-var processSessionID = uuid.NewString()
-
-// sessionID returns the Session-Id sent with authorization requests.
-func (e *AuthorizationEnvironment) sessionID() string {
-	if e.SessionID != "" {
-		return e.SessionID
-	}
-	return processSessionID
 }
 
 // httpClient returns the HTTP client used for requests made by AuthorizationEnvironment.
@@ -157,7 +142,11 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
-	req.Header.Set("Session-Id", e.sessionID())
+	sessionID := config.SessionID
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	req.Header.Set("Session-Id", sessionID)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -303,7 +292,8 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 // authorization service and validate the claims to authenticate the player.
 //
 // If the service rejects the service token as unauthorized and src implements [TokenInvalidator],
-// the token is invalidated and the request is retried once with a fresh one.
+// the token is invalidated and the request is retried once with a fresh one. The Session-Id sent
+// is src's when it implements [SessionIdentifier]; otherwise none is sent.
 func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, error) {
 	jwt, rejected, err := e.multiplayerToken(ctx, src, key)
 	invalidator, ok := src.(TokenInvalidator)
@@ -322,7 +312,11 @@ func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src Tok
 	if err != nil {
 		return "", nil, fmt.Errorf("request service token: %w", err)
 	}
-	jwt, err := e.startMultiplayerSession(ctx, token, key)
+	var sessionID string
+	if id, ok := src.(SessionIdentifier); ok {
+		sessionID = id.SessionID()
+	}
+	jwt, err := e.startMultiplayerSession(ctx, token, sessionID, key)
 	var responseErr *ResponseError
 	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusUnauthorized {
 		return "", token, err
@@ -331,7 +325,7 @@ func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src Tok
 }
 
 // startMultiplayerSession exchanges token for a multiplayer token bound to key.
-func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, token *Token, key *ecdsa.PublicKey) (string, error) {
+func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, token *Token, sessionID string, key *ecdsa.PublicKey) (string, error) {
 	b, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		return "", fmt.Errorf("encode public key: %w", err)
@@ -351,7 +345,9 @@ func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Session-Id", e.sessionID())
+	if sessionID != "" {
+		req.Header.Set("Session-Id", sessionID)
+	}
 	token.SetAuthHeader(req)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
@@ -609,6 +605,11 @@ type TokenConfig struct {
 	// User contains user identity encapsulated in a UserConfig.
 	// User contains an identity token authenticated with PlayFab via an external platform.
 	User UserConfig `json:"user,omitempty"`
+
+	// SessionID is the game session sent as the Session-Id header; the game keeps one per signed-in
+	// user for the whole launch. Token sources generate one when empty and keep it; a direct
+	// [AuthorizationEnvironment.Token] call with it empty sends a fresh one.
+	SessionID string `json:"-"`
 }
 
 // UserConfig represents the configuration of the user whose Token
