@@ -210,6 +210,21 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonDenyListed:                                    "You are in deny list.",
 }
 
+// Handoff names where a Conn's automatic packet handling ends and the caller takes over the connection.
+type Handoff int
+
+const (
+	// HandoffNone handles the whole login and spawn sequence.
+	HandoffNone Handoff = iota
+	// HandoffAtStartGame handles login, encryption, resource packs and cache negotiation, then delivers StartGame,
+	// any DimensionData before it and everything after it unchanged. The Conn sends none of the spawn sequence
+	// and records the StartGame, DimensionData and ItemRegistry it delivers. Dialer only.
+	HandoffAtStartGame
+	// HandoffAfterLogin delivers every packet after the encryption handshake, or from the first answer to Login
+	// when a server skips that handshake. The caller owns the game data; see Conn.SetGameData.
+	HandoffAfterLogin
+)
+
 // Conn represents a Minecraft (Bedrock Edition) connection over a specific net.Conn transport layer. Its
 // methods (Read, Write etc.) are safe to be called from multiple goroutines simultaneously, but ReadPacket and
 // ReadBatch must not be called on multiple goroutines simultaneously.
@@ -348,8 +363,6 @@ type Conn struct {
 	resourcePackDownload ResourcePackDownloadConfig
 	// httpClient downloads packs offered by URL; nil uses http.DefaultClient.
 	httpClient *http.Client
-	// relayStartup delivers StartGame and everything after it to the caller instead of spawning.
-	relayStartup bool
 	// resourcePackProgress receives acquisition events under resourcePackProgressMu.
 	resourcePackProgress   func(ResourcePackEvent)
 	resourcePackProgressMu sync.Mutex
@@ -398,11 +411,8 @@ type Conn struct {
 
 	additional chan packet.Packet
 
-	disablePacketHandling bool
-	// disablePacketHandlingReady indicates that the connection should now forward packets directly to the caller
-	// when disablePacketHandling is enabled. This becomes true after handshake completion or once post-login
-	// packets start arriving on servers that skip the handshake packet.
-	disablePacketHandlingReady bool
+	handoff   Handoff
+	handedOff bool // set by the processing goroutine at the handoff transition
 }
 
 // newConn creates a new Minecraft connection for the net.Conn passed, reading and writing compressed
@@ -1183,9 +1193,8 @@ func (conn *Conn) ChunkRadius() int {
 	return int(conn.GameData().ChunkRadius)
 }
 
-// SetGameData manually sets the game data for this connection. This is useful when DisablePacketHandling
-// is enabled and you want to populate the internal state without automatic packet handling.
-// This allows GameData() to return meaningful data even when packet handlers aren't running.
+// SetGameData sets the game data GameData returns and that decodes item stacks, for callers that own the
+// game data under HandoffAfterLogin.
 func (conn *Conn) SetGameData(data GameData) {
 	conn.gameDataMu.Lock()
 	conn.gameData = data
@@ -1344,38 +1353,17 @@ func (conn *Conn) receive(data []byte) error {
 		// it decoded to something else. Restore the payload and deliver it like any other packet.
 		pkData.payload = bytes.NewBuffer(payload)
 	}
-	if conn.disablePacketHandling {
-		if conn.handshakeComplete || conn.loggedIn {
-			conn.disablePacketHandlingReady = true
-		} else if !conn.disablePacketHandlingReady {
-			switch pkData.h.PacketID {
-			case packet.IDResourcePacksInfo, packet.IDStartGame, packet.IDPlayStatus:
-				// Servers that skip the handshake packet should still switch to passthrough mode once post-login
-				// packets start coming in.
-				conn.disablePacketHandlingReady = true
-			}
-		}
-	}
-	if conn.relayStartup {
-		if relayed, err := conn.relayStartupPacket(pkData); relayed || err != nil {
+	switch conn.handoff {
+	case HandoffAtStartGame:
+		if deferred, err := conn.relayStartupPacket(pkData); deferred || err != nil {
 			return err
 		}
-	}
-	if conn.disablePacketHandling {
-		if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
-			return err
+	case HandoffAfterLogin:
+		if !conn.handedOff && conn.skipsHandshake(pkData.h.PacketID) {
+			conn.handedOff = true
 		}
-		if conn.disablePacketHandlingReady {
-			if pkData.h.PacketID == packet.IDClientToServerHandshake {
-				return nil // don't forward it
-			}
-			if !conn.collectPacket(pkData) {
-				select {
-				case <-conn.ctx.Done():
-				case conn.packets <- pkData.ensureOwned():
-				}
-			}
-			return nil
+		if conn.handedOff {
+			return conn.forward(pkData)
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
@@ -1387,9 +1375,33 @@ func (conn *Conn) receive(data []byte) error {
 	return conn.handle(pkData)
 }
 
+// skipsHandshake reports whether a Dialer's login, awaiting ServerToClientHandshake, received another of the
+// answers to Login it accepts: the server skipped the handshake and the packet is the first after login.
+func (conn *Conn) skipsHandshake(id uint32) bool {
+	expected := conn.expectedIDs.Load().([]uint32)
+	return id != packet.IDServerToClientHandshake && slices.Contains(expected, packet.IDServerToClientHandshake) && slices.Contains(expected, id)
+}
+
+// forward delivers a packet received after HandoffAfterLogin's transition straight to the caller.
+func (conn *Conn) forward(pkData *packetData) error {
+	if err := conn.handlePassthroughCacheNegotiation(pkData); err != nil {
+		return err
+	}
+	if pkData.h.PacketID == packet.IDClientToServerHandshake {
+		return nil // the handshake was already consumed
+	}
+	if !conn.collectPacket(pkData) {
+		select {
+		case <-conn.ctx.Done():
+		case conn.packets <- pkData.ensureOwned():
+		}
+	}
+	return nil
+}
+
 // relayStartupPacket records what the Conn needs from a relayed StartGame, DimensionData or ItemRegistry to
 // decode later packets, and reports whether it deferred a packet that arrived before StartGame. Every other
-// relayed packet is left to the passthrough or logged-in delivery, so it keeps their ordering.
+// relayed packet is left to the logged-in delivery, so it keeps its ordering.
 func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 	id := pkData.h.PacketID
 	if !conn.loggedIn && id != packet.IDStartGame && id != packet.IDDimensionData {
@@ -1405,7 +1417,7 @@ func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 			switch pk := pk.(type) {
 			case *packet.StartGame:
 				conn.observeStartGame(pk)
-				conn.loggedIn = true
+				conn.loggedIn, conn.handedOff = true, true
 			case *packet.DimensionData:
 				_ = conn.handleDimensionData(pk)
 			case *packet.ItemRegistry:
@@ -1413,7 +1425,7 @@ func (conn *Conn) relayStartupPacket(pkData *packetData) (bool, error) {
 			}
 		}
 	}
-	if conn.loggedIn || conn.disablePacketHandlingReady {
+	if conn.loggedIn {
 		return false, nil
 	}
 	// Keep early DimensionData beside other deferred login packets in receive order.
@@ -1448,7 +1460,7 @@ func (conn *Conn) observeShield(items []protocol.ItemEntry) {
 }
 
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
-// raw PlayStatus packet owned by a passthrough caller.
+// raw PlayStatus packet forwarded to the caller.
 func (conn *Conn) handlePassthroughCacheNegotiation(pkData *packetData) error {
 	if conn.loginSuccessReceived || pkData.h.PacketID != packet.IDPlayStatus {
 		return nil
@@ -1843,8 +1855,8 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	// Mark authentication before the work that follows it, which may outlast the listener's login deadline.
 	conn.authenticated.Store(true)
 	conn.handshakeComplete = true
-	if conn.disablePacketHandling {
-		conn.disablePacketHandlingReady = true
+	if conn.handoff == HandoffAfterLogin {
+		conn.handedOff = true
 		return nil
 	}
 	if conn.fetchResourcePacks != nil {
@@ -1994,6 +2006,9 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	// We write a ClientToServerHandshake packet (which has no payload) as a response.
 	_ = conn.WritePacket(&packet.ClientToServerHandshake{})
 	conn.handshakeComplete = true
+	if conn.handoff == HandoffAfterLogin {
+		conn.handedOff = true
+	}
 	return nil
 }
 
@@ -2783,12 +2798,12 @@ func (conn *Conn) handleLoginSuccess() error {
 		return nil
 	}
 	conn.loginSuccessReceived = true
-	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
+	if conn.handoff != HandoffAfterLogin || !conn.forwardClientCacheStatus {
 		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if !conn.disablePacketHandling {
+	if conn.handoff != HandoffAfterLogin {
 		conn.expect(packet.IDResourcePacksInfo)
 	}
 	return conn.Flush()

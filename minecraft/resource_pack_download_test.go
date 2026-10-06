@@ -236,11 +236,19 @@ func TestChunkDownloadFlushesItsRequestsWithoutATicker(t *testing.T) {
 	client, peer := net.Pipe()
 	defer client.Close()
 	defer peer.Close()
-	sent := make(chan struct{})
+	sent := make(chan packet.ResourcePackChunkRequest, 1)
 	go func() {
-		buf := make([]byte, 1)
-		if _, err := peer.Read(buf); err == nil {
-			close(sent)
+		batch, err := packet.NewDecoder(peer).Decode()
+		for _, data := range batch {
+			buf := bytes.NewBuffer(data)
+			var header packet.Header
+			if err != nil || header.Read(buf) != nil || header.PacketID != packet.IDResourcePackChunkRequest {
+				continue
+			}
+			var request packet.ResourcePackChunkRequest
+			request.Marshal(protocol.NewReader(buf, 0, false))
+			sent <- request
+			break
 		}
 		_, _ = io.Copy(io.Discard, peer)
 	}()
@@ -256,7 +264,10 @@ func TestChunkDownloadFlushesItsRequestsWithoutATicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-sent:
+	case request := <-sent:
+		if request.UUID != id.String()+"_1.0.0" || request.ChunkIndex != 0 {
+			t.Fatalf("request = %+v", request)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("chunk requests stayed buffered on a Conn with no flush ticker")
 	}

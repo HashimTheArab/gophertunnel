@@ -118,9 +118,8 @@ type Dialer struct {
 	// are converted from and to this Protocol.
 	Protocol Protocol
 
-	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
-	// connection control remains internal. When EnableClientCache is also set, cache negotiation remains automatic.
-	DisablePacketHandling bool
+	// Handoff is the point in the login at which the Conn stops handling packets itself and the dial returns.
+	Handoff Handoff
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
@@ -143,18 +142,12 @@ type Dialer struct {
 
 	// EnableClientCache, if set to true, enables the client blob cache for the client. This means that the
 	// server will send chunks as blobs, which may be saved by the client so that chunks don't have to be
-	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
-	// DisablePacketHandling is set.
+	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic with
+	// HandoffAfterLogin.
 	EnableClientCache bool
-	// RelayStartup hands the game's startup to the caller unchanged: login, encryption and resource packs stay
-	// automatic, but from StartGame on (and any DimensionData before it) every packet is delivered to the caller
-	// as received and the Conn sends none of the spawn sequence itself: no loading-screen acknowledgements,
-	// RequestChunkRadius or SetLocalPlayerAsInitialised. The dial returns when StartGame arrives. It is meant for
-	// proxies that forward the real client's own spawn sequence.
-	RelayStartup bool
 	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
 	// ClientCacheStatus. Relays that forward the real client's status set this so the server negotiates
-	// the cache once. It only applies with DisablePacketHandling; normal logins need the packet.
+	// the cache once. It only applies with HandoffAfterLogin; other logins need the packet.
 	ForwardClientCacheStatus bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server
@@ -254,6 +247,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = http.DefaultClient
+	}
+	if d.Handoff < HandoffNone || d.Handoff > HandoffAfterLogin {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("unknown Handoff %d", d.Handoff)}
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
@@ -362,13 +358,12 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.httpClient = d.HTTPClient
 	conn.resourcePackProgress = d.ResourcePackProgress
-	conn.relayStartup = d.RelayStartup
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = d.MaxDecompressedLen
-	conn.disablePacketHandling = d.DisablePacketHandling
+	conn.handoff = d.Handoff
 	conn.batchReading = d.EnableBatchReading
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
@@ -464,20 +459,14 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 		// and push them to the Conn so that they may be processed.
 		callbackErr := false
 		if err := conn.dec.DecodeFunc(func(data []byte) error {
-			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
+			loggedInBefore, readyToLoginBefore, handedOffBefore := conn.loggedIn, conn.readyToLogin, conn.handedOff
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
 				return err
 			}
-			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
-			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
-			if handshakeReady || passthroughReady {
-				// In relay mode, complete dialing as soon as handshake succeeds or passthrough is ready.
-				// This supports both encrypted servers and servers that skip the handshake.
-				if conn.disablePacketHandling && connected != nil {
-					close(connected)
-					connected = nil
-				}
+			if !handedOffBefore && conn.handedOff && connected != nil {
+				close(connected)
+				connected = nil
 			}
 			if !readyToLoginBefore && conn.readyToLogin {
 				// This is the signal that the connection is ready to login, so we put a value in the channel so that
