@@ -247,7 +247,7 @@ func TestPlayerCountsAbandonedRefreshDoesNotOverwriteNewer(t *testing.T) {
 	var requests atomic.Int32
 	base, _ := url.Parse("https://example.test")
 	client := (&Environment{ServiceURI: base, HTTPClient: &http.Client{Transport: countsTransport(func(*http.Request) (*http.Response, error) {
-		var reader io.ReadCloser = io.NopCloser(strings.NewReader(fmt.Sprintf(body, 2)))
+		reader := io.NopCloser(strings.NewReader(fmt.Sprintf(body, 2)))
 		if requests.Add(1) == 1 {
 			reader = &blockingBody{started, release, strings.NewReader(fmt.Sprintf(body, 1))}
 		}
