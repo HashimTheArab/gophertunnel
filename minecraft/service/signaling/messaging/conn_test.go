@@ -17,6 +17,8 @@ import (
 	"github.com/creachadair/jrpc2/handler"
 	"github.com/df-mc/go-nethernet"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
+	"github.com/sandertv/gophertunnel/minecraft/service/signaling/internal"
 )
 
 func TestCredentialsRejectsWarmCacheAfterClose(t *testing.T) {
@@ -178,5 +180,29 @@ func TestConnHandleInnerMessageAcknowledgesAcceptedSignal(t *testing.T) {
 	}
 	if delivery.Params.MessageID != messageID {
 		t.Fatalf("delivery message ID = %s, want %s", delivery.Params.MessageID, messageID)
+	}
+}
+
+// A delivery error from the service fails the signal it names instead of being refused as an
+// unknown method; an error naming no pending signal is ignored.
+func TestReceiveErrorFailsThePendingSignal(t *testing.T) {
+	conn := &Conn{d: Dialer{Log: slog.New(slog.DiscardHandler)}, pending: internal.NewPendingMap()}
+	id := uuid.New()
+	ch := conn.pending.Add(id)
+	params := []byte(`{"messageId":"` + id.String() + `","code":404,"message":"recipient offline"}`)
+	if err := conn.handleReceiveError(params); err != nil {
+		t.Fatalf("handleReceiveError() error = %v", err)
+	}
+	select {
+	case err := <-ch:
+		var serviceErr *signaling.Error
+		if !errors.As(err, &serviceErr) || serviceErr.Code != 404 || serviceErr.Message != "recipient offline" {
+			t.Fatalf("pending signal failed with %v", err)
+		}
+	default:
+		t.Fatal("pending signal was not failed")
+	}
+	if err := conn.handleReceiveError([]byte(`{"code":1}`)); err != nil {
+		t.Fatalf("an error naming no signal: %v", err)
 	}
 }
