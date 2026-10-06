@@ -284,3 +284,32 @@ func TestServerTokenKeyAcceptsBothCPKForms(t *testing.T) {
 		t.Fatal("parseClaimedKey accepted a malformed cpk")
 	}
 }
+
+type slowTrust struct {
+	delay time.Duration
+	asked int
+}
+
+func (s *slowTrust) TrustServer(context.Context, string, *ecdsa.PublicKey) (bool, error) {
+	s.asked++
+	time.Sleep(s.delay)
+	return true, nil
+}
+
+// A trust decision slower than the server's negotiation window is followed by one fresh
+// negotiation that does not ask again.
+func TestAddressNetworkRedialsAfterASlowTrustDecision(t *testing.T) {
+	address := trustListener(t, false)
+	trust := &slowTrust{delay: 200 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	network := AddressNetwork{ServerTrust: trust, NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}, trustRedialAfter: 50 * time.Millisecond}
+	conn, err := network.DialContext(ctx, address)
+	if err != nil {
+		t.Fatalf("dial after a slow decision: %v", err)
+	}
+	_ = conn.Close()
+	if trust.asked != 1 {
+		t.Fatalf("asked %d times, want once", trust.asked)
+	}
+}

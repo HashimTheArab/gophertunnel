@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/df-mc/go-nethernet/endpoint"
@@ -29,7 +30,10 @@ type AddressNetwork struct {
 	HTTPClient *http.Client
 	// ServerTrust, when set, decides whether to join a NetherNet server and replaces the NetherNet
 	// dialer's server identity checks; servers without an identity are then refused, as in vanilla.
+	// A decision slower than the server's negotiation window is followed by one silent redial.
 	ServerTrust ServerTrust
+
+	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
@@ -50,7 +54,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 		}
 		return n.RakNet, nil
 	}
-	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust}, nil
+	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter}, nil
 }
 
 // DialContext ...
@@ -177,10 +181,25 @@ type httpNetherNet struct {
 	endpoint  string // url with an explicit port, the dial address endpoint.Client expects
 	client    *http.Client
 	trust     ServerTrust
+	// trustRedialAfter overrides the package default in tests.
+	trustRedialAfter time.Duration
+}
+
+// trustRedialAfter is how long a trust decision may hold a negotiation before it is replaced with a
+// fresh one: servers abandon a negotiation left idle for about ten seconds.
+const trustRedialAfter = 5 * time.Second
+
+// errTrustDecidedLate abandons a negotiation whose trust decision outlived trustRedialAfter.
+var errTrustDecidedLate = errors.New("minecraft: server trusted after its negotiation went stale")
+
+// trustedKey remembers the key trusted during one dial, so its redial does not ask again.
+type trustedKey struct {
+	mu  sync.Mutex
+	key *ecdsa.PublicKey
 }
 
 // transport returns NetherNet signaling through the endpoint, opening fresh signaling per dial.
-func (n httpNetherNet) transport() NetherNet {
+func (n httpNetherNet) transport(trusted *trustedKey) NetherNet {
 	transport := n.nethernet
 	transport.Signaling = nil
 	transport.DialSignaling = func(context.Context, string) (SignalingConn, error) {
@@ -193,12 +212,25 @@ func (n httpNetherNet) transport() NetherNet {
 			if err != nil {
 				return nil, err
 			}
-			trusted, err := n.trust.TrustServer(ctx, n.url, key)
+			trusted.mu.Lock()
+			known := trusted.key != nil && trusted.key.Equal(key)
+			trusted.mu.Unlock()
+			if known {
+				return key, nil
+			}
+			start := time.Now()
+			ok, err := n.trust.TrustServer(ctx, n.url, key)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", ErrServerNotTrusted, err)
 			}
-			if !trusted {
+			if !ok {
 				return nil, ErrServerNotTrusted
+			}
+			trusted.mu.Lock()
+			trusted.key = key
+			trusted.mu.Unlock()
+			if time.Since(start) > n.redialAfter() {
+				return nil, errTrustDecidedLate
 			}
 			return key, nil
 		}
@@ -206,19 +238,38 @@ func (n httpNetherNet) transport() NetherNet {
 	return transport
 }
 
+func (n httpNetherNet) redialAfter() time.Duration {
+	if n.trustRedialAfter > 0 {
+		return n.trustRedialAfter
+	}
+	return trustRedialAfter
+}
+
+// dial runs one NetherNet dial, and runs it again when a slow trust decision left it stale.
+func (n httpNetherNet) dial(dial func(NetherNet) (net.Conn, error)) (net.Conn, error) {
+	trusted := new(trustedKey)
+	conn, err := dial(n.transport(trusted))
+	if errors.Is(err, errTrustDecidedLate) {
+		return dial(n.transport(trusted))
+	}
+	return conn, err
+}
+
 // DialContext ignores address: the endpoint already names the server.
 func (n httpNetherNet) DialContext(ctx context.Context, _ string) (net.Conn, error) {
-	return n.transport().DialContext(ctx, n.endpoint)
+	return n.dial(func(t NetherNet) (net.Conn, error) { return t.DialContext(ctx, n.endpoint) })
 }
 
 // DialContextIdentity ...
 func (n httpNetherNet) DialContextIdentity(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
-	return n.transport().DialContextIdentity(ctx, n.endpoint, token, key)
+	return n.dial(func(t NetherNet) (net.Conn, error) { return t.DialContextIdentity(ctx, n.endpoint, token, key) })
 }
 
 // DialContextIdentityProvider ...
 func (n httpNetherNet) DialContextIdentityProvider(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
-	return n.transport().DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
+	return n.dial(func(t NetherNet) (net.Conn, error) {
+		return t.DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
+	})
 }
 
 // PingContext ...
