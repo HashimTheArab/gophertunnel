@@ -3,6 +3,8 @@ package gatherings
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -214,5 +216,58 @@ func TestPlayerCountsCancelledRefreshClearsThrottle(t *testing.T) {
 	counts, err = client.PlayerCounts(context.Background())
 	if err != nil || len(counts) != 3 || requests.Load() != 3 {
 		t.Fatalf("refresh after cancellation = %v, requests %d", err, requests.Load())
+	}
+}
+
+// blockingBody signals its first read and then waits, ignoring request cancellation.
+type blockingBody struct {
+	started, release chan struct{}
+	io.Reader
+}
+
+func (b *blockingBody) Read(p []byte) (int, error) {
+	if b.started != nil {
+		close(b.started)
+		b.started = nil
+		<-b.release
+	}
+	return b.Reader.Read(p)
+}
+
+func (b *blockingBody) Close() error { return nil }
+
+type countsTransport func(*http.Request) (*http.Response, error)
+
+func (f countsTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// An abandoned refresh that still succeeds must not replace counts from the refresh that superseded it.
+func TestPlayerCountsAbandonedRefreshDoesNotOverwriteNewer(t *testing.T) {
+	const body = `{"result":[{"experienceId":"5b8d51c3-4b40-4f4e-a7bf-b94bba8fc27c","playerCount":%d}]}`
+	started, release := make(chan struct{}), make(chan struct{})
+	var requests atomic.Int32
+	base, _ := url.Parse("https://example.test")
+	client := (&Environment{ServiceURI: base, HTTPClient: &http.Client{Transport: countsTransport(func(*http.Request) (*http.Response, error) {
+		var reader io.ReadCloser = io.NopCloser(strings.NewReader(fmt.Sprintf(body, 2)))
+		if requests.Add(1) == 1 {
+			reader = &blockingBody{started, release, strings.NewReader(fmt.Sprintf(body, 1))}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: reader, Header: make(http.Header)}, nil
+	})}}).New(fixedTokens{})
+	ctx, cancel := context.WithCancel(context.Background())
+	abandonedDone := make(chan struct{})
+	go func() { _, _ = client.PlayerCounts(ctx); close(abandonedDone) }()
+	<-started
+	client.countsMu.Lock()
+	abandoned := client.countsRefresh
+	client.countsMu.Unlock()
+	cancel()
+	<-abandonedDone
+	if counts, err := client.PlayerCounts(context.Background()); err != nil || *counts[0].PlayerCount != 2 {
+		t.Fatalf("replacement refresh = %v, %v", counts, err)
+	}
+	close(release)
+	<-abandoned.done
+	if counts, err := client.PlayerCounts(context.Background()); err != nil || *counts[0].PlayerCount != 2 {
+		t.Fatalf("abandoned refresh overwrote newer counts: %v, %v", counts, err)
 	}
 }

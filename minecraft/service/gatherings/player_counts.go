@@ -78,18 +78,18 @@ func (c *Client) PlayerCounts(ctx context.Context) ([]ExperiencePlayerCount, err
 	}
 }
 
-// refreshPlayerCounts completes refresh, keeping the previous counts when it fails.
+// refreshPlayerCounts completes refresh, keeping the previous counts when it fails or was abandoned.
 func (c *Client) refreshPlayerCounts(ctx context.Context, refresh *playerCountsRefresh) {
 	defer refresh.cancel()
 	counts, err := c.fetchPlayerCounts(ctx)
 	c.countsMu.Lock()
 	defer c.countsMu.Unlock()
-	if err == nil {
-		c.counts = counts
-	}
 	refresh.err = err
 	if c.countsRefresh == refresh {
 		c.countsRefresh = nil
+		if err == nil {
+			c.counts = counts
+		}
 	}
 	close(refresh.done)
 }
