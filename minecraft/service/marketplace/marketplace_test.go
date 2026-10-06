@@ -284,7 +284,8 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 			w.Header().Set("InventoryETag", "e9")
 			w.WriteHeader(status)
 		})
-		result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", StoreID: "s1", Amount: 320, Tags: CustomTags{TitleID: "20CA2", Seq: 1}})
+		client.identity.TitleID = "20CA2"
+		result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", StoreID: "s1", Amount: 320})
 		if err != nil || result.Outcome != want || result.StatusCode != status || calls.Load() != 1 {
 			t.Fatalf("status %d: result = %+v calls = %d err = %v", status, result, calls.Load(), err)
 		}
@@ -561,5 +562,62 @@ func TestStoreRequestsCarryTheInventoryVersion(t *testing.T) {
 	}
 	if client.InventoryVersion() != "v7" {
 		t.Errorf("InventoryVersion() = %q, want v7 from the last inventory read", client.InventoryVersion())
+	}
+}
+
+// Pages render against the newest inventory and user-lists versions the services answered with.
+func TestPageStateCarriesTheNewestVersions(t *testing.T) {
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1.0/session/config":
+			_, _ = io.WriteString(w, `{"result":{"knownPages":{},"userListsVersion":"lists-1"}}`)
+		case "/api/v1.0/player/inventory":
+			w.Header().Set("InventoryETag", "v3")
+			_, _ = io.WriteString(w, inventoryFixture)
+		default:
+			w.Header().Set("X-UserLists-Version", "lists-2")
+			_, _ = io.WriteString(w, `{"result":{"pageId":"p","layout":[]}}`)
+		}
+	})
+	ctx := context.Background()
+	if _, err := client.SessionConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Inventory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := client.PageState(nil); state.Entitlements == nil || state.InventoryVersion != "v3" || state.ListVersion != "lists-1" {
+		t.Fatalf("state = %+v", state)
+	}
+	if _, err := client.Page(ctx, PageByID, "p", client.PageState(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if state := client.PageState([]string{"a"}); state.ListVersion != "lists-2" || state.Entitlements[0] != "a" {
+		t.Fatalf("state after page = %+v", state)
+	}
+}
+
+// A purchase's custom tags come from the client's identity, with a fresh correlation id and a
+// rising sequence; the result names the correlation id.
+func TestPurchaseTagsComeFromTheIdentity(t *testing.T) {
+	var bodies []purchaseBody
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		var body purchaseBody
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+	})
+	client.identity = Identity{XUID: "2535", TitleID: "20CA2"}.withDefaults()
+	first, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o", Amount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	tags := bodies[0].CustomTags
+	if tags.Xuid != "2535" || tags.TitleID != "20CA2" || tags.BuildPlat != 7 || tags.DnAPlat != "Windows10" ||
+		tags.EditionType != "Bedrock" || tags.ClientID == "" || tags.DeviceSessionID != client.SessionID() ||
+		tags.CorrelationID == "" || tags.CorrelationID != first.CorrelationID || tags.Seq != 1 || bodies[1].CustomTags.Seq != 2 {
+		t.Fatalf("tags = %+v, %+v; result = %+v", tags, bodies[1].CustomTags, first)
 	}
 }
