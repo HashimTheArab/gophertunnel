@@ -117,6 +117,30 @@ func TestFirstUseTrustAsksAgainWhenAServerKeyChanges(t *testing.T) {
 	}
 }
 
+type failingLoadStore struct {
+	memoryTrustStore
+	fail bool
+}
+
+func (s *failingLoadStore) LoadTrustedKeys() ([]string, error) {
+	if s.fail {
+		return nil, errors.New("unreadable")
+	}
+	return s.memoryTrustStore.LoadTrustedKeys()
+}
+
+// A store that cannot be read is never overwritten, though the join is still trusted.
+func TestFirstUseTrustKeepsKeysItCouldNotLoad(t *testing.T) {
+	store := &failingLoadStore{memoryTrustStore: memoryTrustStore{keys: []string{"kept"}}, fail: true}
+	trust := &FirstUseTrust{Store: store, Log: slog.New(slog.DiscardHandler)}
+	if trusted, err := trust.TrustServer(t.Context(), "https://example.com", newServerKey(t)); err != nil || !trusted {
+		t.Fatalf("TrustServer = %v, %v; want trusted", trusted, err)
+	}
+	if !slices.Equal(store.keys, []string{"kept"}) {
+		t.Fatalf("stored keys = %q, want the unreadable keys left alone", store.keys)
+	}
+}
+
 // The store keeps the 100 most recently used keys, and reusing a key makes it the newest.
 func TestFirstUseTrustKeepsTheMostRecentlyUsedKeys(t *testing.T) {
 	store := new(memoryTrustStore)
