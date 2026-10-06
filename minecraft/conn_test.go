@@ -1631,8 +1631,10 @@ func TestConn_AcceptPacketHeader(t *testing.T) {
 			defer conn.Close()
 			conn.pool = conn.proto.Packets(false)
 			conn.batchReading = true
-			conn.disablePacketHandling = true
-			conn.handshakeComplete = ready
+			conn.handoff = HandoffAfterLogin
+			conn.handedOff = ready
+			// Awaiting the login's answer, so a PlayStatus reaching the state machine would hand off.
+			conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
 			conn.disconnectOnInvalidPacket = true
 			conn.acceptPacketHeader = func(h packet.Header) bool { return h.PacketID == 777 }
 			observed := 0
@@ -1647,13 +1649,13 @@ func TestConn_AcceptPacketHeader(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if conn.ctx.Err() != nil || conn.loginSuccessReceived || conn.disablePacketHandlingReady || len(conn.pendingBatch) != 0 || len(conn.batchDeferred) != 0 {
+			if conn.ctx.Err() != nil || conn.loginSuccessReceived || conn.handedOff != ready || len(conn.pendingBatch) != 0 || len(conn.batchDeferred) != 0 {
 				t.Fatal("rejected packets changed connection state")
 			}
 			if observed != 3 {
 				t.Fatalf("observed %d packets, want 3", observed)
 			}
-			conn.handshakeComplete = true
+			conn.handedOff = true
 			frame, err := encodePacket(&packet.Unknown{PacketID: 777, Payload: []byte{42}})
 			if err != nil {
 				t.Fatal(err)
