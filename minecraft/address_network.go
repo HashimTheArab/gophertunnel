@@ -185,8 +185,8 @@ type httpNetherNet struct {
 	trustRedialAfter time.Duration
 }
 
-// trustRedialAfter is how long a trust decision may hold a negotiation before it is replaced with a
-// fresh one: servers abandon a negotiation left idle for about ten seconds.
+// trustRedialAfter is how old a negotiation may be when its trust decision returns before it is
+// replaced with a fresh one: servers abandon a negotiation left idle for about ten seconds.
 const trustRedialAfter = 5 * time.Second
 
 // errTrustDecidedLate abandons a negotiation whose trust decision outlived trustRedialAfter.
@@ -194,8 +194,10 @@ var errTrustDecidedLate = errors.New("minecraft: server trusted after its negoti
 
 // trustedKey remembers the key trusted during one dial, so its redial does not ask again.
 type trustedKey struct {
-	mu  sync.Mutex
-	key *ecdsa.PublicKey
+	mu      sync.Mutex
+	key     *ecdsa.PublicKey
+	started time.Time // when the dial's first negotiation began
+	decided bool      // a decision was made during the dial, not taken from key
 }
 
 // transport returns NetherNet signaling through the endpoint, opening fresh signaling per dial.
@@ -218,7 +220,6 @@ func (n httpNetherNet) transport(trusted *trustedKey) NetherNet {
 			if known {
 				return key, nil
 			}
-			start := time.Now()
 			ok, err := n.trust.TrustServer(ctx, n.url, key)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %w", ErrServerNotTrusted, err)
@@ -227,9 +228,10 @@ func (n httpNetherNet) transport(trusted *trustedKey) NetherNet {
 				return nil, ErrServerNotTrusted
 			}
 			trusted.mu.Lock()
-			trusted.key = key
+			trusted.key, trusted.decided = key, true
+			stale := time.Since(trusted.started) > n.redialAfter()
 			trusted.mu.Unlock()
-			if time.Since(start) > n.redialAfter() {
+			if stale {
 				return nil, errTrustDecidedLate
 			}
 			return key, nil
@@ -245,11 +247,15 @@ func (n httpNetherNet) redialAfter() time.Duration {
 	return trustRedialAfter
 }
 
-// dial runs one NetherNet dial, and runs it again when a slow trust decision left it stale.
+// dial runs one NetherNet dial, and runs it once more when it fails after a trust decision, whose
+// wait may have outlived the server's negotiation window.
 func (n httpNetherNet) dial(dial func(NetherNet) (net.Conn, error)) (net.Conn, error) {
-	trusted := new(trustedKey)
+	trusted := &trustedKey{started: time.Now()}
 	conn, err := dial(n.transport(trusted))
-	if errors.Is(err, errTrustDecidedLate) {
+	trusted.mu.Lock()
+	decided := trusted.decided
+	trusted.mu.Unlock()
+	if err != nil && decided && !errors.Is(err, ErrServerNotTrusted) {
 		return dial(n.transport(trusted))
 	}
 	return conn, err
