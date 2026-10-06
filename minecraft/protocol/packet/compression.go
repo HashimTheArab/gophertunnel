@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -82,7 +83,7 @@ func (nopCompression) Compress(decompressed []byte) ([]byte, error) {
 func (nopCompression) Decompress(compressed []byte, limit int) ([]byte, error) {
 	limit = normalizeDecompressionLimit(limit)
 	if len(compressed) > limit {
-		return nil, fmt.Errorf("nop decompression: size %d exceeds limit %d", len(compressed), limit)
+		return nil, fmt.Errorf("nop decompression: size %d: %w %d", len(compressed), ErrDecompressedSizeExceeded, limit)
 	}
 	return compressed, nil
 }
@@ -202,7 +203,7 @@ func (snappyCompression) DecompressAppend(dst, compressed []byte, limit int) ([]
 		return nil, fmt.Errorf("snappy decoded length: %w", err)
 	}
 	if decodedLen > limit {
-		return nil, fmt.Errorf("snappy decoded size %d exceeds limit %d", decodedLen, limit)
+		return nil, fmt.Errorf("snappy decoded size %d: %w %d", decodedLen, ErrDecompressedSizeExceeded, limit)
 	}
 	offset := len(dst)
 	dst = slices.Grow(dst, decodedLen)
@@ -212,6 +213,9 @@ func (snappyCompression) DecompressAppend(dst, compressed []byte, limit int) ([]
 	}
 	return append(dst[:offset], decompressed...), nil
 }
+
+// ErrDecompressedSizeExceeded is wrapped by decompression errors for output beyond the limit.
+var ErrDecompressedSizeExceeded = errors.New("decompressed size exceeds limit")
 
 func normalizeDecompressionLimit(limit int) int {
 	if limit < 0 {
@@ -238,7 +242,7 @@ func appendReader(dst []byte, r io.Reader, limit int) ([]byte, error) {
 		read, err := r.Read(dst[n:])
 		dst = dst[:n+read]
 		if len(dst)-start > limit {
-			return nil, fmt.Errorf("size exceeds limit %d", limit)
+			return nil, fmt.Errorf("%w %d", ErrDecompressedSizeExceeded, limit)
 		}
 		if err == io.EOF {
 			return dst, nil

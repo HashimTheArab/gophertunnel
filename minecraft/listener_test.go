@@ -711,3 +711,37 @@ func (listenTestNetwork) PingContext(context.Context, string) ([]byte, error) {
 func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 	return n.listen(address)
 }
+
+// A client batch whose compression cannot be decoded is dropped and the connection keeps reading.
+func TestListenerDropsUndecodableCompressedBatch(t *testing.T) {
+	t.Parallel()
+
+	listener, client := newBatchReadingListener(t, nil)
+	go func() { _ = writePackets(client, &packet.ResourcePacksInfo{}) }()
+	accepted := acceptConn(t, listener)
+	if _, err := accepted.ReadBatch(); err != nil {
+		t.Fatalf("ReadBatch publishing batch: %v", err)
+	}
+	// The pipe write below orders this before the decode loop's next read.
+	accepted.dec.EnableCompression(packet.FlateCompression, 1<<20)
+
+	frame, err := encodePacket(&packet.Unknown{PacketID: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if _, err := client.Write([]byte{0xfe, 0x8f, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); err != nil {
+			return
+		}
+		encoder := packet.NewEncoder(client)
+		encoder.EnableCompression(packet.FlateCompression, 0)
+		_ = encoder.Encode([][]byte{frame})
+	}()
+	packets, err := accepted.ReadBatch()
+	if err != nil {
+		t.Fatalf("ReadBatch after dropped batch: %v", err)
+	}
+	if ids := packetIDs(packets); !slices.Equal(ids, []uint32{1000}) {
+		t.Fatalf("batch IDs = %v, want [1000]", ids)
+	}
+}
