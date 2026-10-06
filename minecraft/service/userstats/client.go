@@ -48,6 +48,39 @@ type UserStatistics struct {
 	ServiceConfigurations []ServiceStatistics `json:"scids"`
 }
 
+// UnmarshalJSON accepts the XUID as a JSON string or integer, keeping integer digits exactly.
+func (u *UserStatistics) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		XUID                  json.RawMessage     `json:"xuid"`
+		ServiceConfigurations []ServiceStatistics `json:"scids"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	xuid, err := decodeXUID(raw.XUID)
+	if err != nil {
+		return err
+	}
+	*u = UserStatistics{XUID: xuid, ServiceConfigurations: raw.ServiceConfigurations}
+	return nil
+}
+
+func decodeXUID(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return "", nil
+	}
+	if raw[0] == '"' {
+		var xuid string
+		err := json.Unmarshal(raw, &xuid)
+		return xuid, err
+	}
+	if _, err := strconv.ParseUint(string(raw), 10, 64); err != nil {
+		return "", fmt.Errorf("service/userstats: invalid xuid %s", raw)
+	}
+	return string(raw), nil
+}
+
 // ServiceStatistics groups statistics under their service configuration.
 type ServiceStatistics struct {
 	ServiceConfigID uuid.UUID   `json:"scid"`

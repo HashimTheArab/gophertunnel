@@ -75,8 +75,7 @@ func TestBatchSDKFixtureAndRequest(t *testing.T) {
 
 func TestBatchRejectsMalformedAndRedactsHTTPError(t *testing.T) {
 	requested := []RequestedStatistics{{uuid.New(), []string{"stat"}}}
-	// Bedrock's statistics client accepts only string or null user IDs and rejects the whole response otherwise.
-	for _, body := range []string{`{}`, `{"users":null}`, `{"users":{}}`, `{"users":[]} trailing`, `{"users":[{"xuid":2533274792693551,"scids":[]}]}`} {
+	for _, body := range []string{`{}`, `{"users":null}`, `{"users":{}}`, `{"users":[]} trailing`, `{"users":[{"xuid":1.5,"scids":[]}]}`, `{"users":[{"xuid":-2,"scids":[]}]}`} {
 		client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(http.StatusOK, body), nil })})
 		if _, err := client.Batch(context.Background(), []string{"1"}, requested); err == nil {
 			t.Errorf("accepted %s", body)
@@ -89,6 +88,19 @@ func TestBatchRejectsMalformedAndRedactsHTTPError(t *testing.T) {
 	var responseErr *service.ResponseError
 	if !errors.As(err, &responseErr) || responseErr.StatusCode != http.StatusForbidden || strings.Contains(err.Error(), "sensitive-error-content") {
 		t.Fatal("HTTP error was not safely typed")
+	}
+}
+
+// Microsoft documents both quoted and integer XUIDs; integer digits must survive without float rounding.
+func TestBatchAcceptsStringAndIntegerXUIDs(t *testing.T) {
+	body := `{"users":[{"xuid":"2533274792693551","scids":[]},{"xuid":2533274792693553,"scids":[]},{"xuid":null,"scids":[]}]}`
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(http.StatusOK, body), nil })})
+	users, err := client.Batch(context.Background(), []string{"1"}, []RequestedStatistics{{uuid.New(), []string{"stat"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{users[0].XUID, users[1].XUID, users[2].XUID}; !reflect.DeepEqual(got, []string{"2533274792693551", "2533274792693553", ""}) {
+		t.Fatalf("xuids=%q", got)
 	}
 }
 
