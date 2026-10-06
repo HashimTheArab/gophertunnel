@@ -24,6 +24,7 @@ const ServerTab = "ServerTab"
 const (
 	FabExperience     = "ExperienceFab"
 	FabExperienceList = "ExperienceListFab"
+	FabExperiencePage = "ExperiencePdpFab"
 )
 
 // Environment is the discovered layout service endpoint.
@@ -108,9 +109,32 @@ func (p RefreshPolicy) TimeToLive() time.Duration {
 	return time.Duration(p.TimeToLiveSeconds) * time.Second
 }
 
+// ExperiencePage returns the experience page the layout's first [FabExperiencePage] presents, or
+// nil. An experience's [Link] names a layout holding one.
+func (l *Layout) ExperiencePage() *ExperiencePage {
+	for _, fab := range l.Body.Fabs {
+		if fab.ExperiencePage != nil {
+			return fab.ExperiencePage
+		}
+	}
+	return nil
+}
+
+// ExperiencePage is an experience's detail page.
+type ExperiencePage struct {
+	Title       Text       `json:"title"`
+	Description Text       `json:"description"`
+	Banner      Image      `json:"banner"`
+	Activities  []Activity `json:"activities"`
+	News        *struct {
+		Title       Text `json:"title"`
+		Description Text `json:"description"`
+	} `json:"news"`
+}
+
 // Fab is one block of a layout. Type selects its members: an [FabExperience] presents Experience,
-// an [FabExperienceList] lists PagedExperiences. Variant names its presentation, such as
-// "feature-play", "row", "hero" or "grid".
+// an [FabExperienceList] lists PagedExperiences, an [FabExperiencePage] holds ExperiencePage.
+// Variant names its presentation, such as "feature-play", "row", "hero" or "grid".
 type Fab struct {
 	ID               string        `json:"id"`
 	Type             string        `json:"$type"`
@@ -121,6 +145,7 @@ type Fab struct {
 	PagedExperiences *struct {
 		Experiences []Experience `json:"experiences"`
 	} `json:"pagedExperiences"`
+	ExperiencePage *ExperiencePage `json:"experiencePdp"`
 
 	Raw json.RawMessage `json:"-"` // the whole fab, for types not modelled here
 }

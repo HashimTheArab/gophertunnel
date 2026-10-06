@@ -102,3 +102,22 @@ func TestLayoutKeepsEscapedLinkIDs(t *testing.T) {
 		t.Fatalf("path = %q", path)
 	}
 }
+
+// An experience's detail layout decodes its page: title, description, banner, activities and news.
+func TestLayoutDecodesTheExperiencePage(t *testing.T) {
+	var layout Layout
+	if err := json.Unmarshal([]byte(`{"body":{"fabs":[{"$type":"ExperiencePdpFab","id":"pdp","experiencePdp":{
+"title":{"value":"Hunt"},"description":{"value":"Mine."},"banner":{"half":{"url":"https://cdn.example.test/b.png"}},
+"activities":[{"title":{"value":"Prestige"},"subtitle":{"value":"Climb"},"image":{"full":{"url":"https://cdn.example.test/a.png"}}}],
+"news":{"title":{"value":"News"},"description":{"value":"Out now"}}}}]}}`), &layout); err != nil {
+		t.Fatal(err)
+	}
+	page := layout.ExperiencePage()
+	if page == nil || page.Title.Value != "Hunt" || page.Description.Value != "Mine." || page.Banner.URL() != "https://cdn.example.test/b.png" ||
+		len(page.Activities) != 1 || page.Activities[0].Subtitle.Value != "Climb" || page.News == nil || page.News.Description.Value != "Out now" {
+		t.Fatalf("page = %+v", page)
+	}
+	if (&Layout{}).ExperiencePage() != nil {
+		t.Fatal("a layout without an experience page returned one")
+	}
+}
