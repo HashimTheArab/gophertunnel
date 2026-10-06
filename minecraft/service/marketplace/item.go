@@ -138,6 +138,27 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, (*plain)(p))
 }
 
+// Amount returns what the offer sells for now: the sale price during a sale, else the list price.
+func (p *Price) Amount() int64 {
+	if p.Sale != nil && p.Sale.SalePrice > 0 {
+		return p.Sale.SalePrice
+	}
+	return int64(p.ListPrice)
+}
+
+// ThumbnailURL returns the URL of the offer's Thumbnail-typed image, or "".
+func (i *Item) ThumbnailURL() string {
+	if i.Thumbnail != nil && strings.EqualFold(i.Thumbnail.Type, "Thumbnail") {
+		return i.Thumbnail.URL
+	}
+	for _, image := range i.Images {
+		if strings.EqualFold(image.Type, "Thumbnail") {
+			return image.URL
+		}
+	}
+	return ""
+}
+
 // ContinueRow loads the next items of a row from the continuation token a previous answer gave.
 func (c *Client) ContinueRow(ctx context.Context, token, inventoryVersion string) ([]Item, string, error) {
 	if token == "" {

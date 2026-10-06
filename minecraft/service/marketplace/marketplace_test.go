@@ -457,3 +457,18 @@ func TestItemDetailDecodesComponents(t *testing.T) {
 		t.Fatalf("description = %+v gallery = %+v rating = %+v", description, gallery, rating)
 	}
 }
+
+// An offer sells at its sale price during a sale, and its thumbnail is the Thumbnail-typed image.
+func TestItemPriceAndThumbnail(t *testing.T) {
+	var item Item
+	if err := json.Unmarshal([]byte(`{"id":"a","price":{"listPrice":990,"saleInfo":{"salePrice":490}},
+"thumbnail":{"type":"Thumbnail","url":"https://cdn.example.test/t.png"},"images":[{"type":"Screenshot","url":"https://cdn.example.test/s.png"}]}`), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Price.Amount() != 490 || item.ThumbnailURL() != "https://cdn.example.test/t.png" {
+		t.Fatalf("amount = %d thumbnail = %q", item.Price.Amount(), item.ThumbnailURL())
+	}
+	if (&Price{ListPrice: 320}).Amount() != 320 || (&Item{Images: item.Images}).ThumbnailURL() != "" {
+		t.Fatal("list price or missing thumbnail misread")
+	}
+}
