@@ -29,17 +29,27 @@ type delayWriter struct {
 	w     io.Writer
 	delay atomic.Int64
 
-	mu    sync.Mutex
-	held  []heldWrite
-	timer *time.Timer
+	mu            sync.Mutex
+	held          []heldWrite
+	nextObservers []func()
+	timer         *time.Timer
 	// err is the first error writing a held batch failed with, returned from every later Write.
 	err error
 }
 
 // heldWrite is one encoded batch and the time it may be written.
 type heldWrite struct {
-	due  time.Time
-	data []byte
+	due       time.Time
+	data      []byte
+	observers []func()
+}
+
+// setObservers associates the next encoder write with its successful delivery callbacks.
+// The connection's encoder lock serializes this with encoding and clearing on failure.
+func (d *delayWriter) setObservers(observers []func()) {
+	d.mu.Lock()
+	d.nextObservers = observers
+	d.mu.Unlock()
 }
 
 // Write writes b to w now if nothing is held and no delay is set, and otherwise holds a copy of it.
@@ -49,11 +59,19 @@ func (d *delayWriter) Write(b []byte) (int, error) {
 	if d.err != nil {
 		return 0, d.err
 	}
+	observers := d.nextObservers
+	d.nextObservers = nil
 	delay := time.Duration(d.delay.Load())
 	if len(d.held) == 0 && delay <= 0 {
-		return d.w.Write(b)
+		n, err := d.w.Write(b)
+		if err == nil {
+			for _, observe := range observers {
+				observe()
+			}
+		}
+		return n, err
 	}
-	d.held = append(d.held, heldWrite{due: time.Now().Add(delay), data: slices.Clone(b)})
+	d.held = append(d.held, heldWrite{due: time.Now().Add(delay), data: slices.Clone(b), observers: observers})
 	if len(d.held) == 1 {
 		d.armLocked()
 	}
@@ -87,6 +105,11 @@ func (d *delayWriter) releaseLocked(all bool) error {
 	for ; n < len(d.held) && (all || !d.held[n].due.After(time.Now())); n++ {
 		if d.err == nil {
 			_, d.err = d.w.Write(d.held[n].data)
+			if d.err == nil {
+				for _, observe := range d.held[n].observers {
+					observe()
+				}
+			}
 		}
 	}
 	d.held = slices.Delete(d.held, 0, n)

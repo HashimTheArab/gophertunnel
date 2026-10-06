@@ -296,6 +296,7 @@ type Conn struct {
 	encMu sync.Mutex
 	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
 	// they are sent each 20th of a second.
+	bufferedObservers []func()
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
 	hdr               *packet.Header
@@ -597,6 +598,14 @@ func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation
 // WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
 // next 20th of a second, after which the data is flushed and sent over the connection.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
+	return conn.WritePacketObserved(pk, nil, nil)
+}
+
+// WritePacketObserved encodes pk and invokes queued under the same write lock, then invokes
+// sent after its batch reaches the transport successfully, including any send delay.
+// Callbacks must not write to or reconfigure this connection. They must not retain pk;
+// capture immutable values for sent before returning. Failed or aborted writes never call sent.
+func (conn *Conn) WritePacketObserved(pk packet.Packet, queued func(packet.Packet), sent func()) error {
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write packet")
@@ -605,7 +614,17 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 
+	before := len(conn.bufferedSend)
 	conn.encodePacketsTo(&conn.bufferedSend, pk)
+	if len(conn.bufferedSend) == before {
+		return nil
+	}
+	if queued != nil {
+		queued(pk)
+	}
+	if sent != nil {
+		conn.bufferedObservers = append(conn.bufferedObservers, sent)
+	}
 	return nil
 }
 
@@ -879,11 +898,15 @@ func (conn *Conn) Flush() error {
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
+	observers := conn.bufferedObservers
+	conn.bufferedObservers = nil
 	conn.bufferedSend = conn.bufferedSendSpare[:0]
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
+	conn.delay.setObservers(observers)
 	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
+	conn.delay.setObservers(nil)
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
