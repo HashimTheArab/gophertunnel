@@ -358,3 +358,29 @@ func TestAddressNetworkDialEndsWithItsContextDuringTrust(t *testing.T) {
 		t.Fatalf("dial error = %v, want context.Canceled", err)
 	}
 }
+
+type keyedConn struct {
+	net.Conn
+	key    *ecdsa.PublicKey
+	closed bool
+}
+
+func (c *keyedConn) PublicKey() *ecdsa.PublicKey { return c.key }
+func (c *keyedConn) Close() error                { c.closed = true; return nil }
+
+// A redial that meets a different key asks about it, and a slow answer redials again rather than
+// returning the stale connection.
+func TestAddressNetworkRedialsWhileNewKeysAreDecidedSlowly(t *testing.T) {
+	first, second := newServerKey(t), newServerKey(t)
+	conns := []*keyedConn{{key: first}, {key: second}, {key: second}}
+	trust := &slowTrust{delay: 20 * time.Millisecond}
+	network := httpNetherNet{trust: trust, trustRedialAfter: time.Millisecond, url: "http://example.com:19132"}
+	dials := 0
+	conn, err := network.dial(t.Context(), func(NetherNet) (net.Conn, error) {
+		dials++
+		return conns[dials-1], nil
+	})
+	if err != nil || conn != conns[2] || trust.asked != 2 || !conns[0].closed || !conns[1].closed {
+		t.Fatalf("dial = %v, %v after %d dials and %d prompts; want the third connection after two prompts", conn, err, dials, trust.asked)
+	}
+}

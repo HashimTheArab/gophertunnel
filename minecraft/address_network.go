@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -209,11 +210,11 @@ func (n httpNetherNet) redialAfter() time.Duration {
 }
 
 // dial runs a NetherNet dial and asks ServerTrust about the key the server proved it holds. A
-// decision slow enough that the server may have dropped the idle connection is followed by one
-// redial, which does not ask again for the same key.
+// decision slow enough that the server may have dropped the idle connection is followed by a
+// redial, which does not ask again about keys already trusted during this dial.
 func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (net.Conn, error) {
-	var trusted *ecdsa.PublicKey
-	for redialed := false; ; redialed = true {
+	var trusted []*ecdsa.PublicKey
+	for {
 		conn, err := dial(n.transport())
 		if err != nil || n.trust == nil {
 			return conn, err
@@ -227,7 +228,7 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 			_ = conn.Close()
 			return nil, fmt.Errorf("%w: server presented no verified identity", ErrServerNotTrusted)
 		}
-		if trusted != nil && trusted.Equal(key) {
+		if slices.ContainsFunc(trusted, func(known *ecdsa.PublicKey) bool { return known.Equal(key) }) {
 			return conn, nil
 		}
 		start := time.Now()
@@ -243,10 +244,10 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 			_ = conn.Close()
 			return nil, err
 		}
-		if redialed || time.Since(start) <= n.redialAfter() {
+		if time.Since(start) <= n.redialAfter() {
 			return conn, nil
 		}
-		trusted = key
+		trusted = append(trusted, key)
 		_ = conn.Close()
 	}
 }
