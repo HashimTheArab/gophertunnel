@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -27,6 +28,12 @@ type AddressNetwork struct {
 	// HTTPClient sends the probe and signaling requests; nil uses http.DefaultTransport.
 	// Redirects are never followed.
 	HTTPClient *http.Client
+	// ServerTrust, when set, decides whether to join a NetherNet server once it has proved its
+	// identity; servers without an identity are then refused, as in vanilla. A decision slow enough
+	// for the server to drop the idle connection is followed by one silent redial.
+	ServerTrust ServerTrust
+
+	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
@@ -47,7 +54,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 		}
 		return n.RakNet, nil
 	}
-	return httpNetherNet{nethernet: n.NetherNet, endpoint: explicitPort(endpoint), client: client}, nil
+	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter}, nil
 }
 
 // DialContext ...
@@ -170,9 +177,17 @@ func splitServerAddress(address string) (string, uint16) {
 // httpNetherNet dials NetherNet through one server's HTTP signaling endpoint.
 type httpNetherNet struct {
 	nethernet NetherNet
-	endpoint  string // base URL with an explicit port, the dial address endpoint.Client expects
+	url       string // the URL that answered the probe
+	endpoint  string // url with an explicit port, the dial address endpoint.Client expects
 	client    *http.Client
+	trust     ServerTrust
+	// trustRedialAfter overrides the package default in tests.
+	trustRedialAfter time.Duration
 }
+
+// trustRedialAfter is how long a trust decision may keep a fresh connection idle before it is
+// replaced with a new one: servers drop a connection left idle for about ten seconds.
+const trustRedialAfter = 5 * time.Second
 
 // transport returns NetherNet signaling through the endpoint, opening fresh signaling per dial.
 func (n httpNetherNet) transport() NetherNet {
@@ -181,22 +196,77 @@ func (n httpNetherNet) transport() NetherNet {
 	transport.DialSignaling = func(context.Context, string) (SignalingConn, error) {
 		return endpointSignaling{endpoint.ClientConfig{HTTPClient: n.client, Logger: n.nethernet.Log}.New()}, nil
 	}
+	if n.trust != nil {
+		transport.Dialer.AllowIdentitylessServer = false
+	}
 	return transport
+}
+
+func (n httpNetherNet) redialAfter() time.Duration {
+	if n.trustRedialAfter > 0 {
+		return n.trustRedialAfter
+	}
+	return trustRedialAfter
+}
+
+// dial runs a NetherNet dial and asks ServerTrust about the key the server proved it holds. A
+// decision slow enough that the server may have dropped the idle connection is followed by a
+// redial, which does not ask again about keys already trusted during this dial.
+func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (net.Conn, error) {
+	var trusted []*ecdsa.PublicKey
+	for {
+		conn, err := dial(n.transport())
+		if err != nil || n.trust == nil {
+			return conn, err
+		}
+		holder, ok := conn.(interface{ PublicKey() *ecdsa.PublicKey })
+		key := (*ecdsa.PublicKey)(nil)
+		if ok {
+			key = holder.PublicKey()
+		}
+		if key == nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("%w: server presented no verified identity", ErrServerNotTrusted)
+		}
+		if slices.ContainsFunc(trusted, func(known *ecdsa.PublicKey) bool { return known.Equal(key) }) {
+			return conn, nil
+		}
+		start := time.Now()
+		ok, err = n.trust.TrustServer(ctx, n.url, key)
+		if err != nil || !ok {
+			_ = conn.Close()
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrServerNotTrusted, err)
+			}
+			return nil, ErrServerNotTrusted
+		}
+		if err := ctx.Err(); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		if time.Since(start) <= n.redialAfter() {
+			return conn, nil
+		}
+		trusted = append(trusted, key)
+		_ = conn.Close()
+	}
 }
 
 // DialContext ignores address: the endpoint already names the server.
 func (n httpNetherNet) DialContext(ctx context.Context, _ string) (net.Conn, error) {
-	return n.transport().DialContext(ctx, n.endpoint)
+	return n.dial(ctx, func(t NetherNet) (net.Conn, error) { return t.DialContext(ctx, n.endpoint) })
 }
 
 // DialContextIdentity ...
 func (n httpNetherNet) DialContextIdentity(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
-	return n.transport().DialContextIdentity(ctx, n.endpoint, token, key)
+	return n.dial(ctx, func(t NetherNet) (net.Conn, error) { return t.DialContextIdentity(ctx, n.endpoint, token, key) })
 }
 
 // DialContextIdentityProvider ...
 func (n httpNetherNet) DialContextIdentityProvider(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
-	return n.transport().DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
+	return n.dial(ctx, func(t NetherNet) (net.Conn, error) {
+		return t.DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
+	})
 }
 
 // PingContext ...
