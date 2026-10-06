@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Item is a catalog offer as a layout row lists it inline or a row continuation returns it.
@@ -15,7 +16,7 @@ type Item struct {
 	ContentType  string          `json:"contentType"`
 	Title        Localized       `json:"title"`
 	Description  Localized       `json:"description"`
-	Tags         []string        `json:"tags"`
+	Tags         []Tag           `json:"tags"`
 	Platforms    []string        `json:"platforms"`
 	Thumbnail    *Image          `json:"thumbnail"`
 	Images       []Image         `json:"images"`
@@ -33,6 +34,24 @@ type Item struct {
 	PackIdentity []PackIdentity  `json:"packIdentity"`
 	PlayFabSKU   string          `json:"playFabSku"`
 	LinksTo      *Link           `json:"linksToInfo"` // the offer's detail page
+}
+
+// Tag is an offer tag. Detail pages send it with the page listing the tagged offers; other answers
+// send the bare name.
+type Tag struct {
+	Name    string `json:"name"`
+	LinksTo *Link  `json:"linksToInfo"`
+}
+
+// UnmarshalJSON decodes a tag object or a bare name.
+func (t *Tag) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '"' {
+		*t = Tag{}
+		return json.Unmarshal(b, &t.Name)
+	}
+	type plain Tag
+	return json.Unmarshal(b, (*plain)(t))
 }
 
 // Rating is an offer's aggregate star rating.
@@ -99,7 +118,7 @@ type Price struct {
 type SaleInfo struct {
 	StartDate      string  `json:"startDate"`
 	ExpirationDate string  `json:"expirationDate"`
-	SalePrice      int64   `json:"salePrice"`
+	SalePrice      *int64  `json:"salePrice,omitempty"` // nil when the sale names no price; 0 for a free sale
 	StoreID        string  `json:"storeId"`
 	Discount       float64 `json:"discount"`
 	Category       string  `json:"category"`
@@ -118,6 +137,36 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 	}
 	type plain Price
 	return json.Unmarshal(b, (*plain)(p))
+}
+
+// Amount returns what the offer sells for now; see [Price.AmountAt].
+func (p *Price) Amount() int64 { return p.AmountAt(time.Now()) }
+
+// AmountAt returns what the offer sells for at now: the sale price, a free sale included, while
+// the sale's window holds it, else the list price. A missing or unreadable bound leaves that side
+// of the window open.
+func (p *Price) AmountAt(now time.Time) int64 {
+	if s := p.Sale; s != nil && s.SalePrice != nil && *s.SalePrice >= 0 {
+		start, startErr := time.Parse(time.RFC3339, s.StartDate)
+		end, endErr := time.Parse(time.RFC3339, s.ExpirationDate)
+		if (startErr != nil || !now.Before(start)) && (endErr != nil || now.Before(end)) {
+			return *s.SalePrice
+		}
+	}
+	return int64(p.ListPrice)
+}
+
+// ThumbnailURL returns the URL of the offer's Thumbnail-typed image, or "".
+func (i *Item) ThumbnailURL() string {
+	if i.Thumbnail != nil && strings.EqualFold(i.Thumbnail.Type, "Thumbnail") {
+		return i.Thumbnail.URL
+	}
+	for _, image := range i.Images {
+		if strings.EqualFold(image.Type, "Thumbnail") {
+			return image.URL
+		}
+	}
+	return ""
 }
 
 // ContinueRow loads the next items of a row from the continuation token a previous answer gave.

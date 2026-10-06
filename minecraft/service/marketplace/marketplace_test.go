@@ -177,12 +177,11 @@ func TestStoreReadsDecodeTheReferenceSchema(t *testing.T) {
 	if nav := rows[3].Component(ComponentNavButtonList); nav == nil || nav.Buttons[0].Images[0].LocalPath == "" {
 		t.Fatalf("nav = %+v", nav)
 	}
-	query, ok := rows[4].SearchQuery()
-	if !ok || query.OrTags[0] != "new" || rows[4].ItemList().Items != nil || rows[4].Title() != "" {
+	if len(rows[4].Queries) != 1 || rows[4].Queries[0].OrTags[0] != "new" || rows[4].ItemList().Items != nil || rows[4].Title() != "" {
 		t.Fatalf("query row = %+v", rows[4])
 	}
 	items, next, err := client.ContinueRow(ctx, "t", "v1")
-	if err != nil || next != "next" || items[0].Price.ListPrice != 320 || items[1].Price.Sale.SalePrice != 490 || items[1].Title.Neutral() != "Beta" {
+	if err != nil || next != "next" || items[0].Price.ListPrice != 320 || *items[1].Price.Sale.SalePrice != 490 || items[1].Title.Neutral() != "Beta" {
 		t.Fatalf("items = %+v next = %q err = %v", items, next, err)
 	}
 	want := []string{
@@ -385,14 +384,129 @@ func TestStoreRequiresBothEnvironments(t *testing.T) {
 	}
 }
 
-// A row query maps onto a quoted PlayFab filter, and unsupported members are refused.
-func TestQuerySearchFilter(t *testing.T) {
-	filter, ok := Query{ContentTypes: []string{"A"}, OrTags: []string{"x", "o'k"}, NotTags: []string{"h"}, ItemLimit: 80, SortDirection: "ASC"}.SearchFilter()
-	if !ok || filter.Filter != "ContentType eq 'A' and (Tags/any(t: t eq 'x') or Tags/any(t: t eq 'o''k')) and not Tags/any(t: t eq 'h')" ||
-		filter.Count != maxSearchCount || filter.OrderBy != "startDate asc" {
-		t.Fatalf("filter = %+v ok = %v", filter, ok)
+// Synthesized in the live service's search and detail page shapes, not captured payloads.
+const (
+	searchPageFixture = `{"result":{"pageId":"Search_SearchResults","layout":[{"sectionName":"rows","rows":[
+{"controlId":"SearchBar","components":[{"type":"searchBarComp","search":"castle","sortBy":"relevance","sortDirection":"DESC","filters":{}}]},
+{"controlId":"GridList","components":[{"type":"pagedItemListComp","totalItems":785,"continuationToken":"more",
+ "items":[{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","title":"CASTLE","ownership":"NotOwned",
+  "price":{"listPrice":660,"currencyId":"c","virtualCurrencyType":"Minecoin"}}]}]}]}]}}`
+	detailPageFixture = `{"result":{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","pageId":"ItemDetail_9490fb47-4ba4-419f-bd3f-e0b8557a4304",
+"layout":[{"sectionName":"rows","rows":[
+{"controlId":"ItemSummary","components":[
+ {"type":"itemSummaryComp","item":{"id":"9490fb47-4ba4-419f-bd3f-e0b8557a4304","title":"CASTLE","creatorName":"Novasoft",
+  "tags":[{"name":"Roleplay","linksToInfo":{"linksTo":"Tag_subgenre.roleplay","linkType":"pageId"}}]}},
+ {"type":"purchaseInfoComp","price":{"listPrice":660,"currencyId":"c","virtualCurrencyType":"Minecoin"}}]},
+{"controlId":"ItemDescription","components":[{"type":"headerComp","headerText":"Description"},
+ {"type":"itemDescriptionComp","description":"A castle.","playerCount":"1-22"}]},
+{"controlId":"ImageGallery","components":[{"type":"imageGalleryComp","images":[{"type":"Unknown","url":"https://cdn.example.test/s0.jpg"}]}]},
+{"controlId":"RatingRow","components":[{"type":"ratingComp","rating":{"average":4.0,"totalCount":102}}]}]}]}}`
+)
+
+// Search renders the session config's searchResults page with the game's search body.
+func TestSearchPostsTheSearchResultsPage(t *testing.T) {
+	var body map[string]any
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2.0/layout/pages/results-page" {
+			t.Errorf("search reached %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = io.WriteString(w, searchPageFixture)
+	})
+	config := &SessionConfig{KnownPages: map[string]string{"searchResults": "results-page"}}
+	page, err := client.Search(context.Background(), config, SearchRequest{Search: "castle"}, PageRequest{Entitlements: []string{}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := (Query{RarityFilters: []string{"epic"}}).SearchFilter(); ok {
-		t.Fatal("a rarity query was mapped")
+	want := map[string]any{"search": "castle", "sortBy": "Relevance", "sortDirection": "Desc", "filterPastRealmsPlus": false,
+		"filterCurrentRealmsPlus": false, "filters": map[string]any{}, "entitlements": []any{}, "inventoryVersion": "", "listVersion": ""}
+	for key, value := range want {
+		got, _ := json.Marshal(body[key])
+		if expected, _ := json.Marshal(value); string(got) != string(expected) {
+			t.Errorf("body[%q] = %s, want %s", key, got, expected)
+		}
+	}
+	results := page.Component(ComponentPagedItemList)
+	if results == nil || results.ContinuationToken != "more" || results.TotalItems != 785 || results.Items[0].Title.Neutral() != "CASTLE" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+// An offer's detail page decodes its summary, price, description, gallery and rating components.
+func TestItemDetailDecodesComponents(t *testing.T) {
+	client, _ := newStore(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2.0/layout/pages/productId/9490fb47-4ba4-419f-bd3f-e0b8557a4304" {
+			t.Errorf("detail reached %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, detailPageFixture)
+	})
+	page, err := client.Page(context.Background(), PageByProductID, "9490fb47-4ba4-419f-bd3f-e0b8557a4304", PageRequest{Entitlements: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, purchase := page.Component(ComponentItemSummary), page.Component(ComponentPurchaseInfo)
+	description, gallery, rating := page.Component(ComponentItemDescription), page.Component(ComponentImageGallery), page.Component(ComponentRating)
+	if summary == nil || summary.Item == nil || summary.Item.CreatorName != "Novasoft" || summary.Item.Tags[0].Name != "Roleplay" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if purchase == nil || purchase.Price == nil || purchase.Price.ListPrice != 660 {
+		t.Fatalf("purchase = %+v", purchase)
+	}
+	if description == nil || description.Description != "A castle." || gallery == nil || len(gallery.Images) != 1 ||
+		rating == nil || rating.Rating == nil || rating.Rating.TotalCount != 102 {
+		t.Fatalf("description = %+v gallery = %+v rating = %+v", description, gallery, rating)
+	}
+}
+
+// An offer sells at its sale price during a sale, and its thumbnail is the Thumbnail-typed image.
+func TestItemPriceAndThumbnail(t *testing.T) {
+	var item Item
+	if err := json.Unmarshal([]byte(`{"id":"a","price":{"listPrice":990,"saleInfo":{"salePrice":490}},
+"thumbnail":{"type":"Thumbnail","url":"https://cdn.example.test/t.png"},"images":[{"type":"Screenshot","url":"https://cdn.example.test/s.png"}]}`), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Price.Amount() != 490 || item.ThumbnailURL() != "https://cdn.example.test/t.png" {
+		t.Fatalf("amount = %d thumbnail = %q", item.Price.Amount(), item.ThumbnailURL())
+	}
+	if (&Price{ListPrice: 320}).Amount() != 320 || (&Item{Images: item.Images}).ThumbnailURL() != "" {
+		t.Fatal("list price or missing thumbnail misread")
+	}
+}
+
+// An offer on sale for free sells at zero; a sale without a price leaves the list price.
+func TestItemSalePriceOfZeroIsFree(t *testing.T) {
+	var free, unpriced Price
+	if err := json.Unmarshal([]byte(`{"listPrice":990,"saleInfo":{"salePrice":0}}`), &free); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"listPrice":990,"saleInfo":{"discount":0.5}}`), &unpriced); err != nil {
+		t.Fatal(err)
+	}
+	if free.Amount() != 0 || unpriced.Amount() != 990 {
+		t.Fatalf("free = %d, unpriced = %d", free.Amount(), unpriced.Amount())
+	}
+	half := int64(490)
+	if constructed := (Price{ListPrice: 990, Sale: &SaleInfo{SalePrice: &half}}); constructed.Amount() != 490 {
+		t.Fatalf("constructed sale = %d", constructed.Amount())
+	}
+	for _, price := range []Price{free, unpriced} {
+		var again Price
+		data, _ := json.Marshal(price)
+		if err := json.Unmarshal(data, &again); err != nil || again.Amount() != price.Amount() {
+			t.Fatalf("round trip of %s = %d, want %d (err %v)", data, again.Amount(), price.Amount(), err)
+		}
+	}
+}
+
+// A sale prices the offer only inside its window; before it starts or after it expires the list
+// price applies.
+func TestItemSalePriceOnlyInsideItsWindow(t *testing.T) {
+	half := int64(490)
+	price := Price{ListPrice: 990, Sale: &SaleInfo{StartDate: "2026-10-01T00:00:00Z", ExpirationDate: "2026-10-08T00:00:00Z", SalePrice: &half}}
+	for at, want := range map[string]int64{"2026-09-30T23:59:59Z": 990, "2026-10-01T00:00:00Z": 490, "2026-10-07T12:00:00Z": 490, "2026-10-08T00:00:00Z": 990} {
+		now, _ := time.Parse(time.RFC3339, at)
+		if got := price.AmountAt(now); got != want {
+			t.Errorf("AmountAt(%s) = %d, want %d", at, got, want)
+		}
 	}
 }
