@@ -181,7 +181,7 @@ func TestStoreReadsDecodeTheReferenceSchema(t *testing.T) {
 		t.Fatalf("query row = %+v", rows[4])
 	}
 	items, next, err := client.ContinueRow(ctx, "t", "v1")
-	if err != nil || next != "next" || items[0].Price.ListPrice != 320 || items[1].Price.Sale.SalePrice != 490 || items[1].Title.Neutral() != "Beta" {
+	if err != nil || next != "next" || items[0].Price.ListPrice != 320 || *items[1].Price.Sale.SalePrice != 490 || items[1].Title.Neutral() != "Beta" {
 		t.Fatalf("items = %+v next = %q err = %v", items, next, err)
 	}
 	want := []string{
@@ -484,5 +484,16 @@ func TestItemSalePriceOfZeroIsFree(t *testing.T) {
 	}
 	if free.Amount() != 0 || unpriced.Amount() != 990 {
 		t.Fatalf("free = %d, unpriced = %d", free.Amount(), unpriced.Amount())
+	}
+	half := int64(490)
+	if constructed := (Price{ListPrice: 990, Sale: &SaleInfo{SalePrice: &half}}); constructed.Amount() != 490 {
+		t.Fatalf("constructed sale = %d", constructed.Amount())
+	}
+	for _, price := range []Price{free, unpriced} {
+		var again Price
+		data, _ := json.Marshal(price)
+		if err := json.Unmarshal(data, &again); err != nil || again.Amount() != price.Amount() {
+			t.Fatalf("round trip of %s = %d, want %d (err %v)", data, again.Amount(), price.Amount(), err)
+		}
 	}
 }
