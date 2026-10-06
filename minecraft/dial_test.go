@@ -1238,6 +1238,7 @@ func TestWrittenItemRegistrySetsTheShieldID(t *testing.T) {
 		t.Fatalf("shield ID = %d, want 355", got)
 	}
 }
+
 // A NetherNet server that repeats NetworkSettings as a bare packet after Login is joined as vanilla
 // joins it: the message has no compression byte, so it is dropped and the login carries on. The
 // bytes are those a live server sends.
