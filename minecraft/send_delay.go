@@ -13,10 +13,10 @@ import (
 // only the encoded bytes wait d before they reach the network, in the order they were sent. A new d applies
 // to what is sent afterwards and never reorders, so after lowering it new packets still wait for those held
 // before them. A d of zero or less stops delaying and sends everything held immediately. Close sends what is
-// held without waiting; Abort discards it.
-func (conn *Conn) SetSendDelay(d time.Duration) {
-	// A failed release is reported by the next write, like any other send failure.
-	_ = conn.delay.set(d)
+// held without waiting; Abort discards it. It returns any failure while releasing held batches, including
+// an earlier asynchronous failure. The delay setting is applied even when a failure is returned.
+func (conn *Conn) SetSendDelay(d time.Duration) error {
+	return conn.delay.set(d)
 }
 
 // SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
@@ -67,19 +67,28 @@ func (d *delayWriter) Write(b []byte) (int, error) {
 	d.nextObservers = nil
 	delay := time.Duration(d.delay.Load())
 	if len(d.held) == 0 && delay <= 0 {
-		n, err := d.w.Write(b)
-		if err == nil {
-			for _, observe := range observers {
-				observe()
-			}
-		}
-		return n, err
+		return d.writeLocked(b, observers)
 	}
 	d.held = append(d.held, heldWrite{due: time.Now().Add(delay), data: slices.Clone(b), observers: observers})
 	if len(d.held) == 1 {
 		d.armLocked()
 	}
 	return len(b), nil
+}
+
+// writeLocked writes a complete batch and runs its completions only after the transport accepts all
+// bytes. The caller holds mu, keeping transport writes and completion order serialized.
+func (d *delayWriter) writeLocked(data []byte, observers []func()) (int, error) {
+	n, err := d.w.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		for _, observe := range observers {
+			observe()
+		}
+	}
+	return n, err
 }
 
 // set changes the delay under the same lock Write decides with, writing everything held when it is
@@ -89,7 +98,7 @@ func (d *delayWriter) set(delay time.Duration) error {
 	defer d.mu.Unlock()
 	d.delay.Store(int64(max(delay, 0)))
 	if delay > 0 {
-		return nil
+		return d.err
 	}
 	return d.releaseLocked(true)
 }
@@ -108,12 +117,7 @@ func (d *delayWriter) releaseLocked(all bool) error {
 	n := 0
 	for ; n < len(d.held) && (all || !d.held[n].due.After(time.Now())); n++ {
 		if d.err == nil {
-			_, d.err = d.w.Write(d.held[n].data)
-			if d.err == nil {
-				for _, observe := range d.held[n].observers {
-					observe()
-				}
-			}
+			_, d.err = d.writeLocked(d.held[n].data, d.held[n].observers)
 		}
 	}
 	d.held = slices.Delete(d.held, 0, n)

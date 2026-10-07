@@ -3,6 +3,7 @@ package minecraft
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"testing"
@@ -67,6 +68,7 @@ func expectNothingSent(t *testing.T, ids <-chan uint32, d time.Duration) {
 	}
 }
 
+// testPacket returns a minimal packet with an ID that is easy to check on the wire.
 func testPacket(id uint32) packet.Packet { return &packet.Unknown{PacketID: id} }
 
 func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
@@ -74,7 +76,7 @@ func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 	const delay = 150 * time.Millisecond
 	conn.SetSendDelay(delay)
 	start := time.Now()
-	if err := conn.WritePacket(testPacket(700)); err != nil {
+	if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -92,11 +94,11 @@ func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 func TestConn_SendDelayLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	conn.SetSendDelay(50 * time.Millisecond)
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
 	// Written after the last flush: only the owner decides when this batch closes.
-	if err := conn.WritePacket(testPacket(701)); err != nil {
+	if err := conn.WritePacket(Buffered, testPacket(701)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 
@@ -112,17 +114,17 @@ func TestConn_SendDelayLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	conn.SetSendDelay(100 * time.Millisecond)
-	if err := conn.WritePacket(testPacket(700)); err != nil {
+	if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
-	if err := conn.WritePacketImmediate(testPacket(701)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(701)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
 	// A direct write would normally go out at once; it must not overtake the held packets.
-	if err := conn.WritePacketDirect(testPacket(702)); err != nil {
-		t.Fatalf("WritePacketDirect: %v", err)
+	if err := conn.WritePacket(BypassBuffered, testPacket(702)); err != nil {
+		t.Fatalf("WritePacket(BypassBuffered): %v", err)
 	}
-	if err := conn.WritePacket(testPacket(703)); err != nil {
+	if err := conn.WritePacket(Buffered, testPacket(703)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -136,8 +138,8 @@ func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	conn.SetSendDelay(time.Hour)
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
 	expectNothingSent(t, ids, 50*time.Millisecond)
 
@@ -148,8 +150,8 @@ func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	}
 
 	// With the delay cleared, writes go out as usual again.
-	if err := conn.WritePacketDirect(testPacket(701)); err != nil {
-		t.Fatalf("WritePacketDirect: %v", err)
+	if err := conn.WritePacket(BypassBuffered, testPacket(701)); err != nil {
+		t.Fatalf("WritePacket(BypassBuffered): %v", err)
 	}
 	expectSent(t, ids, 701, time.Second)
 }
@@ -159,8 +161,8 @@ func TestConn_SendDelayKeepsTheEncodingPacketsWereSentWith(t *testing.T) {
 	conn.SetSendDelay(time.Hour)
 	// Sent before compression is enabled, like NetworkSettings during login: the peer still reads
 	// uncompressed batches, so the held packet must stay uncompressed.
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
 	if err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: packet.FlateCompression.EncodeCompression()}); err != nil {
 		t.Fatalf("handleNetworkSettings: %v", err)
@@ -191,8 +193,8 @@ func TestConn_SendDelayHoldsWhatWasSentNotTheCallersBuffer(t *testing.T) {
 func TestConn_AbortDiscardsPacketsHeldBySendDelay(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
 	conn.SetSendDelay(time.Hour)
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
 	_ = conn.Abort()
 
@@ -223,8 +225,8 @@ func TestConn_SendDelayKeepsTheTransportsBatchFraming(t *testing.T) {
 		n, _ := peer.Read(buf)
 		sent <- buf[:n]
 	}()
-	if err := conn.WritePacketDirect(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketDirect: %v", err)
+	if err := conn.WritePacket(BypassBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(BypassBuffered): %v", err)
 	}
 	select {
 	case data := <-sent:
@@ -255,6 +257,57 @@ func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
 	}
 }
 
+func TestConn_SetSendDelayReturnsReleaseFailure(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	conn.delay.w = failingWriter{}
+	if err := conn.SetSendDelay(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatal(err)
+	}
+	for _, delay := range []time.Duration{0, time.Hour, -time.Second} {
+		if err := conn.SetSendDelay(delay); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("SetSendDelay(%v) = %v, want net.ErrClosed", delay, err)
+		}
+		if got := conn.SendDelay(); got != max(delay, 0) {
+			t.Fatalf("SendDelay = %v, want %v", got, max(delay, 0))
+		}
+	}
+	if err := conn.WritePacket(BypassBuffered, testPacket(701)); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write after release failure = %v, want net.ErrClosed", err)
+	}
+}
+
+// shortWriter simulates a transport that accepts only part of a batch without reporting an error.
+type shortWriter struct{}
+
+// Write deliberately violates io.Writer's full-write contract to test completion handling.
+func (shortWriter) Write(data []byte) (int, error) { return len(data) - 1, nil }
+
+func TestDelayWriter_ShortWritesNeverComplete(t *testing.T) {
+	for _, delay := range []time.Duration{0, time.Hour} {
+		t.Run(delay.String(), func(t *testing.T) {
+			d := &delayWriter{w: shortWriter{}}
+			defer d.drop()
+			if err := d.set(delay); err != nil {
+				t.Fatal(err)
+			}
+			d.setObservers([]func(){func() { t.Error("short write completed") }})
+			_, err := d.Write([]byte{1, 2})
+			if delay > 0 {
+				if err != nil {
+					t.Fatalf("queue delayed write: %v", err)
+				}
+				err = d.set(0)
+			}
+			if !errors.Is(err, io.ErrShortWrite) {
+				t.Fatalf("write error = %v, want io.ErrShortWrite", err)
+			}
+		})
+	}
+}
+
 func TestDelayWriter_DropRejectsWritesAfterDelayChanges(t *testing.T) {
 	for _, delay := range []time.Duration{0, time.Hour} {
 		t.Run(delay.String(), func(t *testing.T) {
@@ -279,10 +332,10 @@ func TestDelayWriter_DropRejectsWritesAfterDelayChanges(t *testing.T) {
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	conn.SetSendDelay(time.Hour)
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
+	if err := conn.WritePacket(FlushBuffered, testPacket(700)); err != nil {
+		t.Fatalf("WritePacket(FlushBuffered): %v", err)
 	}
-	if err := conn.WritePacket(testPacket(701)); err != nil {
+	if err := conn.WritePacket(Buffered, testPacket(701)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 

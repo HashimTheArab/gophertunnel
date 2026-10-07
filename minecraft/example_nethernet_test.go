@@ -78,7 +78,7 @@ func handleConn(conn *Conn, listener *Listener) {
 			if err != nil {
 				return
 			}
-			if err := serverConn.WritePacket(pk); err != nil {
+			if err := serverConn.WritePacket(Buffered, pk); err != nil {
 				var disc DisconnectError
 				if ok := errors.As(err, &disc); ok {
 					_ = listener.Disconnect(conn, disc.Error())
@@ -99,7 +99,7 @@ func handleConn(conn *Conn, listener *Listener) {
 				}
 				return
 			}
-			if err := conn.WritePacket(pk); err != nil {
+			if err := conn.WritePacket(Buffered, pk); err != nil {
 				return
 			}
 		}

@@ -100,7 +100,7 @@ func handleConn(conn *minecraft.Conn, listener *minecraft.Listener, config confi
 			if err != nil {
 				return
 			}
-			if err := serverConn.WritePacket(pk); err != nil {
+			if err := serverConn.WritePacket(minecraft.Buffered, pk); err != nil {
 				var disc minecraft.DisconnectError
 				if ok := errors.As(err, &disc); ok {
 					_ = listener.Disconnect(conn, disc.Error())
@@ -121,7 +121,7 @@ func handleConn(conn *minecraft.Conn, listener *minecraft.Listener, config confi
 				}
 				return
 			}
-			if err := conn.WritePacket(pk); err != nil {
+			if err := conn.WritePacket(minecraft.Buffered, pk); err != nil {
 				return
 			}
 		}

@@ -289,13 +289,14 @@ type Conn struct {
 	deferredBatches [][]*packetData
 	readDeadline    <-chan time.Time
 
-	// sendMu protects bufferedSend/bufferedSendSpare.
+	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and network writes (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
 	encMu sync.Mutex
 	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
 	// they are sent each 20th of a second.
+	writeObserver     WriteObserver
 	bufferedObservers []func()
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
@@ -595,43 +596,96 @@ func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation
 	conn.actorIDs.Store(translation)
 }
 
-// WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
-// next 20th of a second, after which the data is flushed and sent over the connection.
-func (conn *Conn) WritePacket(pk packet.Packet) error {
-	return conn.WritePacketObserved(pk, nil, nil)
+// SendMode controls when WritePacket submits packets to the batch encoder. Every mode respects SendDelay.
+type SendMode uint8
+
+const (
+	// Buffered appends packets to the pending batch, which is sent by the next Flush.
+	Buffered SendMode = iota
+	// FlushBuffered appends packets to the pending batch and submits that entire batch before returning.
+	FlushBuffered
+	// BypassBuffered submits packets as a separate batch before packets still in the pending buffer.
+	// It never overtakes a batch already submitted to the encoder, including one held by SendDelay.
+	BypassBuffered
+)
+
+// WriteObserver captures an outgoing logical packet after it has been marshaled, under the connection's
+// packet write lock. It receives the original logical packet once when that packet produces wire data,
+// even if protocol conversion produces several wire packets. It may return a function called when the
+// batch is accepted by the transport, including any send delay. This does not acknowledge receipt or
+// processing by the remote peer.
+//
+// Neither callback may write to or reconfigure this connection. The observer must not retain the packet
+// or mutable data owned by it; capture immutable values for the returned function. Captures run in packet
+// marshaling order, and completions run in transport order, which can differ with BypassBuffered. Failed
+// or aborted batches never run their completions. Raw Write calls do not invoke the observer.
+type WriteObserver func(packet.Packet) func()
+
+// SetWriteObserver replaces the observer for future packet captures. Passing nil stops new captures.
+// Packets already captured retain their original completion functions, even when they are still buffered.
+func (conn *Conn) SetWriteObserver(observer WriteObserver) {
+	conn.sendMu.Lock()
+	conn.writeObserver = observer
+	conn.sendMu.Unlock()
 }
 
-// WritePacketObserved encodes pk and invokes queued under the same write lock, then invokes
-// sent after its batch reaches the transport successfully, including any send delay.
-// Callbacks must not write to or reconfigure this connection. They must not retain pk;
-// capture immutable values for sent before returning. Failed or aborted writes never call sent.
-func (conn *Conn) WritePacketObserved(pk packet.Packet, queued func(packet.Packet), sent func()) error {
+// WritePacket marshals packets and queues or submits them according to mode. A successful buffered or
+// delayed write means the packets were accepted for sending, not that they reached the transport or peer.
+// An unknown mode returns an error without marshaling, observing, or flushing any packet.
+func (conn *Conn) WritePacket(mode SendMode, pks ...packet.Packet) error {
+	if mode != Buffered && mode != FlushBuffered && mode != BypassBuffered {
+		return fmt.Errorf("write packet: unknown send mode %d", mode)
+	}
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write packet")
 	default:
 	}
+	if mode != Buffered {
+		// Serialize submission before marshaling, so separate batches cannot overtake one another
+		// between their capture callbacks and the batch encoder.
+		conn.encMu.Lock()
+		defer conn.encMu.Unlock()
+	}
+	if mode == BypassBuffered {
+		var stackBuf [4][]byte
+		batch := stackBuf[:0]
+		var observers []func()
+		if err := conn.queuePackets(&batch, &observers, pks...); err != nil {
+			return err
+		}
+		return conn.encodeBatch(batch, observers, "write packet")
+	}
+	if err := conn.queuePackets(&conn.bufferedSend, &conn.bufferedObservers, pks...); err != nil {
+		return err
+	}
+	if mode == FlushBuffered {
+		return conn.flushLocked()
+	}
+	return nil
+}
+
+// queuePackets serializes packet marshaling and observation, rejecting writes if shutdown began while
+// the caller waited for an encoder or packet write lock.
+func (conn *Conn) queuePackets(dst *[][]byte, observers *[]func(), pks ...packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
-
-	before := len(conn.bufferedSend)
-	conn.encodePacketsTo(&conn.bufferedSend, pk)
-	if len(conn.bufferedSend) == before {
-		return nil
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("write packet")
 	}
-	if queued != nil {
-		queued(pk)
-	}
-	if sent != nil {
-		conn.bufferedObservers = append(conn.bufferedObservers, sent)
-	}
+	conn.encodePacketsTo(dst, observers, pks...)
 	return nil
 }
 
 // encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
-// appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
+// appended to dst. The appended slices are copies safe to retain beyond the call. Each logical packet
+// that produces bytes is observed once, and its optional completion is appended to observers. The caller
+// holds sendMu, so captures and buffered packet order cannot race.
+func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]func(), pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -640,6 +694,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}()
 
 	for _, pk := range pks {
+		before := len(*dst)
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
 			conn.hdr.PacketID = converted.ID()
@@ -656,50 +711,12 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
+		if conn.writeObserver != nil && len(*dst) != before {
+			if sent := conn.writeObserver(pk); sent != nil {
+				*observers = append(*observers, sent)
+			}
+		}
 	}
-}
-
-// WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
-// that queue immediately. This preserves ordering relative to packets that were already queued through
-// WritePacket while still sending the data right away.
-func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("write immediate packet")
-	default:
-	}
-
-	conn.sendMu.Lock()
-	conn.encodePacketsTo(&conn.bufferedSend, pks...)
-	conn.sendMu.Unlock()
-
-	return conn.Flush()
-}
-
-// WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
-// bypassing the buffered batch that is flushed every tick.
-// Use this only when packet ordering relative to already-buffered packets does not matter.
-func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("write packet direct")
-	default:
-	}
-	// Use a small stack-allocated buffer for the common case (usually 1 slice),
-	// allowing append to spill to heap only if more capacity is needed.
-	var stackBuf [4][]byte
-	immediate := stackBuf[:0]
-
-	conn.sendMu.Lock()
-	conn.encodePacketsTo(&immediate, pks...)
-	conn.sendMu.Unlock()
-
-	if len(immediate) > 0 {
-		conn.encMu.Lock()
-		defer conn.encMu.Unlock()
-		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
-	}
-	return nil
 }
 
 // ReadPacket reads a packet from the Conn, depending on the packet ID that is found in front of the packet
@@ -874,8 +891,8 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 	}
 }
 
-// Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
-// are directly sent.
+// Flush submits the currently buffered packets to the batch encoder. Encoded batches still wait for any
+// configured SendDelay before reaching the transport; Flush does not bypass that delay.
 func (conn *Conn) Flush() error {
 	if conn.ctx == nil {
 		return net.ErrClosed
@@ -888,7 +905,12 @@ func (conn *Conn) Flush() error {
 
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
+	return conn.flushLocked()
+}
 
+// flushLocked detaches and encodes the pending batch, then retains its slice for reuse. The caller holds
+// encMu; sendMu is released during encoding so buffered writers can keep appending.
+func (conn *Conn) flushLocked() error {
 	conn.sendMu.Lock()
 	if len(conn.bufferedSend) == 0 {
 		conn.sendMu.Unlock()
@@ -904,9 +926,7 @@ func (conn *Conn) Flush() error {
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	conn.delay.setObservers(observers)
-	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
-	conn.delay.setObservers(nil)
+	encodeErr := conn.encodeBatch(toSend, observers, "flush")
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
@@ -920,6 +940,17 @@ func (conn *Conn) Flush() error {
 	return encodeErr
 }
 
+// encodeBatch submits one batch with its captured completion functions. The caller holds encMu so the
+// callbacks cannot be attached to a different encoder write. Empty batches have nothing to complete.
+func (conn *Conn) encodeBatch(batch [][]byte, observers []func(), op string) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	conn.delay.setObservers(observers)
+	defer conn.delay.setObservers(nil)
+	return conn.handleEncodeError(conn.enc.Encode(batch), op)
+}
+
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
 // ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
@@ -929,9 +960,6 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	}
 	if conn.ctx.Err() != nil {
 		return conn.closeErr(op)
-	}
-	if errors.Is(err, net.ErrClosed) {
-		return nil
 	}
 	return conn.wrap(err, op)
 }
@@ -1040,7 +1068,7 @@ func (conn *Conn) Disconnect(message string) error {
 // DisconnectPacket disconnects the connection by first sending pk, and closing
 // the connection after.
 func (conn *Conn) DisconnectPacket(pk packet.Disconnect) error {
-	_ = conn.WritePacketImmediate(&pk)
+	_ = conn.WritePacket(FlushBuffered, &pk)
 	return conn.close(conn.closeErr(conn.disconnectPacketMessage(&pk)))
 }
 
@@ -1418,10 +1446,10 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		// may predate the current Disconnect wire layout and would mis-decode it, hiding the message.
 		if conn.protocolMismatchMessage != nil && newerThanAccepted(conn.acceptedProto, pk.ClientProtocol) {
 			if msg := conn.protocolMismatchMessage(pk.ClientProtocol); msg != "" {
-				_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
+				_ = conn.WritePacket(Buffered, &packet.Disconnect{Reason: packet.DisconnectReasonOutdatedServer, Message: msg})
 			}
 		}
-		_ = conn.WritePacket(&packet.PlayStatus{Status: status})
+		_ = conn.WritePacket(Buffered, &packet.PlayStatus{Status: status})
 		return fmt.Errorf("incompatible protocol version: expected %v, got %v", protocol.CurrentProtocol, pk.ClientProtocol)
 	}
 
@@ -1432,7 +1460,7 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 	}
 
 	conn.expect(packet.IDLogin)
-	if err := conn.WritePacket(&packet.NetworkSettings{
+	if err := conn.WritePacket(Buffered, &packet.NetworkSettings{
 		CompressionThreshold: uint16(conn.compressionThreshold),
 		CompressionAlgorithm: conn.compression.EncodeCompression(),
 	}); err != nil {
@@ -1476,24 +1504,24 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 	// accepted protocols may share the negotiated one. Login is the first point
 	// that carries the client's game version, which is what tells them apart.
 	if err := conn.selectProtocolByGameVersion(); err != nil {
-		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
+		_ = conn.WritePacket(Buffered, &packet.PlayStatus{Status: packet.PlayStatusLoginFailedClient})
 		return err
 	}
 
 	// Make sure the player is logged in with XBOX Live when necessary.
 	if !authResult.XBOXLiveAuthenticated && conn.authEnabled {
-		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
+		_ = conn.WritePacket(Buffered, &packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
 	if pkc, ok := conn.conn.(publicKeyConn); ok {
 		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+			_ = conn.WritePacket(Buffered, &packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
 			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
 		}
 	}
 	if conn.allow != nil {
 		if reason, ok := conn.allow(conn.RemoteAddr(), conn.identityData, conn.clientData); !ok {
-			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonKicked, Message: reason})
+			_ = conn.WritePacket(Buffered, &packet.Disconnect{Reason: packet.DisconnectReasonKicked, Message: reason})
 			return conn.Close()
 		}
 	}
@@ -1600,7 +1628,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 	}
 	// The next expected packet is a resource pack client response.
 	conn.expect(packet.IDResourcePackClientResponse, packet.IDClientCacheStatus)
-	if err := conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+	if err := conn.WritePacket(Buffered, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
 		return fmt.Errorf("send PlayStatus (Status=LoginSuccess): %w", err)
 	}
 
@@ -1627,7 +1655,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 		pk.TexturePacks = append(pk.TexturePacks, texturePack)
 	}
 	// Finally we send the packet after the play status.
-	if err := conn.WritePacket(pk); err != nil {
+	if err := conn.WritePacket(Buffered, pk); err != nil {
 		return fmt.Errorf("send ResourcePacksInfo: %w", err)
 	}
 	return nil
@@ -1678,7 +1706,7 @@ func (conn *Conn) handleServerToClientHandshake(pk *packet.ServerToClientHandsha
 	}
 
 	// We write a ClientToServerHandshake packet (which has no payload) as a response.
-	_ = conn.WritePacket(&packet.ClientToServerHandshake{})
+	_ = conn.WritePacket(Buffered, &packet.ClientToServerHandshake{})
 	conn.handshakeComplete = true
 	return nil
 }
@@ -1769,7 +1797,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	if len(packsToDownload) != 0 {
 		conn.expect(packet.IDResourcePackDataInfo, packet.IDResourcePackChunkData, packet.IDStartGame, packet.IDPlayStatus)
-		_ = conn.WritePacket(&packet.ResourcePackClientResponse{
+		_ = conn.WritePacket(Buffered, &packet.ResourcePackClientResponse{
 			Response:        packet.PackResponseSendPacks,
 			PacksToDownload: packsToDownload,
 		})
@@ -1777,7 +1805,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 	}
 	conn.expect(packet.IDResourcePackStack, packet.IDStartGame, packet.IDPlayStatus)
 
-	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
+	_ = conn.WritePacket(Buffered, &packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded})
 	return nil
 }
 
@@ -1803,7 +1831,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 		}
 	}
 	conn.expect(packet.IDDimensionData, packet.IDStartGame)
-	_ = conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
+	_ = conn.WritePacket(Buffered, &packet.ResourcePackClientResponse{Response: packet.PackResponseCompleted})
 	return nil
 }
 
@@ -1870,7 +1898,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 				Version: exempted.version,
 			})
 		}
-		if err := conn.WritePacket(pk); err != nil {
+		if err := conn.WritePacket(Buffered, pk); err != nil {
 			return fmt.Errorf("send ResourcePackStack: %w", err)
 		}
 	case packet.PackResponseCompleted:
@@ -1887,11 +1915,11 @@ func (conn *Conn) startGame() error {
 	conn.expect(packet.IDRequestChunkRadius, packet.IDSetLocalPlayerAsInitialised)
 	data := conn.gameData
 	if len(data.Dimensions) > 0 {
-		if err := conn.WritePacket(&packet.DimensionData{Definitions: data.Dimensions}); err != nil {
+		if err := conn.WritePacket(Buffered, &packet.DimensionData{Definitions: data.Dimensions}); err != nil {
 			return err
 		}
 	}
-	if err := conn.WritePacket(&packet.JigsawStructureData{
+	if err := conn.WritePacket(Buffered, &packet.JigsawStructureData{
 		StructureData: map[string]any{
 			"processors":     make([]map[string]any, 0),
 			"template_pools": make([]map[string]any, 0),
@@ -1901,7 +1929,7 @@ func (conn *Conn) startGame() error {
 	}); err != nil {
 		return err
 	}
-	if err := conn.WritePacket(&packet.VoxelShapes{}); err != nil {
+	if err := conn.WritePacket(Buffered, &packet.VoxelShapes{}); err != nil {
 		return err
 	}
 	pk := StartGameFromGameData(data)
@@ -1913,10 +1941,10 @@ func (conn *Conn) startGame() error {
 	pk.CommandsEnabled = true
 	pk.LANBroadcastEnabled = true
 	pk.GameVersion = protocol.CurrentVersion
-	if err := conn.WritePacket(pk); err != nil {
+	if err := conn.WritePacket(Buffered, pk); err != nil {
 		return err
 	}
-	if err := conn.WritePacket(&packet.ItemRegistry{Items: data.Items}); err != nil {
+	if err := conn.WritePacket(Buffered, &packet.ItemRegistry{Items: data.Items}); err != nil {
 		return err
 	}
 	if err := conn.Flush(); err != nil {
@@ -1935,7 +1963,7 @@ func (conn *Conn) nextResourcePackDownload() error {
 	if !ok {
 		return fmt.Errorf("no resource packs to download")
 	}
-	if err := conn.WritePacket(pk); err != nil {
+	if err := conn.WritePacket(Buffered, pk); err != nil {
 		return fmt.Errorf("send ResourcePackDataInfo: %w", err)
 	}
 	// Set the next expected packet to ResourcePackChunkRequest packets.
@@ -1994,7 +2022,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 			pack.mu.Lock()
 			pack.requested[index] = struct{}{}
 			pack.mu.Unlock()
-			if err := conn.WritePacket(&packet.ResourcePackChunkRequest{
+			if err := conn.WritePacket(Buffered, &packet.ResourcePackChunkRequest{
 				UUID:       idCopy,
 				ChunkIndex: int32(index),
 			}); err != nil {
@@ -2062,7 +2090,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 
 		if packAmount == 0 {
 			conn.expect(packet.IDResourcePackStack, packet.IDPlayStatus)
-			if err := conn.WritePacket(&packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
+			if err := conn.WritePacket(Buffered, &packet.ResourcePackClientResponse{Response: packet.PackResponseAllPacksDownloaded}); err != nil {
 				_ = conn.abort(fmt.Errorf("download resource pack %v: send completion: %w", id, err))
 				return
 			}
@@ -2140,7 +2168,7 @@ func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkReq
 		}
 		response.Data = response.Data[:n]
 	}
-	if err := conn.WritePacket(response); err != nil {
+	if err := conn.WritePacket(Buffered, response); err != nil {
 		return fmt.Errorf("send ResourcePackChunkData: %w", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -2180,8 +2208,8 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	conn.gameData = GameDataFromStartGame(pk)
 	conn.gameData.Dimensions = dimensions
 
-	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	_ = conn.WritePacket(Buffered, &packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
+	_ = conn.WritePacket(Buffered, &packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
 }
@@ -2281,7 +2309,7 @@ func (conn *Conn) handleItemRegistry(pk *packet.ItemRegistry) error {
 		}
 	}
 
-	// _ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	// _ = conn.WritePacket(Buffered, &packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
 	conn.expect(packet.IDChunkRadiusUpdated, packet.IDPlayStatus)
 	return nil
 }
@@ -2297,10 +2325,10 @@ func (conn *Conn) handleRequestChunkRadius(pk *packet.RequestChunkRadius) error 
 	if r := conn.gameData.ChunkRadius; r != 0 {
 		radius = r
 	}
-	_ = conn.WritePacket(&packet.ChunkRadiusUpdated{ChunkRadius: radius})
+	_ = conn.WritePacket(Buffered, &packet.ChunkRadiusUpdated{ChunkRadius: radius})
 	conn.gameData.ChunkRadius = pk.ChunkRadius
-	_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
-	_ = conn.WritePacket(&packet.CreativeContent{})
+	_ = conn.WritePacket(Buffered, &packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn})
+	_ = conn.WritePacket(Buffered, &packet.CreativeContent{})
 	return nil
 }
 
@@ -2381,7 +2409,7 @@ func (conn *Conn) handleLoginSuccess() error {
 	}
 	conn.loginSuccessReceived = true
 	if !conn.disablePacketHandling || !conn.forwardClientCacheStatus {
-		if err := conn.WritePacket(&packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
+		if err := conn.WritePacket(Buffered, &packet.ClientCacheStatus{Enabled: conn.cacheEnabled}); err != nil {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
@@ -2401,8 +2429,8 @@ func (conn *Conn) tryFinaliseClientConn() {
 
 		close(conn.spawn)
 		conn.loggedIn = true
-		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
-		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.gameData.EntityRuntimeID})
+		_ = conn.WritePacket(Buffered, &packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
+		_ = conn.WritePacket(Buffered, &packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.gameData.EntityRuntimeID})
 	}
 }
 
@@ -2418,7 +2446,7 @@ func (conn *Conn) enableEncryption(clientPublicKey *ecdsa.PublicKey) error {
 	if err != nil {
 		return fmt.Errorf("compact serialise server JWT: %w", err)
 	}
-	if err := conn.WritePacket(&packet.ServerToClientHandshake{JWT: []byte(serverJWT)}); err != nil {
+	if err := conn.WritePacket(Buffered, &packet.ServerToClientHandshake{JWT: []byte(serverJWT)}); err != nil {
 		return fmt.Errorf("send ServerToClientHandshake: %w", err)
 	}
 	// Flush immediately as we'll enable encryption after this.

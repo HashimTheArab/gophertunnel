@@ -1011,9 +1011,9 @@ func TestAbortUnblocksInFlightWritesWithoutPanic(t *testing.T) {
 			},
 		},
 		{
-			name: "WritePacketDirect",
+			name: "WritePacket(BypassBuffered)",
 			prepare: func(_ *testing.T, conn *Conn) func() error {
-				return func() error { return conn.WritePacketDirect(&packet.PlayStatus{}) }
+				return func() error { return conn.WritePacket(BypassBuffered, &packet.PlayStatus{}) }
 			},
 		},
 	}

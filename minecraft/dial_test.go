@@ -900,7 +900,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContextNetwork passthrough login: %v (scripted server: %v)", err, <-network.done)
 	}
-	if err := conn.WritePacket(&packet.Text{Message: "forwarded"}); err != nil {
+	if err := conn.WritePacket(Buffered, &packet.Text{Message: "forwarded"}); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 	if err := conn.Flush(); err != nil {
