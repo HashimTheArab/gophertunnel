@@ -2893,13 +2893,9 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
-// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
-// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
-// treating the closed transport as an encoding failure.
+// closeTransport cancels conn and closes its transport without waiting for pending packets or writes.
 func (conn *Conn) closeTransport(cause error) {
-	conn.cancelFunc(cause)
-	_ = conn.conn.Close()
-	_ = conn.close(cause)
+	_ = conn.abort(cause)
 }
 
 func (conn *Conn) close(cause error) error {
@@ -2911,6 +2907,9 @@ func (conn *Conn) close(cause error) error {
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
+		if conn.ctx != nil && conn.ctx.Err() != nil {
+			return
+		}
 		// Anything the send delay holds goes out now: the connection will not be around when it falls due.
 		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.delay.set(0))
 	})

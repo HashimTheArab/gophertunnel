@@ -221,3 +221,69 @@ func TestDelayWriter_AbortRacingUnlockClearsReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
+	for _, delay := range []time.Duration{0, time.Hour} {
+		for _, closePath := range []string{"abortThenClose", "closeTransport", "canceledContext"} {
+			t.Run(fmt.Sprintf("delay=%s/path=%s", delay, closePath), func(t *testing.T) {
+				client, peer := net.Pipe()
+				transport := &deferredCloseTransport{Conn: client, started: make(chan struct{}), release: make(chan struct{}), succeed: true}
+				t.Cleanup(func() { transport.unblock(); _ = client.Close(); _ = peer.Close() })
+				conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+				t.Cleanup(func() { _ = conn.Abort() })
+				if err := conn.SetSendDelay(delay); err != nil {
+					t.Fatal(err)
+				}
+				sent := make(chan struct{}, 1)
+				conn.SetWriteObserver(func(packet.Packet) func() { return func() { sent <- struct{}{} } })
+				written := make(chan error, 1)
+				if delay > 0 {
+					if err := conn.WritePacketDirect(testPacket(700)); err != nil {
+						t.Fatal(err)
+					}
+					go func() { written <- conn.SetSendDelay(0) }()
+				} else {
+					go func() { written <- conn.WritePacketDirect(testPacket(700)) }()
+				}
+				select {
+				case <-transport.started:
+				case <-time.After(time.Second):
+					t.Fatal("transport write did not start")
+				}
+				closed := make(chan error, 1)
+				go func() {
+					switch closePath {
+					case "abortThenClose":
+						_ = conn.Abort()
+						closed <- conn.Close()
+					case "closeTransport":
+						conn.closeTransport(net.ErrClosed)
+						closed <- nil
+					case "canceledContext":
+						conn.cancelFunc(net.ErrClosed)
+						closed <- conn.Close()
+					}
+				}()
+				select {
+				case err := <-closed:
+					if closePath != "closeTransport" && !errors.Is(err, net.ErrClosed) {
+						t.Errorf("canceled Close = %v, want net.ErrClosed", err)
+					}
+				case <-time.After(time.Second):
+					transport.unblock()
+					<-written
+					t.Fatal("canceled close waited for the transport write")
+				}
+				transport.unblock()
+				if err := <-written; !errors.Is(err, net.ErrClosed) {
+					t.Fatalf("write after canceled close = %v, want net.ErrClosed", err)
+				}
+				select {
+				case <-sent:
+					t.Fatal("canceled close allowed a delivery completion")
+				default:
+				}
+			})
+		}
+	}
+}
