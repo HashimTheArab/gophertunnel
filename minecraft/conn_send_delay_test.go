@@ -248,7 +248,7 @@ func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
 	if err := d.set(time.Hour); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if _, err := d.Write([]byte{1}); err != nil {
+	if _, err := d.writeBatch([]byte{1}, 1); err != nil {
 		t.Fatalf("Write while delayed: %v", err)
 	}
 	// Close releases what is held this way, so the failure must reach its caller.
@@ -293,8 +293,8 @@ func TestDelayWriter_ShortWritesNeverComplete(t *testing.T) {
 			if err := d.set(delay); err != nil {
 				t.Fatal(err)
 			}
-			d.setObservers([]func(){func() { t.Error("short write completed") }})
-			_, err := d.Write([]byte{1, 2})
+			d.setObservers([]packetCompletion{{after: 1, sent: func() { t.Error("short write completed") }}})
+			_, err := d.writeBatch([]byte{1, 2}, 1)
 			if delay > 0 {
 				if err != nil {
 					t.Fatalf("queue delayed write: %v", err)
@@ -315,11 +315,11 @@ func TestDelayWriter_DropRejectsWritesAfterDelayChanges(t *testing.T) {
 			d := &delayWriter{w: &transport}
 			defer d.drop()
 			observe := func() { t.Error("dropped writer reported delivery") }
-			d.setObservers([]func(){observe})
+			d.setObservers([]packetCompletion{{after: 1, sent: observe}})
 			d.drop()
 			_ = d.set(delay)
-			d.setObservers([]func(){observe})
-			if n, err := d.Write([]byte{1}); n != 0 || !errors.Is(err, net.ErrClosed) {
+			d.setObservers([]packetCompletion{{after: 1, sent: observe}})
+			if n, err := d.writeBatch([]byte{1}, 1); n != 0 || !errors.Is(err, net.ErrClosed) {
 				t.Errorf("Write after drop = (%d, %v), want (0, net.ErrClosed)", n, err)
 			}
 			if transport.Len() != 0 || len(d.held) != 0 || len(d.nextObservers) != 0 {

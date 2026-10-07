@@ -30,41 +30,56 @@ type delayWriter struct {
 	w     io.Writer
 	delay atomic.Int64
 
-	mu            sync.Mutex
-	held          []heldWrite
-	nextObservers []func()
-	timer         *time.Timer
-	// err is the first held-write failure or net.ErrClosed after drop, returned from every later Write.
+	mu             sync.Mutex
+	held           []heldWrite
+	nextObservers  []packetCompletion
+	encodedPackets int
+	timer          *time.Timer
+	// err is the first held-write failure or net.ErrClosed after drop, returned from every later write.
 	err error
+}
+
+// packetCompletion ties one logical packet to its last wire packet in the current encoder submission.
+// Protocol conversion can expand a logical packet across transport batches, so only the last completes it.
+type packetCompletion struct {
+	after int
+	sent  func()
 }
 
 // heldWrite is one encoded batch and the time it may be written.
 type heldWrite struct {
 	due       time.Time
 	data      []byte
-	observers []func()
+	observers []packetCompletion
 }
 
-// setObservers associates the next encoder write with its successful delivery callbacks.
+// setObservers associates one encoder submission, which may produce several batches, with its callbacks.
 // The connection's encoder lock serializes this with encoding and clearing on failure.
-func (d *delayWriter) setObservers(observers []func()) {
+func (d *delayWriter) setObservers(observers []packetCompletion) {
 	d.mu.Lock()
 	if d.err != nil {
 		observers = nil
 	}
 	d.nextObservers = observers
+	d.encodedPackets = 0
 	d.mu.Unlock()
 }
 
-// Write writes b to w now if nothing is held and no delay is set, and otherwise holds a copy of it.
-func (d *delayWriter) Write(b []byte) (int, error) {
+// writeBatch sends b now if nothing is held and no delay is set, and otherwise holds a copy. packetCount
+// selects only the logical packet completions whose final wire packet belongs to this actual batch.
+func (d *delayWriter) writeBatch(b []byte, packetCount int) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.err != nil {
 		return 0, d.err
 	}
-	observers := d.nextObservers
-	d.nextObservers = nil
+	d.encodedPackets += packetCount
+	n := 0
+	for n < len(d.nextObservers) && d.nextObservers[n].after <= d.encodedPackets {
+		n++
+	}
+	observers := d.nextObservers[:n:n]
+	d.nextObservers = d.nextObservers[n:]
 	delay := time.Duration(d.delay.Load())
 	if len(d.held) == 0 && delay <= 0 {
 		return d.writeLocked(b, observers)
@@ -78,16 +93,17 @@ func (d *delayWriter) Write(b []byte) (int, error) {
 
 // writeLocked writes a complete batch and runs its completions only after the transport accepts all
 // bytes. The caller holds mu, keeping transport writes and completion order serialized.
-func (d *delayWriter) writeLocked(data []byte, observers []func()) (int, error) {
+func (d *delayWriter) writeLocked(data []byte, observers []packetCompletion) (int, error) {
 	n, err := d.w.Write(data)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
 	}
 	if err == nil {
 		for _, observe := range observers {
-			observe()
+			observe.sent()
 		}
 	}
+	clear(observers)
 	return n, err
 }
 
@@ -123,6 +139,8 @@ func (d *delayWriter) releaseLocked(all bool) error {
 	d.held = slices.Delete(d.held, 0, n)
 	if d.err != nil {
 		d.held = nil
+		d.nextObservers = nil
+		d.encodedPackets = 0
 	}
 	d.armLocked()
 	return d.err
@@ -134,6 +152,7 @@ func (d *delayWriter) drop() {
 	defer d.mu.Unlock()
 	d.held = nil
 	d.nextObservers = nil
+	d.encodedPackets = 0
 	if d.err == nil {
 		d.err = net.ErrClosed
 	}

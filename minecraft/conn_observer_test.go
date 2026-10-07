@@ -364,10 +364,10 @@ func TestConn_AbortDiscardsInFlightDelayedWrites(t *testing.T) {
 				t.Fatal("write did not finish after abort")
 			}
 			conn.delay.mu.Lock()
-			held, observers := len(conn.delay.held), len(conn.delay.nextObservers)
+			held, observers, cursor := len(conn.delay.held), len(conn.delay.nextObservers), conn.delay.encodedPackets
 			conn.delay.mu.Unlock()
-			if held != 0 || observers != 0 {
-				t.Errorf("aborted connection retained %d delayed batches and %d pending observers", held, observers)
+			if held != 0 || observers != 0 || cursor != 0 {
+				t.Errorf("aborted connection retained %d delayed batches, %d pending observers and cursor %d", held, observers, cursor)
 			}
 			select {
 			case <-sent:

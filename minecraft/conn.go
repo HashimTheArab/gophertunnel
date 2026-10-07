@@ -319,7 +319,7 @@ type Conn struct {
 	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
 	// they are sent each 20th of a second.
 	writeObserver     WriteObserver
-	bufferedObservers []func()
+	bufferedObservers []packetCompletion
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
 	hdr               *packet.Header
@@ -448,7 +448,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
 	conn.delay.w = netConn
-	conn.enc = packet.NewEncoderFor(netConn, &conn.delay)
+	conn.enc = packet.NewEncoderFor(netConn, conn.delay.writeBatch)
 	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
@@ -641,8 +641,9 @@ const (
 // WriteObserver captures an outgoing logical packet after it has been marshaled, under the connection's
 // packet write lock. It receives the original logical packet once when that packet produces wire data,
 // even if protocol conversion produces several wire packets. It may return a function called when the
-// batch is accepted by the transport, including any send delay. This does not acknowledge receipt or
-// processing by the remote peer.
+// packet's final wire batch is accepted by the transport, including any send delay. If one logical
+// packet spans split batches, all of them must succeed before it completes. This does not acknowledge
+// receipt or processing by the remote peer.
 //
 // Neither callback may write to or reconfigure this connection. The observer must not retain the packet
 // or mutable data owned by it; capture immutable values for the returned function. Captures run in packet
@@ -682,7 +683,7 @@ func (conn *Conn) WritePacket(mode SendMode, pks ...packet.Packet) error {
 	if mode == BypassBuffered {
 		var stackBuf [4][]byte
 		batch := stackBuf[:0]
-		var observers []func()
+		var observers []packetCompletion
 		if err := conn.queuePackets(&batch, &observers, pks...); err != nil {
 			return err
 		}
@@ -699,7 +700,7 @@ func (conn *Conn) WritePacket(mode SendMode, pks ...packet.Packet) error {
 
 // queuePackets serializes packet marshaling and observation, rejecting writes if shutdown began while
 // the caller waited for an encoder or packet write lock.
-func (conn *Conn) queuePackets(dst *[][]byte, observers *[]func(), pks ...packet.Packet) error {
+func (conn *Conn) queuePackets(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 	if conn.ctx.Err() != nil {
@@ -714,7 +715,7 @@ func (conn *Conn) queuePackets(dst *[][]byte, observers *[]func(), pks ...packet
 // appended to dst. The appended slices are copies safe to retain beyond the call. Each logical packet
 // that produces bytes is observed once, and its optional completion is appended to observers. The caller
 // holds sendMu, so captures and buffered packet order cannot race.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]func(), pks ...packet.Packet) {
+func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -746,7 +747,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]func(), pks ...pac
 		}
 		if conn.writeObserver != nil && len(*dst) != before {
 			if sent := conn.writeObserver(pk); sent != nil {
-				*observers = append(*observers, sent)
+				*observers = append(*observers, packetCompletion{after: len(*dst), sent: sent})
 			}
 		}
 	}
@@ -1066,9 +1067,10 @@ func (conn *Conn) flushLocked() error {
 	return encodeErr
 }
 
-// encodeBatch submits one batch with its captured completion functions. The caller holds encMu so the
-// callbacks cannot be attached to a different encoder write. Empty batches have nothing to complete.
-func (conn *Conn) encodeBatch(batch [][]byte, observers []func(), op string) error {
+// encodeBatch submits packets with their captured completions, allowing the encoder to split them into
+// transport batches. The caller holds encMu so the completion indices belong to this submission alone.
+// Empty submissions have nothing to complete.
+func (conn *Conn) encodeBatch(batch [][]byte, observers []packetCompletion, op string) error {
 	if len(batch) == 0 {
 		return nil
 	}
