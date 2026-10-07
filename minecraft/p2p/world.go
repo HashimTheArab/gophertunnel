@@ -126,6 +126,27 @@ func (w World) HandleID() uuid.UUID {
 	return w.handleID
 }
 
+// Listed reports whether the game lists the World among friends' worlds for the player with XUID
+// self. An experience session is listed only while joinWithFriends is enabled. Otherwise the World
+// needs a host and members; the player's own session is listed only for a Realm; and the broadcast
+// setting must admit friends of friends (or the game's next, wider setting), or friends only with a
+// host isFriend accepts.
+func (w World) Listed(self string, joinWithFriends bool, isFriend func(xuid string) bool) bool {
+	if w.ExperienceID != uuid.Nil {
+		return joinWithFriends
+	}
+	if w.HostName == "" || w.MemberCount <= 0 || (w.OwnerID == self && w.RealmID == 0) {
+		return false
+	}
+	switch w.BroadcastSetting {
+	case BroadcastSettingFriendsOfFriends, BroadcastSettingFriendsOfFriends + 1:
+		return true
+	case BroadcastSettingFriendsOnly:
+		return isFriend(w.OwnerID)
+	}
+	return false
+}
+
 // Connection represents a way to connect to a World.
 type Connection struct {
 	// Type identifies the connection subtype.

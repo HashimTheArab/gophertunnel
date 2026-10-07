@@ -38,6 +38,65 @@ func TestListenConfigListenNetworkUsesExplicitNetwork(t *testing.T) {
 	}
 }
 
+// Listener shutdown must wake Accept without closing a channel that still has senders.
+func TestListenerShutdownUnblocksAccept(t *testing.T) {
+	listener := newShutdownTestListener()
+	done := make(chan error, 1)
+	go func() {
+		_, err := listener.Accept()
+		done <- err
+	}()
+	listener.listen()
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept error = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Accept remained blocked after shutdown")
+	}
+}
+
+// Login goroutines may still be delivering connections when the network listener shuts down.
+func TestListenerShutdownWithPendingDelivery(t *testing.T) {
+	listener := newShutdownTestListener()
+	const deliveries = 32
+	done := make(chan any, deliveries)
+	start := make(chan struct{})
+	for range deliveries {
+		go func() {
+			defer func() { done <- recover() }()
+			<-start
+			if listener.deliverConn(new(Conn)) {
+				t.Error("connection delivered without an Accept caller")
+			}
+		}()
+	}
+	close(start)
+	listener.listen()
+	for range deliveries {
+		select {
+		case recovered := <-done:
+			if recovered != nil {
+				t.Errorf("connection delivery panicked during shutdown: %v", recovered)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("connection delivery remained blocked after shutdown")
+		}
+	}
+}
+
+// newShutdownTestListener creates a listener whose underlying Accept immediately reports closure.
+func newShutdownTestListener() *Listener {
+	return &Listener{
+		cfg:      ListenConfig{StatusProvider: NewStatusProvider("test", "test")},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
+		incoming: make(chan *Conn),
+		close:    make(chan struct{}),
+	}
+}
+
 func TestListenerDisablePacketEncryption(t *testing.T) {
 	t.Parallel()
 
@@ -63,19 +122,13 @@ func TestListenerDisablePacketEncryption(t *testing.T) {
 					StatusProvider:          NewStatusProvider("Minecraft Server", "Gophertunnel"),
 					AuthenticationDisabled:  tt.authenticationDisabled,
 					DisablePacketEncryption: tt.disableInConfig,
-					DisablePacketHandling:   true,
 				},
 				listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
 				group:    new(ListenerGroup),
 				incoming: make(chan *Conn, 1),
 				close:    make(chan struct{}),
 			}
-			listener.createConn(encryptionDisablingConn{Conn: server, disabled: tt.disableInTransport})
-
-			if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
-				t.Fatalf("write packet: %v", err)
-			}
-			conn := acceptConn(t, listener)
+			conn := listener.createConn(encryptionDisablingConn{Conn: server, disabled: tt.disableInTransport})
 			if conn.disableEncryption != tt.wantDisabled {
 				t.Fatalf("disableEncryption = %t, want %t", conn.disableEncryption, tt.wantDisabled)
 			}
@@ -86,7 +139,7 @@ func TestListenerDisablePacketEncryption(t *testing.T) {
 	}
 }
 
-func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
+func TestListenerPublishesHandoffAfterLoginConnection(t *testing.T) {
 	t.Parallel()
 
 	client, server := net.Pipe()
@@ -95,9 +148,9 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	log := slog.New(internal.DiscardHandler{})
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              log,
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
+			ErrorLog:       log,
+			StatusProvider: NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:        HandoffAfterLogin,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
 		group:    new(ListenerGroup),
@@ -109,10 +162,11 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
-	conn.disablePacketHandling = true
+	conn.handoff = HandoffAfterLogin
+	conn.expect(packet.IDClientToServerHandshake)
 	go listener.handleConn(conn)
 
-	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
+	if err := writePacket(client, &packet.ClientToServerHandshake{}); err != nil {
 		t.Fatalf("write packet: %v", err)
 	}
 
@@ -126,7 +180,7 @@ func TestListenerPublishesDisablePacketHandlingConnection(t *testing.T) {
 	}
 }
 
-func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T) {
+func TestListenerConnHandlerReceivesHandoffAfterLoginConnection(t *testing.T) {
 	t.Parallel()
 
 	client, server := net.Pipe()
@@ -136,9 +190,9 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 	log := slog.New(internal.DiscardHandler{})
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              log,
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
+			ErrorLog:       log,
+			StatusProvider: NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:        HandoffAfterLogin,
 			ConnHandler: func(conn *Conn) error {
 				handled <- conn
 				return nil
@@ -154,10 +208,11 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
-	conn.disablePacketHandling = true
+	conn.handoff = HandoffAfterLogin
+	conn.expect(packet.IDClientToServerHandshake)
 	go listener.handleConn(conn)
 
-	if err := writePacket(client, &packet.ResourcePacksInfo{}); err != nil {
+	if err := writePacket(client, &packet.ClientToServerHandshake{}); err != nil {
 		t.Fatalf("write packet: %v", err)
 	}
 
@@ -177,7 +232,7 @@ func TestListenerConnHandlerReceivesDisablePacketHandlingConnection(t *testing.T
 	}
 }
 
-func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
+func TestListenerHandoffAfterLoginConsumesClientHandshake(t *testing.T) {
 	t.Parallel()
 
 	client, server := net.Pipe()
@@ -186,9 +241,9 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	log := slog.New(internal.DiscardHandler{})
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              log,
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
+			ErrorLog:       log,
+			StatusProvider: NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:        HandoffAfterLogin,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
 		group:    new(ListenerGroup),
@@ -200,7 +255,7 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 
 	conn := newConn(server, nil, log, proto{}, -1, true)
 	conn.pool = conn.proto.Packets(true)
-	conn.disablePacketHandling = true
+	conn.handoff = HandoffAfterLogin
 	conn.expect(packet.IDClientToServerHandshake)
 	go listener.handleConn(conn)
 
@@ -230,6 +285,53 @@ func TestListenerDisablePacketHandlingConsumesClientHandshake(t *testing.T) {
 	}
 }
 
+// A client cannot skip login on a HandoffAfterLogin listener by sending what a server answers Login with.
+func TestListenerHandoffAfterLoginRequiresLogin(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	defer client.Close()
+	listener := &Listener{
+		cfg: ListenConfig{
+			ErrorLog:            slog.New(internal.DiscardHandler{}),
+			StatusProvider:      NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:             HandoffAfterLogin,
+			AllowUnknownPackets: true,
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
+		incoming: make(chan *Conn, 1),
+		close:    make(chan struct{}),
+	}
+	listener.createConn(server)
+
+	if err := writePackets(client, &packet.ResourcePacksInfo{}, &packet.PlayStatus{}, &packet.StartGame{}); err != nil {
+		t.Fatalf("write pre-login batch: %v", err)
+	}
+	// The pipe accepts this batch only once the decode loop has finished with the one before it.
+	if err := writePackets(client, &packet.Unknown{PacketID: 777}); err != nil {
+		t.Fatalf("write second batch: %v", err)
+	}
+	select {
+	case conn := <-listener.incoming:
+		t.Fatalf("listener published %p before login", conn)
+	default:
+	}
+}
+
+// Listeners reject the Handoff modes only a Dialer supports.
+func TestListenRejectsDialerOnlyHandoff(t *testing.T) {
+	network := listenTestNetwork{listen: func(string) (NetworkListener, error) {
+		t.Fatal("listened with a dialer-only Handoff")
+		return nil, nil
+	}}
+	for _, handoff := range []Handoff{HandoffAtStartGame, HandoffAfterLogin + 1} {
+		if _, err := (ListenConfig{Handoff: handoff, AuthenticationDisabled: true}).ListenNetwork(network, ""); err == nil {
+			t.Fatalf("ListenNetwork accepted Handoff %d", handoff)
+		}
+	}
+}
+
 func TestListenerReadBatchPreservesNetworkBatch(t *testing.T) {
 	t.Parallel()
 
@@ -239,20 +341,21 @@ func TestListenerReadBatchPreservesNetworkBatch(t *testing.T) {
 	log := slog.New(internal.DiscardHandler{})
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              log,
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
-			EnableBatchReading:    true,
-			AllowUnknownPackets:   true,
+			ErrorLog:            log,
+			StatusProvider:      NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:             HandoffAfterLogin,
+			EnableBatchReading:  true,
+			AllowUnknownPackets: true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
 		group:    new(ListenerGroup),
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.createConn(server)
+	listener.createConn(server).expect(packet.IDClientToServerHandshake)
 
 	if err := writePackets(client,
+		&packet.ClientToServerHandshake{},
 		&packet.ResourcePacksInfo{},
 		&packet.Unknown{PacketID: 777},
 	); err != nil {
@@ -322,11 +425,11 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 	log := slog.New(internal.DiscardHandler{})
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              log,
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
-			EnableBatchReading:    true,
-			AllowUnknownPackets:   true,
+			ErrorLog:            log,
+			StatusProvider:      NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:             HandoffAfterLogin,
+			EnableBatchReading:  true,
+			AllowUnknownPackets: true,
 			ConnHandler: func(conn *Conn) error {
 				packets, err := conn.ReadBatch()
 				resultCh <- result{packets: packets, err: err}
@@ -338,9 +441,10 @@ func TestListenerConnHandlerCanReadPublishedBatch(t *testing.T) {
 		incoming: make(chan *Conn, 1),
 		close:    make(chan struct{}),
 	}
-	listener.createConn(server)
+	listener.createConn(server).expect(packet.IDClientToServerHandshake)
 
 	if err := writePackets(client,
+		&packet.ClientToServerHandshake{},
 		&packet.ResourcePacksInfo{},
 		&packet.Unknown{PacketID: 777},
 	); err != nil {
@@ -370,11 +474,11 @@ func newBatchReadingListener(t *testing.T, mutate func(*ListenConfig)) (*Listene
 
 	listener := &Listener{
 		cfg: ListenConfig{
-			ErrorLog:              slog.New(internal.DiscardHandler{}),
-			StatusProvider:        NewStatusProvider("Minecraft Server", "Gophertunnel"),
-			DisablePacketHandling: true,
-			EnableBatchReading:    true,
-			AllowUnknownPackets:   true,
+			ErrorLog:            slog.New(internal.DiscardHandler{}),
+			StatusProvider:      NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			Handoff:             HandoffAfterLogin,
+			EnableBatchReading:  true,
+			AllowUnknownPackets: true,
 		},
 		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
 		group:    new(ListenerGroup),
@@ -384,7 +488,8 @@ func newBatchReadingListener(t *testing.T, mutate func(*ListenConfig)) (*Listene
 	if mutate != nil {
 		mutate(&listener.cfg)
 	}
-	listener.createConn(server)
+	// The connection is past Login, so the client's handshake hands it off.
+	listener.createConn(server).expect(packet.IDClientToServerHandshake)
 	return listener, client
 }
 
@@ -404,13 +509,17 @@ func TestListenerReadBatchDeliversBatchBeforeMidBatchError(t *testing.T) {
 
 	listener, client := newBatchReadingListener(t, nil)
 
+	handshake, err := encodePacket(&packet.ClientToServerHandshake{})
+	if err != nil {
+		t.Fatalf("encode packet: %v", err)
+	}
 	valid, err := encodePacket(&packet.ResourcePacksInfo{})
 	if err != nil {
 		t.Fatalf("encode packet: %v", err)
 	}
-	// The second frame is an unterminated varuint32, so its header cannot be parsed and the decode
+	// The third frame is an unterminated varuint32, so its header cannot be parsed and the decode
 	// loop tears the connection down mid-batch.
-	if err := writeRawFrames(client, [][]byte{valid, {0xff, 0xff, 0xff, 0xff, 0xff}}); err != nil {
+	if err := writeRawFrames(client, [][]byte{handshake, valid, {0xff, 0xff, 0xff, 0xff, 0xff}}); err != nil {
 		t.Fatalf("write raw frames: %v", err)
 	}
 
@@ -432,8 +541,8 @@ func TestListenerBatchReadingDoesNotStallDecodeLoop(t *testing.T) {
 	const batches = 12
 	written := make(chan error, 1)
 	go func() {
-		// The first batch flips passthrough mode and publishes the connection.
-		if err := writePackets(client, &packet.ResourcePacksInfo{}); err != nil {
+		// The first batch hands the connection off and publishes it.
+		if err := writePackets(client, &packet.ClientToServerHandshake{}, &packet.ResourcePacksInfo{}); err != nil {
 			written <- err
 			return
 		}
@@ -480,7 +589,7 @@ func TestListenerDeliversClientDisconnectMissingFromPool(t *testing.T) {
 	// must deliver it like any unknown packet instead of panicking on a *packet.Disconnect assertion.
 	listener, client := newBatchReadingListener(t, nil)
 
-	if err := writePackets(client, &packet.ResourcePacksInfo{}); err != nil {
+	if err := writePackets(client, &packet.ClientToServerHandshake{}, &packet.ResourcePacksInfo{}); err != nil {
 		t.Fatalf("write publishing batch: %v", err)
 	}
 	accepted := acceptConn(t, listener)
@@ -524,7 +633,7 @@ func TestListenerConnHandlerCanBlockReadingBatches(t *testing.T) {
 	})
 	_ = listener
 
-	if err := writePackets(client, &packet.ResourcePacksInfo{}, &packet.Unknown{PacketID: 777}); err != nil {
+	if err := writePackets(client, &packet.ClientToServerHandshake{}, &packet.ResourcePacksInfo{}, &packet.Unknown{PacketID: 777}); err != nil {
 		t.Fatalf("write publishing batch: %v", err)
 	}
 	select {
@@ -651,4 +760,38 @@ func (listenTestNetwork) PingContext(context.Context, string) ([]byte, error) {
 
 func (n listenTestNetwork) Listen(address string) (NetworkListener, error) {
 	return n.listen(address)
+}
+
+// A client batch whose compression cannot be decoded is dropped and the connection keeps reading.
+func TestListenerDropsUndecodableCompressedBatch(t *testing.T) {
+	t.Parallel()
+
+	listener, client := newBatchReadingListener(t, nil)
+	go func() { _ = writePackets(client, &packet.ClientToServerHandshake{}, &packet.ResourcePacksInfo{}) }()
+	accepted := acceptConn(t, listener)
+	if _, err := accepted.ReadBatch(); err != nil {
+		t.Fatalf("ReadBatch publishing batch: %v", err)
+	}
+	// The pipe write below orders this before the decode loop's next read.
+	accepted.dec.EnableCompression(packet.FlateCompression, 1<<20)
+
+	frame, err := encodePacket(&packet.Unknown{PacketID: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if _, err := client.Write([]byte{0xfe, 0x8f, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}); err != nil {
+			return
+		}
+		encoder := packet.NewEncoder(client)
+		encoder.EnableCompression(packet.FlateCompression, 0)
+		_ = encoder.Encode([][]byte{frame})
+	}()
+	packets, err := accepted.ReadBatch()
+	if err != nil {
+		t.Fatalf("ReadBatch after dropped batch: %v", err)
+	}
+	if ids := packetIDs(packets); !slices.Equal(ids, []uint32{1000}) {
+		t.Fatalf("batch IDs = %v, want [1000]", ids)
+	}
 }

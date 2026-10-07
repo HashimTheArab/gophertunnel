@@ -212,6 +212,8 @@ func (conn *Conn) handleCallback(ctx context.Context, request *jrpc2.Request) (a
 		return nil, nil
 	case MethodSignalingReceiveMessage:
 		return conn.handleMessage(ctx, request)
+	case MethodSignalingReceiveError:
+		return nil, conn.handleReceiveError([]byte(request.ParamString()))
 	default:
 		return nil, fmt.Errorf("received message for unknown method: %q", request.Method())
 	}
@@ -234,6 +236,24 @@ func (conn *Conn) handleMessage(ctx context.Context, request *jrpc2.Request) (v 
 		}
 	}
 	return nil, err
+}
+
+// handleReceiveError fails the pending signal a delivery error names. An error that names no
+// pending signal, or that cannot be read, is logged and otherwise ignored.
+func (conn *Conn) handleReceiveError(params []byte) error {
+	var e struct {
+		MessageID uuid.UUID `json:"messageId"`
+		Code      int       `json:"code"`
+		Message   string    `json:"message"`
+	}
+	if err := json.Unmarshal(params, &e); err != nil || e.MessageID == uuid.Nil {
+		conn.d.Log.Debug("received delivery error without a message", slog.Int("code", e.Code))
+		return nil
+	}
+	if !conn.pending.Done(e.MessageID, &signaling.Error{Code: e.Code, Message: e.Message}) {
+		conn.d.Log.Debug("received delivery error for unknown message", slog.String("message_id", e.MessageID.String()))
+	}
+	return nil
 }
 
 // envelopeParams accepts both the single-message object and legacy batched array
@@ -318,8 +338,11 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return fmt.Errorf("decode request parameters: %w", err)
 		}
 		signal := &nethernet.Signal{NetworkID: envelope.From.String()}
+		// Dropped without acknowledgement; an error here would log the raw payload.
 		if err := signal.UnmarshalText([]byte(params.Message)); err != nil {
-			return fmt.Errorf("decode signal: %w", err)
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID), slog.String("reason", "undecodable"))
+			return nil
 		}
 
 		if !conn.notifySignal(signal) {
@@ -404,6 +427,9 @@ const (
 	// MethodSignalingReceiveMessage is the JSON-RPC method name used by
 	// the server to deliver one or more envelopes received from remote peers.
 	MethodSignalingReceiveMessage = "Signaling_ReceiveMessage_v1_0"
+	// MethodSignalingReceiveError is the JSON-RPC method name used by the server to report that
+	// a message the client sent could not be delivered.
+	MethodSignalingReceiveError = "Signaling_ReceiveError_v1_0"
 	// MethodSignalingSendMessage is the JSON-RPC method name used by the
 	// client to send an inner signaling message to a remote peer.
 	MethodSignalingSendMessage = "Signaling_SendClientMessage_v1_0"
