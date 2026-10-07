@@ -1060,7 +1060,7 @@ func (conn *Conn) flushLocked() error {
 	conn.sendMu.Lock()
 	if len(conn.bufferedSend) == 0 {
 		conn.sendMu.Unlock()
-		return nil
+		return conn.handleEncodeError(conn.delay.failure(), "flush")
 	}
 
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
@@ -2926,10 +2926,10 @@ func (conn *Conn) abort(cause error) error {
 		if conn.cancelFunc != nil {
 			conn.cancelFunc(cause)
 		}
+		conn.delay.drop()
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
-		conn.delay.drop()
 	})
 	return conn.abortErr
 }
