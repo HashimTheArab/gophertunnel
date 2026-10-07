@@ -3,6 +3,7 @@ package minecraft
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"slices"
 	"sync"
@@ -60,28 +61,6 @@ func TestConn_WriteModesObserveEveryPacketAndPreserveBatchOrder(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestConn_UnknownSendModeHasNoSideEffects(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	var captures []uint32
-	conn.SetWriteObserver(func(pk packet.Packet) func() {
-		captures = append(captures, pk.ID())
-		return nil
-	})
-	if err := conn.WritePacket(testPacket(700)); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.writePackets(sendMode(255), testPacket(701)); err == nil {
-		t.Fatal("unknown mode accepted")
-	}
-	if !slices.Equal(captures, []uint32{700}) || len(conn.bufferedSend) != 1 {
-		t.Fatalf("unknown mode changed pending packets: captures %v, buffered %d", captures, len(conn.bufferedSend))
-	}
-	if err := conn.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	expectSent(t, ids, 700, time.Second)
 }
 
 func TestConn_ReplacingObserverKeepsBufferedAndDelayedCompletions(t *testing.T) {
@@ -208,32 +187,72 @@ func TestConn_ConcurrentSubmittedWritesKeepCaptureAndTransportOrder(t *testing.T
 	}
 }
 
-func TestConn_FailedImmediateWritesDoNotCompleteOrLeakCallbacks(t *testing.T) {
-	for _, mode := range []sendMode{flushBuffered, bypassBuffered} {
-		t.Run(fmt.Sprint(mode), func(t *testing.T) {
-			conn, ids := newSendDelayConn(t)
-			transport := conn.delay.w
-			conn.delay.w = failingWriter{}
-			sent := make(chan uint32, 2)
-			conn.SetWriteObserver(func(pk packet.Packet) func() {
-				id := pk.ID()
-				return func() { sent <- id }
-			})
-			if err := conn.writePackets(mode, testPacket(700)); !errors.Is(err, net.ErrClosed) {
-				t.Fatalf("failed immediate write = %v, want net.ErrClosed", err)
+// recoveringWriter fails its first write and would accept later writes if they reached it.
+type recoveringWriter struct {
+	failure io.Writer
+	writes  int
+}
+
+// Write injects one failure, then accepts complete batches.
+func (w *recoveringWriter) Write(data []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		return w.failure.Write(data)
+	}
+	return len(data), nil
+}
+
+func TestConn_TransportFailureIsTerminal(t *testing.T) {
+	for _, mode := range []sendMode{buffered, flushBuffered, bypassBuffered} {
+		for _, encrypted := range []bool{false, true} {
+			for _, failure := range []struct {
+				name   string
+				writer io.Writer
+				err    error
+			}{
+				{"error", failingWriter{}, net.ErrClosed},
+				{"short", shortWriter{}, io.ErrShortWrite},
+			} {
+				t.Run(fmt.Sprintf("mode=%d/encrypted=%t/%s", mode, encrypted, failure.name), func(t *testing.T) {
+					conn, _ := newSendDelayConn(t)
+					transport := &recoveringWriter{failure: failure.writer}
+					conn.delay.w = transport
+					if encrypted {
+						conn.enc.EnableEncryption([32]byte{1, 2, 3, 4})
+					}
+					completions := 0
+					conn.SetWriteObserver(func(packet.Packet) func() {
+						return func() { completions++ }
+					})
+					for _, id := range []uint32{700, 701} {
+						err := conn.writePackets(mode, testPacket(id))
+						if mode == buffered {
+							if err != nil {
+								t.Fatal(err)
+							}
+							err = conn.Flush()
+						}
+						if !errors.Is(err, failure.err) {
+							t.Errorf("send %d = %v, want %v", id, err, failure.err)
+						}
+						if err := conn.Flush(); !errors.Is(err, failure.err) {
+							t.Errorf("empty Flush = %v, want %v", err, failure.err)
+						}
+					}
+					for _, delay := range []time.Duration{time.Hour, 0} {
+						if err := conn.SetSendDelay(delay); !errors.Is(err, failure.err) {
+							t.Errorf("SetSendDelay(%v) = %v, want %v", delay, err, failure.err)
+						}
+					}
+					if transport.writes != 1 || completions != 0 {
+						t.Errorf("transport writes = %d, completions = %d; want 1, 0", transport.writes, completions)
+					}
+					if len(conn.delay.nextObservers) != 0 || len(conn.delay.held) != 0 {
+						t.Error("failed send retained pending completions or batches")
+					}
+				})
 			}
-			conn.delay.w = transport
-			if err := conn.writePackets(mode, testPacket(701)); err != nil {
-				t.Fatal(err)
-			}
-			expectSent(t, ids, 701, time.Second)
-			expectSent(t, sent, 701, time.Second)
-			select {
-			case id := <-sent:
-				t.Fatalf("extra completion for packet %d", id)
-			default:
-			}
-		})
+		}
 	}
 }
 

@@ -313,13 +313,12 @@ type Conn struct {
 
 	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
-	// encMu serializes encoder state changes and network writes (enc.Encode).
+	// encMu serializes encoder state changes and batch submissions (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
-	encMu sync.Mutex
-	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
-	// they are sent each 20th of a second.
+	encMu             sync.Mutex
 	writeObserver     WriteObserver
 	bufferedObservers []packetCompletion
+	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
 	hdr               *packet.Header
@@ -645,10 +644,16 @@ const (
 // packet spans split batches, all of them must succeed before it completes. This does not acknowledge
 // receipt or processing by the remote peer.
 //
-// Neither callback may write to or reconfigure this connection. The observer must not retain the packet
-// or mutable data owned by it; capture immutable values for the returned function. Captures run in packet
-// marshaling order, and completions run in transport order, which can differ with WritePacketDirect. Failed
-// or aborted batches never run their completions. Raw Write calls do not invoke the observer.
+// Both callbacks run synchronously under internal locks and must be short and nonblocking. Neither may
+// write to or reconfigure this connection, or wait for connection I/O, including on another connection:
+// callbacks on two connections can deadlock if they wait for each other. Completion functions may run on
+// a library timer or flusher goroutine. Callbacks must handle any panics they need to recover rather
+// than rely on the caller to recover them.
+//
+// The observer must not retain the packet or mutable data owned by it; capture immutable values for the
+// returned function. Captures run in packet marshaling order, and completions run in transport order,
+// which can differ with WritePacketDirect. Failed or aborted batches never run their completions.
+// Raw Write calls do not invoke the observer.
 type WriteObserver func(packet.Packet) func()
 
 // SetWriteObserver replaces the observer for future packet captures. Passing nil stops new captures.
@@ -680,11 +685,7 @@ func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
 
 // writePackets marshals packets and queues or submits them according to mode. A successful buffered or
 // delayed write means the packets were accepted for sending, not that they reached the transport or peer.
-// An unknown mode returns an error without marshaling, observing, or flushing any packet.
 func (conn *Conn) writePackets(mode sendMode, pks ...packet.Packet) error {
-	if mode != buffered && mode != flushBuffered && mode != bypassBuffered {
-		return fmt.Errorf("write packet: unknown send mode %d", mode)
-	}
 	if conn.ctx == nil {
 		return net.ErrClosed
 	}
@@ -1038,7 +1039,8 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 }
 
 // Flush submits the currently buffered packets to the batch encoder. Encoded batches still wait for any
-// configured SendDelay before reaching the transport; Flush does not bypass that delay.
+// configured SendDelay before reaching the transport; Flush does not bypass that delay. It returns
+// any earlier send failure, even when no packets are buffered.
 func (conn *Conn) Flush() error {
 	if conn.ctx == nil {
 		return net.ErrClosed
@@ -1093,8 +1095,10 @@ func (conn *Conn) encodeBatch(batch [][]byte, observers []packetCompletion, op s
 	if len(batch) == 0 {
 		return nil
 	}
-	conn.delay.setObservers(observers)
-	defer conn.delay.setObservers(nil)
+	if len(observers) != 0 {
+		conn.delay.setObservers(observers)
+		defer conn.delay.setObservers(nil)
+	}
 	return conn.handleEncodeError(conn.enc.Encode(batch), op)
 }
 
@@ -2891,11 +2895,6 @@ func newerThanAccepted(accepted []Protocol, clientProtocol int32) bool {
 // expect sets the packet IDs that are next expected to arrive.
 func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
-}
-
-// closeTransport cancels conn and closes its transport without waiting for pending packets or writes.
-func (conn *Conn) closeTransport(cause error) {
-	_ = conn.abort(cause)
 }
 
 func (conn *Conn) close(cause error) error {

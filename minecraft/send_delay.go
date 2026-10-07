@@ -14,7 +14,7 @@ import (
 // to what is sent afterwards and never reorders, so after lowering it new packets still wait for those held
 // before them. A d of zero or less stops delaying and sends everything held immediately. Close sends what is
 // held without waiting; Abort discards it. It returns any failure while releasing held batches, including
-// an earlier asynchronous failure. The delay setting is applied even when a failure is returned.
+// an earlier send failure. The delay setting is applied even when a failure is returned.
 func (conn *Conn) SetSendDelay(d time.Duration) error {
 	return conn.delay.set(d)
 }
@@ -32,12 +32,13 @@ type delayWriter struct {
 	// aborted rejects new writes and completions without waiting for a blocked transport write.
 	aborted atomic.Bool
 
+	// mu serializes transport writes, completions and access to pending batches.
 	mu             sync.Mutex
 	held           []heldWrite
 	nextObservers  []packetCompletion
 	encodedPackets int
 	timer          *time.Timer
-	// err is the first held-write failure or net.ErrClosed after drop, returned from every later write.
+	// err is the first send failure or net.ErrClosed after drop, returned from every later write.
 	err error
 }
 
@@ -97,13 +98,19 @@ func (d *delayWriter) writeBatch(b []byte, packetCount int) (int, error) {
 }
 
 // writeLocked writes a complete batch and runs its completions only after the transport accepts all
-// bytes. The caller holds mu, keeping transport writes and completion order serialized.
-func (d *delayWriter) writeLocked(data []byte, observers []packetCompletion) (int, error) {
-	if d.aborted.Load() {
+// bytes. A failure is terminal because the encoder may already have advanced its encryption state.
+// The caller holds mu, keeping transport writes and completion order serialized.
+func (d *delayWriter) writeLocked(data []byte, observers []packetCompletion) (n int, err error) {
+	defer func() {
 		clear(observers)
+		if err != nil {
+			d.err = err
+		}
+	}()
+	if d.aborted.Load() {
 		return 0, net.ErrClosed
 	}
-	n, err := d.w.Write(data)
+	n, err = d.w.Write(data)
 	if d.aborted.Load() {
 		err = net.ErrClosed
 	}
@@ -119,12 +126,11 @@ func (d *delayWriter) writeLocked(data []byte, observers []packetCompletion) (in
 			observe.sent()
 		}
 	}
-	clear(observers)
 	return n, err
 }
 
 // set changes the delay under the same lock Write decides with, writing everything held when it is
-// cleared. It returns the error a held batch failed to write with.
+// cleared. It returns the first send failure, if any.
 func (d *delayWriter) set(delay time.Duration) error {
 	d.mu.Lock()
 	defer d.unlock()
@@ -145,7 +151,7 @@ func (d *delayWriter) releaseDue() {
 	_ = d.releaseLocked(false)
 }
 
-// failure returns a held-write failure so an empty Flush still reports asynchronous transport errors.
+// failure returns the first send failure so an empty Flush still reports transport errors.
 func (d *delayWriter) failure() error {
 	d.mu.Lock()
 	defer d.unlock()
@@ -157,7 +163,7 @@ func (d *delayWriter) failure() error {
 
 // releaseLocked writes the held batches that are due, or all of them when all is set, and arms the timer
 // for the next one. The clock is read again after every write, so batches that fall due meanwhile go too.
-// It returns the error a held batch failed to write with. The caller holds mu.
+// It returns the first send failure, if any. The caller holds mu.
 func (d *delayWriter) releaseLocked(all bool) error {
 	if d.aborted.Load() {
 		d.dropLocked()
@@ -166,7 +172,7 @@ func (d *delayWriter) releaseLocked(all bool) error {
 	n := 0
 	for ; n < len(d.held) && (all || !d.held[n].due.After(time.Now())); n++ {
 		if d.err == nil {
-			_, d.err = d.writeLocked(d.held[n].data, d.held[n].observers)
+			_, _ = d.writeLocked(d.held[n].data, d.held[n].observers)
 		}
 	}
 	d.held = slices.Delete(d.held, 0, n)

@@ -224,7 +224,7 @@ func TestDelayWriter_AbortRacingUnlockClearsReferences(t *testing.T) {
 
 func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
 	for _, delay := range []time.Duration{0, time.Hour} {
-		for _, closePath := range []string{"abortThenClose", "closeTransport", "canceledContext"} {
+		for _, closePath := range []string{"abortThenClose", "abort", "canceledContext"} {
 			t.Run(fmt.Sprintf("delay=%s/path=%s", delay, closePath), func(t *testing.T) {
 				client, peer := net.Pipe()
 				transport := &deferredCloseTransport{Conn: client, started: make(chan struct{}), release: make(chan struct{}), succeed: true}
@@ -256,8 +256,8 @@ func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
 					case "abortThenClose":
 						_ = conn.Abort()
 						closed <- conn.Close()
-					case "closeTransport":
-						conn.closeTransport(net.ErrClosed)
+					case "abort":
+						_ = conn.abort(net.ErrClosed)
 						closed <- nil
 					case "canceledContext":
 						conn.cancelFunc(net.ErrClosed)
@@ -266,7 +266,7 @@ func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
 				}()
 				select {
 				case err := <-closed:
-					if closePath != "closeTransport" && !errors.Is(err, net.ErrClosed) {
+					if closePath != "abort" && !errors.Is(err, net.ErrClosed) {
 						t.Errorf("canceled Close = %v, want net.ErrClosed", err)
 					}
 				case <-time.After(time.Second):
