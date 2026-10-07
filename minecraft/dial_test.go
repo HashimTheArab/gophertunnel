@@ -913,7 +913,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialContextNetwork passthrough login: %v (scripted server: %v)", err, <-network.done)
 	}
-	if err := conn.WritePacket(Buffered, &packet.Text{Message: "forwarded"}); err != nil {
+	if err := conn.WritePacket(&packet.Text{Message: "forwarded"}); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -1027,7 +1027,7 @@ func TestHandoffAtStartGameDeliversStartupUnchangedAndSendsNoSpawnSequence(t *te
 	if conn.GameData().WorldName != "Relayed" || conn.shieldID.Load() != 355 {
 		t.Fatalf("relaying Conn did not record StartGame and the item table")
 	}
-	if err := conn.WritePacket(Buffered, &packet.RequestChunkRadius{ChunkRadius: 7, MaxChunkRadius: 7}); err != nil {
+	if err := conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 7, MaxChunkRadius: 7}); err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.Flush()
@@ -1306,7 +1306,7 @@ func TestWrittenItemRegistrySetsTheShieldID(t *testing.T) {
 	defer peer.Close()
 	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, true)
 	defer conn.Abort()
-	_ = conn.WritePacket(Buffered, &packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
+	_ = conn.WritePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
 	if got := conn.shieldID.Load(); got != 355 {
 		t.Fatalf("shield ID = %d, want 355", got)
 	}

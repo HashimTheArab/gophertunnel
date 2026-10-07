@@ -399,7 +399,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	go listenConn(conn, readyForLogin, connected, cancel)
 
 	conn.expect(packet.IDNetworkSettings, packet.IDPlayStatus)
-	if err := conn.WritePacket(Buffered, &packet.RequestNetworkSettings{ClientProtocol: d.Protocol.ID()}); err != nil {
+	if err := conn.WritePacket(&packet.RequestNetworkSettings{ClientProtocol: d.Protocol.ID()}); err != nil {
 		return nil, conn.wrap(fmt.Errorf("send request network settings: %w", err), "dial")
 	}
 	_ = conn.Flush()
@@ -412,7 +412,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
 		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
-		if err := conn.WritePacket(Buffered, &packet.Login{ConnectionRequest: request, ClientProtocol: d.Protocol.ID()}); err != nil {
+		if err := conn.WritePacket(&packet.Login{ConnectionRequest: request, ClientProtocol: d.Protocol.ID()}); err != nil {
 			return nil, conn.wrap(fmt.Errorf("send login: %w", err), "dial")
 		}
 		_ = conn.Flush()

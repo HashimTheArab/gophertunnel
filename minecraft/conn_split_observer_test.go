@@ -43,7 +43,7 @@ func (w *splitBatchTransport) Write(data []byte) (int, error) {
 }
 
 func TestConn_SplitBatchesCompleteOnlyAcceptedLogicalPackets(t *testing.T) {
-	for _, mode := range []SendMode{Buffered, FlushBuffered, BypassBuffered} {
+	for _, mode := range []sendMode{buffered, flushBuffered, bypassBuffered} {
 		for _, delay := range []time.Duration{0, time.Hour} {
 			for _, failAt := range []int{0, 2} {
 				t.Run(fmt.Sprintf("mode=%d/delay=%s/failAt=%d", mode, delay, failAt), func(t *testing.T) {
@@ -59,8 +59,8 @@ func TestConn_SplitBatchesCompleteOnlyAcceptedLogicalPackets(t *testing.T) {
 						id := pk.ID()
 						return func() { completed = append(completed, id) }
 					})
-					err := conn.WritePacket(mode, testPacket(700), testPacket(701), testPacket(702))
-					if mode == Buffered && err == nil {
+					err := conn.writePackets(mode, testPacket(700), testPacket(701), testPacket(702))
+					if mode == buffered && err == nil {
 						err = conn.Flush()
 					}
 					if delay > 0 {
@@ -132,17 +132,17 @@ func TestConn_SplitBatchesKeepOwnersAcrossBufferedAndBypassWrites(t *testing.T) 
 			if _, err := conn.Write(raw.Bytes()); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.WritePacket(Buffered, testPacket(700), testPacket(701)); err != nil {
+			if err := conn.writePackets(buffered, testPacket(700), testPacket(701)); err != nil {
 				t.Fatal(err)
 			}
 			conn.SetWriteObserver(func(pk packet.Packet) func() {
 				id := pk.ID()
 				return func() { completed = append(completed, fmt.Sprintf("new:%d", id)) }
 			})
-			if err := conn.WritePacket(BypassBuffered, testPacket(702)); err != nil {
+			if err := conn.WritePacketDirect(testPacket(702)); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.WritePacket(FlushBuffered, testPacket(703)); err != nil {
+			if err := conn.WritePacketImmediate(testPacket(703)); err != nil {
 				t.Fatal(err)
 			}
 			conn.SetWriteObserver(nil)

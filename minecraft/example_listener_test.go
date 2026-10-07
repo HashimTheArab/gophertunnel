@@ -61,7 +61,7 @@ func ExampleListen() {
 				// Write a packet to the connection: Similarly to ReadPacket, WritePacket will (only) return an error
 				// if the connection is closed.
 				p := &packet.ChunkRadiusUpdated{ChunkRadius: 32}
-				if err := conn.WritePacket(minecraft.Buffered, p); err != nil {
+				if err := conn.WritePacket(p); err != nil {
 					break
 				}
 			}

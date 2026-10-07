@@ -13,7 +13,7 @@ import (
 )
 
 func TestConn_WriteModesObserveEveryPacketAndPreserveBatchOrder(t *testing.T) {
-	for _, mode := range []SendMode{Buffered, FlushBuffered, BypassBuffered} {
+	for _, mode := range []sendMode{buffered, flushBuffered, bypassBuffered} {
 		for _, delay := range []time.Duration{0, time.Hour} {
 			t.Run(fmt.Sprintf("mode=%d/delay=%s", mode, delay), func(t *testing.T) {
 				conn, ids := newSendDelayConn(t)
@@ -27,16 +27,16 @@ func TestConn_WriteModesObserveEveryPacketAndPreserveBatchOrder(t *testing.T) {
 					captures = append(captures, id)
 					return func() { sent <- id }
 				})
-				if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+				if err := conn.WritePacket(testPacket(700)); err != nil {
 					t.Fatal(err)
 				}
-				if err := conn.WritePacket(mode, testPacket(701), testPacket(702)); err != nil {
+				if err := conn.writePackets(mode, testPacket(701), testPacket(702)); err != nil {
 					t.Fatal(err)
 				}
 				if !slices.Equal(captures, []uint32{700, 701, 702}) {
 					t.Fatalf("capture order = %v", captures)
 				}
-				if delay > 0 || mode == Buffered {
+				if delay > 0 || mode == buffered {
 					select {
 					case id := <-sent:
 						t.Fatalf("packet %d completed before its batch was released", id)
@@ -50,7 +50,7 @@ func TestConn_WriteModesObserveEveryPacketAndPreserveBatchOrder(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := []uint32{700, 701, 702}
-				if mode == BypassBuffered {
+				if mode == bypassBuffered {
 					want = []uint32{701, 702, 700}
 				}
 				for _, id := range want {
@@ -69,10 +69,10 @@ func TestConn_UnknownSendModeHasNoSideEffects(t *testing.T) {
 		captures = append(captures, pk.ID())
 		return nil
 	})
-	if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.WritePacket(SendMode(255), testPacket(701)); err == nil {
+	if err := conn.writePackets(sendMode(255), testPacket(701)); err == nil {
 		t.Fatal("unknown mode accepted")
 	}
 	if !slices.Equal(captures, []uint32{700}) || len(conn.bufferedSend) != 1 {
@@ -94,18 +94,18 @@ func TestConn_ReplacingObserverKeepsBufferedAndDelayedCompletions(t *testing.T) 
 		id := pk.ID()
 		return func() { oldSession <- id }
 	})
-	if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatal(err)
 	}
 	conn.SetWriteObserver(func(pk packet.Packet) func() {
 		id := pk.ID()
 		return func() { newSession <- id }
 	})
-	if err := conn.WritePacket(FlushBuffered, testPacket(701)); err != nil {
+	if err := conn.WritePacketImmediate(testPacket(701)); err != nil {
 		t.Fatal(err)
 	}
 	conn.SetWriteObserver(nil)
-	if err := conn.WritePacket(FlushBuffered, testPacket(702)); err != nil {
+	if err := conn.WritePacketImmediate(testPacket(702)); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.SetSendDelay(0); err != nil {
@@ -135,7 +135,7 @@ func (p splitWriteProtocol) ConvertFromLatest(pk packet.Packet, _ *Conn) []packe
 }
 
 func TestConn_ObserverCapturesOnlyLogicalPacketsThatProduceWireData(t *testing.T) {
-	for _, mode := range []SendMode{Buffered, FlushBuffered, BypassBuffered} {
+	for _, mode := range []sendMode{buffered, flushBuffered, bypassBuffered} {
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
 			conn, ids := newSendDelayConn(t)
 			conn.proto = splitWriteProtocol{DefaultProtocol}
@@ -146,7 +146,7 @@ func TestConn_ObserverCapturesOnlyLogicalPacketsThatProduceWireData(t *testing.T
 				captures = append(captures, id)
 				return func() { sent <- id }
 			})
-			if err := conn.WritePacket(mode, testPacket(700), testPacket(701)); err != nil {
+			if err := conn.writePackets(mode, testPacket(700), testPacket(701)); err != nil {
 				t.Fatal(err)
 			}
 			if err := conn.Flush(); err != nil {
@@ -184,11 +184,11 @@ func TestConn_ConcurrentSubmittedWritesKeepCaptureAndTransportOrder(t *testing.T
 			var writers sync.WaitGroup
 			for i := range 8 {
 				writers.Go(func() {
-					mode := FlushBuffered
+					mode := flushBuffered
 					if i%2 == 0 {
-						mode = BypassBuffered
+						mode = bypassBuffered
 					}
-					if err := conn.WritePacket(mode, testPacket(uint32(700+i))); err != nil {
+					if err := conn.writePackets(mode, testPacket(uint32(700+i))); err != nil {
 						t.Error(err)
 					}
 				})
@@ -209,7 +209,7 @@ func TestConn_ConcurrentSubmittedWritesKeepCaptureAndTransportOrder(t *testing.T
 }
 
 func TestConn_FailedImmediateWritesDoNotCompleteOrLeakCallbacks(t *testing.T) {
-	for _, mode := range []SendMode{FlushBuffered, BypassBuffered} {
+	for _, mode := range []sendMode{flushBuffered, bypassBuffered} {
 		t.Run(fmt.Sprint(mode), func(t *testing.T) {
 			conn, ids := newSendDelayConn(t)
 			transport := conn.delay.w
@@ -219,11 +219,11 @@ func TestConn_FailedImmediateWritesDoNotCompleteOrLeakCallbacks(t *testing.T) {
 				id := pk.ID()
 				return func() { sent <- id }
 			})
-			if err := conn.WritePacket(mode, testPacket(700)); !errors.Is(err, net.ErrClosed) {
+			if err := conn.writePackets(mode, testPacket(700)); !errors.Is(err, net.ErrClosed) {
 				t.Fatalf("failed immediate write = %v, want net.ErrClosed", err)
 			}
 			conn.delay.w = transport
-			if err := conn.WritePacket(mode, testPacket(701)); err != nil {
+			if err := conn.writePackets(mode, testPacket(701)); err != nil {
 				t.Fatal(err)
 			}
 			expectSent(t, ids, 701, time.Second)
@@ -258,7 +258,7 @@ func TestConn_PacketObserversFollowSerializedWritesAndDelayedDelivery(t *testing
 		writers.Add(1)
 		go func() {
 			defer writers.Done()
-			err := conn.WritePacket(Buffered, testPacket(id))
+			err := conn.WritePacket(testPacket(id))
 			if err != nil {
 				t.Error(err)
 			}
@@ -296,7 +296,7 @@ func TestConn_AbortDiscardsDeliveryObservers(t *testing.T) {
 	}
 	sent := make(chan struct{}, 1)
 	conn.SetWriteObserver(func(packet.Packet) func() { return func() { sent <- struct{}{} } })
-	if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Flush(); err != nil {
@@ -317,13 +317,13 @@ func TestConn_AbortDiscardsInFlightDelayedWrites(t *testing.T) {
 		write func(*Conn) error
 	}{
 		{"Flush", func(conn *Conn) error {
-			if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+			if err := conn.WritePacket(testPacket(700)); err != nil {
 				return err
 			}
 			return conn.Flush()
 		}},
-		{"FlushBuffered", func(conn *Conn) error { return conn.WritePacket(FlushBuffered, testPacket(700)) }},
-		{"BypassBuffered", func(conn *Conn) error { return conn.WritePacket(BypassBuffered, testPacket(700)) }},
+		{"flushBuffered", func(conn *Conn) error { return conn.WritePacketImmediate(testPacket(700)) }},
+		{"bypassBuffered", func(conn *Conn) error { return conn.WritePacketDirect(testPacket(700)) }},
 	}
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
@@ -388,7 +388,7 @@ func TestConn_DeliveryObserversRunFromTimerAndIgnoreFailedWrites(t *testing.T) {
 			conn.SetSendDelay(20 * time.Millisecond)
 			sent := make(chan struct{}, 1)
 			conn.SetWriteObserver(func(packet.Packet) func() { return func() { sent <- struct{}{} } })
-			if err := conn.WritePacket(Buffered, testPacket(700)); err != nil {
+			if err := conn.WritePacket(testPacket(700)); err != nil {
 				t.Fatal(err)
 			}
 			if err := conn.Flush(); err != nil {

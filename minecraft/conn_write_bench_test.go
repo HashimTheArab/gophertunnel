@@ -48,7 +48,7 @@ func BenchmarkConn_WritePacket(b *testing.B) {
 				}
 				b.ReportAllocs()
 				for b.Loop() {
-					if err := conn.WritePacket(FlushBuffered, packets...); err != nil {
+					if err := conn.WritePacketImmediate(packets...); err != nil {
 						b.Fatal(err)
 					}
 					if delay > 0 {

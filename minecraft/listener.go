@@ -562,7 +562,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 
 	if !listener.group.add(listener.cfg.MaximumPlayers) {
 		// The server was full. We kick the player immediately and close the connection.
-		_ = conn.WritePacket(Buffered, &packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
+		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
 		_ = conn.close(conn.closeErr("server full"))
 		return conn
 	}
