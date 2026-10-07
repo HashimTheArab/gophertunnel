@@ -251,6 +251,8 @@ type Conn struct {
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
 	pool                 packet.Pool
+	// delay holds encoded batches for the send delay between enc and the network. See SetSendDelay.
+	delay                delayWriter
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
 	compression          packet.Compression
@@ -309,13 +311,14 @@ type Conn struct {
 	readBatchLen  int
 	readDeadline  <-chan time.Time
 
-	// sendMu protects bufferedSend/bufferedSendSpare.
+	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
-	// encMu serializes encoder state changes and network writes (enc.Encode).
+	// encMu serializes encoder state changes and batch submissions (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
-	encMu sync.Mutex
-	// bufferedSend is a slice of byte slices containing packets that are 'written'. They are buffered until
-	// they are sent each 20th of a second.
+	encMu             sync.Mutex
+	writeObserver     WriteObserver
+	bufferedObservers []packetCompletion
+	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
 	hdr               *packet.Header
@@ -443,7 +446,8 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		resourcePackDownload: ResourcePackDownloadConfig{}.normalized(),
 		resourcePackDelivery: defaultResourcePackDeliveryConfig(),
 	}
-	conn.enc = packet.NewEncoder(netConn)
+	conn.delay.w = netConn
+	conn.enc = packet.NewEncoderFor(netConn, conn.delay.writeBatch)
 	conn.dec = packet.NewDecoder(netConn)
 
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
@@ -620,25 +624,118 @@ func (conn *Conn) SetActorIDTranslation(translation *protocol.ActorIDTranslation
 	conn.actorIDs.Store(translation)
 }
 
-// WritePacket encodes the packet passed and writes it to the Conn. The encoded data is buffered until the
-// next 20th of a second, after which the data is flushed and sent over the connection.
+// sendMode selects how the public packet writers submit packets to the batch encoder.
+type sendMode uint8
+
+const (
+	// buffered appends packets to the pending batch, which is sent by the next Flush.
+	buffered sendMode = iota
+	// flushBuffered appends packets to the pending batch and submits that entire batch before returning.
+	flushBuffered
+	// bypassBuffered submits packets as a separate batch before packets still in the pending buffer.
+	// It never overtakes a batch already submitted to the encoder, including one held by SendDelay.
+	bypassBuffered
+)
+
+// WriteObserver captures an outgoing logical packet after it has been marshaled, under the connection's
+// packet write lock. It receives the original logical packet once when that packet produces wire data,
+// even if protocol conversion produces several wire packets. It may return a function called when the
+// packet's final wire batch is accepted by the transport, including any send delay. If one logical
+// packet spans split batches, all of them must succeed before it completes. This does not acknowledge
+// receipt or processing by the remote peer.
+//
+// Both callbacks run synchronously under internal locks and must be short and nonblocking. Neither may
+// write to or reconfigure this connection, or wait for connection I/O, including on another connection:
+// callbacks on two connections can deadlock if they wait for each other. Completion functions may run on
+// a library timer or flusher goroutine. Callbacks must handle any panics they need to recover rather
+// than rely on the caller to recover them.
+//
+// The observer must not retain the packet or mutable data owned by it; capture immutable values for the
+// returned function. Captures run in packet marshaling order, and completions run in transport order,
+// which can differ with WritePacketDirect. Failed or aborted batches never run their completions.
+// Raw Write calls do not invoke the observer.
+type WriteObserver func(packet.Packet) func()
+
+// SetWriteObserver replaces the observer for future packet captures. Passing nil stops new captures.
+// Packets already captured retain their original completion functions, even when they are still buffered.
+func (conn *Conn) SetWriteObserver(observer WriteObserver) {
+	conn.sendMu.Lock()
+	conn.writeObserver = observer
+	conn.sendMu.Unlock()
+}
+
+// WritePacket marshals pk and appends it to the pending batch. The next Flush submits that batch,
+// respecting any configured SendDelay. The connection's WriteObserver observes the packet as usual.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
+	return conn.writePackets(buffered, pk)
+}
+
+// WritePacketImmediate appends pks to the pending batch and submits the entire batch before returning.
+// It preserves the order of already buffered packets and respects any configured SendDelay.
+func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
+	return conn.writePackets(flushBuffered, pks...)
+}
+
+// WritePacketDirect submits pks as a separate batch before packets still in the pending buffer.
+// It never overtakes a batch already submitted to the encoder, including one held by SendDelay.
+// Use it only when ordering relative to packets still buffered does not matter.
+func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
+	return conn.writePackets(bypassBuffered, pks...)
+}
+
+// writePackets marshals packets and queues or submits them according to mode. A successful buffered or
+// delayed write means the packets were accepted for sending, not that they reached the transport or peer.
+func (conn *Conn) writePackets(mode sendMode, pks ...packet.Packet) error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write packet")
 	default:
 	}
+	if mode != buffered {
+		// Serialize submission before marshaling, so separate batches cannot overtake one another
+		// between their capture callbacks and the batch encoder.
+		conn.encMu.Lock()
+		defer conn.encMu.Unlock()
+	}
+	if mode == bypassBuffered {
+		var stackBuf [4][]byte
+		batch := stackBuf[:0]
+		var observers []packetCompletion
+		if err := conn.queuePackets(&batch, &observers, pks...); err != nil {
+			return err
+		}
+		return conn.encodeBatch(batch, observers, "write packet")
+	}
+	if err := conn.queuePackets(&conn.bufferedSend, &conn.bufferedObservers, pks...); err != nil {
+		return err
+	}
+	if mode == flushBuffered {
+		return conn.flushLocked()
+	}
+	return nil
+}
+
+// queuePackets serializes packet marshaling and observation, rejecting writes if shutdown began while
+// the caller waited for an encoder or packet write lock.
+func (conn *Conn) queuePackets(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
-
-	conn.encodePacketsTo(&conn.bufferedSend, pk)
+	if conn.ctx.Err() != nil {
+		return conn.closeErr("write packet")
+	}
+	conn.encodePacketsTo(dst, observers, pks...)
 	return nil
 }
 
 // encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
-// appended to dst. The appended slices are copies safe to retain beyond the call.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
+// appended to dst. The appended slices are copies safe to retain beyond the call. Each logical packet
+// that produces bytes is observed once, and its optional completion is appended to observers. The caller
+// holds sendMu, so captures and buffered packet order cannot race.
+func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -647,6 +744,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 	}()
 
 	for _, pk := range pks {
+		before := len(*dst)
 		if registry, ok := pk.(*packet.ItemRegistry); ok {
 			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
 			conn.observeShield(registry.Items)
@@ -667,50 +765,12 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
+		if conn.writeObserver != nil && len(*dst) != before {
+			if sent := conn.writeObserver(pk); sent != nil {
+				*observers = append(*observers, packetCompletion{after: len(*dst), sent: sent})
+			}
+		}
 	}
-}
-
-// WritePacketImmediate encodes the packets passed, queues them in the normal buffered send queue and flushes
-// that queue immediately. This preserves ordering relative to packets that were already queued through
-// WritePacket while still sending the data right away.
-func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("write immediate packet")
-	default:
-	}
-
-	conn.sendMu.Lock()
-	conn.encodePacketsTo(&conn.bufferedSend, pks...)
-	conn.sendMu.Unlock()
-
-	return conn.Flush()
-}
-
-// WritePacketDirect encodes the packet passed and writes it immediately to the underlying connection,
-// bypassing the buffered batch that is flushed every tick.
-// Use this only when packet ordering relative to already-buffered packets does not matter.
-func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("write packet direct")
-	default:
-	}
-	// Use a small stack-allocated buffer for the common case (usually 1 slice),
-	// allowing append to spill to heap only if more capacity is needed.
-	var stackBuf [4][]byte
-	immediate := stackBuf[:0]
-
-	conn.sendMu.Lock()
-	conn.encodePacketsTo(&immediate, pks...)
-	conn.sendMu.Unlock()
-
-	if len(immediate) > 0 {
-		conn.encMu.Lock()
-		defer conn.encMu.Unlock()
-		return conn.handleEncodeError(conn.enc.Encode(immediate), "write packet direct")
-	}
-	return nil
 }
 
 // ReadPacket reads a packet from the Conn, depending on the packet ID that is found in front of the packet
@@ -978,8 +1038,9 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 	}
 }
 
-// Flush flushes the packets currently buffered by the connections to the underlying net.Conn, so that they
-// are directly sent.
+// Flush submits the currently buffered packets to the batch encoder. Encoded batches still wait for any
+// configured SendDelay before reaching the transport; Flush does not bypass that delay. It returns
+// any earlier send failure, even when no packets are buffered.
 func (conn *Conn) Flush() error {
 	if conn.ctx == nil {
 		return net.ErrClosed
@@ -992,21 +1053,28 @@ func (conn *Conn) Flush() error {
 
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
+	return conn.flushLocked()
+}
 
+// flushLocked detaches and encodes the pending batch, then retains its slice for reuse. The caller holds
+// encMu; sendMu is released during encoding so buffered writers can keep appending.
+func (conn *Conn) flushLocked() error {
 	conn.sendMu.Lock()
 	if len(conn.bufferedSend) == 0 {
 		conn.sendMu.Unlock()
-		return nil
+		return conn.handleEncodeError(conn.delay.failure(), "flush")
 	}
 
 	// Detach the current buffer and swap in the spare so writers can keep appending while we encode,
 	// without reallocating bufferedSend.
 	toSend := conn.bufferedSend
+	observers := conn.bufferedObservers
+	conn.bufferedObservers = nil
 	conn.bufferedSend = conn.bufferedSendSpare[:0]
 	conn.bufferedSendSpare = nil
 	conn.sendMu.Unlock()
 
-	encodeErr := conn.handleEncodeError(conn.enc.Encode(toSend), "flush")
+	encodeErr := conn.encodeBatch(toSend, observers, "flush")
 
 	// Clear out toSend so that re-using the slice after resetting its length to 0 doesn't keep references
 	// to packet payloads alive, causing an 'invisible' memory leak.
@@ -1020,6 +1088,20 @@ func (conn *Conn) Flush() error {
 	return encodeErr
 }
 
+// encodeBatch submits packets with their captured completions, allowing the encoder to split them into
+// transport batches. The caller holds encMu so the completion indices belong to this submission alone.
+// Empty submissions have nothing to complete.
+func (conn *Conn) encodeBatch(batch [][]byte, observers []packetCompletion, op string) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	if len(observers) != 0 {
+		conn.delay.setObservers(observers)
+		defer conn.delay.setObservers(nil)
+	}
+	return conn.handleEncodeError(conn.enc.Encode(batch), op)
+}
+
 // handleEncodeError classifies an encoder error according to the connection state. Abort cancels the
 // connection context before closing the transport, so transport-specific errors caused by that close are
 // ordinary shutdown errors. Other errors are returned to the caller so it can close the connection cleanly.
@@ -1029,9 +1111,6 @@ func (conn *Conn) handleEncodeError(err error, op string) error {
 	}
 	if conn.ctx.Err() != nil {
 		return conn.closeErr(op)
-	}
-	if errors.Is(err, net.ErrClosed) {
-		return nil
 	}
 	return conn.wrap(err, op)
 }
@@ -2818,15 +2897,6 @@ func (conn *Conn) expect(packetIDs ...uint32) {
 	conn.expectedIDs.Store(packetIDs)
 }
 
-// closeTransport closes conn without waiting for pending packets to be written. The context is cancelled
-// before the transport is closed, so a flush blocked on a peer that stopped reading returns without
-// treating the closed transport as an encoding failure.
-func (conn *Conn) closeTransport(cause error) {
-	conn.cancelFunc(cause)
-	_ = conn.conn.Close()
-	_ = conn.close(cause)
-}
-
 func (conn *Conn) close(cause error) error {
 	conn.closeOnce.Do(func() {
 		defer func() {
@@ -2836,6 +2906,11 @@ func (conn *Conn) close(cause error) error {
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
+		if conn.ctx != nil && conn.ctx.Err() != nil {
+			return
+		}
+		// Anything the send delay holds goes out now: the connection will not be around when it falls due.
+		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.delay.set(0))
 	})
 	return conn.gracefulCloseErr
 }
@@ -2849,6 +2924,7 @@ func (conn *Conn) abort(cause error) error {
 		if conn.cancelFunc != nil {
 			conn.cancelFunc(cause)
 		}
+		conn.delay.drop()
 		if conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}

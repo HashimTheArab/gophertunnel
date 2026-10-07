@@ -32,10 +32,15 @@ type BatchEncodeStats struct {
 // BatchEncodeObserver is called after a packet batch has been encoded.
 type BatchEncodeObserver func(BatchEncodeStats)
 
+// BatchWriteFunc accepts one encoded transport batch containing packetCount wire packets.
+// Encode calls it once per actual batch, including when it splits a larger packet slice. The function
+// must copy data before retaining it, and return the number of bytes accepted and any write error.
+type BatchWriteFunc func(data []byte, packetCount int) (int, error)
+
 // Encoder handles the encoding of Minecraft packets that are sent to an io.Writer. The packets are compressed
 // and optionally encoded before they are sent to the io.Writer.
 type Encoder struct {
-	w io.Writer
+	write BatchWriteFunc
 
 	// header holds the batch header that should be present at the beginning on each produced packet data
 	// held in a single batch packet.
@@ -52,18 +57,25 @@ type Encoder struct {
 // NewEncoder returns a new Encoder for the io.Writer passed. Each final packet produced by the Encoder is
 // sent with a single call to io.Writer.Write().
 func NewEncoder(w io.Writer) *Encoder {
+	return NewEncoderFor(w, func(data []byte, _ int) (int, error) { return w.Write(data) })
+}
+
+// NewEncoderFor returns a new Encoder that encodes packets for transport, honouring its optional
+// BatchHeaderer and EncryptionDisabler, but submits each encoded batch to write. The sink receives the
+// actual wire packet count of each batch so it can associate delivery with the packets in that batch.
+func NewEncoderFor(transport io.Writer, write BatchWriteFunc) *Encoder {
 	var batch []byte
-	if b, ok := w.(BatchHeaderer); ok {
+	if b, ok := transport.(BatchHeaderer); ok {
 		batch = b.BatchHeader()
 	} else {
 		batch = []byte{header}
 	}
 	var disableEncryption bool
-	if d, ok := w.(EncryptionDisabler); ok {
+	if d, ok := transport.(EncryptionDisabler); ok {
 		disableEncryption = d.DisableEncryption()
 	}
 	return &Encoder{
-		w:                 w,
+		write:             write,
 		header:            batch,
 		disableEncryption: disableEncryption,
 	}
@@ -208,8 +220,10 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 		stats.EncodeDuration = time.Since(encodeStart)
 		observer(stats)
 	}
-	if _, err := encoder.w.Write(data); err != nil {
+	if n, err := encoder.write(data, len(packets)); err != nil {
 		return fmt.Errorf("write batch: %w", err)
+	} else if n != len(data) {
+		return fmt.Errorf("write batch: %w", io.ErrShortWrite)
 	}
 	return nil
 }
