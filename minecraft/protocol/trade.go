@@ -57,7 +57,9 @@ type TradeOffer struct {
 func DecodeTradeOffers(data []byte) ([]TradeOffer, error) {
 	buffer := bytes.NewBuffer(data)
 	var root map[string]any
-	if err := nbt.NewDecoderWithEncoding(buffer, nbt.NetworkLittleEndian).Decode(&root); err != nil {
+	decoder := nbt.NewDecoderWithEncoding(buffer, nbt.NetworkLittleEndian)
+	decoder.CompoundListLimits = map[string]int32{"Recipes": maxTradeOffers}
+	if err := decoder.Decode(&root); err != nil {
 		return nil, fmt.Errorf("decode trade offers: %w", err)
 	}
 	if buffer.Len() != 0 {

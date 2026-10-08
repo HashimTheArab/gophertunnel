@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sandertv/gophertunnel/minecraft/nbt"
@@ -155,4 +156,23 @@ func tradeTestItem(name string, count byte) map[string]any {
 
 func tradeTestRoot(offer map[string]any) map[string]any {
 	return map[string]any{"Recipes": []any{offer}}
+}
+
+// A declared over-limit count without any list elements must fail on the limit,
+// rather than reading or allocating the elements before checking the count.
+func TestTrade_RecipeLimitBeforeElements(t *testing.T) {
+	t.Parallel()
+	recipes := make([]any, maxTradeOffers+1)
+	for i := range recipes {
+		recipes[i] = map[string]any{}
+	}
+	wire, err := nbt.Marshal(map[string]any{"Recipes": recipes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Empty compounds are one TAG_End byte each; also omit the root TAG_End.
+	header := wire[:len(wire)-len(recipes)-1]
+	if _, err := DecodeTradeOffers(header); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("expected early recipe limit rejection, got %v", err)
+	}
 }
