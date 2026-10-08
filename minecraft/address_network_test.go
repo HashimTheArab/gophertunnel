@@ -13,12 +13,16 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
 )
+
+// Tests reuse loopback ports, so a shared probe cache would leak answers between them.
+func init() { netherNetProbes = nil }
 
 func TestProbeEndpointsFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
@@ -139,8 +143,72 @@ func TestAddressNetworkSelectsRakNetWhenProbeFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if !reflect.DeepEqual(selected, network.RakNet) {
+	if rakNet, ok := selected.(probedRakNet); !ok || !reflect.DeepEqual(rakNet.RakNet, network.RakNet) {
 		t.Fatalf("selected %#v, want the configured RakNet", selected)
+	}
+}
+
+// A repeat Select for an address that failed the probe dials RakNet without probing again.
+func TestAddressNetworkCachesRakNetAnswer(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{probes: newProbeCache()}
+
+	if _, err := network.Select(t.Context(), server.Listener.Addr().String()); err != nil {
+		t.Fatalf("first Select: %v", err)
+	}
+	probed := requests.Load()
+	if probed == 0 {
+		t.Fatal("first Select did not probe")
+	}
+	selected, err := network.Select(t.Context(), server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("second Select: %v", err)
+	}
+	if _, ok := selected.(probedRakNet); !ok {
+		t.Fatalf("second Select chose %T, want RakNet", selected)
+	}
+	if got := requests.Load(); got != probed {
+		t.Fatalf("second Select sent %d more probe requests, want none", got-probed)
+	}
+}
+
+// A failed dial through a cached answer makes the next Select probe again.
+func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			probes.Add(1)
+			_, _ = io.WriteString(w, "OK")
+			return
+		}
+		http.Error(w, "no session", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{probes: newProbeCache(), NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
+	address := server.Listener.Addr().String()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := network.Select(ctx, address); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if conn, err := network.DialContext(ctx, address); err == nil {
+		_ = conn.Close()
+		t.Fatal("dial succeeded, want the NetherNet failure")
+	}
+	before := probes.Load()
+	if _, err := network.Select(ctx, address); err != nil {
+		t.Fatalf("Select after failed dial: %v", err)
+	}
+	if probes.Load() == before {
+		t.Fatal("Select after a failed dial reused the cached answer")
 	}
 }
 
