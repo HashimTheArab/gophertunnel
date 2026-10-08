@@ -20,6 +20,10 @@ type Decoder struct {
 	// technically invalid, but some implementations do this to represent an
 	// empty NBT tree.
 	AllowZero bool
+	// CompoundListLimits optionally bounds TAG_List lengths whose elements are
+	// compounds, by tag name. Limits are checked before allocating or decoding
+	// elements. Names absent from the map retain the normal byte/depth limits.
+	CompoundListLimits map[string]int32
 
 	r     *offsetReader
 	depth int
@@ -378,6 +382,9 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 			length, err := d.Encoding.Int32(d.r)
 			if err != nil {
 				return err
+			}
+			if limit, ok := d.CompoundListLimits[tagName]; listType == tagStruct && ok && length > limit {
+				return fmt.Errorf("nbt: compound list %q length %d exceeds limit %d", tagName, length, limit)
 			}
 			c, err := d.r.sliceCap(length, 1, "Slice")
 			if err != nil {
