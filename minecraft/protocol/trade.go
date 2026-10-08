@@ -30,6 +30,12 @@ func (i TradeItem) Matches(name string, metadata int16) bool {
 	return i.Name != "" && i.Name == name && (i.Metadata == metadata || i.Metadata == 0x7fff)
 }
 
+// SameMaterial reports whether two ingredients accept the same item identity
+// and auxiliary values. Counts and item tags do not affect this identity.
+func (i TradeItem) SameMaterial(other TradeItem) bool {
+	return i.Name != "" && i.Name == other.Name && i.Metadata == other.Metadata
+}
+
 // NBT returns the named item compound for this item, including any server
 // supplied item tags or block state. Nested values are read-only. The top-level
 // map is detached so changing its keys cannot change the advertised item.

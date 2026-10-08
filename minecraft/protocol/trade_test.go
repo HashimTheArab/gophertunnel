@@ -201,3 +201,13 @@ func TestTrade_MaterialMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestTrade_SameMaterialRetainsWildcard(t *testing.T) {
+	wildcard := TradeItem{Name: "minecraft:potion", Metadata: 0x7fff, Count: 1}
+	if !wildcard.SameMaterial(TradeItem{Name: "minecraft:potion", Metadata: 0x7fff, Count: 3}) {
+		t.Fatal("price changed material identity")
+	}
+	if wildcard.SameMaterial(TradeItem{Name: "minecraft:potion", Metadata: 0}) {
+		t.Fatal("wildcard collapsed to one concrete auxiliary value")
+	}
+}
