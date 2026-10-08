@@ -17,6 +17,8 @@ import (
 	"github.com/creachadair/jrpc2/handler"
 	"github.com/df-mc/go-nethernet"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
+	"github.com/sandertv/gophertunnel/minecraft/service/signaling/internal"
 )
 
 func TestCredentialsRejectsWarmCacheAfterClose(t *testing.T) {
@@ -67,49 +69,55 @@ type acceptingNotifier struct{}
 // NotifySignal accepts the signal.
 func (acceptingNotifier) NotifySignal(*nethernet.Signal) bool { return true }
 
+// Rejected or undecodable signals are dropped unacknowledged, without an error that would log
+// the raw payload.
 func TestConnHandleInnerMessageDoesNotAcknowledgeRejectedSignal(t *testing.T) {
-	signal := &nethernet.Signal{
-		Type:         "remote-controlled-type",
-		ConnectionID: 42,
-		Data:         "offer",
-	}
-	params, err := json.Marshal(map[string]any{
-		"netherNetId": "network",
-		"message":     signal.String(),
-	})
-	if err != nil {
-		t.Fatalf("marshal params: %v", err)
-	}
-	var logs bytes.Buffer
-	conn := &Conn{
-		d: Dialer{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		}))},
-		notifiers: make(map[uint32]nethernet.Notifier),
-	}
-	err = conn.handleInnerMessage(context.Background(), &envelope{
-		From: uuid.New(),
-		ID:   uuid.New(),
-		Message: &jrpc2.ParsedRequest{
-			Method: MethodSignalingWebRTC,
-			Params: params,
-		},
-	})
-	if err != nil {
-		t.Fatalf("handleInnerMessage() error = %v, want nil", err)
-	}
-	if strings.Contains(logs.String(), signal.Data) {
-		t.Fatal("rejected signal log contains the signal payload")
-	}
-	if strings.Contains(logs.String(), signal.Type) {
-		t.Fatal("rejected signal log contains the remote-controlled signal type")
-	}
-	var entry map[string]any
-	if err := json.NewDecoder(&logs).Decode(&entry); err != nil {
-		t.Fatalf("decode log entry: %v", err)
-	}
-	if got := entry["msg"]; got != "incoming signal was not accepted" {
-		t.Fatalf("log message = %v, want incoming signal was not accepted", got)
+	for _, typ := range []string{nethernet.SignalTypeOffer, "remote-controlled-type"} {
+		t.Run(typ, func(t *testing.T) {
+			signal := &nethernet.Signal{
+				Type:         typ,
+				ConnectionID: 42,
+				Data:         "sensitive-payload",
+			}
+			params, err := json.Marshal(map[string]any{
+				"netherNetId": "network",
+				"message":     signal.String(),
+			})
+			if err != nil {
+				t.Fatalf("marshal params: %v", err)
+			}
+			var logs bytes.Buffer
+			conn := &Conn{
+				d: Dialer{Log: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+					Level: slog.LevelDebug,
+				}))},
+				notifiers: make(map[uint32]nethernet.Notifier),
+			}
+			err = conn.handleInnerMessage(context.Background(), &envelope{
+				From: uuid.New(),
+				ID:   uuid.New(),
+				Message: &jrpc2.ParsedRequest{
+					Method: MethodSignalingWebRTC,
+					Params: params,
+				},
+			})
+			if err != nil {
+				t.Fatalf("handleInnerMessage() error = %v, want nil", err)
+			}
+			if strings.Contains(logs.String(), signal.Data) {
+				t.Fatal("rejected signal log contains the signal payload")
+			}
+			if strings.Contains(logs.String(), signal.Type) {
+				t.Fatal("rejected signal log contains the remote-controlled signal type")
+			}
+			var entry map[string]any
+			if err := json.NewDecoder(&logs).Decode(&entry); err != nil {
+				t.Fatalf("decode log entry: %v", err)
+			}
+			if got := entry["msg"]; got != "incoming signal was not accepted" {
+				t.Fatalf("log message = %v, want incoming signal was not accepted", got)
+			}
+		})
 	}
 }
 
@@ -178,5 +186,29 @@ func TestConnHandleInnerMessageAcknowledgesAcceptedSignal(t *testing.T) {
 	}
 	if delivery.Params.MessageID != messageID {
 		t.Fatalf("delivery message ID = %s, want %s", delivery.Params.MessageID, messageID)
+	}
+}
+
+// A delivery error from the service fails the signal it names instead of being refused as an
+// unknown method; an error naming no pending signal is ignored.
+func TestReceiveErrorFailsThePendingSignal(t *testing.T) {
+	conn := &Conn{d: Dialer{Log: slog.New(slog.DiscardHandler)}, pending: internal.NewPendingMap()}
+	id := uuid.New()
+	ch := conn.pending.Add(id)
+	params := []byte(`{"messageId":"` + id.String() + `","code":404,"message":"recipient offline"}`)
+	if err := conn.handleReceiveError(params); err != nil {
+		t.Fatalf("handleReceiveError() error = %v", err)
+	}
+	select {
+	case err := <-ch:
+		var serviceErr *signaling.Error
+		if !errors.As(err, &serviceErr) || serviceErr.Code != 404 || serviceErr.Message != "recipient offline" {
+			t.Fatalf("pending signal failed with %v", err)
+		}
+	default:
+		t.Fatal("pending signal was not failed")
+	}
+	if err := conn.handleReceiveError([]byte(`{"code":1}`)); err != nil {
+		t.Fatalf("an error naming no signal: %v", err)
 	}
 }

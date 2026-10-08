@@ -33,6 +33,7 @@ type downloadingPack struct {
 	newFrag    chan resourcePackChunk
 	contentKey string
 	cacheKey   ResourcePackCacheKey
+	event      ResourcePackEvent // chunk-source template for progress events
 
 	// mu guards requested, which tracks the chunk indices requested but not yet received.
 	mu        sync.Mutex

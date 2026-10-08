@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -13,7 +15,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -491,28 +495,33 @@ func startScriptedLogin(conn net.Conn) (*packet.Decoder, *packet.Encoder, error)
 	if _, err := decoder.Decode(); err != nil {
 		return nil, nil, fmt.Errorf("read Login: %w", err)
 	}
+	return decoder, encoder, finishScriptedLogin(decoder, encoder)
+}
+
+// finishScriptedLogin plays the server's side of a login from LoginSuccess to the StartGame replies.
+func finishScriptedLogin(decoder *packet.Decoder, encoder *packet.Encoder) error {
 	if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
-		return nil, nil, fmt.Errorf("write login success: %w", err)
+		return fmt.Errorf("write login success: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ClientCacheStatus: %w", err)
+		return fmt.Errorf("read ClientCacheStatus: %w", err)
 	}
 	if err := encodeScriptedPackets(encoder, &packet.ResourcePacksInfo{}); err != nil {
-		return nil, nil, fmt.Errorf("write ResourcePacksInfo: %w", err)
+		return fmt.Errorf("write ResourcePacksInfo: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ResourcePackClientResponse: %w", err)
+		return fmt.Errorf("read ResourcePackClientResponse: %w", err)
 	}
 	if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{}); err != nil {
-		return nil, nil, fmt.Errorf("write StartGame: %w", err)
+		return fmt.Errorf("write StartGame: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read ResourcePackStack response: %w", err)
+		return fmt.Errorf("read ResourcePackStack response: %w", err)
 	}
 	if _, err := decoder.Decode(); err != nil {
-		return nil, nil, fmt.Errorf("read StartGame responses: %w", err)
+		return fmt.Errorf("read StartGame responses: %w", err)
 	}
-	return decoder, encoder, nil
+	return nil
 }
 
 func encodeScriptedPackets(encoder *packet.Encoder, packets ...packet.Packet) error {
@@ -560,6 +569,7 @@ func expectScriptedClose(conn net.Conn, decoder *packet.Decoder) error {
 type scriptedDialNetwork struct {
 	script func(net.Conn) error
 	done   chan error
+	wrap   func(net.Conn) net.Conn // optional client-side transport wrapper
 }
 
 const remappedTransferID = 0x3ff
@@ -592,6 +602,9 @@ func (n *scriptedDialNetwork) DialContext(context.Context, string) (net.Conn, er
 		defer server.Close()
 		n.done <- n.script(server)
 	}()
+	if n.wrap != nil {
+		return n.wrap(pipeConn{Conn: client}), nil
+	}
 	return pipeConn{Conn: client}, nil
 }
 
@@ -893,7 +906,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	defer cancel()
 	conn, err := (Dialer{
 		FlushRate:                -1,
-		DisablePacketHandling:    true,
+		Handoff:                  HandoffAfterLogin,
 		EnableBatchReading:       true,
 		ForwardClientCacheStatus: true,
 	}).DialContextNetwork(ctx, network, "example.com:19132")
@@ -914,7 +927,7 @@ func TestDialContextForwardClientCacheStatusSkipsInjectedStatus(t *testing.T) {
 	}
 }
 
-func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing.T) {
+func TestDialContextForwardClientCacheStatusIgnoredOutsideHandoffAfterLogin(t *testing.T) {
 	network := newScriptedDialNetwork(func(conn net.Conn) error {
 		// startScriptedLogin reads the ClientCacheStatus a normal login must still send.
 		decoder, encoder, err := startScriptedLogin(conn)
@@ -947,3 +960,414 @@ func TestDialContextForwardClientCacheStatusIgnoredWithoutPassthrough(t *testing
 		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
+
+// A relayed startup reaches the caller unchanged, the Conn sends none of the spawn sequence itself, and the
+// caller's own RequestChunkRadius is the first packet the server sees after StartGame.
+func TestHandoffAtStartGameDeliversStartupUnchangedAndSendsNoSpawnSequence(t *testing.T) {
+	startGame := &packet.StartGame{WorldName: "Relayed", LevelID: "level-id", ServerID: "server-id", WorldID: "world-id", ScenarioID: "scenario", OwnerID: "owner", EntityRuntimeID: 7, EntityUniqueID: 7, BaseGameVersion: "1.26.50"}
+	startup := []packet.Packet{
+		&packet.DimensionData{},
+		startGame,
+		&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}},
+		&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+	}
+	serverSaw := make(chan packet.Header, 1)
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder := packet.NewDecoder(conn)
+		encoder := packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{CompressionThreshold: math.MaxUint16, CompressionAlgorithm: packet.CompressionAlgorithmFlate}); err != nil {
+			return err
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		for _, step := range []packet.Packet{&packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}, &packet.ResourcePacksInfo{}, &packet.ResourcePackStack{}} {
+			if _, err := decoder.Decode(); err != nil {
+				return err
+			}
+			if err := encodeScriptedPackets(encoder, step); err != nil {
+				return err
+			}
+		}
+		if _, err := decoder.Decode(); err != nil { // ResourcePackClientResponse completed
+			return err
+		}
+		if err := encodeScriptedPackets(encoder, startup...); err != nil {
+			return err
+		}
+		batch, err := decoder.Decode()
+		if err != nil {
+			return err
+		}
+		var header packet.Header
+		if err := header.Read(bytes.NewBuffer(batch[0])); err != nil {
+			return err
+		}
+		serverSaw <- header
+		return nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1, Handoff: HandoffAtStartGame}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	for _, want := range startup {
+		got, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("read %T: %v", want, err)
+		}
+		if !bytes.Equal(marshalScripted(got), marshalScripted(want)) {
+			t.Fatalf("relayed %T differs from the server's", want)
+		}
+	}
+	if conn.GameData().WorldName != "Relayed" || conn.shieldID.Load() != 355 {
+		t.Fatalf("relaying Conn did not record StartGame and the item table")
+	}
+	if err := conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 7, MaxChunkRadius: 7}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Flush()
+	if header := <-serverSaw; header.PacketID != packet.IDRequestChunkRadius {
+		t.Fatalf("first packet after StartGame = %d, want the caller's RequestChunkRadius", header.PacketID)
+	}
+	if err := <-network.done; err != nil {
+		t.Fatalf("scripted server: %v", err)
+	}
+}
+
+// marshalScripted encodes a packet payload for comparing forwarded startup packets.
+func marshalScripted(pk packet.Packet) []byte {
+	buf := new(bytes.Buffer)
+	pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	return buf.Bytes()
+}
+
+// GameData remains readable while relayed startup packets arrive after Dial has returned.
+func TestHandoffAtStartGameGameDataWhileRegistryArrives(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.handoff = HandoffAtStartGame
+	conn.loggedIn, conn.handedOff = true, true
+	registry := &packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}}
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: registry.ID()}).Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	registry.Marshal(DefaultProtocol.NewWriter(buf, 0))
+	frame := buf.Bytes()
+	done := make(chan error, 1)
+	go func() {
+		for range 1000 {
+			if err := conn.receive(frame); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	for range 1000 {
+		_ = conn.GameData()
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.GameData().Items; len(got) != 1 || got[0].RuntimeID != 355 {
+		t.Fatalf("relayed item registry = %v", got)
+	}
+}
+
+// Startup packets reach the caller in receive order under every Handoff in either reading mode, including
+// packets deferred before StartGame and a handoff triggered by a server skipping the handshake.
+func TestHandoffPreservesStartupPacketOrder(t *testing.T) {
+	type mode struct {
+		handoff                   Handoff
+		handedOff, skipsHandshake bool
+	}
+	for _, m := range []mode{
+		{handoff: HandoffNone},
+		{handoff: HandoffAtStartGame},
+		{handoff: HandoffAfterLogin, handedOff: true},
+		{handoff: HandoffAfterLogin, skipsHandshake: true},
+	} {
+		for _, batchReading := range []bool{false, true} {
+			t.Run(fmt.Sprintf("handoff=%d/handedOff=%t/skipsHandshake=%t/batch=%t", m.handoff, m.handedOff, m.skipsHandshake, batchReading), func(t *testing.T) {
+				client, peer := net.Pipe()
+				defer peer.Close()
+				go func() { _, _ = io.Copy(io.Discard, peer) }() // a regressed login's writes must not block receive
+				conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+				defer conn.Abort()
+				conn.pool = DefaultProtocol.Packets(false)
+				conn.handoff, conn.handedOff, conn.batchReading = m.handoff, m.handedOff, batchReading
+				if m.skipsHandshake {
+					// Login sent: StartGame answers it without the handshake, after three unexpected packets.
+					conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
+				}
+				if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				startup := []packet.Packet{&packet.DimensionData{}, &packet.VoxelShapes{}, &packet.DimensionData{}, &packet.StartGame{}}
+				for _, pk := range startup {
+					buf := new(bytes.Buffer)
+					if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+						t.Fatal(err)
+					}
+					pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+					if err := conn.receive(buf.Bytes()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				conn.flushBatch()
+				if m.skipsHandshake && !conn.handedOff {
+					t.Fatal("StartGame answering Login did not hand off")
+				}
+				var got []packet.Packet
+				if batchReading {
+					var err error
+					got, err = conn.ReadBatch()
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					for range startup {
+						pk, err := conn.ReadPacket()
+						if err != nil {
+							t.Fatal(err)
+						}
+						got = append(got, pk)
+					}
+				}
+				if !slices.Equal(packetIDs(got), packetIDs(startup)) {
+					t.Fatalf("startup order = %v, want %v", packetIDs(got), packetIDs(startup))
+				}
+			})
+		}
+	}
+}
+
+// An encrypting server hands off after the handshake: ServerToClientHandshake stays internal and the login's
+// answers reach the caller in order.
+func TestHandoffAfterLoginReturnsAfterEncryptionHandshake(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &Listener{
+		key: key,
+		cfg: ListenConfig{
+			ErrorLog:               slog.New(slog.DiscardHandler),
+			StatusProvider:         NewStatusProvider("Minecraft Server", "Gophertunnel"),
+			AuthenticationDisabled: true,
+			Compression:            packet.DefaultCompression,
+			FlushRate:              -1,
+		},
+		listener: fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}},
+		group:    new(ListenerGroup),
+		incoming: make(chan *Conn, 1),
+		close:    make(chan struct{}),
+	}
+	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		listener.createConn(pipeConn{Conn: server})
+		return pipeConn{Conn: client}, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1, Handoff: HandoffAfterLogin}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []uint32{packet.IDPlayStatus, packet.IDResourcePacksInfo} {
+		pk, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("read packet %d: %v", want, err)
+		}
+		if pk.ID() != want {
+			t.Fatalf("handed-off packet = %d, want %d", pk.ID(), want)
+		}
+	}
+}
+
+// Handoff values outside the defined modes are rejected before dialing.
+func TestDialRejectsUnknownHandoff(t *testing.T) {
+	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
+		t.Fatal("dialed with an unknown Handoff")
+		return nil, nil
+	}}
+	if _, err := (Dialer{Handoff: HandoffAfterLogin + 1}).DialContextNetwork(context.Background(), network, "example.com:19132"); err == nil {
+		t.Fatal("dial accepted an unknown Handoff")
+	}
+}
+
+// A dial can return immediately after the handshake, before any application packet arrives.
+func TestHandoffAfterLoginWakesReaderAfterHandshake(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.handoff, conn.handedOff = HandoffAfterLogin, true
+	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{})}
+	conn.ctx = readContext
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		pk, err := conn.ReadPacket()
+		if err == nil && pk.ID() != packet.IDDimensionData {
+			err = fmt.Errorf("first handed-off packet = %v, want DimensionData", pk.ID())
+		}
+		done <- err
+	}()
+	<-readContext.ready
+	buf := new(bytes.Buffer)
+	if err := (&packet.Header{PacketID: packet.IDDimensionData}).Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	(&packet.DimensionData{}).Marshal(DefaultProtocol.NewWriter(buf, 0))
+	if err := conn.receive(buf.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("waiting reader: %v", err)
+	}
+}
+
+// A reader preempted after checking deferred packets still reads handed-off packets in order.
+func TestHandoffAfterLoginKeepsOrderForPreemptedReader(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	conn.pool = DefaultProtocol.Packets(false)
+	conn.handoff, conn.handedOff = HandoffAfterLogin, true
+	readContext := &readWaitContext{Context: conn.ctx, ready: make(chan struct{}), hold: make(chan struct{})}
+	conn.ctx = readContext
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan packet.Packet, 1)
+	go func() {
+		pk, _ := conn.ReadPacket()
+		read <- pk
+	}()
+	<-readContext.ready
+	for _, pk := range []packet.Packet{&packet.DimensionData{}, &packet.StartGame{}} {
+		buf := new(bytes.Buffer)
+		if err := (&packet.Header{PacketID: pk.ID()}).Write(buf); err != nil {
+			t.Fatal(err)
+		}
+		pk.Marshal(DefaultProtocol.NewWriter(buf, 0))
+		if err := conn.receive(buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(readContext.hold)
+	if pk := <-read; pk == nil || pk.ID() != packet.IDDimensionData {
+		t.Fatalf("first handed-off packet = %T, want DimensionData", pk)
+	}
+}
+
+// readWaitContext signals when ReadPacket has checked deferred packets and starts waiting for input,
+// optionally holding the reader there until hold is closed.
+type readWaitContext struct {
+	context.Context
+	ready, hold chan struct{}
+	entered     atomic.Bool
+}
+
+// Done marks entry into the blocking read select before returning the connection's cancellation channel.
+// Only the first caller is held, so the receiving goroutine is never blocked behind the reader.
+func (ctx *readWaitContext) Done() <-chan struct{} {
+	if ctx.entered.CompareAndSwap(false, true) {
+		close(ctx.ready)
+		if ctx.hold != nil {
+			<-ctx.hold
+		}
+	}
+	return ctx.Context.Done()
+}
+
+// A relaying listener that forwards an ItemRegistry decodes the client's shield stacks with it.
+func TestWrittenItemRegistrySetsTheShieldID(t *testing.T) {
+	client, peer := net.Pipe()
+	defer client.Close()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(slog.DiscardHandler), DefaultProtocol, -1, true)
+	defer conn.Abort()
+	_ = conn.WritePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
+	if got := conn.shieldID.Load(); got != 355 {
+		t.Fatalf("shield ID = %d, want 355", got)
+	}
+}
+
+// A NetherNet server that repeats NetworkSettings as a bare packet after Login is joined as vanilla
+// joins it: the message has no compression byte, so it is dropped and the login carries on. The
+// bytes are those a live server sends.
+func TestDialContextDropsBareNetworkSettingsOverNetherNet(t *testing.T) {
+	framedSettings := []byte{0x0c, 0x8f, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	bareSettings := []byte{0x8f, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	network := newScriptedDialNetwork(func(raw net.Conn) error {
+		conn := unbatchedConn{raw}
+		decoder, encoder := packet.NewDecoder(conn), packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read RequestNetworkSettings: %w", err)
+		}
+		if _, err := conn.Write(framedSettings); err != nil {
+			return fmt.Errorf("write NetworkSettings: %w", err)
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read Login: %w", err)
+		}
+		if _, err := conn.Write(bareSettings); err != nil {
+			return fmt.Errorf("write bare NetworkSettings: %w", err)
+		}
+		if err := finishScriptedLogin(decoder, encoder); err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 16},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(raw, decoder)
+	})
+	network.wrap = func(c net.Conn) net.Conn { return unbatchedConn{c} }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork: %v (scripted server: %v)", err, <-network.done)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+// unbatchedConn frames packets as NetherNet does: no batch header and no packet encryption.
+type unbatchedConn struct{ net.Conn }
+
+func (unbatchedConn) BatchHeader() []byte     { return nil }
+func (unbatchedConn) DisableEncryption() bool { return true }

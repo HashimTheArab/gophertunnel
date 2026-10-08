@@ -29,7 +29,7 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 	conn.SetActorIDTranslation(swapTranslation())
 
 	var dst [][]byte
-	conn.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 100})
+	conn.encodePacketsTo(&dst, nil, &packet.MovePlayer{EntityRuntimeID: 100})
 	if len(dst) != 1 {
 		t.Fatalf("expected 1 encoded packet, got %d", len(dst))
 	}
@@ -52,7 +52,7 @@ func TestConnActorIDTranslationEncode(t *testing.T) {
 func TestConnActorIDTranslationDecode(t *testing.T) {
 	plain := testConn()
 	var dst [][]byte
-	plain.encodePacketsTo(&dst, &packet.MovePlayer{EntityRuntimeID: 200})
+	plain.encodePacketsTo(&dst, nil, &packet.MovePlayer{EntityRuntimeID: 200})
 
 	conn := testConn()
 	conn.SetActorIDTranslation(swapTranslation())

@@ -132,9 +132,16 @@ type ListenConfig struct {
 	// If set, it will be called before sending the ResourcePacksInfo packet. The returned resource packs
 	// will be forwarded to the client in place of the Listener's current ones.
 	FetchResourcePacks func(identityData login.IdentityData, clientData login.ClientData, current []*resource.Pack) []*resource.Pack
+	// PrepareResourcePackOffer is called exactly once after the login handshake and FetchResourcePacks, but
+	// before ResourcePacksInfo is written. The connection context is cancelled when the peer disconnects.
+	// Implementations may perform cancellable preparation and call Conn.ConfigureResourcePackOffer,
+	// Conn.ConfigureResourcePackOfferSnapshot or Conn.ConfigureResourcePackStack to replace the offer for this
+	// exact connection. A non-nil error aborts it.
+	PrepareResourcePackOffer func(ctx context.Context, conn *Conn) error
 
-	// AfterHandshake is called after the login handshake is complete, but before resource packs are handled.
-	// If AfterHandshake returns a non-nil error, the connection is aborted.
+	// AfterHandshake is called after the initial login handshake handler completes. Use PrepareResourcePackOffer
+	// for work that must finish before LoginSuccess and ResourcePacksInfo are written. If AfterHandshake returns a
+	// non-nil error, the connection is aborted.
 	AfterHandshake func(c *Conn) error
 
 	// ConnHandler is called when a connection is ready for caller-owned packet handling. If set, ready connections
@@ -142,9 +149,9 @@ type ListenConfig struct {
 	// reading the connection; returning a non-nil error closes the connection.
 	ConnHandler func(c *Conn) error
 
-	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
-	// connection control, including disconnect and encryption-handshake packets, remains internal.
-	DisablePacketHandling bool
+	// Handoff is the point in the login at which connections stop handling packets themselves and are delivered.
+	// Only HandoffNone and HandoffAfterLogin apply to a Listener.
+	Handoff Handoff
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
@@ -273,6 +280,9 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	if cfg.FlushRate == 0 {
 		cfg.FlushRate = time.Second / 20
 	}
+	if cfg.Handoff != HandoffNone && cfg.Handoff != HandoffAfterLogin {
+		return nil, fmt.Errorf("listen: Handoff %d does not apply to a Listener", cfg.Handoff)
+	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 256
 	} else if cfg.CompressionThreshold < 0 {
@@ -386,16 +396,29 @@ func PreloadAuthEnvironment(ctx context.Context) error {
 	return err
 }
 
+// PreloadAuthVerifier resolves and caches the authorization environment, its multiplayer token verifier and
+// the verifier's signing keys, so the first authenticated dial pays none of those round trips.
+func PreloadAuthVerifier(ctx context.Context) error {
+	e, err := authEnv(ctx)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return e.PreloadVerifier(ctx)
+}
+
 // Accept accepts a fully connected (on Minecraft layer) connection which is ready to receive and send
 // packets. It is recommended to cast the net.Conn returned to a *minecraft.Conn so that it is possible to
 // use Conn.ReadPacket (or Conn.ReadBatch when batch reading is enabled) and Conn.WritePacket.
 // Accept returns an error if the listener is closed.
 func (listener *Listener) Accept() (net.Conn, error) {
-	conn, ok := <-listener.incoming
-	if !ok {
+	select {
+	case conn := <-listener.incoming:
+		return conn, nil
+	case <-listener.close:
 		return nil, &net.OpError{Op: "accept", Net: "minecraft", Addr: listener.Addr(), Err: net.ErrClosed}
 	}
-	return conn, nil
 }
 
 // Disconnect disconnects a Minecraft Conn passed by first sending a disconnect with the message passed, and
@@ -487,11 +510,7 @@ func (listener *Listener) listen() {
 			}
 		}
 	}()
-	defer func() {
-		close(listener.close)
-		close(listener.incoming)
-		_ = listener.Close()
-	}()
+	defer listener.shutdown()
 	for {
 		netConn, err := listener.listener.Accept()
 		if err != nil {
@@ -505,7 +524,7 @@ func (listener *Listener) listen() {
 
 // createConn creates a connection for the net.Conn passed and adds it to the listener, so that it may be
 // accepted once its login sequence is complete.
-func (listener *Listener) createConn(netConn net.Conn) {
+func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	listener.packsMu.RLock()
 	packs := slices.Clone(listener.packs)
 	listener.packsMu.RUnlock()
@@ -532,19 +551,20 @@ func (listener *Listener) createConn(netConn net.Conn) {
 	conn.resourcePackDelivery = listener.cfg.ResourcePackDelivery.normalized()
 	conn.resourcePacks = packs
 	conn.fetchResourcePacks = listener.cfg.FetchResourcePacks
+	conn.prepareResourcePackOffer = listener.cfg.PrepareResourcePackOffer
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
 	conn.verifier = listener.verifier
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
-	conn.disablePacketHandling = listener.cfg.DisablePacketHandling
+	conn.handoff = listener.cfg.Handoff
 	conn.batchReading = listener.cfg.EnableBatchReading
 
 	if !listener.group.add(listener.cfg.MaximumPlayers) {
 		// The server was full. We kick the player immediately and close the connection.
 		_ = conn.WritePacket(&packet.PlayStatus{Status: packet.PlayStatusLoginFailedServerFull})
 		_ = conn.close(conn.closeErr("server full"))
-		return
+		return conn
 	}
 	listener.updatePongData()
 
@@ -553,7 +573,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 		timer = time.AfterFunc(timeout, func() {
 			if !conn.authenticated.Load() {
 				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
-				conn.closeTransport(errLoginTimeout)
+				_ = conn.abort(errLoginTimeout)
 			}
 		})
 	}
@@ -563,6 +583,7 @@ func (listener *Listener) createConn(netConn net.Conn) {
 			timer.Stop()
 		}
 	}()
+	return conn
 }
 
 // errLoginTimeout is the cause of closing a connection that exceeded ListenConfig.LoginTimeout.
@@ -591,8 +612,7 @@ func (listener *Listener) handleConn(conn *Conn) {
 		publishBatch := false
 		callbackErr := false
 		if err := conn.dec.DecodeFunc(func(data []byte) error {
-			loggedInBefore, handshakeCompleteBefore := conn.loggedIn, conn.handshakeComplete
-			passthroughReadyBefore := conn.disablePacketHandlingReady
+			loggedInBefore, handshakeCompleteBefore, handedOffBefore := conn.loggedIn, conn.handshakeComplete, conn.handedOff
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
 				return err
@@ -604,11 +624,7 @@ func (listener *Listener) handleConn(conn *Conn) {
 					return err
 				}
 			}
-			publish := !loggedInBefore && conn.loggedIn
-			if conn.disablePacketHandling && !passthroughReadyBefore && conn.disablePacketHandlingReady {
-				publish = true
-			}
-			if publish {
+			if (!loggedInBefore && conn.loggedIn) || (!handedOffBefore && conn.handedOff) {
 				if conn.batchReading {
 					publishBatch = true
 				} else if !listener.deliverConn(conn) {
@@ -617,6 +633,10 @@ func (listener *Listener) handleConn(conn *Conn) {
 			}
 			return nil
 		}); err != nil {
+			if !callbackErr && errors.Is(err, packet.ErrBatchDropped) {
+				conn.log.Debug("dropped undecodable batch", "error", err)
+				continue
+			}
 			conn.flushBatch()
 			if publishBatch {
 				listener.deliverConn(conn)
@@ -635,6 +655,14 @@ func (listener *Listener) handleConn(conn *Conn) {
 	}
 }
 
+// shutdown marks the listener closed once listen stops accepting. listener.incoming is never closed: a
+// connection finishing its login at this point may still be in deliverConn's select, and a send on a closed
+// channel panics, taking the whole process down. Accept watches listener.close instead.
+func (listener *Listener) shutdown() {
+	close(listener.close)
+	_ = listener.Close()
+}
+
 // deliverConn delivers conn to the configured owner. ConnHandler, when set, replaces the Accept path entirely:
 // connections delivered through it are not published to listener.incoming.
 func (listener *Listener) deliverConn(conn *Conn) bool {
@@ -651,8 +679,8 @@ func (listener *Listener) deliverConn(conn *Conn) bool {
 	}
 	select {
 	case <-listener.close:
-		// The listener was closed while this one was logged in, so the incoming channel will be closed. Just return
-		// so the connection is closed and cleaned up.
+		// The listener was closed while this one was logged in. Just return so the connection is closed and
+		// cleaned up.
 		return false
 	case listener.incoming <- conn:
 		// The connection was previously not logged in, but was after receiving this packet, meaning the connection is
