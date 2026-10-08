@@ -176,3 +176,28 @@ func TestTrade_RecipeLimitBeforeElements(t *testing.T) {
 		t.Fatalf("expected early recipe limit rejection, got %v", err)
 	}
 }
+
+func TestTrade_MaterialMatches(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		offer    TradeItem
+		actual   string
+		metadata int16
+		want     bool
+	}{
+		{"same", TradeItem{Name: "minecraft:emerald"}, "minecraft:emerald", 0, true},
+		{"other item", TradeItem{Name: "minecraft:emerald"}, "minecraft:diamond", 0, false},
+		{"same aux", TradeItem{Name: "minecraft:wool", Metadata: 3}, "minecraft:wool", 3, true},
+		{"other aux", TradeItem{Name: "minecraft:wool", Metadata: 3}, "minecraft:wool", 4, false},
+		{"wildcard aux", TradeItem{Name: "minecraft:wool", Metadata: 0x7fff}, "minecraft:wool", 4, true},
+		{"wildcard still checks item", TradeItem{Name: "minecraft:wool", Metadata: 0x7fff}, "minecraft:diamond", 4, false},
+		{"empty", TradeItem{}, "", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.offer.Matches(tc.actual, tc.metadata); got != tc.want {
+				t.Fatalf("matches=%v want%v", got, tc.want)
+			}
+		})
+	}
+}

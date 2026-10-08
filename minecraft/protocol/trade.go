@@ -23,6 +23,13 @@ type TradeItem struct {
 	compound map[string]any
 }
 
+// Matches reports whether name and metadata identify an accepted trade material.
+// Modern trades compare item identity and auxiliary value, ignoring item tags.
+// An advertised auxiliary value of 0x7fff accepts any auxiliary value.
+func (i TradeItem) Matches(name string, metadata int16) bool {
+	return i.Name != "" && i.Name == name && (i.Metadata == metadata || i.Metadata == 0x7fff)
+}
+
 // NBT returns the named item compound for this item, including any server
 // supplied item tags or block state. Nested values are read-only. The top-level
 // map is detached so changing its keys cannot change the advertised item.
