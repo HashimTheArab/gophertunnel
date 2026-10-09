@@ -24,7 +24,9 @@ export function loadConfig(file = configPath) {
 
 // git reads a checkout without invoking a shell or accepting command fragments.
 function git(directory, ...args) {
-  return execFileSync("git", ["-C", directory, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"]) delete env[key];
+  return execFileSync("git", ["-C", directory, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env }).trim();
 }
 
 // readOracleIdentity verifies that the compared files belong to the pinned dump.

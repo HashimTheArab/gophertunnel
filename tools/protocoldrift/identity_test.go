@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,9 +95,37 @@ func writeIdentityFixture(t *testing.T, root, source string) {
 // runIdentityGit runs an isolated fixture repository command and reports failures.
 func runIdentityGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+	out, err := identityGit(root, args...)
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestSourceRevisionIgnoresInheritedRepository prevents hook environments from redirecting inspection.
+func TestSourceRevisionIgnoresInheritedRepository(t *testing.T) {
+	root := t.TempDir()
+	writeIdentityFixture(t, root, `package protocol; const CurrentVersion = "9.8.7"; const CurrentProtocol = 12345`)
+	runIdentityGit(t, root, "init", "--quiet")
+	runIdentityGit(t, root, "add", ".")
+	runIdentityGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+	want, err := sourceRevision(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		t.Setenv(name, filepath.Join(t.TempDir(), "missing"))
+	}
+	got, err := sourceRevision(root)
+	if err != nil || got != want {
+		t.Fatalf("inherited repository changed identity: %s, %v", got, err)
+	}
+}
+
+// TestSourceRevisionRequiresGit rejects an unavailable tool instead of reporting an archive.
+func TestSourceRevisionRequiresGit(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, err := sourceRevision(t.TempDir()); err == nil {
+		t.Fatal("missing Git was accepted as an unversioned archive")
+	}
 }

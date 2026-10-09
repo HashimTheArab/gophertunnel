@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // inspectSource reads the target from the inspected source, without importing it.
@@ -74,9 +78,13 @@ func sourceRevision(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	top, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	top, err := identityGit(root, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return "gophertunnel@unversioned", nil
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && strings.Contains(string(exitError.Stderr), "not a git repository") {
+			return "gophertunnel@unversioned", nil
+		}
+		return "", fmt.Errorf("inspect source repository: %w", err)
 	}
 	topPath, err := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
 	if err != nil {
@@ -86,11 +94,11 @@ func sourceRevision(root string) (string, error) {
 		// An archive inside another checkout does not inherit that checkout's identity.
 		return "gophertunnel@unversioned", nil
 	}
-	revision, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD").Output()
+	revision, err := identityGit(root, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read inspected source revision: %w", err)
 	}
-	status, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=all", "--", "minecraft/protocol").Output()
+	status, err := identityGit(root, "status", "--porcelain", "--untracked-files=all", "--", "minecraft/protocol")
 	if err != nil {
 		return "", fmt.Errorf("read inspected source status: %w", err)
 	}
@@ -99,4 +107,27 @@ func sourceRevision(root string) (string, error) {
 		label += "-dirty"
 	}
 	return label, nil
+}
+
+// identityGit reads the selected checkout without inherited repository overrides.
+func identityGit(root string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command.Env = repositoryEnvironment()
+	return command.Output()
+}
+
+// repositoryEnvironment preserves user settings while removing repository selectors.
+func repositoryEnvironment() []string {
+	var environment []string
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "LC_ALL":
+			continue
+		}
+		environment = append(environment, value)
+	}
+	return append(environment, "LC_ALL=C")
 }

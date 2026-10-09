@@ -21,6 +21,9 @@ on:
       - "tools/protocoldrift/**"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: protocol-drift-${{ github.ref }}
   cancel-in-progress: true
