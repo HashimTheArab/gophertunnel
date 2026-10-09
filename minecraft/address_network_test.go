@@ -212,6 +212,49 @@ func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
 	}
 }
 
+func TestAddressNetworkReprobesAfterRakNetTimeoutButNotCancellation(t *testing.T) {
+	for _, timeout := range []bool{true, false} {
+		name := "cancelled"
+		if timeout {
+			name = "timed_out"
+		}
+		t.Run(name, func(t *testing.T) {
+			var probes atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				probes.Add(1)
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(server.Close)
+			network := AddressNetwork{probes: newProbeCache(), RakNet: RakNet{
+				UpstreamDialer: upstreamDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return nil, ctx.Err()
+				}),
+			}}
+			address := server.Listener.Addr().String()
+			selected, err := network.Select(t.Context(), address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := probes.Load()
+			ctx, cancel := context.WithCancel(t.Context())
+			if timeout {
+				cancel()
+				ctx, cancel = context.WithDeadline(t.Context(), time.Time{})
+			}
+			cancel()
+			if _, err := selected.DialContext(ctx, address); !errors.Is(err, ctx.Err()) {
+				t.Fatalf("dial error = %v, want %v", err, ctx.Err())
+			}
+			if _, err := network.Select(t.Context(), address); err != nil {
+				t.Fatal(err)
+			}
+			if reprobed := probes.Load() > before; reprobed != timeout {
+				t.Fatalf("probed again = %v, want %v", reprobed, timeout)
+			}
+		})
+	}
+}
+
 func TestAddressNetworkSelectsNetherNetWhenProbeAnswers(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

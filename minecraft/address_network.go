@@ -131,10 +131,10 @@ func (c *probeCache) store(key probeKey, endpoint string) {
 	c.entries[key] = probeEntry{endpoint: endpoint, expires: now.Add(probeCacheTTL)}
 }
 
-// forgetAfter drops the answer behind a dial that failed for a reason other than ctx ending, so
-// the next Select probes again.
+// forgetAfter drops failed and timed-out choices so the next Select probes again.
+// Explicit cancellation preserves the answer because it does not show a transport failure.
 func (c *probeCache) forgetAfter(ctx context.Context, key probeKey, err error) {
-	if c == nil || err == nil || ctx.Err() != nil {
+	if c == nil || err == nil || errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
 	c.mu.Lock()
