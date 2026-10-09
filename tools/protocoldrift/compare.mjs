@@ -12,14 +12,26 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadConfig, validateComparison } from "./oracle.mjs";
 
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/(.:)/, "$1"));
+const here = path.dirname(fileURLToPath(import.meta.url));
 const docsDir = process.argv[2];
-const flatPath = process.argv[3] ?? "gophertunnel-flat.json";
+const flatPath = process.argv[3] ?? path.join(here, "gophertunnel-flat.json");
 
 if (!docsDir) {
   console.error("usage: node compare.mjs <endstone-docs-dir> [gophertunnel-flat.json]");
   process.exit(2);
+}
+
+let flat, baseline, oracleIdentity;
+try {
+  flat = JSON.parse(fs.readFileSync(flatPath, "utf8"));
+  baseline = loadConfig();
+  oracleIdentity = validateComparison(flat, baseline, docsDir);
+} catch (error) {
+  console.error(`protocol drift identity check failed: ${error.message}`);
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,13 +203,7 @@ function tokens(ops, acc = [], trail = "") {
   return acc;
 }
 
-const flat = JSON.parse(fs.readFileSync(flatPath, "utf8"));
 const byID = new Map((flat.packets ?? []).map((p) => [p.id, p]));
-
-const baselinePath = path.join(here, "accepted-drift.json");
-let baseline = { packets: [] };
-try { baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8")); }
-catch { console.error(`no accepted-drift.json beside compare.mjs; refusing to pass silently`); process.exit(1); }
 const accepted = new Map((baseline.packets ?? []).map((p) => [p.id, p]));
 
 const rows = [];
@@ -227,7 +233,7 @@ const counts = {};
 for (const r of rows) counts[r.status] = (counts[r.status] ?? 0) + 1;
 const drift = rows.filter((r) => r.status === "DRIFT");
 
-fs.writeFileSync(path.join(here, "drift-report.json"), JSON.stringify({ counts, rows }, null, 2) + "\n");
+fs.writeFileSync(path.join(here, "drift-report.json"), JSON.stringify({ source: flat.source, minecraft_version: flat.minecraft_version, protocol_version: flat.protocol_version, oracle: oracleIdentity, counts, rows }, null, 2) + "\n");
 
 console.log(JSON.stringify(counts, null, 2));
 for (const r of drift) {

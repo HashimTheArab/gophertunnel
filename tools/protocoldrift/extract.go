@@ -145,11 +145,13 @@ func isProtocolHelper(name string) bool {
 }
 
 func main() {
-	root := filepath.Join("..", "gt-2168")
+	root := "."
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
 	abs, err := filepath.Abs(root)
+	must(err)
+	identity, err := inspectSource(abs)
 	must(err)
 	e := &extractor{root: abs, fset: token.NewFileSet(), types: map[string]*typeInfo{}, marshals: map[string]*marshalInfo{}, functions: map[string]*marshalInfo{}}
 	must(e.load())
@@ -176,7 +178,7 @@ func main() {
 		packets = append(packets, Packet{ID: id, Name: e.packet, Operations: ops})
 	}
 	sort.Slice(packets, func(i, j int) bool { return packets[i].ID < packets[j].ID })
-	manifest := Manifest{SchemaVersion: 1, Source: "gophertunnel@4815aff7", MinecraftVersion: "1.26.40", ProtocolVersion: 2168, Packets: packets}
+	manifest := Manifest{SchemaVersion: 1, Source: identity.Source, MinecraftVersion: identity.MinecraftVersion, ProtocolVersion: identity.ProtocolVersion, Packets: packets}
 	checks := writerChecks(abs)
 	diag := Diagnostics{SchemaVersion: 1, SourceRoot: abs, Unresolved: e.diagnostics, WriterExpansionChecks: checks}
 	for _, c := range checks {
