@@ -14,6 +14,7 @@ import (
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/text/language"
@@ -134,6 +135,8 @@ func (c *Client) ParseFeaturedServer(item catalog.Item) (*FeaturedServer, error)
 // filter, so this method is only useful for listing gatherings experiences
 // and featured servers.
 func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, opts ...playfab.RequestOption) (*catalog.SearchResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, internal.CatalogCallTimeout)
+	defer cancel()
 	buf := &bytes.Buffer{}
 	defer buf.Reset()
 	if err := json.NewEncoder(buf).Encode(filter); err != nil {
@@ -161,7 +164,11 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 	}
 	token.SetAuthHeader(req)
 
-	resp, err := c.client.Do(req)
+	httpClient := *c.client
+	if httpClient.Timeout == 0 || httpClient.Timeout > internal.CatalogRequestTimeout {
+		httpClient.Timeout = internal.CatalogRequestTimeout
+	}
+	resp, err := authclient.SendRequestWithRetries(ctx, &httpClient, req, authclient.RetryOptions{Attempts: internal.CatalogRequestAttempts})
 	if err != nil {
 		return nil, err
 	}

@@ -72,8 +72,8 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 
 		resp, err = c.Do(req)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return resp, err
+			if ctx.Err() != nil {
+				return resp, ctx.Err()
 			}
 			// Some proxies close the connection without returning a response, which often surfaces as EOF.
 			// Treat that as retryable.
