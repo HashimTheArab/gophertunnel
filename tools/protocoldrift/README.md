@@ -24,15 +24,23 @@ tooling. Both would have failed this check before merge.
 [endstonemc/protocol-docs](https://github.com/endstonemc/protocol-docs), produced
 by `protocol-dumper` reading a live BDS. That is a stronger claim than published
 documentation: it describes what the server actually serialises rather than what
-a document asserts. Each release branch (`r26_u4`, …) is a dump of one build, so
-the branch is the pin.
+a document asserts. `accepted-drift.json` pins the repository, exact commit and
+BDS build. Branch names can move and are not used as pins. The oracle's exact
+BDS build is separate from gophertunnel's advertised compatibility version;
+both must use the same protocol number.
 
 ## How it works
 
 1. `extract.go` walks every `Marshal` method with `go/ast`, recursing through
    helper types, and writes each packet's flattened wire operations. It needs no
-   type-checking and downloads nothing.
-2. `compare.mjs` flattens the BDS schemas the same way and diffs them per packet.
+   type-checking and downloads nothing. It reads the inspected checkout's
+   `CurrentVersion` and `CurrentProtocol` literals from `minecraft/protocol/info.go`.
+   The source label records that checkout's commit, adds `-dirty` when its
+   protocol sources have local changes, or says `unversioned` for a source archive.
+2. `compare.mjs` checks that the inspected target matches `accepted-drift.json`
+   and that the oracle checkout is clean, uses the pinned commit, and declares
+   the expected BDS build and protocol. It then flattens the BDS schemas the same
+   way and diffs them per packet. The report includes both source identities.
 
 Each packet lands in one of four buckets: `AGREEMENT`, `DRIFT`, `UNRESOLVED`, or
 `NO_GOPHERTUNNEL_PACKET`.
@@ -63,10 +71,17 @@ Deliberately kept distinct, because each difference is a wire bug:
 ## Running it locally
 
 ```sh
-git clone --depth 1 --branch r26_u4 https://github.com/endstonemc/protocol-docs schema-oracle
+node tools/protocoldrift/oracle.mjs checkout schema-oracle
 go run ./tools/protocoldrift .
 node tools/protocoldrift/compare.mjs schema-oracle tools/protocoldrift/gophertunnel-flat.json
 ```
+
+Use a new directory for the oracle checkout. These are the same commands CI
+runs. When updating protocols, update the target and oracle record in
+`accepted-drift.json` together and review the accepted packet differences.
+
+Run the identity regression tests with `go test ./tools/protocoldrift` and
+`node --test tools/protocoldrift/oracle.test.mjs`.
 
 ## When it fails
 
@@ -80,6 +95,5 @@ A new drift means one of three things, in rough order of likelihood:
    and say so in the entry.
 
 Every entry in `accepted-drift.json` carries a reason and what would settle it,
-so "known drift" cannot quietly become "any drift". Nine packets are accepted
-today: two where gophertunnel is very likely right, one being fixed, one
-comparator limitation, and five genuinely unsettled and wanting a capture.
+so "known drift" cannot quietly become "any drift". The current list is in
+`accepted-drift.json`.
