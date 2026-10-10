@@ -1,6 +1,8 @@
 package device
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
@@ -56,5 +58,34 @@ func TestAuthConfigMatchesTheTitle(t *testing.T) {
 	}
 	if _, ok := AuthConfig(protocol.DeviceXBOX); ok {
 		t.Fatal("an unsupported sign-in reported a config")
+	}
+}
+
+// Applying a device to decoded client data that lacked the device claims serializes them, in the
+// vanilla claim order.
+func TestApplyDeviceToDecodedClientDataSerializesTheClaims(t *testing.T) {
+	var data login.ClientData
+	if err := json.Unmarshal([]byte(`{"CurrentInputMode":1,"GameVersion":"1.26.50","ThirdPartyName":"Steve"}`), &data); err != nil {
+		t.Fatal(err)
+	}
+	profile := New(protocol.DeviceAndroid)
+	profile.Apply(&data)
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &claims); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"DefaultInputMode", "DeviceId", "DeviceModel", "DeviceOS"} {
+		if _, ok := claims[name]; !ok {
+			t.Fatalf("serialized login lacks %s: %s", name, encoded)
+		}
+	}
+	text := string(encoded)
+	if !(strings.Index(text, `"CurrentInputMode"`) < strings.Index(text, `"DefaultInputMode"`) &&
+		strings.Index(text, `"DeviceOS"`) < strings.Index(text, `"GameVersion"`)) {
+		t.Fatalf("device claims are out of vanilla order: %s", encoded)
 	}
 }

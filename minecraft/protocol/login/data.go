@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -392,6 +393,28 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
+}
+
+// MarkClaims records claims set after decoding as present, at their vanilla position, so MarshalJSON
+// writes them. A ClientData constructed programmatically already writes every claim.
+func (data *ClientData) MarkClaims(names ...string) {
+	if data.ClaimOrder == nil {
+		return
+	}
+	for _, name := range names {
+		if slices.Contains(data.ClaimOrder, name) {
+			continue
+		}
+		rank := slices.Index(clientDataClaimOrder, name)
+		at := len(data.ClaimOrder)
+		for index, present := range data.ClaimOrder {
+			if other := slices.Index(clientDataClaimOrder, present); rank >= 0 && other > rank {
+				at = index
+				break
+			}
+		}
+		data.ClaimOrder = slices.Insert(data.ClaimOrder, at, name)
+	}
 }
 
 // UnmarshalJSON decodes ClientData while retaining unknown claims and the original claim order.

@@ -53,6 +53,7 @@ func (p Profile) Apply(data *login.ClientData) {
 	data.DeviceModel = p.Model
 	data.DeviceID = p.ID
 	data.DefaultInputMode = DefaultInputMode(p.OS)
+	data.MarkClaims("DefaultInputMode", "DeviceId", "DeviceModel", "DeviceOS")
 }
 
 // DefaultInputMode returns the input mode a client on os starts in.
