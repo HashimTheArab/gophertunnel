@@ -307,3 +307,18 @@ func TestResourcePackSnapshotsCopyAllPacketReferences(t *testing.T) {
 		}
 	}
 }
+
+// Every exempted pack is built in, matched only by its exact identity.
+func TestIsBuiltinResourcePackMatchesTheExemptionList(t *testing.T) {
+	for _, exempted := range exemptedPacks {
+		if !IsBuiltinResourcePack(exempted.uuid, exempted.version) {
+			t.Fatalf("exempted pack %s_%s is not built in", exempted.uuid, exempted.version)
+		}
+		if IsBuiltinResourcePack(exempted.uuid, exempted.version+".1") {
+			t.Fatalf("another version of %s is built in", exempted.uuid)
+		}
+	}
+	if IsBuiltinResourcePack("00112233-4455-6677-8899-aabbccddeeff", "1.0.0") {
+		t.Fatal("a downloadable pack is built in")
+	}
+}
