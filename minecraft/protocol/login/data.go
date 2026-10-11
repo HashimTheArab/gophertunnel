@@ -159,7 +159,8 @@ type ClientData struct {
 	// PremiumSkin indicates if the skin the player held was a premium skin, meaning it was obtained through
 	// payment.
 	PremiumSkin bool
-	// SelfSignedID is a UUID that remains consistent through restarts of the game and new game sessions.
+	// SelfSignedID is the login UUID. The dialer preserves an explicit value and otherwise
+	// derives it from ClientRandomID and DeviceID. Without a supplied DeviceID, it uses a random UUID.
 	SelfSignedID string `json:"SelfSignedId"`
 	// ServerAddress is the exact address the player used to join the server with. This may be either an
 	// actual address, or a hostname. ServerAddress also has the port in it, in the shape of

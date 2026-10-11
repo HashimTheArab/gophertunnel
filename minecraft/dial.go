@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -551,8 +552,16 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.GameVersion == "" {
 		d.GameVersion = protocol.CurrentVersion
 	}
-	if d.ClientRandomID == 0 {
+	if d.ClientRandomID == 0 && !slices.Contains(d.ClaimOrder, "ClientRandomId") {
 		d.ClientRandomID = rand.Int63()
+	}
+	if d.SelfSignedID == "" {
+		if d.DeviceID == "" {
+			// Without a supplied device ID, keep the random UUID fallback.
+			d.SelfSignedID = uuid.New().String()
+		} else {
+			d.SelfSignedID = login.DeriveSelfSignedID(d.ClientRandomID, string(d.DeviceID))
+		}
 	}
 	if d.DeviceID == "" {
 		d.DeviceID = d.ExpectedDeviceIDFormat().Generate()
@@ -573,9 +582,6 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	}
 	if d.PieceTintColours == nil {
 		d.PieceTintColours = make([]login.PersonaPieceTintColour, 0)
-	}
-	if d.SelfSignedID == "" {
-		d.SelfSignedID = uuid.New().String()
 	}
 	if d.SkinID == "" {
 		d.SkinID = uuid.New().String()
