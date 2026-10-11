@@ -16,7 +16,10 @@ type compressionTestConn struct {
 	outgoing bytes.Buffer
 }
 
-func (c *compressionTestConn) Read(b []byte) (int, error)  { return c.incoming.Read(b) }
+// Read consumes the next batch supplied by the peer encoder.
+func (c *compressionTestConn) Read(b []byte) (int, error) { return c.incoming.Read(b) }
+
+// Write stores the connection's outgoing batch for comparison with the peer envelope.
 func (c *compressionTestConn) Write(b []byte) (int, error) { return c.outgoing.Write(b) }
 
 func TestNetworkSettingsNone(t *testing.T) {
