@@ -10,12 +10,15 @@ type sizeOnlyCompression struct {
 	extra int
 }
 
+// EncodeCompression identifies synthetic candidates as Flate so fallback must avoid decoding them.
 func (c sizeOnlyCompression) EncodeCompression() uint16 { return CompressionAlgorithmFlate }
 
+// Compress produces a candidate with the requested size difference and unrelated contents.
 func (c sizeOnlyCompression) Compress(b []byte) ([]byte, error) {
 	return bytes.Repeat([]byte{0x7f}, len(b)+c.extra), nil
 }
 
+// Decompress leaves candidate bytes intact so an incorrect compressed send fails byte preservation.
 func (c sizeOnlyCompression) Decompress(b []byte, _ int) ([]byte, error) { return b, nil }
 
 // appendSizeOnlyCompression exercises compressors that append into the encoder's buffer.
@@ -23,8 +26,10 @@ type appendSizeOnlyCompression struct {
 	sizeOnlyCompression
 }
 
+// MaxCompressedLen reports the exact synthetic candidate size.
 func (c appendSizeOnlyCompression) MaxCompressedLen(n int) int { return n + c.extra }
 
+// CompressAppend appends the synthetic candidate after the caller's envelope.
 func (c appendSizeOnlyCompression) CompressAppend(dst, b []byte) ([]byte, error) {
 	candidate, err := c.Compress(b)
 	return append(dst, candidate...), err
@@ -109,6 +114,7 @@ type callCountingCompression struct {
 	calls int
 }
 
+// Compress counts calls before delegating to the real algorithm.
 func (c *callCountingCompression) Compress(b []byte) ([]byte, error) {
 	c.calls++
 	return c.Compression.Compress(b)
