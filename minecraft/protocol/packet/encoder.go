@@ -88,6 +88,11 @@ func (encoder *Encoder) EnableCompression(compression Compression, threshold int
 	encoder.compressionThreshold = threshold
 }
 
+// DisableCompression disables compression framing without changing the encryption session.
+func (encoder *Encoder) DisableCompression() {
+	encoder.compression = nil
+}
+
 // SetBatchEncodeObserver sets an observer called with metadata for each encoded
 // packet batch. The observer should be fast and non-blocking.
 func (encoder *Encoder) SetBatchEncodeObserver(observer BatchEncodeObserver) {
