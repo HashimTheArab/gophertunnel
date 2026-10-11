@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
@@ -35,12 +34,11 @@ func TestDefaultClientDataSelfSignedID(t *testing.T) {
 func TestDefaultClientDataSelfSignedIDWithoutDevice(t *testing.T) {
 	data := login.ClientData{ClientRandomID: -1}
 	defaultClientData("example.com:19132", "Player", &data)
-	id, err := uuid.Parse(data.SelfSignedID)
-	if err != nil {
-		t.Fatal(err)
+	if data.DeviceID == "" {
+		t.Fatal("DeviceID was not generated")
 	}
-	if id.Version() != 4 || id.Variant() != uuid.RFC4122 {
-		t.Fatalf("missing-device fallback version/variant = %v/%v", id.Version(), id.Variant())
+	if want := login.DeriveSelfSignedID(data.ClientRandomID, string(data.DeviceID)); data.SelfSignedID != want {
+		t.Fatalf("SelfSignedID = %q, want derivation from generated device ID %q", data.SelfSignedID, want)
 	}
 }
 

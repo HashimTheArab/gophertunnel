@@ -555,16 +555,11 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ClientRandomID == 0 && !slices.Contains(d.ClaimOrder, "ClientRandomId") {
 		d.ClientRandomID = rand.Int63()
 	}
-	if d.SelfSignedID == "" {
-		if d.DeviceID == "" {
-			// Without a supplied device ID, keep the random UUID fallback.
-			d.SelfSignedID = uuid.New().String()
-		} else {
-			d.SelfSignedID = login.DeriveSelfSignedID(d.ClientRandomID, string(d.DeviceID))
-		}
-	}
 	if d.DeviceID == "" {
 		d.DeviceID = d.ExpectedDeviceIDFormat().Generate()
+	}
+	if d.SelfSignedID == "" {
+		d.SelfSignedID = login.DeriveSelfSignedID(d.ClientRandomID, string(d.DeviceID))
 	}
 	if d.LanguageCode == "" {
 		d.LanguageCode = "en_GB"
