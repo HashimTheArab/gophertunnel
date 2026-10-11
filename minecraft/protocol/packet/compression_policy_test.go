@@ -102,3 +102,63 @@ func TestEncoderCompressionBenefit(t *testing.T) {
 		})
 	}
 }
+
+// callCountingCompression checks that disabled and below-threshold batches do no compression work.
+type callCountingCompression struct {
+	Compression
+	calls int
+}
+
+func (c *callCountingCompression) Compress(b []byte) ([]byte, error) {
+	c.calls++
+	return c.Compression.Compress(b)
+}
+
+func TestEncoderCompressionThreshold(t *testing.T) {
+	payload := bytes.Repeat([]byte{7}, 2048)
+	// A 2048-byte packet uses a two-byte length prefix in the inner batch.
+	const innerLen = 2050
+	for _, tc := range []struct {
+		name       string
+		threshold  int
+		compressed bool
+	}{
+		{name: "zero", threshold: 0},
+		{name: "below", threshold: innerLen + 1},
+		{name: "equal", threshold: innerLen, compressed: true},
+		{name: "above", threshold: innerLen - 1, compressed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			compression := &callCountingCompression{Compression: FlateCompression}
+			enc := NewEncoder(&out)
+			enc.EnableCompression(compression, tc.threshold)
+			var stats BatchEncodeStats
+			enc.SetBatchEncodeObserver(func(s BatchEncodeStats) { stats = s })
+			if err := enc.Encode([][]byte{payload}); err != nil {
+				t.Fatal(err)
+			}
+			wantCalls := 0
+			wantID := byte(0xff)
+			if tc.compressed {
+				wantCalls = 1
+				wantID = byte(CompressionAlgorithmFlate)
+			}
+			if compression.calls != wantCalls || out.Bytes()[1] != wantID {
+				t.Fatalf("compression calls = %d, byte = %x; want %d, %x", compression.calls, out.Bytes()[1], wantCalls, wantID)
+			}
+			if stats.UncompressedLen != innerLen || stats.Compressed != tc.compressed || stats.BelowThreshold != (tc.name == "below") {
+				t.Fatalf("unexpected stats: %+v", stats)
+			}
+			dec := NewDecoder(&out)
+			dec.EnableCompression(FlateCompression, 0)
+			packets, err := dec.Decode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(packets) != 1 || !bytes.Equal(packets[0], payload) {
+				t.Fatalf("decoded packets = %x, want %x", packets, payload)
+			}
+		})
+	}
+}
