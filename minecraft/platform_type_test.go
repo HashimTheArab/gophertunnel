@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -54,5 +55,38 @@ func TestDefaultClientDataSerializesPlatformType(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Reusing caller-owned decoded data must retain the same supplied skin on each login.
+func TestDefaultPlatformTypePreservesReusedClientData(t *testing.T) {
+	t.Parallel()
+	var original login.ClientData
+	input := []byte(`{"DeviceOS":1,"ClientRandomId":-7,"SkinId":"fixture"}`)
+	if err := json.Unmarshal(input, &original); err != nil {
+		t.Fatal(err)
+	}
+	original.ClaimOrder = slices.Grow(original.ClaimOrder, 1)
+	for range 2 {
+		data := original
+		defaultClientData("example.invalid:19132", "Player", &data)
+		encoded, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims := map[string]any{}
+		if err := json.Unmarshal(encoded, &claims); err != nil {
+			t.Fatal(err)
+		}
+		if claims["SkinId"] != "fixture" || claims["PlatformType"] != float64(login.PlatformTypeMobile) {
+			t.Errorf("reused login lost supplied skin or platform claim: %s", encoded)
+		}
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(input) {
+		t.Errorf("defaulting changed caller-owned login claims: got %s, want %s", encoded, input)
 	}
 }

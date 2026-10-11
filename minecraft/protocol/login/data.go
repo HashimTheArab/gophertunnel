@@ -398,11 +398,13 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 }
 
 // MarkClaims records claims set after decoding as present, at their vanilla position, so MarshalJSON
-// writes them. A ClientData constructed programmatically already writes every claim.
+// writes them. It preserves the claim order of shallow copies. A ClientData constructed
+// programmatically already writes every claim.
 func (data *ClientData) MarkClaims(names ...string) {
 	if data.ClaimOrder == nil {
 		return
 	}
+	data.ClaimOrder = slices.Clone(data.ClaimOrder)
 	for _, name := range names {
 		if slices.Contains(data.ClaimOrder, name) {
 			continue
