@@ -164,9 +164,6 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
 			_, _ = compressedBuf.Write(encoder.header)
 			compressionID := compression.EncodeCompression()
-			if observer != nil {
-				stats.CompressionID = compressionID
-			}
 			_ = compressedBuf.WriteByte(byte(compressionID))
 			var err error
 			if appender, ok := compression.(appendCompression); ok {
@@ -187,9 +184,18 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			if err != nil {
 				return fmt.Errorf("compress batch: %w", err)
 			}
+			// Compare inner payloads before encryption or checksum overhead is added.
+			beneficial := len(data)-batchStart < len(batch)
+			if !beneficial {
+				data = buf.Bytes()
+				data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
+			}
 			if observer != nil {
 				stats.CompressionDuration = time.Since(compressionStart)
-				stats.Compressed = true
+				stats.Compressed = beneficial
+				if beneficial {
+					stats.CompressionID = compressionID
+				}
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
 			}
