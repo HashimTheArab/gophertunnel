@@ -240,7 +240,8 @@ type ClientData struct {
 	// 3 - High, less than ~8GB of memory
 	// 4 - Super High, more than ~8GB of memory
 	MemoryTier int
-	// PlatformType is the type of platform the client is running.
+	// PlatformType is the client's platform category, distinct from DeviceOS. Known values are
+	// PlatformTypeDesktop and PlatformTypeMobile.
 	PlatformType int
 	// GraphicsMode is the graphics mode the client is running.
 	GraphicsMode int

@@ -47,12 +47,17 @@ func (p Profile) Valid() bool {
 	return len(choices) == 0 && p.Model == "" || slices.Contains(choices, p.Model)
 }
 
-// Apply claims p's device, and the input mode its platform defaults to, in data.
+// Apply claims p's device and default input mode in data. Android also supplies the mobile
+// platform type when zero; explicit nonzero platform types are preserved.
 func (p Profile) Apply(data *login.ClientData) {
 	data.DeviceOS = p.OS
 	data.DeviceModel = p.Model
 	data.DeviceID = p.ID
 	data.DefaultInputMode = DefaultInputMode(p.OS)
+	if p.OS == protocol.DeviceAndroid && data.PlatformType == login.PlatformTypeDesktop {
+		data.PlatformType = login.PlatformTypeMobile
+		data.MarkClaims("PlatformType")
+	}
 	data.MarkClaims("DefaultInputMode", "DeviceId", "DeviceModel", "DeviceOS")
 }
 
