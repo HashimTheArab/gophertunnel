@@ -81,7 +81,8 @@ func (encoder *Encoder) EnableEncryption(keyBytes [32]byte) {
 	encoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Encoder.
+// EnableCompression enables compression framing for the Encoder. A zero threshold skips compression work
+// while retaining the per-batch compression byte.
 func (encoder *Encoder) EnableCompression(compression Compression, threshold int) {
 	encoder.compression = compression
 	encoder.compressionThreshold = threshold
@@ -151,10 +152,10 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 		if observer != nil {
 			stats.UncompressedLen = len(batch)
 		}
-		if len(batch) < encoder.compressionThreshold {
+		if encoder.compressionThreshold == 0 || len(batch) < encoder.compressionThreshold {
 			data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
 			if observer != nil {
-				stats.BelowThreshold = true
+				stats.BelowThreshold = len(batch) < encoder.compressionThreshold
 			}
 		} else {
 			var compressionStart time.Time
