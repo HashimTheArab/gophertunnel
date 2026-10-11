@@ -240,7 +240,8 @@ type ClientData struct {
 	// 3 - High, less than ~8GB of memory
 	// 4 - Super High, more than ~8GB of memory
 	MemoryTier int
-	// PlatformType is the type of platform the client is running.
+	// PlatformType is the client's platform category, distinct from DeviceOS. Known values are
+	// PlatformTypeDesktop and PlatformTypeMobile.
 	PlatformType int
 	// GraphicsMode is the graphics mode the client is running.
 	GraphicsMode int
@@ -397,11 +398,13 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 }
 
 // MarkClaims records claims set after decoding as present, at their vanilla position, so MarshalJSON
-// writes them. A ClientData constructed programmatically already writes every claim.
+// writes them. It preserves the claim order of shallow copies. A ClientData constructed
+// programmatically already writes every claim.
 func (data *ClientData) MarkClaims(names ...string) {
 	if data.ClaimOrder == nil {
 		return
 	}
+	data.ClaimOrder = slices.Clone(data.ClaimOrder)
 	for _, name := range names {
 		if slices.Contains(data.ClaimOrder, name) {
 			continue
