@@ -104,8 +104,8 @@ type Dialer struct {
 	ResourcePackProgress func(ResourcePackEvent)
 	// HoldResourcePackCompletion makes a HandoffAfterLogin connection handle the server's resource pack
 	// phase itself: it downloads the packs, then parks the Completed response until Conn.CompleteResourcePacks.
-	// Every other packet, LoginSuccess included, is still delivered. A relay uses it to serve those packs to
-	// its own client first, while the server waits as it would for a client applying packs.
+	// ResourcePacksInfo and every packet outside the pack phase are still delivered in order. A relay uses it
+	// to serve those packs to its own client first, while the server waits as it would for a client applying packs.
 	// It requires HandoffAfterLogin; otherwise dialing returns an error.
 	HoldResourcePackCompletion bool
 

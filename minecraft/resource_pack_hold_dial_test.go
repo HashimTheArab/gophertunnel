@@ -101,7 +101,7 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
-	loginSuccess := false
+	loginSuccess, packsInfo := false, false
 	for {
 		if time.Now().After(deadline) {
 			t.Fatal("StartGame never passed through after completion")
@@ -115,6 +115,11 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 			switch pk := pk.(type) {
 			case *packet.PlayStatus:
 				loginSuccess = loginSuccess || pk.Status == packet.PlayStatusLoginSuccess
+			case *packet.ResourcePacksInfo:
+				if !loginSuccess {
+					t.Fatal("ResourcePacksInfo was delivered before LoginSuccess")
+				}
+				packsInfo = true
 			case *packet.StartGame:
 				found = true
 			}
@@ -123,8 +128,8 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 			break
 		}
 	}
-	if !loginSuccess {
-		t.Fatal("LoginSuccess was not delivered while the pack phase was held")
+	if !loginSuccess || !packsInfo {
+		t.Fatalf("held pack phase delivered LoginSuccess=%v ResourcePacksInfo=%v, want both", loginSuccess, packsInfo)
 	}
 	entries, _ := os.ReadDir(cache.Dir)
 	var cached, temp int

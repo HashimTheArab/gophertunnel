@@ -1368,8 +1368,17 @@ func (conn *Conn) receive(data []byte) error {
 		if !conn.handedOff && conn.skipsHandshake(pkData.h.PacketID) {
 			conn.handedOff = true
 		}
-		if conn.handedOff && !conn.holdsPackPhase(pkData.h.PacketID) {
-			return conn.forward(pkData)
+		if conn.handedOff {
+			if !conn.holdsPackPhase(pkData.h.PacketID) {
+				return conn.forward(pkData)
+			}
+			if pkData.h.PacketID == packet.IDResourcePacksInfo {
+				// The caller still receives the offer in stream order to serve it; the Conn downloads it.
+				if err := conn.handle(pkData.clone()); err != nil {
+					return err
+				}
+				return conn.forward(pkData)
+			}
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
@@ -1382,7 +1391,7 @@ func (conn *Conn) receive(data []byte) error {
 }
 
 // holdsPackPhase reports whether a packet belongs to a held pack phase, which the Conn handles itself
-// instead of delivering until CompleteResourcePacks.
+// until CompleteResourcePacks.
 func (conn *Conn) holdsPackPhase(id uint32) bool {
 	if !conn.holdResourcePackCompletion || conn.packPhaseDone.Load() {
 		return false
