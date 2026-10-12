@@ -9,7 +9,7 @@ require (
 	github.com/creachadair/jrpc2 v1.3.5
 	github.com/df-mc/go-nethernet v1.0.25-0.20260928201420-215e46422b58
 	github.com/df-mc/go-playfab/v2 v2.0.3
-	github.com/df-mc/go-xsapi/v2 v2.0.4-0.20260916091843-af826516381a
+	github.com/df-mc/go-xsapi/v2 v2.0.4-0.20261012072832-90ce120e31cd
 	github.com/df-mc/jsonc v1.0.5
 	github.com/go-gl/mathgl v1.1.0
 	github.com/go-jose/go-jose/v4 v4.1.4
