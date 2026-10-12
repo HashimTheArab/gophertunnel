@@ -380,7 +380,7 @@ func (r *Reader) ItemDescriptorCount(i *ItemDescriptorCount) {
 		switch name {
 		case "name":
 			id = ItemDescriptorDefault
-		case "molang":
+		case "tags":
 			id = ItemDescriptorMoLang
 		case "item_tag":
 			id = ItemDescriptorItemTag
@@ -389,8 +389,12 @@ func (r *Reader) ItemDescriptorCount(i *ItemDescriptorCount) {
 			return
 		}
 		i.Descriptor, _ = itemDescriptorFromType(id)
-		i.Descriptor.Marshal(r)
-		if id == ItemDescriptorItemTag {
+		if molang, ok := i.Descriptor.(*MoLangItemDescriptor); ok {
+			r.String(&molang.Expression)
+		} else {
+			i.Descriptor.Marshal(r)
+		}
+		if id != ItemDescriptorDefault {
 			var aux int32
 			r.Varint32(&aux)
 		}

@@ -298,8 +298,12 @@ func (w *Writer) ItemDescriptorCount(i *ItemDescriptorCount) {
 		w.Varint32(&aux)
 	} else {
 		w.String(&name)
-		i.Descriptor.Marshal(w)
-		if id == ItemDescriptorItemTag {
+		if molang, ok := i.Descriptor.(*MoLangItemDescriptor); ok {
+			w.String(&molang.Expression)
+		} else {
+			i.Descriptor.Marshal(w)
+		}
+		if id != ItemDescriptorDefault {
 			aux := int32(32767)
 			w.Varint32(&aux)
 		}
