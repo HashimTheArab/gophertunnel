@@ -1931,7 +1931,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 
 	var pk *packet.ResourcePacksInfo
 	if resourcePackOffer != nil {
-		pk = resourcePackOffer.packet()
+		pk = resourcePackOffer.Packet()
 	} else {
 		pk = &packet.ResourcePacksInfo{
 			TexturePackRequired:        texturePacksRequired,
@@ -2325,7 +2325,7 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			BaseGameVersion:     "*",
 		}
 		if conn.resourcePackStack != nil {
-			pk = conn.resourcePackStack.packet()
+			pk = conn.resourcePackStack.Packet()
 		} else {
 			for _, pack := range conn.resourcePacks {
 				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()})
