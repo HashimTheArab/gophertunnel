@@ -515,7 +515,8 @@ func (r *Reader) StackRequestAction(x *StackRequestAction) {
 func (r *Reader) MaterialReducer(m *MaterialReducer) {
 	var mix int32
 	r.Varint32(&mix)
-	m.InputItem = ItemType{NetworkID: mix << 16, MetadataValue: uint32(mix & 0x7fff)}
+	// The key packs id << 16 | aux; the arithmetic shift keeps negative ids the writer packs.
+	m.InputItem = ItemType{NetworkID: mix >> 16, MetadataValue: uint32(mix & 0xffff)}
 	Slice(r, &m.Outputs)
 }
 

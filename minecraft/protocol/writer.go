@@ -403,7 +403,7 @@ func (w *Writer) StackRequestAction(x *StackRequestAction) {
 
 // MaterialReducer writes a material reducer to the writer.
 func (w *Writer) MaterialReducer(m *MaterialReducer) {
-	mix := (m.InputItem.NetworkID << 16) | int32(m.InputItem.MetadataValue)
+	mix := (m.InputItem.NetworkID << 16) | int32(m.InputItem.MetadataValue&0xffff)
 	w.Varint32(&mix)
 	Slice(w, &m.Outputs)
 }

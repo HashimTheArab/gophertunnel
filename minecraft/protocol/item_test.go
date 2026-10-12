@@ -1,6 +1,9 @@
 package protocol
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestItemEntrySlotCapabilities(t *testing.T) {
 	boolPtr := func(value bool) *bool { return &value }
@@ -65,4 +68,31 @@ func TestItemEntrySlotCapabilities(t *testing.T) {
 
 func wearableComponents(slot any) map[string]any {
 	return map[string]any{"minecraft:wearable": map[string]any{"slot": slot}}
+}
+
+// The reducer key packs the input as id << 16 | aux; decoding must recover the same item.
+func TestMaterialReducerInputKeyRoundTrip(t *testing.T) {
+	for _, item := range []ItemType{
+		{NetworkID: 1},
+		{NetworkID: 5, MetadataValue: 3},
+		{NetworkID: 300, MetadataValue: 0x7fff},
+		{NetworkID: 0x7fff, MetadataValue: 0xffff},
+		{NetworkID: -5, MetadataValue: 2},
+	} {
+		in := MaterialReducer{InputItem: item, Outputs: []MaterialReducerOutput{{NetworkID: 7, Count: 2}}}
+		buf := new(bytes.Buffer)
+		NewWriter(buf, 0).MaterialReducer(&in)
+
+		var key int32
+		NewReader(bytes.NewReader(buf.Bytes()), 0, false).Varint32(&key)
+		if want := item.NetworkID<<16 | int32(item.MetadataValue); key != want {
+			t.Fatalf("%+v: key = %#x, want %#x", item, key, want)
+		}
+
+		var out MaterialReducer
+		NewReader(bytes.NewReader(buf.Bytes()), 0, false).MaterialReducer(&out)
+		if out.InputItem != item || len(out.Outputs) != 1 || out.Outputs[0] != in.Outputs[0] {
+			t.Fatalf("decoded %+v, want %+v", out, in)
+		}
+	}
 }
