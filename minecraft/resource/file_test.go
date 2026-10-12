@@ -52,7 +52,7 @@ func TestReadURLToFile_StreamsIntoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pack, err := ReadURLToFile(t.Context(), server.Client(), server.URL+"/p.mcpack", uint64(len(data)), f)
+	pack, err := ReadURLToFile(t.Context(), server.Client(), server.URL+"/p.mcpack", uint64(len(data)), f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestReadURLToFile_StreamsIntoFile(t *testing.T) {
 	if pack.Size() != len(data) || pack.DownloadURL() != server.URL+"/p.mcpack" {
 		t.Fatalf("size=%d url=%q", pack.Size(), pack.DownloadURL())
 	}
-	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, uint64(len(data))-1, f); err == nil {
+	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, uint64(len(data))-1, f, nil); err == nil {
 		t.Fatal("nonempty destination accepted")
 	}
 }
@@ -132,7 +132,7 @@ func TestReadURLToFile_ValidatesDestination(t *testing.T) {
 		t.Error("requested pack with an invalid destination")
 	}))
 	defer server.Close()
-	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, 1024, nil); err == nil {
+	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, 1024, nil, nil); err == nil {
 		t.Fatal("nil destination accepted")
 	}
 	f, err := os.CreateTemp(t.TempDir(), "nonempty-*")
@@ -143,7 +143,7 @@ func TestReadURLToFile_ValidatesDestination(t *testing.T) {
 	if _, err := f.Write([]byte("existing")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, 1024, f); err == nil {
+	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, 1024, f, nil); err == nil {
 		t.Fatal("nonempty destination accepted")
 	}
 }
@@ -175,7 +175,7 @@ func TestReadURLToFile_BoundsUnknownLength(t *testing.T) {
 			if _, err := f.Seek(10, io.SeekStart); err != nil {
 				t.Fatal(err)
 			}
-			pack, err := ReadURLToFile(t.Context(), server.Client(), server.URL, test.limit, f)
+			pack, err := ReadURLToFile(t.Context(), server.Client(), server.URL, test.limit, f, nil)
 			if (err == nil) != test.valid {
 				t.Fatalf("ReadURLToFile error = %v, want valid=%v", err, test.valid)
 			}
@@ -208,7 +208,7 @@ func TestReadURLToFile_RejectsNestedArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, uint64(len(data)), f); err == nil {
+	if _, err := ReadURLToFile(t.Context(), server.Client(), server.URL, uint64(len(data)), f, nil); err == nil {
 		t.Fatal("nested HTTP archive accepted")
 	}
 }

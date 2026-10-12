@@ -1,11 +1,15 @@
 package minecraft
 
 import (
-	"github.com/sandertv/go-raknet"
+	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/sandertv/go-raknet"
+	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
 // ServerStatusProvider represents a type that is able to provide the visual status of a server, in specific
@@ -34,6 +38,10 @@ type ServerStatus struct {
 	// MaxPlayers is the maximum amount of players in the server. If set to 0, MaxPlayers is set to
 	// PlayerCount + 1.
 	MaxPlayers int
+	// GameType is the default game mode of the server, as shown in the friend list. It is one of
+	// packet.GameTypeSurvival, packet.GameTypeCreative, packet.GameTypeAdventure or packet.GameTypeSpectator;
+	// any other value is advertised as Survival.
+	GameType int
 }
 
 // ListenerStatusProvider is the default ServerStatusProvider of a Listener. It displays a static server name/
@@ -43,6 +51,8 @@ type ListenerStatusProvider struct {
 	name string
 	// subName is the sub-name of the server, or the MOTD, that is displayed in the friend list.
 	subName string
+	// GameType is advertised as the pong game mode; it is one of the packet.GameType constants.
+	GameType int
 }
 
 // NewStatusProvider creates a ListenerStatusProvider that displays the server name passed.
@@ -57,6 +67,7 @@ func (l ListenerStatusProvider) ServerStatus(playerCount, maxPlayers int) Server
 		ServerSubName: l.subName,
 		PlayerCount:   playerCount,
 		MaxPlayers:    maxPlayers,
+		GameType:      l.GameType,
 	}
 }
 
@@ -120,25 +131,71 @@ func (f *ForeignStatusProvider) update() {
 }
 
 // ParsePongData parses the unconnected pong data passed into the relevant fields of a ServerStatus struct.
+// Malformed data yields a ServerStatus whose ServerName describes the problem; use [ParsePong] to get an error.
 func ParsePongData(pong []byte) ServerStatus {
+	status, err := ParsePong(pong)
+	if err != nil {
+		// Keep the existing display text while ParsePong returns conventional lowercase errors.
+		message := err.Error()
+		return ServerStatus{ServerName: strings.ToUpper(message[:1]) + message[1:]}
+	}
+	return status
+}
+
+// ParsePong parses unconnected pong data into a ServerStatus, or returns an error when the pong lacks
+// the name, player count or max player count fields.
+func ParsePong(pong []byte) (ServerStatus, error) {
 	frag := splitPong(string(pong))
-	if len(frag) < 7 {
-		return ServerStatus{ServerName: "Invalid pong data"}
+	if len(frag) < 8 {
+		return ServerStatus{}, errors.New("invalid pong data")
 	}
 	serverName := frag[1]
 	serverSubName := frag[7]
 	online, err := strconv.Atoi(frag[4])
 	if err != nil {
-		return ServerStatus{ServerName: "Invalid player count"}
+		return ServerStatus{}, errors.New("invalid player count")
 	}
 	max, err := strconv.Atoi(frag[5])
 	if err != nil {
-		return ServerStatus{ServerName: "Invalid max player count"}
+		return ServerStatus{}, errors.New("invalid max player count")
 	}
-	return ServerStatus{
+	status := ServerStatus{
 		ServerName:    serverName,
 		ServerSubName: serverSubName,
 		PlayerCount:   online,
 		MaxPlayers:    max,
 	}
+	// The game mode field is optional and, like the client, an unknown mode does not invalidate the pong.
+	if len(frag) > 8 {
+		status.GameType = parseGameType(frag[8])
+	}
+	return status, nil
+}
+
+// gameTypeName returns the pong string for a ServerStatus.GameType. Types without a pong string are
+// advertised as Survival.
+func gameTypeName(gameType int) string {
+	switch gameType {
+	case packet.GameTypeCreative:
+		return "Creative"
+	case packet.GameTypeAdventure:
+		return "Adventure"
+	case packet.GameTypeSpectator:
+		return "Spectator"
+	}
+	return "Survival"
+}
+
+// parseGameType converts the game mode string of a pong to a ServerStatus.GameType. Unknown modes are
+// treated as Survival.
+func parseGameType(v string) int {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "creative":
+		return packet.GameTypeCreative
+	case "adventure":
+		return packet.GameTypeAdventure
+	case "spectator":
+		return packet.GameTypeSpectator
+	}
+	return packet.GameTypeSurvival
 }

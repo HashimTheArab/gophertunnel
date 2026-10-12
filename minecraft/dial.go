@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,7 +41,8 @@ type Dialer struct {
 	ErrorLog *slog.Logger
 
 	// HTTPClient is the HTTP client used for outbound HTTP requests needed by the dialer,
-	// such as fetching OpenID configuration/JWKs when authentication is enabled.
+	// such as fetching OpenID configuration/JWKs when authentication is enabled and
+	// downloading resource packs the server offers by URL.
 	// If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client
 
@@ -97,15 +99,15 @@ type Dialer struct {
 	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
 	// fall back to a normal download.
 	ResourcePackCache ResourcePackCache
-	// HoldResourcePackCompletion keeps the resource pack phase handled while DisablePacketHandling is set:
-	// the connection downloads the server's packs, then parks the Completed response until
-	// Conn.CompleteResourcePacks. A relay uses it to serve those packs to its own client first, while the
-	// server waits as it would for a client applying packs.
-	// It requires DisablePacketHandling; otherwise dialing returns an error.
+	// ResourcePackProgress, if set, receives each step of resource pack acquisition from the cache, URLs and
+	// chunks. Calls are serialised but may come from different goroutines; it must not block.
+	ResourcePackProgress func(ResourcePackEvent)
+	// HoldResourcePackCompletion makes a HandoffAfterLogin connection handle the server's resource pack
+	// phase itself: it downloads the packs, then parks the Completed response until Conn.CompleteResourcePacks.
+	// Every other packet, LoginSuccess included, is still delivered. A relay uses it to serve those packs to
+	// its own client first, while the server waits as it would for a client applying packs.
+	// It requires HandoffAfterLogin; otherwise dialing returns an error.
 	HoldResourcePackCompletion bool
-	// ResourcePackHTTPClient fetches packs advertised with a download URL. Nil uses http.DefaultClient; a
-	// relay that must not reach private addresses on a server's behalf supplies a restricted client.
-	ResourcePackHTTPClient *http.Client
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -123,9 +125,8 @@ type Dialer struct {
 	// are converted from and to this Protocol.
 	Protocol Protocol
 
-	// DisablePacketHandling, if set to true, exposes application packets without automatic handling. Mandatory
-	// connection control remains internal. When EnableClientCache is also set, cache negotiation remains automatic.
-	DisablePacketHandling bool
+	// Handoff is the point in the login at which the Conn stops handling packets itself and the dial returns.
+	Handoff Handoff
 	// EnableBatchReading preserves incoming network batch boundaries. When enabled, callers must use
 	// Conn.ReadBatch instead of Conn.ReadPacket, Conn.ReadBytes or Conn.Read.
 	EnableBatchReading bool
@@ -148,12 +149,12 @@ type Dialer struct {
 
 	// EnableClientCache, if set to true, enables the client blob cache for the client. This means that the
 	// server will send chunks as blobs, which may be saved by the client so that chunks don't have to be
-	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic when
-	// DisablePacketHandling is set.
+	// transmitted every time, resulting in less network transmission. Cache negotiation remains automatic with
+	// HandoffAfterLogin.
 	EnableClientCache bool
 	// ForwardClientCacheStatus stops the Conn from answering PlayStatus LoginSuccess with its own
 	// ClientCacheStatus. Relays that forward the real client's status set this so the server negotiates
-	// the cache once. It only applies with DisablePacketHandling; normal logins need the packet.
+	// the cache once. It only applies with HandoffAfterLogin; other logins need the packet.
 	ForwardClientCacheStatus bool
 
 	// KeepXBLIdentityData, if set to true, enables passing XUID and title ID to the target server
@@ -241,8 +242,8 @@ func (d Dialer) DialTimeout(network, address string, timeout time.Duration) (*Co
 // and send packets to. If a connection is not established before the context passed is cancelled,
 // DialContextNetwork returns an error.
 func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address string) (conn *Conn, err error) {
-	if d.HoldResourcePackCompletion && !d.DisablePacketHandling {
-		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("HoldResourcePackCompletion requires DisablePacketHandling")}
+	if d.HoldResourcePackCompletion && d.Handoff != HandoffAfterLogin {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("HoldResourcePackCompletion requires HandoffAfterLogin")}
 	}
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
@@ -256,6 +257,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 	if d.HTTPClient == nil {
 		d.HTTPClient = http.DefaultClient
+	}
+	if d.Handoff < HandoffNone || d.Handoff > HandoffAfterLogin {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("unknown Handoff %d", d.Handoff)}
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
@@ -298,18 +302,20 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			// If a MultiplayerTokenSource was not provided, log in to PlayFab
 			// account and use a default implementation instead.
 			if d.PlayFabClient == nil {
-				client, err := playfab.LoginWithXbox(ctx, e.PlayFabTitleID, playFabSigner, playfab.ClientConfig{
-					HTTPClient:    d.HTTPClient,
-					CreateAccount: true,
+				src, err := e.NewTokenSource(ctx, playFabSigner, service.TokenSourceConfig{
+					HTTPClient: d.HTTPClient,
+					PlayFab: playfab.ClientConfig{
+						CreateAccount: true,
+					},
 				})
 				if err != nil {
 					return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("login to playfab: %w", err)}
 				}
-				defer client.Close()
-
-				d.PlayFabClient = client
+				defer src.Close()
+				m = NewMultiplayerTokenSource(e, src)
+			} else {
+				m = NewMultiplayerTokenSource(e, e.TokenSource(d.PlayFabClient, service.TokenConfig{}))
 			}
-			m = &multiplayerTokenSource{src: e.TokenSource(d.PlayFabClient, service.TokenConfig{}), env: e}
 		}
 		token, err = m.MultiplayerToken(ctx, &key.PublicKey)
 		if err != nil {
@@ -360,17 +366,18 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
 	conn.resourcePackCache = d.ResourcePackCache
+	conn.httpClient = d.HTTPClient
+	conn.resourcePackProgress = d.ResourcePackProgress
 	conn.holdResourcePackCompletion = d.HoldResourcePackCompletion
 	if d.HoldResourcePackCompletion {
 		conn.packsReady = make(chan struct{})
 	}
-	conn.resourcePackHTTPClient = d.ResourcePackHTTPClient
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
 	conn.maxDecompressedLen = d.MaxDecompressedLen
-	conn.disablePacketHandling = d.DisablePacketHandling
+	conn.handoff = d.Handoff
 	conn.batchReading = d.EnableBatchReading
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
@@ -430,7 +437,9 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		case <-conn.ctx.Done():
 			return nil, conn.closeErr("dial")
 		case <-connected:
-			// We've connected successfully. We return the connection and no error.
+			if err := conn.awaitPackStores(ctx); err != nil {
+				return nil, err
+			}
 			return conn, nil
 		}
 	}
@@ -464,21 +473,14 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 		// and push them to the Conn so that they may be processed.
 		callbackErr := false
 		if err := conn.dec.DecodeFunc(func(data []byte) error {
-			loggedInBefore, readyToLoginBefore, handshakeCompleteBefore, passthroughReadyBefore := conn.loggedIn, conn.readyToLogin, conn.handshakeComplete, conn.disablePacketHandlingReady
+			loggedInBefore, readyToLoginBefore, handedOffBefore := conn.loggedIn, conn.readyToLogin, conn.handedOff
 			if err := conn.receive(data); err != nil {
 				callbackErr = true
 				return err
 			}
-			handshakeReady := !handshakeCompleteBefore && conn.handshakeComplete
-			passthroughReady := !passthroughReadyBefore && conn.disablePacketHandlingReady
-			heldLoginReady := conn.holdResourcePackCompletion && (conn.loginSuccessReceived || conn.retainedPacksInfo != nil)
-			if handshakeReady || passthroughReady || heldLoginReady {
-				// Held packs keep passthrough disabled, so servers without encryption must also finish
-				// dialing when login succeeds. The caller can then wait for and release the pack phase.
-				if conn.disablePacketHandling && connected != nil {
-					close(connected)
-					connected = nil
-				}
+			if !handedOffBefore && conn.handedOff && connected != nil {
+				close(connected)
+				connected = nil
 			}
 			if !readyToLoginBefore && conn.readyToLogin {
 				// This is the signal that the connection is ready to login, so we put a value in the channel so that
@@ -496,6 +498,10 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			}
 			return nil
 		}); err != nil {
+			if !callbackErr && errors.Is(err, packet.ErrBatchDropped) {
+				conn.log.Debug("dropped undecodable batch", "error", err)
+				continue
+			}
 			conn.flushBatch()
 			if callbackErr || !errors.Is(err, net.ErrClosed) {
 				if cancelContext {
@@ -559,11 +565,14 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.GameVersion == "" {
 		d.GameVersion = protocol.CurrentVersion
 	}
-	if d.ClientRandomID == 0 {
+	if d.ClientRandomID == 0 && !slices.Contains(d.ClaimOrder, "ClientRandomId") {
 		d.ClientRandomID = rand.Int63()
 	}
 	if d.DeviceID == "" {
 		d.DeviceID = d.ExpectedDeviceIDFormat().Generate()
+	}
+	if d.SelfSignedID == "" {
+		d.SelfSignedID = login.DeriveSelfSignedID(d.ClientRandomID, string(d.DeviceID))
 	}
 	if d.LanguageCode == "" {
 		d.LanguageCode = "en_GB"
@@ -581,9 +590,6 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	}
 	if d.PieceTintColours == nil {
 		d.PieceTintColours = make([]login.PersonaPieceTintColour, 0)
-	}
-	if d.SelfSignedID == "" {
-		d.SelfSignedID = uuid.New().String()
 	}
 	if d.SkinID == "" {
 		d.SkinID = uuid.New().String()

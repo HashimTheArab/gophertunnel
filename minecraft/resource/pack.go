@@ -73,6 +73,19 @@ func ReadBytes(data []byte) (*Pack, error) {
 	return compile(data, true)
 }
 
+type progressReader struct {
+	r        io.Reader
+	progress func(int)
+}
+
+func (r progressReader) Read(b []byte) (int, error) {
+	n, err := r.r.Read(b)
+	if n > 0 {
+		r.progress(n)
+	}
+	return n, err
+}
+
 // ReadURL downloads a resource pack found at the URL passed and compiles it. The resource pack must be a valid
 // zip archive where the manifest.json file is inside a subdirectory rather than the root itself. If the resource
 // pack is not a valid zip or there is no manifest.json file, an error is returned.
@@ -83,7 +96,7 @@ func ReadURL(url string) (*Pack, error) {
 // ReadURLContext downloads a resource pack found at the URL passed and compiles it. The request is canceled
 // when ctx is done.
 func ReadURLContext(ctx context.Context, url string) (*Pack, error) {
-	return readURLContext(ctx, http.DefaultClient, url, 0, nil)
+	return readURLContext(ctx, http.DefaultClient, url, 0, nil, nil)
 }
 
 // ReadURLContextLimit downloads a resource pack found at the URL passed and compiles it, reading at most maxSize
@@ -95,13 +108,19 @@ func ReadURLContextLimit(ctx context.Context, url string, maxSize uint64) (*Pack
 // ReadURLWithClient is ReadURLContextLimit through client, for callers that must restrict where a
 // server-supplied URL may connect.
 func ReadURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64) (*Pack, error) {
-	return readURLWithClient(ctx, client, url, maxSize, nil)
+	return ReadURLWithProgress(ctx, client, url, maxSize, nil)
+}
+
+// ReadURLWithProgress is ReadURLWithClient that calls progress, if non-nil, with each count of body bytes read.
+func ReadURLWithProgress(ctx context.Context, client *http.Client, url string, maxSize uint64, progress func(int)) (*Pack, error) {
+	return readURLWithClient(ctx, client, url, maxSize, nil, progress)
 }
 
 // ReadURLToFile downloads a pack of at most maxSize bytes through client into f and compiles it from there,
 // so the archive never sits in memory. f must be a non-nil, empty file. On success, the returned pack owns
 // f and must be closed when no longer used. On error, the caller still owns f and any partial download.
-func ReadURLToFile(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File) (*Pack, error) {
+// progress, if non-nil, is called with each count of body bytes read.
+func ReadURLToFile(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File, progress func(int)) (*Pack, error) {
 	if f == nil {
 		return nil, errors.New("download resource pack: destination file is nil")
 	}
@@ -115,22 +134,22 @@ func ReadURLToFile(ctx context.Context, client *http.Client, url string, maxSize
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek resource pack destination: %w", err)
 	}
-	return readURLWithClient(ctx, client, url, maxSize, f)
+	return readURLWithClient(ctx, client, url, maxSize, f, progress)
 }
 
 // readURLWithClient validates the bounded download size before making a request.
-func readURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File) (*Pack, error) {
+func readURLWithClient(ctx context.Context, client *http.Client, url string, maxSize uint64, f *os.File, progress func(int)) (*Pack, error) {
 	if maxSize == 0 {
 		return nil, errors.New("download resource pack: max size must be greater than 0")
 	}
 	if maxSize > math.MaxInt64 {
 		return nil, fmt.Errorf("download resource pack: max size %d exceeds supported limit", maxSize)
 	}
-	return readURLContext(ctx, client, url, int64(maxSize), f)
+	return readURLContext(ctx, client, url, int64(maxSize), f, progress)
 }
 
 // readURLContext downloads an archive into memory or f and validates it without unwrapping nested ZIPs.
-func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64, f *os.File) (*Pack, error) {
+func readURLContext(ctx context.Context, client *http.Client, url string, maxSize int64, f *os.File, progress func(int)) (*Pack, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create resource pack request: %w", err)
@@ -149,6 +168,9 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 			return nil, fmt.Errorf("download resource pack: response size %d exceeds limit %d", resp.ContentLength, maxSize)
 		}
 		r = io.LimitReader(resp.Body, maxSize)
+	}
+	if progress != nil {
+		r = progressReader{r: r, progress: progress}
 	}
 	var data []byte
 	var n int64
@@ -437,7 +459,7 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 }
 
 // Close releases the archive behind a file-backed pack; an in-memory pack needs no Close.
-// Copies made with WithContentKey or WithDownloadURL share that archive and must no longer be used afterward.
+// Copies made with Clone, WithContentKey or WithDownloadURL share that archive and must no longer be used afterward.
 func (pack *Pack) Close() error {
 	if closer, ok := pack.content.(io.Closer); ok {
 		return closer.Close()
@@ -456,6 +478,22 @@ func (pack Pack) WithContentKey(key string) *Pack {
 // used in ResourcePacksInfo. Both packs share the archive: closing either pack closes it for both.
 func (pack Pack) WithDownloadURL(url string) *Pack {
 	pack.downloadURL = url
+	return &pack
+}
+
+// Clone returns an independently owned copy of the pack. The archive data is shared read-only, while all
+// manifest data exposed through Pack methods is copied so changes made through one Pack cannot affect another.
+func (pack Pack) Clone() *Pack {
+	manifest := *pack.manifest
+	manifest.Modules = append([]Module(nil), manifest.Modules...)
+	manifest.Dependencies = append([]Dependency(nil), manifest.Dependencies...)
+	manifest.Capabilities = append([]Capability(nil), manifest.Capabilities...)
+	if manifest.Metadata != nil {
+		metadata := *manifest.Metadata
+		metadata.Authors = append([]string(nil), metadata.Authors...)
+		manifest.Metadata = &metadata
+	}
+	pack.manifest = &manifest
 	return &pack
 }
 

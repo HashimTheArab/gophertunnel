@@ -20,7 +20,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
 
-// TestHoldResourcePackCompletion parks Completed until the caller releases it and keeps the server's packets.
+// TestHoldResourcePackCompletion parks Completed until the caller releases it and snapshots the server's offer and stack.
 func TestHoldResourcePackCompletion(t *testing.T) {
 	client, peer := net.Pipe()
 	defer client.Close()
@@ -29,7 +29,7 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 
 	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	defer conn.Abort()
-	conn.disablePacketHandling = true
+	conn.handoff = HandoffAfterLogin
 	conn.holdResourcePackCompletion = true
 	conn.packsReady = make(chan struct{})
 
@@ -52,17 +52,17 @@ func TestHoldResourcePackCompletion(t *testing.T) {
 	if conn.packPhaseDone.Load() || conn.loggedIn {
 		t.Fatal("completion was not held")
 	}
-	if got := conn.ResourcePacksInfo(); got == info || !got.TexturePackRequired {
-		t.Fatal("retained info is not an independent copy of the server's packet")
+	if offer, ok := conn.ResourcePackOffer(); !ok || !offer.TexturePackRequired() {
+		t.Fatal("offer snapshot lost the server's required bit")
 	}
-	if conn.ResourcePackStack().BaseGameVersion != "1.26.0" {
-		t.Fatal("retained stack lost")
+	if stack, ok := conn.ResourcePackStack(); !ok || stack.BaseGameVersion() != "1.26.0" {
+		t.Fatal("stack snapshot lost")
 	}
 	if err := conn.handleResourcePackStack(&packet.ResourcePackStack{BaseGameVersion: "dup"}); err != nil {
 		t.Fatal(err)
 	}
-	if conn.ResourcePackStack().BaseGameVersion != "1.26.0" {
-		t.Fatal("a resent stack replaced the retained one")
+	if stack, _ := conn.ResourcePackStack(); stack.BaseGameVersion() != "1.26.0" {
+		t.Fatal("a resent stack replaced the first one")
 	}
 	if err := conn.CompleteResourcePacks(); err != nil || !conn.packPhaseDone.Load() {
 		t.Fatalf("CompleteResourcePacks = %v, done=%v", err, conn.packPhaseDone.Load())

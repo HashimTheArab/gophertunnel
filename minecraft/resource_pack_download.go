@@ -3,6 +3,8 @@ package minecraft
 import (
 	"fmt"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 // DefaultResourcePackMaxInFlightChunks matches the vanilla client request window.
@@ -15,6 +17,40 @@ const DefaultResourcePackMaxBytes = 512 << 20
 const DefaultResourcePackDownloadBudgetBytes = 2 << 30
 
 var defaultResourcePackDownloadBudget = NewResourcePackDownloadBudget(DefaultResourcePackDownloadBudgetBytes)
+
+// ResourcePackSource is where a Dialer obtained, or is obtaining, a resource pack.
+type ResourcePackSource uint8
+
+const (
+	ResourcePackSourceCache  ResourcePackSource = iota + 1 // the Dialer's ResourcePackCache
+	ResourcePackSourceURL                                  // the pack's DownloadURL
+	ResourcePackSourceChunks                               // ResourcePackChunkData from the server
+)
+
+// ResourcePackEventKind is the step a ResourcePackEvent reports.
+type ResourcePackEventKind uint8
+
+const (
+	// ResourcePackStarted begins a transfer; Size is the byte count expected.
+	ResourcePackStarted ResourcePackEventKind = iota + 1
+	// ResourcePackReceived reports Size more bytes of a started transfer.
+	ResourcePackReceived
+	// ResourcePackFinished ends a transfer, or reports a cache hit of Size bytes with no transfer.
+	ResourcePackFinished
+	// ResourcePackFailed ends a transfer without the pack; Err says why. A failed URL download falls back to
+	// chunks, and a cancelled connection fails its transfers with the connection's cause.
+	ResourcePackFailed
+)
+
+// ResourcePackEvent reports one step of a Dialer's resource pack acquisition.
+type ResourcePackEvent struct {
+	Kind    ResourcePackEventKind
+	Source  ResourcePackSource
+	UUID    uuid.UUID
+	Version string
+	Size    uint64
+	Err     error
+}
 
 // ResourcePackDownloadConfig controls resource pack downloads performed by a Dialer.
 type ResourcePackDownloadConfig struct {

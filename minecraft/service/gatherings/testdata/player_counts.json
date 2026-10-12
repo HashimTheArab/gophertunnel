@@ -1,0 +1,27 @@
+{
+  "result": [
+    {
+      "experienceId": "5b8d51c3-4b40-4f4e-a7bf-b94bba8fc27c",
+      "playerCount": 14252
+    },
+    {
+      "experienceId": "4f3e2e68-cf78-42b7-99b5-2adecd752e5a",
+      "playerCount": 0
+    },
+    {
+      "experienceId": "38526dc5-0378-454c-aedc-9a3a66527cce"
+    },
+    {
+      "experienceId": "",
+      "playerCount": 90
+    },
+    {
+      "experienceId": "unknown",
+      "playerCount": 100
+    },
+    {
+      "experienceId": "798ca3d1-b30b-4746-bf2e-3eb134f54ae5",
+      "playerCount": "bad"
+    }
+  ]
+}

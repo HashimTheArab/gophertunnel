@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -90,8 +89,9 @@ func removePackFile(f *os.File) {
 	_ = os.Remove(f.Name())
 }
 
-// downloadPackURL fetches an advertised pack and immediately discards failed or mismatching responses.
-func (conn *Conn) downloadPackURL(info protocol.TexturePackInfo) (pack *resource.Pack, err error) {
+// downloadPackURL fetches an advertised pack into a file and immediately discards failed or mismatching
+// responses. progress receives each count of body bytes read.
+func (conn *Conn) downloadPackURL(info protocol.TexturePackInfo, progress func(int)) (pack *resource.Pack, err error) {
 	f, err := conn.newPackFile(info.Size)
 	if err != nil {
 		return nil, err
@@ -101,11 +101,7 @@ func (conn *Conn) downloadPackURL(info protocol.TexturePackInfo) (pack *resource
 			conn.discardPackFile(f)
 		}
 	}()
-	client := conn.resourcePackHTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	pack, err = resource.ReadURLToFile(conn.ctx, client, info.DownloadURL, info.Size, f)
+	pack, err = resource.ReadURLToFile(conn.ctx, conn.packHTTPClient(), info.DownloadURL, info.Size, f, progress)
 	if err != nil {
 		return nil, err
 	}

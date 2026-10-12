@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
 )
@@ -65,7 +64,7 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 	cache := DirResourcePackCache{Dir: t.TempDir()}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	dialer := Dialer{ErrorLog: log, DisablePacketHandling: true, EnableBatchReading: true, HoldResourcePackCompletion: true, ResourcePackCache: cache, FlushRate: -1}
+	dialer := Dialer{ErrorLog: log, Handoff: HandoffAfterLogin, EnableBatchReading: true, HoldResourcePackCompletion: true, ResourcePackCache: cache, FlushRate: -1}
 	conn, err := dialer.DialContext(ctx, "raknet", listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -80,12 +79,12 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 	if packs := conn.ResourcePacks(); len(packs) != 1 || packs[0].UUID() != pack.UUID() {
 		t.Fatalf("downloaded packs = %v", packs)
 	}
-	if info := conn.ResourcePacksInfo(); info == nil || len(info.TexturePacks) != 1 || info.TexturePacks[0].UUID != pack.UUID() {
-		t.Fatalf("retained info = %+v", info)
+	if offer, ok := conn.ResourcePackOffer(); !ok || len(offer.TexturePacks()) != 1 || offer.TexturePacks()[0].Info().UUID != pack.UUID() {
+		t.Fatalf("offer snapshot = %+v, %v", offer, ok)
 	}
-	stack := conn.ResourcePackStack()
-	if stack == nil || !slices.ContainsFunc(stack.TexturePacks, func(entry protocol.StackResourcePack) bool { return entry.UUID == pack.UUID().String() }) {
-		t.Fatalf("retained stack lacks the server pack: %+v", stack)
+	stack, ok := conn.ResourcePackStack()
+	if !ok || !slices.ContainsFunc(stack.Entries(), func(entry ResourcePackStackEntry) bool { return entry.UUID() == pack.UUID().String() }) {
+		t.Fatalf("stack snapshot lacks the server pack: %+v", stack)
 	}
 	select {
 	case err := <-started:
@@ -102,6 +101,7 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
+	loginSuccess := false
 	for {
 		if time.Now().After(deadline) {
 			t.Fatal("StartGame never passed through after completion")
@@ -112,13 +112,19 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 		}
 		found := false
 		for _, pk := range batch {
-			if _, ok := pk.(*packet.StartGame); ok {
+			switch pk := pk.(type) {
+			case *packet.PlayStatus:
+				loginSuccess = loginSuccess || pk.Status == packet.PlayStatusLoginSuccess
+			case *packet.StartGame:
 				found = true
 			}
 		}
 		if found {
 			break
 		}
+	}
+	if !loginSuccess {
+		t.Fatal("LoginSuccess was not delivered while the pack phase was held")
 	}
 	entries, _ := os.ReadDir(cache.Dir)
 	var cached, temp int
@@ -143,15 +149,15 @@ func testDialHoldsResourcePackCompletion(t *testing.T, disableEncryption bool) {
 	_ = temp
 }
 
-// TestDialRejectsHeldPacksWithoutPassthrough rejects a configuration that could never return its held Conn.
-func TestDialRejectsHeldPacksWithoutPassthrough(t *testing.T) {
+// TestDialRejectsHeldPacksWithoutAfterLoginHandoff rejects a configuration that could never return its held Conn.
+func TestDialRejectsHeldPacksWithoutAfterLoginHandoff(t *testing.T) {
 	called := false
 	network := dialTestNetwork{dial: func(context.Context, string) (net.Conn, error) {
 		called = true
 		return nil, errors.New("unexpected network dial")
 	}}
 	conn, err := (Dialer{HoldResourcePackCompletion: true}).DialContextNetwork(t.Context(), network, "example.com:19132")
-	if conn != nil || err == nil || !strings.Contains(err.Error(), "requires DisablePacketHandling") {
+	if conn != nil || err == nil || !strings.Contains(err.Error(), "requires HandoffAfterLogin") {
 		t.Fatalf("DialContextNetwork = %v, %v; want a configuration error", conn, err)
 	}
 	if called {

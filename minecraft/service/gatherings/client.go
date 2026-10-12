@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
+	"time"
 
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-playfab/v2/catalog"
@@ -26,6 +28,30 @@ type Environment struct {
 	// to make requests to the endpoints provided by gatherings service.
 	// If nil, [http.DefaultClient] will be used instead.
 	HTTPClient *http.Client `json:"-"`
+}
+
+// ServiceName implements [service.Environment] and returns "gatherings".
+func (e *Environment) ServiceName() string {
+	return "gatherings"
+}
+
+// UnmarshalJSON decodes the discovered environment, requiring an absolute https ServiceURI.
+func (e *Environment) UnmarshalJSON(b []byte) error {
+	var data struct {
+		ServiceURI string `json:"serviceUri"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return err
+	}
+	u, err := url.Parse(data.ServiceURI)
+	if err != nil {
+		return fmt.Errorf("parse ServiceURI: %w", err)
+	}
+	if u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("service/gatherings: ServiceURI must be an absolute https URL")
+	}
+	e.ServiceURI = u
+	return nil
 }
 
 // DefaultEnvironment is the default [Environment] used when callers do not
@@ -66,6 +92,12 @@ type Client struct {
 	src    service.TokenSource
 	client *http.Client
 	env    *Environment
+
+	countsMu        sync.Mutex
+	counts          []ExperiencePlayerCount
+	countsRequested time.Time
+	countsRefresh   *playerCountsRefresh
+	countsNow       func() time.Time
 }
 
 // ParseExperience parses the display properties of item into an [Experience].

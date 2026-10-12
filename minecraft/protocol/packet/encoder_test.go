@@ -128,3 +128,67 @@ func BenchmarkEncoderBatchEncodeObserver(b *testing.B) {
 		})
 	}
 }
+
+// A batch over the decoder's packet limit is split so a limit-checking peer can decode every part.
+func TestEncoderSplitsBatchesAtThePacketLimit(t *testing.T) {
+	var writes batchWrites
+	enc := NewEncoder(&writes)
+	packets := make([][]byte, maximumInBatch*2+1)
+	for i := range packets {
+		packets[i] = []byte{byte(i)}
+	}
+	if err := enc.Encode(packets); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	var sizes []int
+	var decoded int
+	for _, batch := range writes {
+		payloads, err := NewDecoder(bytes.NewReader(batch)).Decode()
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		sizes = append(sizes, len(payloads))
+		for _, payload := range payloads {
+			if payload[0] != byte(decoded) {
+				t.Fatalf("packet %d out of order", decoded)
+			}
+			decoded++
+		}
+	}
+	if len(sizes) != 3 || sizes[0] != maximumInBatch || sizes[2] != 1 || decoded != len(packets) {
+		t.Fatalf("batch sizes = %v, decoded %d of %d", sizes, decoded, len(packets))
+	}
+}
+
+func TestEncoderBatchWriterReceivesActualPacketCounts(t *testing.T) {
+	var counts []int
+	enc := NewEncoderFor(io.Discard, func(data []byte, packetCount int) (int, error) {
+		payloads, err := NewDecoder(bytes.NewReader(data)).Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(payloads) != packetCount {
+			t.Fatalf("batch contains %d packets, sink was told %d", len(payloads), packetCount)
+		}
+		counts = append(counts, packetCount)
+		return len(data), nil
+	})
+	packets := make([][]byte, maximumInBatch+1)
+	for i := range packets {
+		packets[i] = []byte{1}
+	}
+	if err := enc.Encode(packets); err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts[0] != maximumInBatch || counts[1] != 1 {
+		t.Fatalf("batch counts = %v, want [%d 1]", counts, maximumInBatch)
+	}
+}
+
+// batchWrites keeps each encoded batch as its own write, as a datagram transport would.
+type batchWrites [][]byte
+
+func (w *batchWrites) Write(b []byte) (int, error) {
+	*w = append(*w, bytes.Clone(b))
+	return len(b), nil
+}

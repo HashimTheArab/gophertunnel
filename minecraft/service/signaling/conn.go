@@ -217,8 +217,10 @@ func (conn *Conn) handleMessage(message Message) {
 		})
 	case MessageTypeSignal:
 		signal := &nethernet.Signal{}
+		// Decode errors echo remote text, so neither they nor the payload are logged.
 		if err := signal.UnmarshalText([]byte(message.Data)); err != nil {
-			log.Error("error decoding signal", slog.Any("error", err))
+			conn.d.Log.Debug("incoming signal was not accepted",
+				slog.Uint64("connection_id", signal.ConnectionID), slog.String("reason", "undecodable"))
 			return
 		}
 		signal.NetworkID = message.From

@@ -125,19 +125,17 @@ func (r *refreshingKeySet) keysFromRemote(ctx context.Context) ([]jose.JSONWebKe
 		// This goroutine has exclusive ownership over the current inflight request.
 		go func() {
 			keys, err := r.updateKeys()
+			inflight.keys, inflight.err = keys, err
 
-			inflight.keys = keys
-			inflight.err = err
-			close(inflight.doneCh)
-
+			// Publish before waking waiters, so a returned refresh is visible to keysFromCache.
 			r.mu.Lock()
-			defer r.mu.Unlock()
-
 			if err == nil {
 				r.cachedKeys = keys
 				r.lastFetch = time.Now()
 			}
 			r.inflight = nil
+			r.mu.Unlock()
+			close(inflight.doneCh)
 		}()
 	}
 	inflight := r.inflight

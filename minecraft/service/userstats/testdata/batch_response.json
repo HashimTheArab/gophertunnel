@@ -1,0 +1,44 @@
+{
+  "users": [
+    {
+      "xuid": "2533274792693551",
+      "scids": [
+        {
+          "scid": "7492baca-c1b4-440d-a391-b7ef364a8d40",
+          "stats": [
+            {
+              "statname": "OverallReputation",
+              "type": "Integer",
+              "value": "66"
+            },
+            {
+              "statname": "FairplayReputation",
+              "type": "Integer",
+              "value": "72"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "xuid": "2533274792693552",
+      "scids": [
+        {
+          "scid": "7492baca-c1b4-440d-a391-b7ef364a8d40",
+          "stats": [
+            {
+              "statname": "OverallReputation",
+              "type": "Integer",
+              "value": "66"
+            },
+            {
+              "statname": "FairplayReputation",
+              "type": "Integer",
+              "value": "72"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

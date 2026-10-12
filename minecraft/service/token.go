@@ -67,6 +67,8 @@ type AuthorizationEnvironment struct {
 	// verifier verifies OpenID Multiplayer Token issued by the authorization service.
 	// It is cached and kept by [Environment.Verifier] to reduce network time.
 	verifier *oidc.IDTokenVerifier
+	// keySet holds the signing keys behind verifier.
+	keySet *refreshingKeySet
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
 }
@@ -142,6 +144,11 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
+	sessionID := config.SessionID
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	req.Header.Set("Session-Id", sessionID)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
 	if err != nil {
@@ -161,53 +168,6 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 	}
 	if result.Data == nil || result.Data.AuthorizationHeader == "" || !validationTime.Before(result.Data.ValidUntil.Add(-expirationDelta)) {
 		return nil, errors.New("minecraft/service: AuthorizationEnvironment: invalid token result")
-	}
-	if err := decodeClaims(result.Data, validationTime); err != nil {
-		return nil, fmt.Errorf("minecraft/service: decode JWT token claims: %w", err)
-	}
-	return result.Data, nil
-}
-
-// Renew requests a refresh of a token that may soon expire. The user config must contain
-// a valid PlayFab token that belong to the same user identity that was previously used
-// for the Token. It is recommended to use TokenSource instead which subsequently renews the token.
-func (e *AuthorizationEnvironment) Renew(ctx context.Context, token *Token, user UserConfig) (*Token, error) {
-	defaultUserConfig(&user)
-	if user.Token == "" {
-		return nil, errors.New("minecraft/service: UserConfig.Token is empty")
-	}
-
-	buf := &bytes.Buffer{}
-	if err := json.NewEncoder(buf).Encode(user); err != nil {
-		return nil, fmt.Errorf("encode request body: %w", err)
-	}
-	requestURL := e.ServiceURI.JoinPath("/api/v1.0/session/renew").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	token.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, NewResponseError(resp)
-	}
-	var result internal.Result[*Token]
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response body: %w", err)
-	}
-	validationTime, hasServerTime := responseValidationTime(resp)
-	if result.Data != nil && hasServerTime {
-		result.Data.setServerTime(validationTime)
-	}
-	if result.Data == nil || result.Data.AuthorizationHeader == "" || !validationTime.Before(result.Data.ValidUntil.Add(-expirationDelta)) {
-		return nil, errors.New("minecraft/service: invalid renew token result")
 	}
 	if err := decodeClaims(result.Data, validationTime); err != nil {
 		return nil, fmt.Errorf("minecraft/service: decode JWT token claims: %w", err)
@@ -241,15 +201,33 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 	if refreshInterval <= 0 {
 		refreshInterval = 30 * time.Minute
 	}
-	keySet := newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
+	e.keySet = newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
 
 	// We need to append '/' on the issuer if not present.
 	issuer := e.Issuer.JoinPath().String()
-	e.verifier = oidc.NewVerifier(issuer, keySet, &oidc.Config{
+	e.verifier = oidc.NewVerifier(issuer, e.keySet, &oidc.Config{
 		ClientID:             "api://auth-minecraft-services/multiplayer",
 		SupportedSigningAlgs: config.Algorithms,
 	})
 	return e.verifier, nil
+}
+
+// PreloadVerifier resolves the multiplayer token verifier and fetches its signing keys, so the first
+// verification needs no network round trip. Keys already fetched are kept.
+func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
+	if _, err := e.VerifierContext(ctx); err != nil {
+		return err
+	}
+	e.verifierMu.Lock()
+	keySet := e.keySet
+	e.verifierMu.Unlock()
+	if keys, _ := keySet.keysFromCache(); len(keys) != 0 {
+		return nil
+	}
+	if _, err := keySet.keysFromRemote(ctx); err != nil {
+		return fmt.Errorf("fetch jwks: %w", err)
+	}
+	return nil
 }
 
 // configuration returns the OpenID configuration published by the authorization
@@ -285,11 +263,42 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 // claim of the token.
 // Servers can verify this JWT using the remote OpenID configuration published by the
 // authorization service and validate the claims to authenticate the player.
+//
+// If the service rejects the service token as unauthorized and src implements [TokenInvalidator],
+// the token is invalidated and the request is retried once with a fresh one. The Session-Id sent
+// is src's when it implements [SessionIdentifier]; otherwise none is sent.
 func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, error) {
+	jwt, rejected, err := e.multiplayerToken(ctx, src, key)
+	invalidator, ok := src.(TokenInvalidator)
+	if rejected == nil || !ok {
+		return jwt, err
+	}
+	invalidator.InvalidateServiceToken(rejected)
+	jwt, _, err = e.multiplayerToken(ctx, src, key)
+	return jwt, err
+}
+
+// multiplayerToken requests one multiplayer token; it returns the service token when the
+// service rejected it as unauthorized.
+func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, *Token, error) {
 	token, err := src.ServiceToken(ctx)
 	if err != nil {
-		return "", fmt.Errorf("request service token: %w", err)
+		return "", nil, fmt.Errorf("request service token: %w", err)
 	}
+	var sessionID string
+	if id, ok := src.(SessionIdentifier); ok {
+		sessionID = id.SessionID()
+	}
+	jwt, err := e.startMultiplayerSession(ctx, token, sessionID, key)
+	var responseErr *ResponseError
+	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusUnauthorized {
+		return "", token, err
+	}
+	return jwt, nil, err
+}
+
+// startMultiplayerSession exchanges token for a multiplayer token bound to key.
+func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, token *Token, sessionID string, key *ecdsa.PublicKey) (string, error) {
 	b, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
 		return "", fmt.Errorf("encode public key: %w", err)
@@ -309,6 +318,9 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if sessionID != "" {
+		req.Header.Set("Session-Id", sessionID)
+	}
 	token.SetAuthHeader(req)
 
 	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
@@ -410,6 +422,9 @@ func defaultDeviceConfig(auth *AuthorizationEnvironment, device *DeviceConfig) {
 	if device.PlayFabTitleID == "" {
 		device.PlayFabTitleID = auth.PlayFabTitleID
 	}
+	if device.NetworkProtocolVersion == 0 {
+		device.NetworkProtocolVersion = protocol.CurrentProtocol
+	}
 }
 
 // Token represents an authentication token used for various network
@@ -417,7 +432,7 @@ func defaultDeviceConfig(auth *AuthorizationEnvironment, device *DeviceConfig) {
 //
 // A Token may be issued using [AuthorizationEnvironment.Token] with a [TokenConfig].
 // As each Token has expiration, it is recommended to use a [TokenSource]
-// so it can be renewed subsequently when it becomes invalid.
+// so it is replaced when it becomes invalid.
 type Token struct {
 	// AuthorizationHeader is the JWT string that is used as the 'Authorization' header
 	// to the requests ongoing to various network services for Minecraft: Bedrock Edition.
@@ -428,8 +443,8 @@ type Token struct {
 
 	// ValidUntil is the expiration time of the Token.
 	// Once the current time surpasses the expiration time, the Token
-	// is no longer valid, and needs to be either requested again or renewed
-	// before the Token expires in a specific delta.
+	// is no longer valid, and needs to be requested again before the Token
+	// expires in a specific delta.
 	ValidUntil time.Time `json:"validUntil"`
 
 	// Treatments is a list of treatments that have been assigned to the Token.
@@ -518,6 +533,12 @@ func (t *Token) Valid() bool {
 	return t.AuthorizationHeader != "" && t.now().Before(t.ValidUntil.Add(-expirationDelta))
 }
 
+// Remaining returns how long the Token stays valid on the service clock [Token.Valid] uses,
+// including the expiry margin. It is negative once the Token is no longer valid.
+func (t *Token) Remaining() time.Duration {
+	return t.ValidUntil.Add(-expirationDelta).Sub(t.now())
+}
+
 // setServerTime records the server time and when it was received.
 func (t *Token) setServerTime(serverTime time.Time) {
 	t.serverTime = serverTime
@@ -563,6 +584,11 @@ type TokenConfig struct {
 	// User contains user identity encapsulated in a UserConfig.
 	// User contains an identity token authenticated with PlayFab via an external platform.
 	User UserConfig `json:"user,omitempty"`
+
+	// SessionID is the game session sent as the Session-Id header; the game keeps one per signed-in
+	// user for the whole launch. Token sources generate one when empty and keep it; a direct
+	// [AuthorizationEnvironment.Token] call with it empty sends a fresh one.
+	SessionID string `json:"-"`
 }
 
 // UserConfig represents the configuration of the user whose Token
@@ -623,6 +649,10 @@ type DeviceConfig struct {
 	// It is unclear how this value is determined and how it is used.
 	// For example, HardwareMemoryTier is 5 for 16GB devices.
 	HardwareMemoryTier int `json:"hardwareMemoryTier,omitempty"`
+
+	// NetworkProtocolVersion is the network protocol the game speaks. It defaults to
+	// [protocol.CurrentProtocol].
+	NetworkProtocolVersion int `json:"networkProtocolVersion,omitempty"`
 
 	// Memory is the total amount of the memory available on the device,
 	// represented as a numerical string. It defaults to 16GB if not present.
