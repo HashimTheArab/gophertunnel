@@ -105,16 +105,29 @@ func (encoder *Encoder) SetBatchEncodeObserver(observer BatchEncodeObserver) {
 	encoder.observer = observer
 }
 
-// Encode encodes the packets passed, compressed and optionally encrypted. It writes them as one batch,
-// or as consecutive batches of at most the decoder's per-batch packet limit, in order.
+// Encode encodes the packets passed, compressed and optionally encrypted. It writes consecutive batches
+// within the decoder's packet-count and default decompressed-byte limits, preserving packet order.
+// An individual packet, including its length prefix, must fit the byte limit.
 func (encoder *Encoder) Encode(packets [][]byte) error {
-	for len(packets) > maximumInBatch {
-		if err := encoder.encodeBatch(packets[:maximumInBatch]); err != nil {
-			return err
+	var length [5]byte
+	start, batchLen := 0, 0
+	for i, packet := range packets {
+		if len(packet) > DefaultMaxDecompressedLen {
+			return fmt.Errorf("encode batch: packet size %d exceeds limit %d", len(packet), DefaultMaxDecompressedLen)
 		}
-		packets = packets[maximumInBatch:]
+		packetLen := len(packet) + putVaruint32(&length, uint32(len(packet)))
+		if packetLen > DefaultMaxDecompressedLen {
+			return fmt.Errorf("encode batch: framed packet size %d exceeds limit %d", packetLen, DefaultMaxDecompressedLen)
+		}
+		if i-start == maximumInBatch || packetLen > DefaultMaxDecompressedLen-batchLen {
+			if err := encoder.encodeBatch(packets[start:i]); err != nil {
+				return err
+			}
+			start, batchLen = i, 0
+		}
+		batchLen += packetLen
 	}
-	return encoder.encodeBatch(packets)
+	return encoder.encodeBatch(packets[start:])
 }
 
 // encodeBatch writes packets as a single batch.
