@@ -15,11 +15,14 @@ on:
       - "tools/protocoldrift/**"
       - ".github/workflows/protocol-drift.yml"
   push:
-    branches: [master]
+    branches: [master, lunar]
     paths:
       - "minecraft/protocol/**"
       - "tools/protocoldrift/**"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: protocol-drift-${{ github.ref }}
@@ -33,40 +36,20 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: stable
           cache: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Read the pinned schema source
-        id: pin
+      - name: Test source and oracle identity checks
         run: |
-          set -euo pipefail
-          pin=tools/protocoldrift/accepted-drift.json
-          echo "protocol=$(jq -r .protocol_version "$pin")" >> "$GITHUB_OUTPUT"
+          go test ./tools/protocoldrift
+          node --test tools/protocoldrift/oracle.test.mjs
 
       - name: Check out the BDS-derived schemas
-        run: |
-          set -euo pipefail
-          # Pin the exact BDS 1.26.50.5 dump; release branches advance after hotfixes.
-          git clone --quiet --depth 1 --branch r26_u5 \
-            https://github.com/endstonemc/protocol-docs.git schema-oracle
-          git -C schema-oracle fetch --quiet --depth 1 origin becee3c5a119f6d8aefa0130b7978c87b2bda764
-          git -C schema-oracle checkout --quiet --detach FETCH_HEAD
-
-      - name: Verify the schemas match this protocol
-        run: |
-          set -euo pipefail
-          want='${{ steps.pin.outputs.protocol }}'
-          got="$(grep -oP 'Network Version:\*\*\s*\K[0-9]+' schema-oracle/README.md)"
-          if [[ "$got" != "$want" ]]; then
-            echo "::error::schema oracle is protocol $got but this checkout expects $want."
-            echo "::error::Comparing across protocol versions is meaningless. Update the schema branch and accepted-drift.json together."
-            exit 1
-          fi
-          echo "schema oracle protocol $got matches"
+        run: node tools/protocoldrift/oracle.mjs checkout schema-oracle
 
       - name: Extract packet wire operations
         run: go run ./tools/protocoldrift .
