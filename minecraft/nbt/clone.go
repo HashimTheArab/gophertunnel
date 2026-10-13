@@ -1,6 +1,9 @@
 package nbt
 
-import "reflect"
+import (
+	"reflect"
+	"slices"
+)
 
 // Clone returns an independently owned copy of a decoded NBT compound. It
 // preserves scalar values, array and list types, and nil maps and slices. It
@@ -12,13 +15,42 @@ func Clone(compound map[string]any) map[string]any {
 	}
 	cloned := make(map[string]any, len(compound))
 	for name, value := range compound {
-		cloned[name] = cloneValue(reflect.ValueOf(value)).Interface()
+		cloned[name] = cloneDecodedValue(value)
 	}
 	return cloned
 }
 
-// cloneValue copies decoded compound and list containers without a parallel
-// list of the decoder's concrete slice and array types.
+// cloneDecodedValue avoids reflection allocations for common decoded containers
+// while retaining structural copying for other typed lists and arrays.
+func cloneDecodedValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return Clone(value)
+	case []any:
+		if value == nil {
+			return value
+		}
+		cloned := make([]any, len(value))
+		for i, element := range value {
+			cloned[i] = cloneDecodedValue(element)
+		}
+		return cloned
+	case []byte:
+		return slices.Clone(value)
+	case []int32:
+		return slices.Clone(value)
+	case []int64:
+		return slices.Clone(value)
+	default:
+		reflected := reflect.ValueOf(value)
+		if reflected.IsValid() && containerType(reflected.Type()) {
+			return cloneValue(reflected).Interface()
+		}
+		return value
+	}
+}
+
+// cloneValue detaches uncommon typed containers without an exhaustive type list.
 func cloneValue(value reflect.Value) reflect.Value {
 	if !value.IsValid() {
 		return reflect.Zero(reflect.TypeFor[any]())

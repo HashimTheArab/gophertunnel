@@ -94,14 +94,16 @@ func (pk *AvailableCommands) AppendCommandTables(source *AvailableCommands, reus
 	for i := range fragment.ChainedSubcommands {
 		for j := range fragment.ChainedSubcommands[i].Values {
 			value := &fragment.ChainedSubcommands[i].Values[j]
-			if value.Value&^uint32(protocol.CommandArgIndexMask) != 0 {
-				return nil, fmt.Errorf("chained subcommand %d value %d: argument flags are not allowed", i, j)
-			}
 			mapped, err := appendCommandIndex(value.Index, len(source.ChainedSubcommandValues), len(pk.ChainedSubcommandValues), math.MaxUint32)
 			if err != nil {
 				return nil, fmt.Errorf("chained subcommand %d value %d: %w", i, j, err)
 			}
 			value.Index = mapped
+			enum, err := mappedCommandEnum(value.Value, enumIndices)
+			if err != nil {
+				return nil, fmt.Errorf("chained subcommand %d enum %d: %w", i, j, err)
+			}
+			value.Value = enum
 		}
 	}
 	for i := range fragment.Commands {
@@ -186,7 +188,8 @@ func remapCommandArgument(value uint32, enums []uint32, source, destination *Ava
 	if flags == 0 {
 		return value, nil
 	}
-	if value&protocol.CommandArgValid == 0 || flags&(flags-1) != 0 || value&protocol.CommandArgTypeChainedCommand != 0 {
+	if flags&(flags-1) != 0 || value&protocol.CommandArgTypeChainedCommand != 0 ||
+		(flags != protocol.CommandArgSuffixed && value&protocol.CommandArgValid == 0) {
 		return 0, fmt.Errorf("invalid table argument flags in %#x", value)
 	}
 	index := value & protocol.CommandArgIndexMask

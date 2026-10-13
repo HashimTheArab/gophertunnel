@@ -70,3 +70,27 @@ func TestClone_PreservesNilAndTypedLists(t *testing.T) {
 		t.Fatalf("typed containers remain shared: %#v", cloned)
 	}
 }
+
+func TestClone_DecodedContainerAllocations(t *testing.T) {
+	encoded, err := Marshal(map[string]any{
+		"Damage":  int32(1),
+		"display": map[string]any{"Name": "Sword", "Lore": []any{"a", "b", "c"}},
+		"ench":    []any{map[string]any{"id": int16(9), "lvl": int16(5)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded, cloned map[string]any
+	if err := Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	allocations := testing.AllocsPerRun(100, func() { cloned = Clone(decoded) })
+	if !reflect.DeepEqual(decoded, cloned) {
+		t.Fatal("clone changed decoded item tags")
+	}
+	// Ten allocations detach this tree's maps and lists; reflecting through
+	// every map value previously added sixteen allocations to the same copy.
+	if allocations > 10 {
+		t.Fatalf("decoded item clone allocated %.0f times, want at most 10", allocations)
+	}
+}

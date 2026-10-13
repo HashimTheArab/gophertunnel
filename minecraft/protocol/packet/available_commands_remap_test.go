@@ -21,7 +21,7 @@ func commandTableFixture() (*AvailableCommands, *AvailableCommands) {
 		ChainedSubcommandValues: []string{"old_chain"},
 		Suffixes:                []string{"old_suffix"},
 		Enums:                   []protocol.CommandEnum{{Type: "Reuse", ValueIndices: []uint32{0}}},
-		ChainedSubcommands:      []protocol.ChainedSubcommand{{Name: "old", Values: []protocol.ChainedSubcommandValue{{Index: 0, Value: protocol.CommandArgTypeInt}}}},
+		ChainedSubcommands:      []protocol.ChainedSubcommand{{Name: "old", Values: []protocol.ChainedSubcommandValue{{Index: 0, Value: 0}}}},
 		Commands:                []protocol.Command{{Name: "old", AliasesOffset: math.MaxUint32}},
 		DynamicEnums:            []protocol.DynamicEnum{{Type: "Old", Values: []string{"old"}}},
 		Constraints:             []protocol.CommandEnumConstraint{{EnumIndex: 0, EnumValueIndex: 0, Constraints: []byte{1}}},
@@ -31,7 +31,7 @@ func commandTableFixture() (*AvailableCommands, *AvailableCommands) {
 		ChainedSubcommandValues: []string{"new_chain"},
 		Suffixes:                []string{"new_suffix_a", "new_suffix_b"},
 		Enums:                   []protocol.CommandEnum{{Type: "Reuse"}, {Type: "New", ValueIndices: []uint32{0, 1}}},
-		ChainedSubcommands:      []protocol.ChainedSubcommand{{Name: "new", Values: []protocol.ChainedSubcommandValue{{Index: 0, Value: protocol.CommandArgTypeInt}}}},
+		ChainedSubcommands:      []protocol.ChainedSubcommand{{Name: "new", Values: []protocol.ChainedSubcommandValue{{Index: 0, Value: 1}}}},
 		Commands: []protocol.Command{{
 			Name: "new", Description: "new description", Flags: 3, PermissionLevel: protocol.CommandPermissionLevelHost,
 			AliasesOffset: 1, ChainedSubcommandOffsets: []uint32{0},
@@ -67,7 +67,7 @@ func TestAvailableCommands_AppendCommandTablesRemapsAllReferences(t *testing.T) 
 	if len(destination.Enums) != 2 || !slices.Equal(destination.Enums[1].ValueIndices, []uint32{1, 2}) {
 		t.Fatalf("enum remapping = %+v", destination.Enums)
 	}
-	if len(destination.ChainedSubcommands) != 2 || destination.ChainedSubcommands[1].Values[0].Index != 1 || destination.ChainedSubcommands[1].Values[0].Value != protocol.CommandArgTypeInt {
+	if len(destination.ChainedSubcommands) != 2 || destination.ChainedSubcommands[1].Values[0].Index != 1 || destination.ChainedSubcommands[1].Values[0].Value != 1 {
 		t.Fatalf("chained subcommand remapping = %+v", destination.ChainedSubcommands)
 	}
 	if commands[0].AliasesOffset != 1 || !slices.Equal(commands[0].ChainedSubcommandOffsets, []uint32{1}) || commands[1].AliasesOffset != math.MaxUint32 {
@@ -126,7 +126,7 @@ func TestAvailableCommands_AppendCommandTablesRejectsInvalidReferencesAtomically
 			p.Commands[0].Overloads[0].Parameters[0].Type |= protocol.CommandArgTypeChainedCommand
 		}},
 		{name: "chained value", edit: func(p *AvailableCommands) { p.ChainedSubcommands[0].Values[0].Index = 1 }},
-		{name: "chained value flags", edit: func(p *AvailableCommands) { p.ChainedSubcommands[0].Values[0].Value |= protocol.CommandArgValid }},
+		{name: "chained enum", edit: func(p *AvailableCommands) { p.ChainedSubcommands[0].Values[0].Value = 2 }},
 		{name: "chained offset", edit: func(p *AvailableCommands) { p.Commands[0].ChainedSubcommandOffsets[0] = 1 }},
 		{name: "constraint enum", edit: func(p *AvailableCommands) { p.Constraints[0].EnumIndex = 2 }},
 		{name: "constraint enum value", edit: func(p *AvailableCommands) { p.Constraints[0].EnumValueIndex = 2 }},
@@ -147,6 +147,61 @@ func TestAvailableCommands_AppendCommandTablesRejectsInvalidReferencesAtomically
 				t.Fatal("validation error mutated a packet")
 			}
 		})
+	}
+}
+
+func TestAvailableCommands_AppendPreservesSuffixFlags(t *testing.T) {
+	for _, valid := range []uint32{0, protocol.CommandArgValid} {
+		destination := &AvailableCommands{Suffixes: []string{"old"}}
+		source := &AvailableCommands{
+			Suffixes: []string{"ticks"},
+			Commands: []protocol.Command{{
+				Name: "delay", AliasesOffset: math.MaxUint32,
+				Overloads: []protocol.CommandOverload{{Parameters: []protocol.CommandParameter{{
+					Name: "duration", Type: protocol.CommandArgSuffixed | valid,
+				}}}},
+			}},
+		}
+		before := source.Clone()
+		commands, err := destination.AppendCommandTables(source, nil)
+		if err != nil {
+			t.Fatalf("valid flag %#x: %v", valid, err)
+		}
+		if got, want := commands[0].Overloads[0].Parameters[0].Type, uint32(protocol.CommandArgSuffixed)|valid|1; got != want {
+			t.Fatalf("suffix type = %#x, want %#x", got, want)
+		}
+		if !reflect.DeepEqual(source, before) || !slices.Equal(destination.Suffixes, []string{"old", "ticks"}) {
+			t.Fatal("suffix append changed source or lost suffix values")
+		}
+	}
+}
+
+func TestAvailableCommands_AppendRemapsChainedEnumReferences(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		destination := &AvailableCommands{
+			Enums:                   []protocol.CommandEnum{{Type: "Old"}, {Type: "Shared"}},
+			ChainedSubcommandValues: []string{"old"},
+		}
+		source := &AvailableCommands{
+			Enums:                   []protocol.CommandEnum{{Type: "Shared"}},
+			ChainedSubcommandValues: []string{"new"},
+			ChainedSubcommands:      []protocol.ChainedSubcommand{{Name: "execute", Values: []protocol.ChainedSubcommandValue{{Index: 0, Value: 0}}}},
+		}
+		before := source.Clone()
+		var mapping map[uint32]uint32
+		wantEnum := uint32(2)
+		if reuse {
+			mapping, wantEnum = map[uint32]uint32{0: 1}, 1
+		}
+		if _, err := destination.AppendCommandTables(source, mapping); err != nil {
+			t.Fatal(err)
+		}
+		if got := destination.ChainedSubcommands[0].Values[0]; got.Index != 1 || got.Value != wantEnum {
+			t.Fatalf("reuse=%t relationship=%+v, want value=1 enum=%d", reuse, got, wantEnum)
+		}
+		if !reflect.DeepEqual(source, before) {
+			t.Fatal("chained remapping changed source")
+		}
 	}
 }
 
