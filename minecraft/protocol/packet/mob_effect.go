@@ -38,6 +38,15 @@ const (
 	EffectFatalPoison
 	EffectConduitPower
 	EffectSlowFalling
+	EffectBadOmen
+	EffectVillageHero
+	EffectDarkness
+	EffectTrialOmen
+	EffectWindCharged
+	EffectWeaving
+	EffectOozing
+	EffectInfested
+	EffectRaidOmen
 )
 
 // MobEffect is sent by the server to apply an effect to the player, for example an effect like poison. It may
