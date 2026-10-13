@@ -8,14 +8,14 @@ import (
 // Clone returns an independently owned copy of a decoded NBT compound. It
 // preserves scalar values, array and list types, and nil maps and slices. It
 // does not encode or normalise values. The compound must contain acyclic
-// map[string]any compounds, primitive scalars, and lists or arrays of these
-// shapes, as produced by Unmarshal. Encoder-only struct and pointer shapes are
-// not supported; convert those through the codec before cloning.
-func Clone(compound map[string]any) map[string]any {
+// Compound or map[string]any compounds, primitive scalars, and lists or arrays
+// of these shapes, as produced by Unmarshal. Encoder-only struct and pointer
+// shapes are not supported; convert those through the codec before cloning.
+func (compound Compound) Clone() Compound {
 	if compound == nil {
 		return nil
 	}
-	cloned := make(map[string]any, len(compound))
+	cloned := make(Compound, len(compound))
 	for name, value := range compound {
 		cloned[name] = cloneDecodedValue(value)
 	}
@@ -26,8 +26,10 @@ func Clone(compound map[string]any) map[string]any {
 // while retaining structural copying for other typed lists and arrays.
 func cloneDecodedValue(value any) any {
 	switch value := value.(type) {
+	case Compound:
+		return value.Clone()
 	case map[string]any:
-		return Clone(value)
+		return map[string]any(Compound(value).Clone())
 	case []any:
 		if value == nil {
 			return value
