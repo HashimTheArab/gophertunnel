@@ -226,9 +226,6 @@ func TestTranslateInputTicksManifestRewrites(t *testing.T) {
 				}
 			}
 			TranslateInputTicks(pk, tick)
-			if !CarriesInputTick(pk) {
-				t.Errorf("tick translation visits %T but carrier metadata is missing", pk)
-			}
 			if got := read(); got != idSentinel+1 {
 				t.Errorf("field was not translated: got %v, want %v", got, idSentinel+1)
 			}

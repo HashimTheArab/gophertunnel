@@ -32,6 +32,3 @@ func (pk *SetActorData) Marshal(io protocol.IO) {
 	protocol.Single(io, &pk.EntityProperties)
 	io.PlayerInputTick(&pk.Tick)
 }
-
-// CarriesInputTick reports whether this packet may carry a player input tick.
-func (*SetActorData) CarriesInputTick() bool { return true }

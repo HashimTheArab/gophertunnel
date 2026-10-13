@@ -28,6 +28,3 @@ func (pk *UpdatePlayerGameType) Marshal(io protocol.IO) {
 	io.ActorUniqueID(&pk.PlayerUniqueID)
 	io.PlayerInputTick(&pk.Tick)
 }
-
-// CarriesInputTick reports whether this packet may carry a player input tick.
-func (*UpdatePlayerGameType) CarriesInputTick() bool { return true }

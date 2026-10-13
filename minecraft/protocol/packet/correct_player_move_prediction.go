@@ -46,6 +46,3 @@ func (pk *CorrectPlayerMovePrediction) Marshal(io protocol.IO) {
 	io.Bool(&pk.OnGround)
 	io.PlayerInputTick(&pk.Tick)
 }
-
-// CarriesInputTick reports whether this packet may carry a player input tick.
-func (*CorrectPlayerMovePrediction) CarriesInputTick() bool { return true }

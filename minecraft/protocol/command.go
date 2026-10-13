@@ -73,9 +73,6 @@ const (
 	CommandArgEnum     = 0x200000
 	CommandArgSuffixed = 0x1000000
 	CommandArgSoftEnum = 0x4000000
-	// CommandArgIndexMask selects the table index or basic type in a packed
-	// CommandParameter.Type value.
-	CommandArgIndexMask = CommandArgValid - 1
 )
 
 const (
@@ -243,7 +240,7 @@ func (ctx CommandEnumContext) Marshal(r IO, x *CommandEnum) {
 type ChainedSubcommand struct {
 	// Name is the name of the chained subcommand and shows up in the list as a regular subcommand enum.
 	Name string
-	// Values contains the subcommand-value and enum references of the chained subcommand.
+	// Values contains the index and parameter type of the chained subcommand.
 	Values []ChainedSubcommandValue
 }
 
@@ -254,10 +251,11 @@ func (x *ChainedSubcommand) Marshal(r IO) {
 
 // ChainedSubcommandValue represents the value for a chained subcommand argument.
 type ChainedSubcommandValue struct {
-	// Index points into ChainedSubcommandValues in the AvailableCommands packet.
+	// Index is the index of the argument in the ChainedSubcommandValues slice from the AvailableCommands packet. This is
+	// then used to set the type specified by the Value field below.
 	Index uint32
-	// Value points into Enums in the AvailableCommands packet. It is an enum
-	// reference, not a packed CommandParameter.Type value.
+	// Value is a combination of the flags above and specified the type of argument. Unlike regular parameter types,
+	// this should NOT contain any of the special flags (valid, enum, suffixed or soft enum) but only the basic types.
 	Value uint32
 }
 
