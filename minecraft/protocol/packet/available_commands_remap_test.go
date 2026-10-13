@@ -205,6 +205,25 @@ func TestAvailableCommands_AppendRemapsChainedEnumReferences(t *testing.T) {
 	}
 }
 
+func TestAvailableCommands_AppendChainedLimitIsAtomic(t *testing.T) {
+	for _, count := range []int{15, 16} {
+		destination := &AvailableCommands{ChainedSubcommands: make([]protocol.ChainedSubcommand, count)}
+		source := &AvailableCommands{ChainedSubcommands: []protocol.ChainedSubcommand{{Name: "new"}}}
+		beforeDestination, beforeSource := destination.Clone(), source.Clone()
+		_, err := destination.AppendCommandTables(source, nil)
+		if count == 15 {
+			if err != nil || len(destination.ChainedSubcommands) != 16 {
+				t.Fatalf("allowed boundary append: definitions=%d err=%v", len(destination.ChainedSubcommands), err)
+			}
+		} else if err == nil || !reflect.DeepEqual(destination, beforeDestination) {
+			t.Fatalf("overflow append changed destination or succeeded: err=%v", err)
+		}
+		if !reflect.DeepEqual(source, beforeSource) {
+			t.Fatal("chained limit check changed source")
+		}
+	}
+}
+
 func TestAvailableCommands_CloneAndAppendDoNotAliasSource(t *testing.T) {
 	for _, operation := range []string{"clone", "append"} {
 		t.Run(operation, func(t *testing.T) {

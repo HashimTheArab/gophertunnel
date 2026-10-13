@@ -8,6 +8,9 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
+// maxChainedSubcommands is the documented AvailableCommands table limit.
+const maxChainedSubcommands = 16
+
 // Clone returns an independent structural copy of pk, preserving nil slices
 // and all values without encoding or normalising them. A nil packet stays nil.
 func (pk *AvailableCommands) Clone() *AvailableCommands {
@@ -62,6 +65,10 @@ func (pk *AvailableCommands) AppendCommandTables(source *AvailableCommands, reus
 	}
 	if pk == nil {
 		return nil, fmt.Errorf("append command tables: nil destination")
+	}
+	if len(pk.ChainedSubcommands) > maxChainedSubcommands ||
+		len(source.ChainedSubcommands) > maxChainedSubcommands-len(pk.ChainedSubcommands) {
+		return nil, fmt.Errorf("combined chained subcommands exceed %d definitions", maxChainedSubcommands)
 	}
 	for from, to := range reuseEnums {
 		if uint64(from) >= uint64(len(source.Enums)) || uint64(to) >= uint64(len(pk.Enums)) {

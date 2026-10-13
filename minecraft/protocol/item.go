@@ -25,7 +25,8 @@ type ItemInstance struct {
 }
 
 // Clone returns an independently owned copy of x, preserving its stack network ID
-// and every stack value. It does not encode or normalise the item.
+// and every stack value. It does not encode or normalise the item. NBT data must
+// use the decoded value shapes supported by nbt.Clone, as for ItemStack.Clone.
 func (x ItemInstance) Clone() ItemInstance {
 	x.Stack = x.Stack.Clone()
 	return x
@@ -54,6 +55,8 @@ type ItemStack struct {
 // the placement and break lists are detached, preserving their types and nil
 // values. Unlike an item codec round trip, Clone preserves every scalar,
 // including BlockingTick for non-shields and values on empty stacks.
+// NBT data must use the decoded value shapes supported by nbt.Clone. For
+// encoder-only struct or pointer shapes, use NormaliseUserData first.
 func (x ItemStack) Clone() ItemStack {
 	x.NBTData = nbt.Clone(x.NBTData)
 	x.CanBePlacedOn = slices.Clone(x.CanBePlacedOn)

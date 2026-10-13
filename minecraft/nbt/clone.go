@@ -7,8 +7,10 @@ import (
 
 // Clone returns an independently owned copy of a decoded NBT compound. It
 // preserves scalar values, array and list types, and nil maps and slices. It
-// does not encode or normalise values. The compound must contain acyclic values
-// decoded into map[string]any by Unmarshal, or equivalent typed lists and arrays.
+// does not encode or normalise values. The compound must contain acyclic
+// map[string]any compounds, primitive scalars, and lists or arrays of these
+// shapes, as produced by Unmarshal. Encoder-only struct and pointer shapes are
+// not supported; convert those through the codec before cloning.
 func Clone(compound map[string]any) map[string]any {
 	if compound == nil {
 		return nil
