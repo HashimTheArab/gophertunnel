@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestClone_DecodedTags(t *testing.T) {
+func TestCompound_CloneDecodedTags(t *testing.T) {
 	encoded, err := Marshal(map[string]any{
 		"byte": byte(1), "short": int16(2), "int": int32(3), "long": int64(4),
 		"float": float32(5), "double": float64(6), "string": "value",
@@ -16,11 +16,11 @@ func TestClone_DecodedTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var source map[string]any
+	var source Compound
 	if err := Unmarshal(encoded, &source); err != nil {
 		t.Fatal(err)
 	}
-	cloned := Clone(source)
+	cloned := source.Clone()
 	if !reflect.DeepEqual(source, cloned) {
 		t.Fatalf("clone changed decoded values or types: source=%#v clone=%#v", source, cloned)
 	}
@@ -40,14 +40,14 @@ func TestClone_DecodedTags(t *testing.T) {
 	}
 }
 
-func TestClone_PreservesNilAndTypedLists(t *testing.T) {
-	if Clone(nil) != nil {
+func TestCompound_ClonePreservesNilAndTypedLists(t *testing.T) {
+	if Compound(nil).Clone() != nil {
 		t.Fatal("nil compound became non-nil")
 	}
-	if Clone(map[string]any{}) == nil {
+	if (Compound{}).Clone() == nil {
 		t.Fatal("empty compound became nil")
 	}
-	source := map[string]any{
+	source := Compound{
 		"nil":         nil,
 		"nilCompound": map[string]any(nil), "emptyCompound": map[string]any{},
 		"nilList": []any(nil), "emptyList": []any{}, "nilTypedList": []int32(nil),
@@ -55,7 +55,7 @@ func TestClone_PreservesNilAndTypedLists(t *testing.T) {
 		"compounds": []map[string]any{{"name": "original"}},
 		"lists":     [][]int64{{2}}, "arrayLists": [][1]int32{{3}},
 	}
-	cloned := Clone(source)
+	cloned := source.Clone()
 	if !reflect.DeepEqual(source, cloned) {
 		t.Fatalf("clone changed structure: source=%#v clone=%#v", source, cloned)
 	}
@@ -71,7 +71,7 @@ func TestClone_PreservesNilAndTypedLists(t *testing.T) {
 	}
 }
 
-func TestClone_DecodedContainerAllocations(t *testing.T) {
+func TestCompound_CloneDecodedContainerAllocations(t *testing.T) {
 	encoded, err := Marshal(map[string]any{
 		"Damage":  int32(1),
 		"display": map[string]any{"Name": "Sword", "Lore": []any{"a", "b", "c"}},
@@ -80,11 +80,11 @@ func TestClone_DecodedContainerAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded, cloned map[string]any
+	var decoded, cloned Compound
 	if err := Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	allocations := testing.AllocsPerRun(100, func() { cloned = Clone(decoded) })
+	allocations := testing.AllocsPerRun(100, func() { cloned = decoded.Clone() })
 	if !reflect.DeepEqual(decoded, cloned) {
 		t.Fatal("clone changed decoded item tags")
 	}
