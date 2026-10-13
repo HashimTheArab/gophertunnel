@@ -73,6 +73,9 @@ const (
 	CommandArgEnum     = 0x200000
 	CommandArgSuffixed = 0x1000000
 	CommandArgSoftEnum = 0x4000000
+	// CommandArgIndexMask selects the table index or basic type in a packed
+	// CommandParameter.Type value.
+	CommandArgIndexMask = CommandArgValid - 1
 )
 
 const (

@@ -196,3 +196,6 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 	io.Vec3(&pk.CameraOrientation)
 	io.Vec2(&pk.RawMoveVector)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*PlayerAuthInput) CarriesInputTick() bool { return true }

@@ -2,6 +2,15 @@ package packet
 
 import "github.com/sandertv/gophertunnel/minecraft/protocol"
 
+// CarriesInputTick reports whether pk's codec may visit a player input tick. It
+// reads type metadata without traversing or serialising pk. Conditional tick
+// fields count even when the packet's current flags omit them. Custom packet
+// implementations may expose a CarriesInputTick() bool method to participate.
+func CarriesInputTick(pk Packet) bool {
+	carrier, ok := pk.(interface{ CarriesInputTick() bool })
+	return ok && carrier.CarriesInputTick()
+}
+
 // TranslateEntityIDs passes every entity runtime ID and entity unique ID carried by pk,
 // including IDs nested in structures such as entity links or metadata, through runtimeID
 // and uniqueID respectively, storing the results. Either function may be nil to leave IDs
