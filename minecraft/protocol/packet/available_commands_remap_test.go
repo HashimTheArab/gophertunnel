@@ -229,7 +229,7 @@ func TestAvailableCommands_CloneAndAppendDoNotAliasSource(t *testing.T) {
 	for _, operation := range []string{"clone", "append"} {
 		t.Run(operation, func(t *testing.T) {
 			destination, source := commandTableFixture()
-			before := source.Clone()
+			_, before := commandTableFixture()
 			if operation == "clone" {
 				destination = source.Clone()
 			} else {

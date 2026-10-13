@@ -23,27 +23,23 @@ func (pk *AvailableCommands) Clone() *AvailableCommands {
 	out.Suffixes = slices.Clone(pk.Suffixes)
 	out.Enums = slices.Clone(pk.Enums)
 	for i := range out.Enums {
-		out.Enums[i].ValueIndices = slices.Clone(pk.Enums[i].ValueIndices)
+		out.Enums[i] = pk.Enums[i].Clone()
 	}
 	out.ChainedSubcommands = slices.Clone(pk.ChainedSubcommands)
 	for i := range out.ChainedSubcommands {
-		out.ChainedSubcommands[i].Values = slices.Clone(pk.ChainedSubcommands[i].Values)
+		out.ChainedSubcommands[i] = pk.ChainedSubcommands[i].Clone()
 	}
 	out.Commands = slices.Clone(pk.Commands)
 	for i := range out.Commands {
-		out.Commands[i].ChainedSubcommandOffsets = slices.Clone(pk.Commands[i].ChainedSubcommandOffsets)
-		out.Commands[i].Overloads = slices.Clone(pk.Commands[i].Overloads)
-		for j := range out.Commands[i].Overloads {
-			out.Commands[i].Overloads[j].Parameters = slices.Clone(pk.Commands[i].Overloads[j].Parameters)
-		}
+		out.Commands[i] = pk.Commands[i].Clone()
 	}
 	out.DynamicEnums = slices.Clone(pk.DynamicEnums)
 	for i := range out.DynamicEnums {
-		out.DynamicEnums[i].Values = slices.Clone(pk.DynamicEnums[i].Values)
+		out.DynamicEnums[i] = pk.DynamicEnums[i].Clone()
 	}
 	out.Constraints = slices.Clone(pk.Constraints)
 	for i := range out.Constraints {
-		out.Constraints[i].Constraints = slices.Clone(pk.Constraints[i].Constraints)
+		out.Constraints[i] = pk.Constraints[i].Clone()
 	}
 	return &out
 }
