@@ -28,3 +28,6 @@ func (pk *UpdateAttributes) Marshal(io protocol.IO) {
 	protocol.Slice(io, &pk.Attributes)
 	io.PlayerInputTick(&pk.Tick)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*UpdateAttributes) CarriesInputTick() bool { return true }
