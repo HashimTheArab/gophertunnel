@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -314,9 +315,15 @@ func TestAvailableCommands_CombinedIndexFitsEncoding(t *testing.T) {
 	if _, err := appendCommandIndex(1, 2, int(protocol.CommandArgIndexMask), protocol.CommandArgIndexMask); err == nil {
 		t.Fatal("packed argument index overflow was accepted")
 	}
-	if _, err := appendCommandIndex(1, 2, math.MaxUint32, math.MaxUint32); err == nil {
-		t.Fatal("uint32 table index overflow was accepted")
-	}
+	t.Run("uint32 table", func(t *testing.T) {
+		if strconv.IntSize < 64 {
+			t.Skip("32-bit slice lengths cannot reach the uint32 table boundary")
+		}
+		offset := uint32(math.MaxUint32)
+		if _, err := appendCommandIndex(1, 2, int(offset), math.MaxUint32); err == nil {
+			t.Fatal("uint32 table index overflow was accepted")
+		}
+	})
 }
 
 func TestAvailableCommands_RemapSchemaExhaustive(t *testing.T) {
