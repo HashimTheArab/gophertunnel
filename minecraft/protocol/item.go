@@ -1,6 +1,11 @@
 package protocol
 
-import "github.com/sandertv/gophertunnel/minecraft/nbt"
+import (
+	"bytes"
+	"slices"
+
+	"github.com/sandertv/gophertunnel/minecraft/nbt"
+)
 
 const (
 	ItemEntryVersionLegacy = iota
@@ -19,6 +24,15 @@ type ItemInstance struct {
 	Stack ItemStack
 }
 
+// Clone returns an independently owned copy of x, preserving its stack network ID
+// and every stack value. It does not encode or normalise the item. NBT data must
+// use the decoded value shapes supported by nbt.Compound.Clone, as for
+// ItemStack.Clone.
+func (x ItemInstance) Clone() ItemInstance {
+	x.Stack = x.Stack.Clone()
+	return x
+}
+
 // ItemStack represents an item instance/stack over network. It has a network ID and a metadata value that
 // define its type.
 type ItemStack struct {
@@ -27,8 +41,8 @@ type ItemStack struct {
 	BlockRuntimeID int32
 	// Count is the count of items that the item stack holds.
 	Count uint16
-	// NBTData is a map that is serialised to its NBT representation when sent in a packet.
-	NBTData map[string]any
+	// NBTData is the item's decoded compound, serialised when sent in a packet.
+	NBTData nbt.Compound
 	// CanBePlacedOn is a list of block identifiers like 'minecraft:stone' which the item, if it is an item
 	// that can be placed, can be placed on top of.
 	CanBePlacedOn []string
@@ -36,6 +50,33 @@ type ItemStack struct {
 	CanBreak []string
 	// BlockingTick is the tick at which a shield started blocking. It is only used for shield items.
 	BlockingTick int64
+}
+
+// Clone returns an independently owned copy of x. NBT compounds and lists and
+// the placement and break lists are detached, preserving their types and nil
+// values. Unlike an item codec round trip, Clone preserves every scalar,
+// including BlockingTick for non-shields and values on empty stacks.
+// NBT data must use the decoded value shapes supported by nbt.Compound.Clone. For
+// encoder-only struct or pointer shapes, use NormaliseUserData first.
+func (x ItemStack) Clone() ItemStack {
+	x.NBTData = x.NBTData.Clone()
+	x.CanBePlacedOn = slices.Clone(x.CanBePlacedOn)
+	x.CanBreak = slices.Clone(x.CanBreak)
+	return x
+}
+
+// NormaliseUserData returns an independently owned copy of x whose NBT and
+// placement and break lists use the representations produced by the item codec.
+// Empty compounds become nil and typed NBT lists use their decoded types. An air
+// stack has no user data. All scalar fields, including BlockingTick, are preserved;
+// this operation does not decide whether the item is a shield. Use Clone when the
+// original structure, including nil collections, must be retained.
+func (x ItemStack) NormaliseUserData() ItemStack {
+	var buffer bytes.Buffer
+	NewWriter(&buffer, 0).itemUserData(itemStackUserData(&x), x.NetworkID != 0, false)
+	data := NewReader(bytes.NewReader(buffer.Bytes()), 0, false).itemUserData(false)
+	x.NBTData, x.CanBePlacedOn, x.CanBreak = data.nbtData, data.canBePlacedOn, data.canBreak
+	return x
 }
 
 // StackRequestItem is the descriptor-backed item format used by deprecated craft-result stack request actions.
@@ -50,7 +91,7 @@ type StackRequestItem struct {
 	// Count is the number of items in the stack.
 	Count uint16
 	// NBTData is the item's compound tag.
-	NBTData map[string]any
+	NBTData nbt.Compound
 	// CanBePlacedOn contains the block identifiers this item may be placed on.
 	CanBePlacedOn []string
 	// CanBreak contains the block identifiers this item may break.
@@ -61,7 +102,7 @@ type StackRequestItem struct {
 
 // ItemStack resolves a descriptor result into the ordinary wire stack using
 // the caller's session item palette. Reference fields remain shared; callers
-// retaining or mutating the result must detach them through their stack owner.
+// retaining or mutating the result must call ItemStack.Clone.
 func (x StackRequestItem) ItemStack(networkID int32) ItemStack {
 	return ItemStack{
 		ItemType:       ItemType{NetworkID: networkID, MetadataValue: x.MetadataValue},

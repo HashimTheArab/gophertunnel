@@ -38,6 +38,15 @@ const (
 	EffectFatalPoison
 	EffectConduitPower
 	EffectSlowFalling
+	EffectBadOmen
+	EffectVillageHero
+	EffectDarkness
+	EffectTrialOmen
+	EffectWindCharged
+	EffectWeaving
+	EffectOozing
+	EffectInfested
+	EffectRaidOmen
 )
 
 // MobEffect is sent by the server to apply an effect to the player, for example an effect like poison. It may
@@ -83,3 +92,6 @@ func (pk *MobEffect) Marshal(io protocol.IO) {
 	io.PlayerInputTick(&pk.Tick)
 	io.Bool(&pk.Ambient)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*MobEffect) CarriesInputTick() bool { return true }

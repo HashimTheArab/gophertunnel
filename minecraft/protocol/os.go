@@ -28,3 +28,39 @@ const (
 	DeviceWP // Windows Phone
 	DeviceLinux
 )
+
+// Name returns the canonical display name of a device OS, including Unknown for
+// DeviceUnknown. Values outside the defined enum return an empty name and false.
+func (os DeviceOS) Name() (string, bool) {
+	names := deviceOSNames()
+	if os == DeviceUnknown {
+		return names[0], true
+	}
+	if os < DeviceAndroid || uint(os) >= uint(len(names)) {
+		return "", false
+	}
+	return names[os], true
+}
+
+// ParseDeviceOS resolves a canonical device OS name. Names are case-sensitive;
+// unknown names return DeviceUnknown and false.
+func ParseDeviceOS(name string) (DeviceOS, bool) {
+	for os, candidate := range deviceOSNames() {
+		if candidate == name {
+			if os == 0 {
+				return DeviceUnknown, true
+			}
+			return DeviceOS(os), true
+		}
+	}
+	return DeviceUnknown, false
+}
+
+// deviceOSNames provides one immutable name table for formatting and parsing.
+func deviceOSNames() [16]string {
+	return [...]string{
+		"Unknown", "Android", "iOS", "macOS", "FireOS", "Gear VR", "HoloLens",
+		"Windows 10 UWP", "Windows", "Dedicated Server", "tvOS", "PlayStation",
+		"Nintendo Switch", "Xbox", "Windows Phone", "Linux",
+	}
+}
