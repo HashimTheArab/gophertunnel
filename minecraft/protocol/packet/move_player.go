@@ -68,3 +68,6 @@ func (pk *MovePlayer) Marshal(io protocol.IO) {
 	protocol.OptionalMarshaler(io, &pk.TeleportData)
 	io.PlayerInputTick(&pk.Tick)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*MovePlayer) CarriesInputTick() bool { return true }

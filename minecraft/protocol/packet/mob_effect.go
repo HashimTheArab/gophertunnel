@@ -92,3 +92,6 @@ func (pk *MobEffect) Marshal(io protocol.IO) {
 	io.PlayerInputTick(&pk.Tick)
 	io.Bool(&pk.Ambient)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*MobEffect) CarriesInputTick() bool { return true }
