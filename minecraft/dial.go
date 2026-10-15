@@ -102,6 +102,12 @@ type Dialer struct {
 	// ResourcePackProgress, if set, receives each step of resource pack acquisition from the cache, URLs and
 	// chunks. Calls are serialised but may come from different goroutines; it must not block.
 	ResourcePackProgress func(ResourcePackEvent)
+	// HoldResourcePackCompletion makes a HandoffAfterLogin connection handle the server's resource pack
+	// phase itself: it downloads the packs, then parks the Completed response until Conn.CompleteResourcePacks.
+	// ResourcePacksInfo and every packet outside the pack phase are still delivered in order. A relay uses it
+	// to serve those packs to its own client first, while the server waits as it would for a client applying packs.
+	// It requires HandoffAfterLogin; otherwise dialing returns an error.
+	HoldResourcePackCompletion bool
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
 	// in the packet pool. If true, such packets lead to the connection being closed immediately.
@@ -236,6 +242,9 @@ func (d Dialer) DialTimeout(network, address string, timeout time.Duration) (*Co
 // and send packets to. If a connection is not established before the context passed is cancelled,
 // DialContextNetwork returns an error.
 func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address string) (conn *Conn, err error) {
+	if d.HoldResourcePackCompletion && d.Handoff != HandoffAfterLogin {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("HoldResourcePackCompletion requires HandoffAfterLogin")}
+	}
 	if d.ErrorLog == nil {
 		d.ErrorLog = slog.New(internal.DiscardHandler{})
 	}
@@ -359,6 +368,10 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.resourcePackCache = d.ResourcePackCache
 	conn.httpClient = d.HTTPClient
 	conn.resourcePackProgress = d.ResourcePackProgress
+	conn.holdResourcePackCompletion = d.HoldResourcePackCompletion
+	if d.HoldResourcePackCompletion {
+		conn.packsReady = make(chan struct{})
+	}
 	conn.cacheEnabled = d.EnableClientCache
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets

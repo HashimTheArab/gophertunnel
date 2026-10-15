@@ -73,9 +73,14 @@ func (p *packetData) decode(conn *Conn) (pks []packet.Packet, err error) {
 	return pks, err
 }
 
+// clone copies p's payload so it can be decoded while p stays intact for delivery.
+func (p *packetData) clone() *packetData {
+	return &packetData{h: p.h, full: p.full, payload: bytes.NewBuffer(bytes.Clone(p.payload.Bytes())), owned: true}
+}
+
 // probe decodes a copy of p's payload, leaving p intact for delivery and applying no disconnect policies.
 func (p *packetData) probe(conn *Conn) ([]packet.Packet, error) {
-	return (&packetData{h: p.h, full: p.full, payload: bytes.NewBuffer(bytes.Clone(p.payload.Bytes())), owned: true}).decodePacket(conn)
+	return p.clone().decodePacket(conn)
 }
 
 // decodePacket decodes p without applying connection-level disconnect policies.

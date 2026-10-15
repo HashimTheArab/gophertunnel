@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"sync"
 	"testing"
@@ -49,7 +50,11 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	defer conn.Abort()
 
 	const id = "550e8400-e29b-41d4-a716-446655440000"
-	pack := &downloadingPack{buf: new(bytes.Buffer), size: 200}
+	file, err := conn.newPackFile(200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := &downloadingPack{file: file, size: 200}
 	conn.packQueue = &resourcePackQueue{
 		downloadingPacks: map[string]*downloadingPack{id: pack},
 		awaitingPacks:    make(map[string]*downloadingPack),
@@ -84,6 +89,10 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	}
 	if !waitForResourcePackRequest(t, pack, 100) {
 		t.Fatal("out-of-order response did not replenish the request window")
+	}
+	var chunk [1]byte
+	if _, err := file.ReadAt(chunk[:], 50); err != nil || chunk[0] != 50 {
+		t.Fatalf("out-of-order chunk was not written to disk: %v, %v", chunk, err)
 	}
 }
 
@@ -196,7 +205,7 @@ func TestChunkDownloadReportsProgressAndCancellation(t *testing.T) {
 		conn.resourcePackProgress = events.record
 		id := uuid.New()
 		key := ResourcePackCacheKey{UUID: id, Version: "1.0.0", Size: uint64(len(archive))}
-		pack := &downloadingPack{buf: new(bytes.Buffer), size: uint64(len(archive)), cacheKey: key}
+		pack := &downloadingPack{file: newTestPackFile(t, conn, uint64(len(archive))), size: uint64(len(archive)), cacheKey: key}
 		conn.packQueue = &resourcePackQueue{
 			packAmount:       1,
 			downloadingPacks: map[string]*downloadingPack{id.String(): pack},
@@ -257,7 +266,7 @@ func TestChunkDownloadFlushesItsRequestsWithoutATicker(t *testing.T) {
 	id := uuid.New()
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       1,
-		downloadingPacks: map[string]*downloadingPack{id.String(): {buf: new(bytes.Buffer), size: 10, cacheKey: ResourcePackCacheKey{UUID: id, Version: "1.0.0"}}},
+		downloadingPacks: map[string]*downloadingPack{id.String(): {file: newTestPackFile(t, conn, 10), size: 10, cacheKey: ResourcePackCacheKey{UUID: id, Version: "1.0.0"}}},
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
 	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: id.String() + "_1.0.0", DataChunkSize: 5, Size: 10}); err != nil {
@@ -300,7 +309,7 @@ func TestChunkDownloadStoresBeforeDialReturns(t *testing.T) {
 	cache := &recordingPackCache{}
 	conn.resourcePackCache = cache
 	key := ResourcePackCacheKey{UUID: id, Version: "1.0.0", Size: uint64(len(archive))}
-	pack := &downloadingPack{buf: new(bytes.Buffer), size: key.Size, cacheKey: key}
+	pack := &downloadingPack{file: newTestPackFile(t, conn, key.Size), size: key.Size, cacheKey: key}
 	conn.packQueue = &resourcePackQueue{
 		packAmount:       1,
 		downloadingPacks: map[string]*downloadingPack{id.String(): pack},
@@ -323,4 +332,14 @@ func TestChunkDownloadStoresBeforeDialReturns(t *testing.T) {
 	if !slices.Equal(cache.stored, []ResourcePackCacheKey{key}) {
 		t.Fatalf("stored %v before Dial returned, want %v", cache.stored, key)
 	}
+}
+
+// newTestPackFile registers a download file of size bytes on conn.
+func newTestPackFile(t *testing.T, conn *Conn, size uint64) *os.File {
+	t.Helper()
+	f, err := conn.newPackFile(size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }

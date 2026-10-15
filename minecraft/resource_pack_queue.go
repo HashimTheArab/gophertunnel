@@ -1,8 +1,8 @@
 package minecraft
 
 import (
-	"bytes"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -26,7 +26,9 @@ type resourcePackQueue struct {
 
 // downloadingPack is a resource pack that is being downloaded by a client connection.
 type downloadingPack struct {
-	buf        *bytes.Buffer
+	// file receives chunks at their archive offsets; the finished pack reads from it.
+	file       *os.File
+	written    uint64
 	chunkSize  uint32
 	chunkCount uint32
 	size       uint64

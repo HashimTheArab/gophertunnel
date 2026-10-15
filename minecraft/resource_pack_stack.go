@@ -49,12 +49,12 @@ type ResourcePackStackSnapshot struct {
 // newResourcePackStackSnapshot retains the complete wire stack and independent content.
 func newResourcePackStackSnapshot(pk *packet.ResourcePackStack, packs []*resource.Pack) ResourcePackStackSnapshot {
 	snapshot := ResourcePackStackSnapshot{stack: *pk, packs: snapshotResourcePacks(packs)}
-	snapshot.stack = *snapshot.packet()
+	snapshot.stack = *snapshot.Packet()
 	return snapshot
 }
 
-// packet copies the stack's slices so callers cannot change the snapshot.
-func (snapshot ResourcePackStackSnapshot) packet() *packet.ResourcePackStack {
+// Packet returns an independent copy of the server's ResourcePackStack.
+func (snapshot ResourcePackStackSnapshot) Packet() *packet.ResourcePackStack {
 	pk := snapshot.stack
 	pk.TexturePacks = slices.Clone(pk.TexturePacks)
 	pk.Experiments = slices.Clone(pk.Experiments)

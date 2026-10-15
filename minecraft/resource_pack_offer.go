@@ -66,8 +66,8 @@ func (snapshot ResourcePackOfferSnapshot) withPacks(packs []*resource.Pack) Reso
 	return snapshot
 }
 
-// packet returns the advertised offer without exposing its entry slice.
-func (snapshot ResourcePackOfferSnapshot) packet() *packet.ResourcePacksInfo {
+// Packet returns an independent copy of the advertised ResourcePacksInfo.
+func (snapshot ResourcePackOfferSnapshot) Packet() *packet.ResourcePacksInfo {
 	pk := snapshot.info
 	pk.TexturePacks = slices.Clone(pk.TexturePacks)
 	return &pk
