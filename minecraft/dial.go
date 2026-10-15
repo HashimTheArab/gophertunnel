@@ -80,7 +80,10 @@ type Dialer struct {
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
-	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// PacketObserver observes selected IDs before PacketFunc. Its interests are copied at dial time.
+	// Unlike PacketFunc, it does not require incoming payload copies for unrelated packets.
+	PacketObserver PacketObserver
+	// AcceptPacketHeader filters incoming packets after packet observers run and before body decoding
 	// or internal handling, including login and disconnect handling. Returning false silently drops only
 	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
 	// it must not block. The header is passed by value and cannot be rewritten through this hook.
@@ -353,6 +356,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
+	conn.packetObserver = d.PacketObserver.compile()
 	conn.acceptPacketHeader = d.AcceptPacketHeader
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()

@@ -399,7 +399,8 @@ type Conn struct {
 
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
-	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	packetFunc     func(header packet.Header, payload []byte, src, dst net.Addr)
+	packetObserver compiledPacketObserver
 	// acceptPacketHeader optionally filters incoming packets before internal handling.
 	acceptPacketHeader func(packet.Header) bool
 
@@ -662,8 +663,15 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 				w = translation.WrapWriter(w)
 			}
 			converted.Marshal(w)
-			if conn.packetFunc != nil {
-				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+			observe := conn.packetObserver.forPacket(conn.hdr.PacketID)
+			if observe != nil || conn.packetFunc != nil {
+				source, destination := conn.LocalAddr(), conn.RemoteAddr()
+				if observe != nil {
+					observe(*conn.hdr, buf.Bytes()[l:], source, destination)
+				}
+				if conn.packetFunc != nil {
+					conn.packetFunc(*conn.hdr, buf.Bytes()[l:], source, destination)
+				}
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
@@ -689,7 +697,9 @@ func (conn *Conn) WritePacketRaw(data []byte) error {
 
 // observeRawWrite runs the write-side observation encodePacketsTo performs for a decoded packet.
 func (conn *Conn) observeRawWrite(data []byte) {
-	if conn.packetFunc == nil && rawPacketID(data) != packet.IDItemRegistry {
+	id := rawPacketID(data)
+	observe := conn.packetObserver.forPacket(id)
+	if conn.packetFunc == nil && observe == nil && id != packet.IDItemRegistry {
 		return
 	}
 	buf := bytes.NewBuffer(data)
@@ -705,8 +715,14 @@ func (conn *Conn) observeRawWrite(data []byte) {
 			}
 		}
 	}
-	if conn.packetFunc != nil {
-		conn.packetFunc(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
+	if observe != nil || conn.packetFunc != nil {
+		source, destination := conn.LocalAddr(), conn.RemoteAddr()
+		if observe != nil {
+			observe(header, buf.Bytes(), source, destination)
+		}
+		if conn.packetFunc != nil {
+			conn.packetFunc(header, buf.Bytes(), source, destination)
+		}
 	}
 }
 

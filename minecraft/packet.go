@@ -65,9 +65,16 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 		// we return to reading a new packet.
 		return nil, fmt.Errorf("read packet header: %w", err)
 	}
-	if conn.packetFunc != nil {
-		// The packet func was set, so we call it.
-		conn.packetFunc(*header, bytes.Clone(buf.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
+	observe := conn.packetObserver.forPacket(header.PacketID)
+	if observe != nil || conn.packetFunc != nil {
+		payload := bytes.Clone(buf.Bytes())
+		source, destination := conn.RemoteAddr(), conn.LocalAddr()
+		if observe != nil {
+			observe(*header, payload, source, destination)
+		}
+		if conn.packetFunc != nil {
+			conn.packetFunc(*header, payload, source, destination)
+		}
 	}
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
