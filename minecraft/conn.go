@@ -663,11 +663,15 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, pks ...packet.Packet) {
 				w = translation.WrapWriter(w)
 			}
 			converted.Marshal(w)
-			if observe := conn.packetObserver.forPacket(conn.hdr.PacketID); observe != nil {
-				observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
-			}
-			if conn.packetFunc != nil {
-				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+			observe := conn.packetObserver.forPacket(conn.hdr.PacketID)
+			if observe != nil || conn.packetFunc != nil {
+				source, destination := conn.LocalAddr(), conn.RemoteAddr()
+				if observe != nil {
+					observe(*conn.hdr, buf.Bytes()[l:], source, destination)
+				}
+				if conn.packetFunc != nil {
+					conn.packetFunc(*conn.hdr, buf.Bytes()[l:], source, destination)
+				}
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
@@ -711,11 +715,14 @@ func (conn *Conn) observeRawWrite(data []byte) {
 			}
 		}
 	}
-	if observe != nil {
-		observe(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
-	}
-	if conn.packetFunc != nil {
-		conn.packetFunc(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
+	if observe != nil || conn.packetFunc != nil {
+		source, destination := conn.LocalAddr(), conn.RemoteAddr()
+		if observe != nil {
+			observe(header, buf.Bytes(), source, destination)
+		}
+		if conn.packetFunc != nil {
+			conn.packetFunc(header, buf.Bytes(), source, destination)
+		}
 	}
 }
 
