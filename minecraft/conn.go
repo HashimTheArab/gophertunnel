@@ -1700,25 +1700,40 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
+	conn.enableCompression(conn.compression, conn.compressionThreshold)
 	return nil
 }
 
-// handleNetworkSettings handles an incoming NetworkSettings packet, enabling compression for future packets.
+// handleNetworkSettings handles an incoming NetworkSettings packet, configuring compression for future packets.
 func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
-	alg, ok := packet.CompressionByID(pk.CompressionAlgorithm)
-	if !ok {
-		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+	var alg packet.Compression = packet.NopCompression
+	if pk.CompressionAlgorithm != packet.CompressionAlgorithmNone {
+		var ok bool
+		alg, ok = packet.CompressionByID(pk.CompressionAlgorithm)
+		if !ok {
+			conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+		}
 	}
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
+	conn.enableCompression(alg, int(pk.CompressionThreshold))
 	conn.readyToLogin = true
 	return nil
+}
+
+// enableCompression applies the negotiated envelope mode and batch size limit without resetting encryption.
+func (conn *Conn) enableCompression(compression packet.Compression, threshold int) {
+	disabled := compression.EncodeCompression() == packet.CompressionAlgorithmNone
+	conn.encMu.Lock()
+	if disabled {
+		conn.enc.DisableCompression()
+	} else {
+		conn.enc.EnableCompression(compression, threshold)
+	}
+	conn.encMu.Unlock()
+	// Apply the configured size limit even when compression framing is disabled.
+	conn.dec.EnableCompression(compression, conn.maxDecompressedLen)
+	if disabled {
+		conn.dec.DisableCompression()
+	}
 }
 
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
