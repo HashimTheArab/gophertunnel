@@ -579,7 +579,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 		d.PieceTintColours = make([]login.PersonaPieceTintColour, 0)
 	}
 	if d.SkinID == "" {
-		d.SkinID = uuid.New().String()
+		d.SkinID = login.DefaultSkinID(d.ArmSize)
 	}
 	if d.SkinData == "" {
 		d.SkinData = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0, 0, 0, 255}, 32*64))
