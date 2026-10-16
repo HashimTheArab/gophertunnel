@@ -26,7 +26,7 @@ type ItemInstance struct {
 
 // Clone returns an independently owned copy of x, preserving its stack network ID
 // and every stack value. It does not encode or normalise the item. NBT data must
-// use the decoded value shapes supported by nbt.Compound.Clone, as for
+// use the decoded value shapes supported by nbt.Clone, as for
 // ItemStack.Clone.
 func (x ItemInstance) Clone() ItemInstance {
 	x.Stack = x.Stack.Clone()
@@ -42,7 +42,7 @@ type ItemStack struct {
 	// Count is the count of items that the item stack holds.
 	Count uint16
 	// NBTData is the item's decoded compound, serialised when sent in a packet.
-	NBTData nbt.Compound
+	NBTData map[string]any
 	// CanBePlacedOn is a list of block identifiers like 'minecraft:stone' which the item, if it is an item
 	// that can be placed, can be placed on top of.
 	CanBePlacedOn []string
@@ -56,10 +56,10 @@ type ItemStack struct {
 // the placement and break lists are detached, preserving their types and nil
 // values. Unlike an item codec round trip, Clone preserves every scalar,
 // including BlockingTick for non-shields and values on empty stacks.
-// NBT data must use the decoded value shapes supported by nbt.Compound.Clone. For
+// NBT data must use the decoded value shapes supported by nbt.Clone. For
 // encoder-only struct or pointer shapes, use NormaliseUserData first.
 func (x ItemStack) Clone() ItemStack {
-	x.NBTData = x.NBTData.Clone()
+	x.NBTData = nbt.Clone(x.NBTData)
 	x.CanBePlacedOn = slices.Clone(x.CanBePlacedOn)
 	x.CanBreak = slices.Clone(x.CanBreak)
 	return x
@@ -91,7 +91,7 @@ type StackRequestItem struct {
 	// Count is the number of items in the stack.
 	Count uint16
 	// NBTData is the item's compound tag.
-	NBTData nbt.Compound
+	NBTData map[string]any
 	// CanBePlacedOn contains the block identifiers this item may be placed on.
 	CanBePlacedOn []string
 	// CanBreak contains the block identifiers this item may break.
