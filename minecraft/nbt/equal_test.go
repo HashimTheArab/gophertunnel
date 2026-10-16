@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestCompound_EqualDecodedValueSemantics(t *testing.T) {
+func TestEqualDecodedValueSemantics(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		a, b Compound
+		a, b map[string]any
 		want bool
 	}{
 		{"nil", nil, nil, true},
@@ -23,30 +23,28 @@ func TestCompound_EqualDecodedValueSemantics(t *testing.T) {
 		{"long list", map[string]any{"a": []int64{1}}, map[string]any{"a": []int64{2}}, false},
 		{"value array", map[string]any{"a": [2]int32{1, 2}}, map[string]any{"a": [2]int32{1, 2}}, true},
 		{"nested list", map[string]any{"a": []any{map[string]any{"b": "text"}}}, map[string]any{"a": []any{map[string]any{"b": "text"}}}, true},
-		{"named compound", Compound{"a": Compound{"b": "text"}}, Compound{"a": Compound{"b": "text"}}, true},
-		{"nested compound type", Compound{"a": Compound{"b": "text"}}, Compound{"a": map[string]any{"b": "text"}}, false},
 		{"NaN", map[string]any{"a": math.NaN()}, map[string]any{"a": math.NaN()}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := test.a.Equal(test.b); got != test.want {
+			if got := Equal(test.a, test.b); got != test.want {
 				t.Fatalf("Equal = %v; want %v", got, test.want)
 			}
-			if got := test.b.Equal(test.a); got != test.want {
+			if got := Equal(test.b, test.a); got != test.want {
 				t.Fatalf("reverse Equal = %v; want %v", got, test.want)
 			}
 		})
 	}
 }
 
-func TestCompound_EqualDecodedContainersDoNotAllocate(t *testing.T) {
-	first := Compound{
+func TestEqualDecodedContainersDoNotAllocate(t *testing.T) {
+	first := map[string]any{
 		"compound": map[string]any{"number": int32(1)},
 		"list":     []any{map[string]any{"name": "value"}},
 		"bytes":    []byte{1, 2}, "ints": []int32{3, 4}, "longs": []int64{5, 6}, "array": [2]int32{7, 8},
 	}
-	second := first.Clone()
+	second := Clone(first)
 	if allocations := testing.AllocsPerRun(100, func() {
-		if !first.Equal(second) {
+		if !Equal(first, second) {
 			t.Fatal("equal decoded compounds compared unequal")
 		}
 	}); allocations != 0 {
