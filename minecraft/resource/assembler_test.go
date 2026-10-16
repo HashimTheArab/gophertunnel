@@ -111,6 +111,45 @@ func TestAssembler_RejectsMalformedChunks(t *testing.T) {
 	}
 }
 
+// TestAssembler_RequestWindow replenishes only validated arrivals, including
+// out-of-order responses, without requesting a chunk twice.
+func TestAssembler_RequestWindow(t *testing.T) {
+	a, err := NewAssembler(10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.RequestWindow(2); !slices.Equal(got, []uint32{0, 1}) {
+		t.Fatalf("initial requests = %v", got)
+	}
+	if _, err := a.Add(1, []byte{1}); err == nil {
+		t.Fatal("malformed response accepted")
+	}
+	if got := a.RequestWindow(2); len(got) != 0 {
+		t.Fatalf("invalid response released capacity: %v", got)
+	}
+	if _, err := a.Add(1, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.RequestWindow(2); !slices.Equal(got, []uint32{2}) {
+		t.Fatalf("out-of-order refill = %v", got)
+	}
+	if _, err := a.Add(1, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.RequestWindow(2); len(got) != 0 {
+		t.Fatalf("duplicate released capacity: %v", got)
+	}
+	for _, index := range []uint32{0, 2, 3, 4} {
+		if _, err := a.Add(index, []byte{1, 2}); err != nil {
+			t.Fatal(err)
+		}
+		a.RequestWindow(2)
+	}
+	if got := a.RequestWindow(2); len(got) != 0 {
+		t.Fatalf("requests after completion = %v", got)
+	}
+}
+
 // TestResourceFiles_RootAndCaseFolding lists from the manifest root and folds directory case by segment.
 func TestResourceFiles_RootAndCaseFolding(t *testing.T) {
 	root, err := ReadBytes(packArchive(t, map[string]string{"manifest.json": testManifest, "Entity/a.json": "{}"}))
