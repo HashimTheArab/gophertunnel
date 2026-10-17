@@ -344,6 +344,11 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		return nil, err
 	}
+	// Classic skins may explicitly send an empty ProfileHash. PocketMine requires the
+	// claim even then, so omitempty must not erase a value supplied by the client.
+	if slices.Contains(data.ClaimOrder, "ProfileHash") {
+		fields["ProfileHash"], _ = json.Marshal(data.ProfileHash)
+	}
 	for name, value := range data.ExtraData {
 		fields[name] = value
 	}
