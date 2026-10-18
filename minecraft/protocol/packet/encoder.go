@@ -187,9 +187,17 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			if err != nil {
 				return fmt.Errorf("compress batch: %w", err)
 			}
+			compressed := len(data)-batchStart < len(batch)
+			if !compressed {
+				data = buf.Bytes()
+				data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
+			}
 			if observer != nil {
 				stats.CompressionDuration = time.Since(compressionStart)
-				stats.Compressed = true
+				stats.Compressed = compressed
+				if !compressed {
+					stats.CompressionID = CompressionAlgorithmNone
+				}
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
 			}
