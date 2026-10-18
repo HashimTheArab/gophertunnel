@@ -177,8 +177,22 @@ func TestResourcePacksInfoReportsCacheURLAndFallbackEvents(t *testing.T) {
 		{Kind: ResourcePackStarted, Source: url, UUID: brokenID, Version: "1.0.0", Size: 10},
 		{Kind: ResourcePackFailed, Source: url, UUID: brokenID, Version: "1.0.0"},
 	}
-	if got := events.steps(); !slices.Equal(got, want) {
-		t.Fatalf("events = %+v\nwant %+v", got, want)
+	// Independent URL downloads may interleave, but each pack retains its lifecycle.
+	for _, id := range []uuid.UUID{cachedID, urlID, brokenID} {
+		gotPack, wantPack := []ResourcePackEvent{}, []ResourcePackEvent{}
+		for _, event := range events.steps() {
+			if event.UUID == id {
+				gotPack = append(gotPack, event)
+			}
+		}
+		for _, event := range want {
+			if event.UUID == id {
+				wantPack = append(wantPack, event)
+			}
+		}
+		if !slices.Equal(gotPack, wantPack) {
+			t.Fatalf("events = %+v\nwant %+v", gotPack, wantPack)
+		}
 	}
 	if _, queued := conn.packQueue.downloadingPacks[brokenID.String()]; !queued {
 		t.Fatal("the failed URL pack did not fall back to chunks")

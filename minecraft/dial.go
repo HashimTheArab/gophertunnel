@@ -104,6 +104,7 @@ type Dialer struct {
 	ResourcePackCache ResourcePackCache
 	// ResourcePackProgress, if set, receives each step of resource pack acquisition from the cache, URLs and
 	// chunks. Calls are serialised but may come from different goroutines; it must not block.
+	// Events for independent packs may interleave while URL downloads overlap.
 	ResourcePackProgress func(ResourcePackEvent)
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present
