@@ -27,6 +27,8 @@ type Pack struct {
 	// manifest is the manifest of the resource pack. It contains information about the pack such as the name,
 	// version and description.
 	manifest *Manifest
+	// transferIdentity is the server's negotiated identity, independent of archive metadata.
+	transferIdentity *transferIdentity
 	// manifestDir is the directory containing manifest.json in the archive.
 	manifestDir string
 
@@ -201,8 +203,11 @@ func (pack *Pack) Name() string {
 	return pack.manifest.Header.Name
 }
 
-// UUID returns the UUID of the resource pack.
+// UUID returns the negotiated transfer UUID, or the manifest UUID for a standalone pack.
 func (pack *Pack) UUID() uuid.UUID {
+	if pack.transferIdentity != nil {
+		return pack.transferIdentity.uuid
+	}
 	return pack.manifest.Header.UUID
 }
 
@@ -211,9 +216,11 @@ func (pack *Pack) Description() string {
 	return pack.manifest.Header.Description
 }
 
-// Version returns the string version of the resource pack. It is guaranteed to have 3 digits in it, joined
-// by a dot.
+// Version returns the advertised transfer version, or the manifest's dotted version triple.
 func (pack *Pack) Version() string {
+	if pack.transferIdentity != nil {
+		return pack.transferIdentity.version
+	}
 	return strconv.Itoa(pack.manifest.Header.Version[0]) + "." + strconv.Itoa(pack.manifest.Header.Version[1]) + "." + strconv.Itoa(pack.manifest.Header.Version[2])
 }
 

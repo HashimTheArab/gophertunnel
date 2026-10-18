@@ -2486,8 +2486,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		conn.packMu.Lock()
 		delete(conn.packQueue.awaitingPacks, id)
 		conn.packQueue.packAmount--
-		// Finally we add the resource to the resource packs slice.
-		conn.resourcePacks = append(conn.resourcePacks, newPack)
+		// Bind the completed transfer to its advertisement without rewriting the archive.
+		// Keep newPack unbound below so cache admission still checks the authored identity.
+		conn.resourcePacks = append(conn.resourcePacks, newPack.WithTransferIdentity(pack.cacheKey.UUID, pack.cacheKey.Version))
 		packAmount := conn.packQueue.packAmount
 		conn.packMu.Unlock()
 
