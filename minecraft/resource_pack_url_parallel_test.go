@@ -151,3 +151,52 @@ func TestResourcePackURLValidationFallsBackWithoutCaching(t *testing.T) {
 		})
 	}
 }
+
+func TestResourcePacksInfoAcquiresRepeatedUUIDOnceAcrossSources(t *testing.T) {
+	for _, source := range []string{"URL", "cache", "chunks"} {
+		t.Run(source, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer client.Close()
+			defer peer.Close()
+			go func() { _, _ = io.Copy(io.Discard, peer) }()
+			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			defer conn.Abort()
+			id := uuid.New()
+			archive := testResourcePackArchive(t, id)
+			transport := &blockedPackTransport{release: make(chan struct{}), archives: map[string][]byte{"/pack": archive}}
+			close(transport.release)
+			conn.httpClient = &http.Client{Transport: transport}
+			first := protocol.TexturePackInfo{UUID: id, Version: "1.0.0", Size: uint64(len(archive))}
+			if source == "URL" {
+				first.DownloadURL = "https://packs.test/pack"
+			}
+			if source == "cache" {
+				pack, err := resource.ReadBytes(archive)
+				if err != nil {
+					t.Fatal(err)
+				}
+				conn.resourcePackCache = memoryPackCache{id: pack}
+			}
+			urlDuplicate := first
+			urlDuplicate.DownloadURL = "https://packs.test/pack"
+			chunkDuplicate := first
+			chunkDuplicate.DownloadURL = ""
+			if err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{first, urlDuplicate, chunkDuplicate}}); err != nil {
+				t.Fatal(err)
+			}
+			wantRequests, wantPacks, wantQueued := int32(0), 1, 0
+			if source == "URL" {
+				wantRequests = 1
+			}
+			if source == "chunks" {
+				wantPacks, wantQueued = 0, 1
+			}
+			if transport.started.Load() != wantRequests || len(conn.resourcePacks) != wantPacks || len(conn.packQueue.downloadingPacks) != wantQueued {
+				t.Fatal("repeated UUID changed the first source or repeated acquisition")
+			}
+			if conn.packQueue.packAmount != wantQueued {
+				t.Fatal("repeated offers kept pack completion pending")
+			}
+		})
+	}
+}
