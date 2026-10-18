@@ -241,3 +241,23 @@ func TestEncoderEncryptsAnUncompressedFallback(t *testing.T) {
 		t.Fatalf("encrypted fallback payload differs: count=%d error=%v", len(packets), err)
 	}
 }
+
+// TestEncoderZeroCompressionThresholdSendsUncompressed covers a disabled negotiated threshold.
+func TestEncoderZeroCompressionThresholdSendsUncompressed(t *testing.T) {
+	for _, compression := range []Compression{FlateCompression, SnappyCompression} {
+		var out bytes.Buffer
+		enc := NewEncoder(&out)
+		enc.EnableCompression(compression, 0)
+		var stats BatchEncodeStats
+		enc.SetBatchEncodeObserver(func(s BatchEncodeStats) { stats = s })
+		if err := enc.Encode([][]byte{bytes.Repeat([]byte{7}, 2048)}); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.Bytes()[1]; got != byte(NopCompression.EncodeCompression()) {
+			t.Errorf("compression %d marker = %02x, want uncompressed", compression.EncodeCompression(), got)
+		}
+		if stats.Compressed || stats.BelowThreshold || stats.CompressionID != CompressionAlgorithmNone {
+			t.Errorf("disabled threshold reported compression: %+v", stats)
+		}
+	}
+}
