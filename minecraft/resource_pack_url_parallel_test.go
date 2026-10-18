@@ -69,6 +69,7 @@ func TestResourcePackURLDownloadsOverlap(t *testing.T) {
 				conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 				defer conn.Abort()
 				transport := &blockedPackTransport{release: make(chan struct{}), archives: make(map[string][]byte)}
+				conn.resourcePackDownload.ParallelURLs = true
 				conn.httpClient = &http.Client{Transport: transport}
 				cache := &recordedURLPackCache{}
 				conn.resourcePackCache = cache
@@ -126,6 +127,7 @@ func TestResourcePackURLValidationFallsBackWithoutCaching(t *testing.T) {
 			go func() { _, _ = io.Copy(io.Discard, peer) }()
 			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 			defer conn.Abort()
+			conn.resourcePackDownload.ParallelURLs = true
 			id := uuid.New()
 			archive := testResourcePackArchive(t, id)
 			info := protocol.TexturePackInfo{UUID: id, Version: "1.0.0", Size: uint64(len(archive)), DownloadURL: "https://packs.test/pack"}
@@ -152,7 +154,7 @@ func TestResourcePackURLValidationFallsBackWithoutCaching(t *testing.T) {
 	}
 }
 
-func TestResourcePacksInfoAcquiresRepeatedUUIDOnceAcrossSources(t *testing.T) {
+func TestResourcePacksInfoParallelAcquiresRepeatedUUIDOnceAcrossSources(t *testing.T) {
 	for _, source := range []string{"URL", "cache", "chunks"} {
 		t.Run(source, func(t *testing.T) {
 			client, peer := net.Pipe()
@@ -161,6 +163,7 @@ func TestResourcePacksInfoAcquiresRepeatedUUIDOnceAcrossSources(t *testing.T) {
 			go func() { _, _ = io.Copy(io.Discard, peer) }()
 			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 			defer conn.Abort()
+			conn.resourcePackDownload.ParallelURLs = true
 			id := uuid.New()
 			archive := testResourcePackArchive(t, id)
 			transport := &blockedPackTransport{release: make(chan struct{}), archives: map[string][]byte{"/pack": archive}}

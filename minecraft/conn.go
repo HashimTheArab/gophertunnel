@@ -2055,53 +2055,78 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
 	}
-	acquisitions := make([]*resourcePackAcquisition, 0, totalPacks)
-	seen := make(map[string]struct{}, totalPacks)
-	for index, pack := range pk.TexturePacks {
-		id := pack.UUID.String()
-		if _, ok := seen[id]; ok {
-			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID)
-			conn.packQueue.packAmount--
-			continue
-		}
-		if conn.downloadResourcePack != nil && !conn.downloadResourcePack(pack.UUID, pack.Version, index, totalPacks) {
-			conn.ignoredResourcePacks = append(conn.ignoredResourcePacks, exemptedResourcePack{uuid: id, version: pack.Version})
-			conn.packQueue.packAmount--
-			continue
-		}
-		seen[id] = struct{}{}
-		acquisition := &resourcePackAcquisition{info: pack, key: ResourcePackCacheKey{UUID: pack.UUID, Version: pack.Version, Size: pack.Size}}
-		if conn.resourcePackCache != nil {
-			cachedPack, err := conn.resourcePackCache.Load(conn.ctx, acquisition.key)
-			switch {
-			case err != nil:
-				conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
-			case cachedPack != nil && !acquisition.key.Matches(cachedPack):
-				conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
-			case cachedPack != nil:
-				acquisition.pack = cachedPack
-				conn.reportResourcePack(ResourcePackEvent{Kind: ResourcePackFinished, Source: ResourcePackSourceCache, UUID: pack.UUID, Version: pack.Version, Size: uint64(max(cachedPack.Size(), 0))})
-			}
-		}
-		acquisitions = append(acquisitions, acquisition)
-	}
-	conn.downloadResourcePackURLs(acquisitions)
 	packsToDownload := make([]string, 0, totalPacks)
-	for _, acquisition := range acquisitions {
-		pack := acquisition.info
-		if acquisition.pack != nil {
-			conn.resourcePacks = append(conn.resourcePacks, acquisition.pack.WithContentKey(pack.ContentKey))
-			conn.packQueue.packAmount--
-			continue
-		}
-		id := pack.UUID.String()
-		// This UUID_Version is a hack Mojang put in place.
-		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = &downloadingPack{
-			size:       pack.Size,
-			buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
-			contentKey: pack.ContentKey,
-			cacheKey:   acquisition.key,
+
+	if conn.resourcePackDownload.ParallelURLs {
+		packsToDownload = conn.acquireResourcePacksParallel(pk)
+	} else {
+		for index, pack := range pk.TexturePacks {
+			id := pack.UUID.String()
+			if _, ok := conn.packQueue.downloadingPacks[id]; ok {
+				conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID)
+				conn.packQueue.packAmount--
+				continue
+			}
+			if conn.downloadResourcePack != nil && !conn.downloadResourcePack(uuid.MustParse(id), pack.Version, index, totalPacks) {
+				conn.ignoredResourcePacks = append(conn.ignoredResourcePacks, exemptedResourcePack{
+					uuid:    id,
+					version: pack.Version,
+				})
+				conn.packQueue.packAmount--
+				continue
+			}
+
+			cacheKey := ResourcePackCacheKey{
+				UUID:    pack.UUID,
+				Version: pack.Version,
+				Size:    pack.Size,
+			}
+			if conn.resourcePackCache != nil {
+				cachedPack, err := conn.resourcePackCache.Load(conn.ctx, cacheKey)
+				switch {
+				case err != nil:
+					conn.log.Warn("handle ResourcePacksInfo: failed to load resource pack from cache", "UUID", pack.UUID, "version", pack.Version, "err", err)
+				case cachedPack != nil && !cacheKey.Matches(cachedPack):
+					conn.log.Warn("handle ResourcePacksInfo: cached resource pack did not match advertised pack", "UUID", pack.UUID, "version", pack.Version, "cached_UUID", cachedPack.UUID(), "cached_version", cachedPack.Version(), "cached_size", cachedPack.Size())
+				case cachedPack != nil:
+					conn.resourcePacks = append(conn.resourcePacks, cachedPack.WithContentKey(pack.ContentKey))
+					conn.packQueue.packAmount--
+					conn.reportResourcePack(ResourcePackEvent{Kind: ResourcePackFinished, Source: ResourcePackSourceCache, UUID: pack.UUID, Version: pack.Version, Size: uint64(max(cachedPack.Size(), 0))})
+					continue
+				}
+			}
+
+			// Try to use the Download URL if set
+			if pack.DownloadURL != "" {
+				event := ResourcePackEvent{Source: ResourcePackSourceURL, UUID: pack.UUID, Version: pack.Version}
+				conn.reportResourcePack(event.with(ResourcePackStarted, pack.Size, nil))
+				newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
+					conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
+				})
+				if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+					err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
+				}
+				if err != nil {
+					conn.log.Warn("handle ResourcePacksInfo: failed to download pack from URL", "UUID", pack.UUID, "version", pack.Version, "download_url", pack.DownloadURL, "err", err)
+					conn.reportResourcePack(event.with(ResourcePackFailed, 0, err))
+				} else {
+					newPack = newPack.WithContentKey(pack.ContentKey)
+					conn.resourcePacks = append(conn.resourcePacks, newPack)
+					conn.storeResourcePack(cacheKey, newPack)
+					conn.packQueue.packAmount--
+					conn.reportResourcePack(event.with(ResourcePackFinished, 0, nil))
+					continue
+				}
+			}
+
+			// This UUID_Version is a hack Mojang put in place.
+			packsToDownload = append(packsToDownload, id+"_"+pack.Version)
+			conn.packQueue.downloadingPacks[id] = &downloadingPack{
+				size:       pack.Size,
+				buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
+				contentKey: pack.ContentKey,
+				cacheKey:   cacheKey,
+			}
 		}
 	}
 

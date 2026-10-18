@@ -96,15 +96,15 @@ type Dialer struct {
 	// and version of the resource pack, the number of the current pack being downloaded, and the total amount of packs.
 	// The boolean returned determines if the pack will be downloaded or not.
 	DownloadResourcePack func(id uuid.UUID, version string, current, total int) bool
-	// ResourcePackDownload controls how many resource pack chunk requests may be in flight at once. The
-	// zero value keeps the sequential default.
+	// ResourcePackDownload controls resource pack downloads. The zero value keeps URL downloads
+	// sequential and uses the default chunk request window.
 	ResourcePackDownload ResourcePackDownloadConfig
 	// ResourcePackCache, if set, reuses resource packs downloaded on earlier logins. Misses and errors
 	// fall back to a normal download.
 	ResourcePackCache ResourcePackCache
 	// ResourcePackProgress, if set, receives each step of resource pack acquisition from the cache, URLs and
 	// chunks. Calls are serialised but may come from different goroutines; it must not block.
-	// Events for independent packs may interleave while URL downloads overlap.
+	// Events for independent packs may interleave when ResourcePackDownload.ParallelURLs is enabled.
 	ResourcePackProgress func(ResourcePackEvent)
 
 	// DisconnectOnUnknownPackets specifies if the connection should disconnect if packets received are not present

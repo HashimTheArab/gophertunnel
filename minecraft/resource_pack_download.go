@@ -46,6 +46,11 @@ type ResourcePackEvent struct {
 
 // ResourcePackDownloadConfig controls resource pack downloads performed by a Dialer.
 type ResourcePackDownloadConfig struct {
+	// ParallelURLs opts into downloading up to four independent URL packs at once. The default
+	// downloads each pack before admitting or looking up the next. When enabled, admission and cache
+	// lookups precede URL downloads, progress events for different packs may interleave, and repeated
+	// accepted UUIDs use their first offer.
+	ParallelURLs bool
 	// MaxInFlightChunks is the maximum number of outstanding chunk requests. Values below one use the
 	// vanilla default.
 	MaxInFlightChunks int
