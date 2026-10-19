@@ -10,6 +10,7 @@ import (
 func TestPlayerAuthInput_NormalizeYaw(t *testing.T) {
 	for _, tc := range []struct{ in, want float32 }{
 		{0, 0}, {-90, -90}, {179.5, 179.5}, {-180, -180}, {180, -180}, {270, -90}, {344, -16}, {360, 0}, {-181, 179}, {720, 0}, {-540, -180},
+		{1e20, -88}, {-1e20, 88}, {math.MaxFloat32, 0}, {-math.MaxFloat32, 0},
 	} {
 		pk := PlayerAuthInput{Yaw: tc.in, HeadYaw: tc.in, InteractYaw: tc.in, Pitch: 25, InteractPitch: -30}
 		changed := pk.NormalizeYaw()

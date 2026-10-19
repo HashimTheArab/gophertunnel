@@ -212,11 +212,13 @@ func (pk *PlayerAuthInput) NormalizeYaw() bool {
 		if (*yaw >= -180 && *yaw < 180) || math.IsNaN(float64(*yaw)) || math.IsInf(float64(*yaw), 0) {
 			continue
 		}
-		wrapped := math.Mod(float64(*yaw)+180, 360)
-		if wrapped < 0 {
+		wrapped := math.Mod(float64(*yaw), 360)
+		if wrapped >= 180 {
+			wrapped -= 360
+		} else if wrapped < -180 {
 			wrapped += 360
 		}
-		*yaw = float32(wrapped - 180)
+		*yaw = float32(wrapped)
 		changed = true
 	}
 	return changed
