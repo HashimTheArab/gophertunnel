@@ -1,8 +1,10 @@
 package resource
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/df-mc/jsonc"
@@ -17,8 +19,9 @@ func (p *Pack) ClientEntityIdentifiers() ([]string, error) {
 		return nil, err
 	}
 	var identifiers []string
-	for _, name := range files {
-		data, err := p.ReadFile(name)
+	for _, file := range files {
+		name := file.Name
+		data, err := readResourceFile(file)
 		if err != nil {
 			return nil, err
 		}
@@ -48,8 +51,9 @@ func (p *Pack) RenderControllerIdentifiers() ([]string, error) {
 		return nil, err
 	}
 	var identifiers []string
-	for _, name := range files {
-		data, err := p.ReadFile(name)
+	for _, file := range files {
+		name := file.Name
+		data, err := readResourceFile(file)
 		if err != nil {
 			return nil, err
 		}
@@ -66,24 +70,27 @@ func (p *Pack) RenderControllerIdentifiers() ([]string, error) {
 	return identifiers, nil
 }
 
-// rendererFiles collects one resource directory at the base and in each
-// subpack, keeping archive paths relative to the pack's manifest directory.
-func (p *Pack) rendererFiles(dir string) ([]string, error) {
+// rendererFiles indexes JSON definitions at the base and in every subpack.
+// It opens the archive once, so reads do not rescan unrelated pack entries.
+func (p *Pack) rendererFiles(dir string) ([]*zip.File, error) {
 	if p.Encrypted() {
 		return nil, fmt.Errorf("cannot inspect encrypted resource pack")
 	}
-	files, err := p.ResourceFiles(dir)
+	entries, err := p.resourceFiles(".")
 	if err != nil {
 		return nil, err
 	}
-	subpacks, err := p.ResourceFiles("subpacks")
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range subpacks {
-		parts := strings.Split(name, "/")
-		if len(parts) >= 4 && strings.EqualFold(parts[2], dir) {
-			files = append(files, name)
+	root := len(pathSegments(p.manifestDir))
+	var files []*zip.File
+	for _, file := range entries {
+		if !strings.EqualFold(path.Ext(file.Name), ".json") {
+			continue
+		}
+		parts := strings.Split(file.Name, "/")[root:]
+		base := len(parts) >= 2 && strings.EqualFold(parts[0], dir)
+		subpack := len(parts) >= 4 && strings.EqualFold(parts[0], "subpacks") && strings.EqualFold(parts[2], dir)
+		if base || subpack {
+			files = append(files, file)
 		}
 	}
 	return files, nil

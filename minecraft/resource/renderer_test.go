@@ -12,12 +12,14 @@ func TestPack_RendererIdentifiersIncludesSubpacks(t *testing.T) {
 		t.Run(prefix, func(t *testing.T) {
 			files := map[string]string{
 				prefix + "manifest.json": testManifest,
-				prefix + "Entity/base.json": `// comment
+				prefix + "Entity/base.JSON": `// comment
 {"minecraft:client_entity":{"description":{"identifier":"minecraft:zombie"}}}`,
 				prefix + "render_controllers/base.json":                 `{"render_controllers":{"controller.render.zombie":{}}}`,
 				prefix + "subpacks/high/ENTITY/player.json":             `{"minecraft:client_entity":{"description":{"identifier":"minecraft:player"}}}`,
 				prefix + "subpacks/high/Render_Controllers/player.json": `{"render_controllers":{"controller.render.player.third_person":{}}}`,
 				prefix + "subpacks/low/textures/irrelevant.txt":         "not JSON",
+				prefix + "entity/README.txt":                            "notes, not JSON",
+				prefix + "subpacks/high/render_controllers/.DS_Store":   "not JSON",
 				prefix + "models/ignored.json":                          `{"minecraft:client_entity":{"description":{"identifier":"ignored"}}}`,
 			}
 			p, err := ReadBytes(packArchive(t, files))
