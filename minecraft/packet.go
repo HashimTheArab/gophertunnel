@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -15,18 +16,24 @@ type packetData struct {
 	owned   bool
 }
 
-// parseData parses the packet data slice passed into a packetData struct.
+// parseData parses packet bytes and reports the payload to the connection observer.
 func parseData(data []byte, conn *Conn) (*packetData, error) {
+	p, err := parsePacketData(data)
+	if err != nil {
+		return nil, err
+	}
+	if conn.packetFunc != nil {
+		conn.packetFunc(*p.h, bytes.Clone(p.payload.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
+	}
+	return p, nil
+}
+
+// parsePacketData separates a packet header from its borrowed payload without connection policy.
+func parsePacketData(data []byte) (*packetData, error) {
 	buf := bytes.NewBuffer(data)
 	header := &packet.Header{}
 	if err := header.Read(buf); err != nil {
-		// We don't return this as an error as it's not in the hand of the user to control this. Instead,
-		// we return to reading a new packet.
 		return nil, fmt.Errorf("read packet header: %w", err)
-	}
-	if conn.packetFunc != nil {
-		// The packet func was set, so we call it.
-		conn.packetFunc(*header, bytes.Clone(buf.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
@@ -79,9 +86,14 @@ func (p *packetData) probe(conn *Conn) ([]packet.Packet, error) {
 }
 
 // decodePacket decodes p without applying connection-level disconnect policies.
-func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
+func (p *packetData) decodePacket(conn *Conn) ([]packet.Packet, error) {
+	return p.decodeWith(conn.proto, conn.pool, conn.shieldID.Load(), conn.readerLimits, conn.actorIDs.Load(), conn)
+}
+
+// decodeWith shares packet decoding, unread-byte checks and conversion with codec-only callers.
+func (p *packetData) decodeWith(proto Protocol, pool packet.Pool, shieldID int32, limits bool, translation *protocol.ActorIDTranslation, conn *Conn) (pks []packet.Packet, err error) {
 	// Attempt to fetch the packet with the right packet ID from the pool.
-	pkFunc, ok := conn.pool[p.h.PacketID]
+	pkFunc, ok := pool[p.h.PacketID]
 	var pk packet.Packet
 	if !ok {
 		// No packet with the ID. This may be a custom packet of some sorts.
@@ -96,8 +108,8 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 		}
 	}()
 
-	r := conn.proto.NewReader(p.payload, conn.shieldID.Load(), conn.readerLimits)
-	if translation := conn.actorIDs.Load(); translation != nil {
+	r := proto.NewReader(p.payload, shieldID, limits)
+	if translation != nil {
 		r = translation.WrapReader(r)
 	}
 	pk.Marshal(r)
@@ -107,5 +119,5 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return conn.proto.ConvertToLatest(pk, conn), err
+	return proto.ConvertToLatest(pk, conn), err
 }

@@ -146,15 +146,10 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 	}
 	batchStart := buf.Len()
 
-	var l [5]byte
-	for _, packet := range packets {
-		// Each packet is prefixed with a varuint32 specifying the length of the packet.
-		if _, err := buf.Write(l[:putVaruint32(&l, uint32(len(packet)))]); err != nil {
-			return fmt.Errorf("encode batch: write packet length: %w", err)
-		}
-		if _, err := buf.Write(packet); err != nil {
-			return fmt.Errorf("encode batch: write packet payload: %w", err)
-		}
+	for _, pk := range packets {
+		// Reserve space so the shared body encoder writes directly into the pooled buffer.
+		buf.Grow(5 + len(pk))
+		_, _ = buf.Write(AppendBatchPacket(buf.AvailableBuffer(), pk))
 	}
 
 	data := buf.Bytes()
