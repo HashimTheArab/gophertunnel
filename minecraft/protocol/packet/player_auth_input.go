@@ -199,3 +199,8 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 
 // CarriesInputTick reports whether this packet may carry a player input tick.
 func (*PlayerAuthInput) CarriesInputTick() bool { return true }
+
+// MovementPose returns the player position, pitch, yaw and head yaw in this update.
+func (pk *PlayerAuthInput) MovementPose() (position, rotation mgl32.Vec3) {
+	return pk.Position, mgl32.Vec3{pk.Pitch, pk.Yaw, pk.HeadYaw}
+}

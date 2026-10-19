@@ -1,6 +1,7 @@
 package packet
 
 import (
+	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"io"
 )
@@ -41,4 +42,11 @@ func (header *Header) Read(r io.ByteReader) error {
 	header.SenderSubClient = byte((value >> 10) & 0x3)
 	header.TargetSubClient = byte((value >> 12) & 0x3)
 	return nil
+}
+
+// PlayerMovement is a player position and look update. Direction and session
+// applicability remain caller policy. Rotation holds pitch, yaw and head yaw.
+type PlayerMovement interface {
+	Packet
+	MovementPose() (position, rotation mgl32.Vec3)
 }
