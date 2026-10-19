@@ -1445,11 +1445,20 @@ func (conn *Conn) observeItems(items []protocol.ItemEntry) {
 
 // observeShield records the runtime ID used when reading and writing shield item stacks.
 func (conn *Conn) observeShield(items []protocol.ItemEntry) {
+	if id, ok := ShieldRuntimeID(items); ok {
+		conn.shieldID.Store(id)
+	}
+}
+
+// ShieldRuntimeID returns the runtime ID an item registry assigns to the shield, which protocol readers
+// and writers need to encode shield item stacks. ok is false when the registry has no shield.
+func ShieldRuntimeID(items []protocol.ItemEntry) (id int32, ok bool) {
 	for _, item := range items {
 		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
+			id, ok = int32(item.RuntimeID), true
 		}
 	}
+	return id, ok
 }
 
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
