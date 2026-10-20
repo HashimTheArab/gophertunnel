@@ -223,6 +223,13 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 	return nil
 }
 
+// AppendBatchPacket appends one packet, including its header, with its batch length prefix.
+func AppendBatchPacket(body, data []byte) []byte {
+	var length [5]byte
+	body = append(body, length[:putVaruint32(&length, uint32(len(data)))]...)
+	return append(body, data...)
+}
+
 // putVaruint32 writes x to b with a size of 1-5 bytes and returns the number of
 // bytes written.
 func putVaruint32(b *[5]byte, x uint32) int {
