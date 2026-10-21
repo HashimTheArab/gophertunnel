@@ -362,7 +362,7 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	manifest, want := pathSegments(p.manifestDir), pathSegments(path.Join(p.manifestDir, dir))
 	var files []string
 	for _, file := range zr.File {
-		segments := strings.Split(file.Name, "/")
+		segments := pathSegments(resourceArchivePath(file.Name))
 		if len(segments) <= len(want) || !file.FileInfo().Mode().IsRegular() {
 			continue
 		}
@@ -388,6 +388,11 @@ func pathSegments(p string) []string {
 	return strings.Split(p, "/")
 }
 
+// resourceArchivePath gives Windows-authored ZIP members the same separator as resource paths.
+func resourceArchivePath(name string) string {
+	return strings.ReplaceAll(name, `\`, "/")
+}
+
 // findResourceFile finds a regular file using a path relative to manifest.json.
 func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	if filePath == "." || !fs.ValidPath(filePath) {
@@ -399,7 +404,7 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	}
 	want := path.Join(p.manifestDir, filePath)
 	for _, file := range zr.File {
-		if strings.EqualFold(file.Name, want) && file.FileInfo().Mode().IsRegular() {
+		if strings.EqualFold(resourceArchivePath(file.Name), want) && file.FileInfo().Mode().IsRegular() {
 			return file, nil
 		}
 	}
@@ -622,14 +627,15 @@ type dirPackReader struct {
 // be used to read data from the file.
 func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
 	for _, f := range r.File {
-		if filepath.Base(f.Name) != fileName {
+		name := resourceArchivePath(f.Name)
+		if path.Base(name) != fileName {
 			continue
 		}
 		fileReader, err := f.Open()
 		if err != nil {
 			return nil, "", fmt.Errorf("open zip file %v: %w", f.Name, err)
 		}
-		return fileReader, f.Name, nil
+		return fileReader, name, nil
 	}
 	return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
 }

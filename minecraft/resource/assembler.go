@@ -28,6 +28,8 @@ type Assembler struct {
 	chunkSize uint32
 	received  []bool
 	missing   uint32
+	requested map[uint32]struct{}
+	next      uint32
 }
 
 // NewAssembler returns an Assembler for the pack a ResourcePackDataInfo announced.
@@ -54,8 +56,28 @@ func (a *Assembler) Add(index uint32, data []byte) (bool, error) {
 		copy(a.data[offset:], data)
 		a.received[index] = true
 		a.missing--
+		delete(a.requested, index)
 	}
 	return a.missing == 0, nil
+}
+
+// RequestWindow reserves the next missing chunk indices up to limit outstanding
+// requests. Add releases a reservation only after validating that chunk. Passive
+// observers need not call this method. The caller owns packet writes and retries.
+func (a *Assembler) RequestWindow(limit int) []uint32 {
+	if a.requested == nil {
+		a.requested = make(map[uint32]struct{})
+	}
+	var indices []uint32
+	for a.next < uint32(len(a.received)) && len(a.requested) < limit {
+		index := a.next
+		a.next++
+		if !a.received[index] {
+			a.requested[index] = struct{}{}
+			indices = append(indices, index)
+		}
+	}
+	return indices
 }
 
 // Pack parses the assembled archive. It fails until every chunk has arrived.
