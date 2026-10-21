@@ -331,14 +331,19 @@ func (p *Pack) ReadFile(filePath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readResourceFile(file)
+}
+
+// readResourceFile reads an already indexed archive entry without reopening the archive.
+func readResourceFile(file *zip.File) ([]byte, error) {
 	rc, err := file.Open()
 	if err != nil {
-		return nil, fmt.Errorf("open resource file %q: %w", filePath, err)
+		return nil, fmt.Errorf("open resource file %q: %w", file.Name, err)
 	}
 	defer rc.Close()
 	content, err := io.ReadAll(rc)
 	if err != nil {
-		return nil, fmt.Errorf("read resource file %q: %w", filePath, err)
+		return nil, fmt.Errorf("read resource file %q: %w", file.Name, err)
 	}
 	return content, nil
 }
@@ -352,6 +357,20 @@ func (p *Pack) HasResourceFile(filePath string) bool {
 // ResourceFiles returns the regular files below dir, as paths relative to the
 // pack's manifest directory. Directory names match case-insensitively.
 func (p *Pack) ResourceFiles(dir string) ([]string, error) {
+	entries, err := p.resourceFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	root := len(pathSegments(p.manifestDir))
+	for _, file := range entries {
+		files = append(files, strings.Join(strings.Split(file.Name, "/")[root:], "/"))
+	}
+	return files, nil
+}
+
+// resourceFiles indexes matching regular entries using one archive reader.
+func (p *Pack) resourceFiles(dir string) ([]*zip.File, error) {
 	if !fs.ValidPath(dir) {
 		return nil, fmt.Errorf("invalid resource directory %q", dir)
 	}
@@ -359,8 +378,8 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open resource pack archive: %w", err)
 	}
-	manifest, want := pathSegments(p.manifestDir), pathSegments(path.Join(p.manifestDir, dir))
-	var files []string
+	want := pathSegments(path.Join(p.manifestDir, dir))
+	var files []*zip.File
 	for _, file := range zr.File {
 		segments := strings.Split(file.Name, "/")
 		if len(segments) <= len(want) || !file.FileInfo().Mode().IsRegular() {
@@ -374,7 +393,7 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 			}
 		}
 		if matches {
-			files = append(files, strings.Join(segments[len(manifest):], "/"))
+			files = append(files, file)
 		}
 	}
 	return files, nil
