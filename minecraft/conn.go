@@ -751,15 +751,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		}
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
-			conn.hdr.PacketID = converted.ID()
-			_ = conn.hdr.Write(buf)
-			l := buf.Len()
-
-			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
-			if translation := conn.actorIDs.Load(); translation != nil {
-				w = translation.WrapWriter(w)
-			}
-			converted.Marshal(w)
+			l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
 			if conn.packetFunc != nil {
 				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
@@ -1445,11 +1437,20 @@ func (conn *Conn) observeItems(items []protocol.ItemEntry) {
 
 // observeShield records the runtime ID used when reading and writing shield item stacks.
 func (conn *Conn) observeShield(items []protocol.ItemEntry) {
+	if id, ok := ShieldRuntimeID(items); ok {
+		conn.shieldID.Store(id)
+	}
+}
+
+// ShieldRuntimeID returns the runtime ID an item registry assigns to the shield, which protocol readers
+// and writers need to encode shield item stacks. ok is false when the registry has no shield.
+func ShieldRuntimeID(items []protocol.ItemEntry) (id int32, ok bool) {
 	for _, item := range items {
 		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
+			id, ok = int32(item.RuntimeID), true
 		}
 	}
+	return id, ok
 }
 
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
