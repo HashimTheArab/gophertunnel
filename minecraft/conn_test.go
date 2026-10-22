@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -1870,4 +1871,61 @@ func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
 	if got := conn.shieldID.Load(); got != 355 {
 		t.Fatalf("shield ID after an active-protocol registry = %d, want 355", got)
 	}
+}
+
+// A reader that falls behind must hold the processing goroutine back instead of letting the read
+// queue grow without bound, and every held batch must still arrive in order.
+func TestBatchReadQueueWaitsForStalledReader(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, serverConn := net.Pipe()
+		defer client.Close()
+		defer serverConn.Close()
+		conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+		defer conn.Close()
+
+		const batches = 2 * maxQueuedReadBytes >> 20
+		payload := make([]byte, 1<<20)
+		produce := func() *atomic.Int64 {
+			var queued atomic.Int64
+			go func() {
+				for i := range batches {
+					conn.queueBatch([]*packetData{{h: &packet.Header{PacketID: uint32(i)}, full: payload}})
+					queued.Add(1)
+				}
+			}()
+			return &queued
+		}
+
+		// Before anyone reads, a dialler or DoSpawn caller may still need the processing goroutine.
+		unread := produce()
+		synctest.Wait()
+		if unread.Load() != batches {
+			t.Fatal("the queue blocked before any reader started")
+		}
+		for range batches {
+			if _, ok := conn.takeBatch(); !ok {
+				t.Fatal("takeBatch exhausted the unread queue early")
+			}
+		}
+
+		conn.readStarted.Store(true)
+		queued := produce()
+		synctest.Wait()
+		if got := queued.Load(); got != maxQueuedReadBytes>>20 {
+			t.Fatalf("queued %d batches past a stalled reader, want %d", got, maxQueuedReadBytes>>20)
+		}
+		for i := range batches {
+			batch, err := conn.nextBatch("read")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := batch[0].h.PacketID; got != uint32(i) {
+				t.Fatalf("batch ID = %d, want %d", got, i)
+			}
+			synctest.Wait()
+		}
+		if conn.readBatchBytes != 0 {
+			t.Fatalf("drained queue still counts %d bytes", conn.readBatchBytes)
+		}
+	})
 }

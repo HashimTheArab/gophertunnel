@@ -43,6 +43,14 @@ type exemptedResourcePack struct {
 
 const batchQueueRetainedCapacity = 8
 
+// maxQueuedReadBytes and maxQueuedReadBatches bound the batches a reader has not yet taken. Once
+// full, the processing goroutine waits for the reader instead of buffering more, so pressure reaches
+// the transport. A single batch is always admitted, however large.
+const (
+	maxQueuedReadBytes   = 32 << 20
+	maxQueuedReadBatches = 4096
+)
+
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
@@ -309,7 +317,14 @@ type Conn struct {
 	readBatches   [][]*packetData
 	readBatchHead int
 	readBatchLen  int
-	readDeadline  <-chan time.Time
+	// readBatchBytes is the packet bytes held in readBatches.
+	readBatchBytes int
+	// readSpace signals, level-triggered like batchReady, that a reader took a batch.
+	readSpace chan struct{}
+	// readStarted is set once a reader waits for a batch; only then may a full queue block, so a
+	// caller still dialling or awaiting spawn cannot deadlock on its own unread backlog.
+	readStarted  atomic.Bool
+	readDeadline <-chan time.Time
 
 	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
@@ -434,6 +449,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
 		batchReady:           make(chan struct{}, 1),
+		readSpace:            make(chan struct{}, 1),
 		readBatches:          make([][]*packetData, batchQueueRetainedCapacity),
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
@@ -958,6 +974,7 @@ func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error)
 // are still returned: a batch is flushed before the context is cancelled, so a final queue check drains it
 // ahead of the error.
 func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
+	conn.readStarted.Store(true)
 	for {
 		if batch, ok := conn.takeBatch(); ok {
 			return batch, nil
@@ -1363,6 +1380,11 @@ func (conn *Conn) takeBatch() ([]*packetData, bool) {
 	conn.readBatches[conn.readBatchHead] = nil
 	conn.readBatchHead = (conn.readBatchHead + 1) % len(conn.readBatches)
 	conn.readBatchLen--
+	conn.readBatchBytes -= batchBytes(batch)
+	select {
+	case conn.readSpace <- struct{}{}:
+	default:
+	}
 	if conn.readBatchLen == 0 {
 		// Reuse the old channel's small steady-state capacity, but release a queue that grew during
 		// a burst once it has been completely drained.
@@ -1378,9 +1400,22 @@ func (conn *Conn) takeBatch() ([]*packetData, bool) {
 	return batch, true
 }
 
-// queueBatch queues a complete network batch for ReadBatch without blocking the processing goroutine.
+// queueBatch queues a complete network batch for ReadBatch. Once a reader has started, a full queue
+// blocks the processing goroutine until the reader takes a batch; a batch arriving after the
+// connection closed while it waits is dropped, as flushBatch drops post-close packets.
 func (conn *Conn) queueBatch(batch []*packetData) {
+	size := batchBytes(batch)
 	conn.readQueueMu.Lock()
+	for conn.readBatchLen != 0 && (conn.readBatchLen >= maxQueuedReadBatches || conn.readBatchBytes+size > maxQueuedReadBytes) && conn.mayBlockQueue() {
+		conn.readQueueMu.Unlock()
+		select {
+		case <-conn.readSpace:
+		case <-conn.ctx.Done():
+			return
+		}
+		conn.readQueueMu.Lock()
+	}
+	conn.readBatchBytes += size
 	if conn.readBatchLen == len(conn.readBatches) {
 		grown := make([][]*packetData, max(len(conn.readBatches)*2, batchQueueRetainedCapacity))
 		copied := copy(grown, conn.readBatches[conn.readBatchHead:])
@@ -1397,6 +1432,29 @@ func (conn *Conn) queueBatch(batch []*packetData) {
 	default:
 	}
 	conn.readQueueMu.Unlock()
+}
+
+// mayBlockQueue reports whether a full read queue may wait for its reader: one has started reading,
+// or the connection spawned, so no DoSpawn caller still depends on this goroutine.
+func (conn *Conn) mayBlockQueue() bool {
+	if conn.readStarted.Load() {
+		return true
+	}
+	select {
+	case <-conn.spawn:
+		return true
+	default:
+		return false
+	}
+}
+
+// batchBytes returns the encoded size of the packets in batch.
+func batchBytes(batch []*packetData) int {
+	size := 0
+	for _, data := range batch {
+		size += len(data.full)
+	}
+	return size
 }
 
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading
