@@ -36,3 +36,6 @@ func (pk *MovementEffect) Marshal(io protocol.IO) {
 	io.Varint32(&pk.Duration)
 	io.PlayerInputTick(&pk.Tick)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*MovementEffect) CarriesInputTick() bool { return true }

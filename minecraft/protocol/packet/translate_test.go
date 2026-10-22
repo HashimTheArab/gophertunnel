@@ -1,6 +1,11 @@
 package packet
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -166,14 +171,33 @@ func TestTranslateEntityIDsCoverage(t *testing.T) {
 func TestTranslateInputTicksCoverage(t *testing.T) {
 	discovered := map[string]bool{}
 	seen := map[reflect.Type]bool{}
+	semanticTypes := inputTickCodecTypes(t)
+	semanticCoverage := map[string]bool{}
 	for _, pool := range []Pool{NewClientPool(), NewServerPool()} {
 		for _, newPk := range pool {
-			typ := reflect.TypeOf(newPk()).Elem()
+			pk := newPk()
+			typ := reflect.TypeOf(pk).Elem()
 			if seen[typ] {
 				continue
 			}
 			seen[typ] = true
-			walkMatchingFields(typ, typ.Name(), discovered, map[reflect.Type]bool{}, tickFieldPattern.MatchString)
+			fields := map[string]bool{}
+			walkMatchingFields(typ, typ.Name(), fields, map[reflect.Type]bool{}, tickFieldPattern.MatchString)
+			for path := range fields {
+				discovered[path] = true
+			}
+			// Derive carrier metadata expectations from both discovered fields and
+			// semantic codec operations. The latter also catches a new input tick
+			// whose name does not match tickFieldPattern.
+			want := len(fields) != 0 || containsInputTickCodec(typ, semanticTypes, map[reflect.Type]bool{})
+			for name := range semanticTypes {
+				if containsInputTickCodec(typ, map[string]bool{name: true}, map[reflect.Type]bool{}) {
+					semanticCoverage[name] = true
+				}
+			}
+			if got := CarriesInputTick(pk); got != want {
+				t.Errorf("CarriesInputTick(%T) = %v, want %v from its fields/codecs", pk, got, want)
+			}
 		}
 	}
 
@@ -182,6 +206,91 @@ func TestTranslateInputTicksCoverage(t *testing.T) {
 		expected[path] = true
 	}
 	reportCoverage(t, "player input tick", "TranslateInputTicks", discovered, expected)
+	for name := range semanticTypes {
+		if !semanticCoverage[name] {
+			t.Errorf("PlayerInputTick codec %s is not traced from a registered packet: extend carrier discovery", name)
+		}
+	}
+}
+
+// inputTickCodecTypes discovers types whose marshal methods call PlayerInputTick
+// directly. Nested protocol structs participate through containsInputTickCodec.
+func inputTickCodecTypes(t *testing.T) map[string]bool {
+	t.Helper()
+	types := map[string]bool{}
+	for directory, packagePath := range map[string]string{
+		".":  "github.com/sandertv/gophertunnel/minecraft/protocol/packet",
+		"..": "github.com/sandertv/gophertunnel/minecraft/protocol",
+	} {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(directory, entry.Name()), nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, declaration := range file.Decls {
+				function, ok := declaration.(*ast.FuncDecl)
+				if !ok || function.Body == nil {
+					continue
+				}
+				visitsTick := false
+				ast.Inspect(function.Body, func(node ast.Node) bool {
+					if call, ok := node.(*ast.CallExpr); ok {
+						if method, ok := call.Fun.(*ast.SelectorExpr); ok && method.Sel.Name == "PlayerInputTick" {
+							visitsTick = true
+						}
+					}
+					return true
+				})
+				if !visitsTick {
+					continue
+				}
+				if function.Recv == nil || function.Name.Name != "Marshal" {
+					t.Errorf("PlayerInputTick call in %s is outside a named Marshal receiver: extend carrier discovery", function.Name.Name)
+					continue
+				}
+				for _, receiver := range function.Recv.List {
+					expression := receiver.Type
+					if pointer, ok := expression.(*ast.StarExpr); ok {
+						expression = pointer.X
+					}
+					if name, ok := expression.(*ast.Ident); ok {
+						types[packagePath+"."+name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	return types
+}
+
+// containsInputTickCodec follows packet members to semantic tick-bearing types.
+func containsInputTickCodec(typ reflect.Type, semanticTypes map[string]bool, visiting map[reflect.Type]bool) bool {
+	if semanticTypes[typ.PkgPath()+"."+typ.Name()] {
+		return true
+	}
+	if visiting[typ] {
+		return false
+	}
+	visiting[typ] = true
+	defer delete(visiting, typ)
+	switch typ.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return containsInputTickCodec(typ.Elem(), semanticTypes, visiting)
+	case reflect.Struct:
+		for field := range typ.Fields() {
+			if containsInputTickCodec(field.Type, semanticTypes, visiting) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reportCoverage diffs the field paths a discovery walk found against the paths a
@@ -301,6 +410,16 @@ func TestTranslateInputTicks(t *testing.T) {
 	TranslateInputTicks(pk, nil)
 	if pk.Tick != 1005 {
 		t.Errorf("nil callback changed the tick: %v", pk.Tick)
+	}
+}
+
+func TestCarriesInputTickDoesNotTraversePacket(t *testing.T) {
+	// Event has a nil interface payload that would panic if a writer visited it.
+	if CarriesInputTick(&Event{}) || CarriesInputTick(nil) {
+		t.Fatal("packet without an input tick was classified as a carrier")
+	}
+	if !CarriesInputTick((*MovePlayer)(nil)) {
+		t.Fatal("carrier classification depended on packet contents")
 	}
 }
 

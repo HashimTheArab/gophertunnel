@@ -573,7 +573,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 		timer = time.AfterFunc(timeout, func() {
 			if !conn.authenticated.Load() {
 				conn.log.Debug(errLoginTimeout.Error(), "timeout", timeout)
-				conn.closeTransport(errLoginTimeout)
+				_ = conn.abort(errLoginTimeout)
 			}
 		})
 	}
