@@ -1,6 +1,8 @@
 package packet
 
 import (
+	"math"
+
 	"github.com/go-gl/mathgl/mgl32"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -203,4 +205,26 @@ func (*PlayerAuthInput) CarriesInputTick() bool { return true }
 // MovementPose returns the player position, pitch, yaw and head yaw in this update.
 func (pk *PlayerAuthInput) MovementPose() (position, rotation mgl32.Vec3) {
 	return pk.Position, mgl32.Vec3{pk.Pitch, pk.Yaw, pk.HeadYaw}
+}
+
+// NormalizeYaw wraps body, head and interaction yaw into [-180, 180), returning
+// whether any value changed. Equivalent turns retain the same facing and movement
+// frame. Non-finite values are left intact so callers can reject invalid input.
+// Marshal itself preserves authored values; generated-input publishers opt in.
+func (pk *PlayerAuthInput) NormalizeYaw() bool {
+	changed := false
+	for _, yaw := range []*float32{&pk.Yaw, &pk.HeadYaw, &pk.InteractYaw} {
+		if (*yaw >= -180 && *yaw < 180) || math.IsNaN(float64(*yaw)) || math.IsInf(float64(*yaw), 0) {
+			continue
+		}
+		wrapped := math.Mod(float64(*yaw), 360)
+		if wrapped >= 180 {
+			wrapped -= 360
+		} else if wrapped < -180 {
+			wrapped += 360
+		}
+		*yaw = float32(wrapped)
+		changed = true
+	}
+	return changed
 }
