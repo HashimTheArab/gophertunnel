@@ -322,3 +322,52 @@ func TestIsBuiltinResourcePackMatchesTheExemptionList(t *testing.T) {
 		t.Fatal("a downloadable pack is built in")
 	}
 }
+
+// A required stack entry matches the downloaded pack by parsed UUID and numeric version, so a short or
+// uppercase form of the same identity is accepted and a different version is not.
+func TestHandleResourcePackStackMatchesNumericIdentity(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	for version, accepted := range map[string]bool{"1.0.0": true, "1.0": true, "1": true, "1.0.1": false, "2.0.0": false} {
+		conn := testConn()
+		conn.ctx = context.Background()
+		conn.resourcePacks = []*resource.Pack{pack}
+		err := conn.handleResourcePackStack(&packet.ResourcePackStack{
+			TexturePackRequired: true,
+			TexturePacks: []protocol.StackResourcePack{{
+				UUID: strings.ToUpper(id.String()), Version: version,
+			}},
+		})
+		if (err == nil) != accepted {
+			t.Fatalf("version %q: err = %v, want accepted %t", version, err, accepted)
+		}
+		if !accepted {
+			continue
+		}
+		snapshot, _ := conn.ResourcePackStack()
+		if entries := snapshot.Entries(); len(entries) != 1 || entries[0].Pack() == nil {
+			t.Fatalf("version %q: stack entry was not associated with the downloaded pack", version)
+		}
+	}
+}
+
+// An offer entry advertising a short version form is associated with the downloaded pack.
+func TestResourcePackOfferMatchesNumericVersion(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	offer := newResourcePackOfferSnapshot(&packet.ResourcePacksInfo{
+		TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: "1.0", Size: uint64(pack.Size())}},
+	}, []*resource.Pack{pack})
+	if entries := offer.TexturePacks(); len(entries) != 1 || entries[0].Pack() == nil {
+		t.Fatal("offer entry with a short version was not associated with the downloaded pack")
+	}
+	if !(ResourcePackCacheKey{UUID: id, Version: "1.0", Size: uint64(pack.Size())}).Matches(pack) {
+		t.Fatal("cache key with a short version does not match its pack")
+	}
+}

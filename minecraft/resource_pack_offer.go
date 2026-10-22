@@ -36,7 +36,15 @@ type ResourcePackOfferSnapshot struct {
 	packs resourcePackContent
 }
 
+// resourcePackID names a pack by its parsed UUID and numeric version, as the vanilla client matches offers,
+// stack entries and downloaded packs.
 type resourcePackID struct{ uuid, version string }
+
+// newResourcePackID keys a pack by its canonical UUID and version text.
+func newResourcePackID(id, version string) resourcePackID {
+	return resourcePackID{resource.CanonicalUUID(id), resource.CanonicalVersion(version)}
+}
+
 type resourcePackContent map[resourcePackID]*resource.Pack
 
 // snapshotResourcePacks copies pack metadata so snapshots never expose mutable connection state.
@@ -44,7 +52,7 @@ func snapshotResourcePacks(packs []*resource.Pack) resourcePackContent {
 	content := make(resourcePackContent, len(packs))
 	for _, pack := range packs {
 		if pack != nil {
-			id := resourcePackID{pack.UUID().String(), pack.Version()}
+			id := newResourcePackID(pack.UUID().String(), pack.Version())
 			if content[id] == nil {
 				content[id] = pack.Clone()
 			}
@@ -107,7 +115,7 @@ func (snapshot ResourcePackOfferSnapshot) WorldTemplateVersion() string {
 func (snapshot ResourcePackOfferSnapshot) TexturePacks() []ResourcePackOfferEntry {
 	entries := make([]ResourcePackOfferEntry, len(snapshot.info.TexturePacks))
 	for i, info := range snapshot.info.TexturePacks {
-		entries[i] = ResourcePackOfferEntry{info: info, pack: snapshot.packs[resourcePackID{info.UUID.String(), info.Version}]}
+		entries[i] = ResourcePackOfferEntry{info: info, pack: snapshot.packs[newResourcePackID(info.UUID.String(), info.Version)]}
 	}
 	return entries
 }
@@ -134,7 +142,7 @@ func ProjectResourcePacks(offer ResourcePackOfferSnapshot, stack ResourcePackSta
 	projectedOffer.info.TexturePacks = nil
 	projectedOffer.packs = kept
 	for _, entry := range offer.TexturePacks() {
-		id := resourcePackID{entry.info.UUID.String(), entry.info.Version}
+		id := newResourcePackID(entry.info.UUID.String(), entry.info.Version)
 		offered[id] = true
 		if entry.pack == nil || !keep(entry.Pack()) {
 			continue
@@ -147,7 +155,7 @@ func ProjectResourcePacks(offer ResourcePackOfferSnapshot, stack ResourcePackSta
 	projectedStack.stack.TexturePacks = nil
 	projectedStack.packs = resourcePackContent{}
 	for _, entry := range stack.stack.TexturePacks {
-		id := resourcePackID{entry.UUID, entry.Version}
+		id := newResourcePackID(entry.UUID, entry.Version)
 		if offered[id] && kept[id] == nil {
 			continue
 		}

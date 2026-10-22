@@ -24,7 +24,7 @@ type ResourcePackCacheKey struct {
 
 // Matches reports whether pack has the UUID, version and size the key holds.
 func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
-	return pack.UUID() == key.UUID && pack.Version() == key.Version && uint64(pack.Size()) == key.Size
+	return pack.UUID() == key.UUID && resource.SameVersion(pack.Version(), key.Version) && uint64(pack.Size()) == key.Size
 }
 
 // ResourcePackCache allows a Dialer to reuse resource packs downloaded earlier. Cache failures are
