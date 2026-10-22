@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 )
 
@@ -93,6 +94,27 @@ func TestMaterialReducerInputKeyRoundTrip(t *testing.T) {
 		NewReader(bytes.NewReader(buf.Bytes()), 0, false).MaterialReducer(&out)
 		if out.InputItem != item || len(out.Outputs) != 1 || out.Outputs[0] != in.Outputs[0] {
 			t.Fatalf("decoded %+v, want %+v", out, in)
+		}
+	}
+}
+
+func TestStackRequestItem_ItemStackPreservesEveryWireField(t *testing.T) {
+	result := StackRequestItem{Identifier: "minecraft:stone", MetadataValue: 7, BlockRuntimeID: 123, Count: 4, NBTData: map[string]any{"custom": "value"}, CanBePlacedOn: []string{"minecraft:grass"}, CanBreak: []string{"minecraft:dirt"}, BlockingTick: 45}
+	stack := result.ItemStack(917)
+	if stack.NetworkID != 917 {
+		t.Fatalf("palette network ID=%d", stack.NetworkID)
+	}
+	// Compare every shared descriptor field so future wire fields cannot silently
+	// disappear in this conversion. Identifier is intentionally palette-resolved.
+	typ, src, dst := reflect.TypeOf(result), reflect.ValueOf(result), reflect.ValueOf(stack)
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if name == "Identifier" {
+			continue
+		}
+		got := dst.FieldByName(name)
+		if !got.IsValid() || !reflect.DeepEqual(src.Field(i).Interface(), got.Interface()) {
+			t.Errorf("descriptor field %s lost", name)
 		}
 	}
 }

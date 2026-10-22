@@ -160,6 +160,31 @@ func TestEncoderSplitsBatchesAtThePacketLimit(t *testing.T) {
 	}
 }
 
+func TestEncoderBatchWriterReceivesActualPacketCounts(t *testing.T) {
+	var counts []int
+	enc := NewEncoderFor(io.Discard, func(data []byte, packetCount int) (int, error) {
+		payloads, err := NewDecoder(bytes.NewReader(data)).Decode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(payloads) != packetCount {
+			t.Fatalf("batch contains %d packets, sink was told %d", len(payloads), packetCount)
+		}
+		counts = append(counts, packetCount)
+		return len(data), nil
+	})
+	packets := make([][]byte, maximumInBatch+1)
+	for i := range packets {
+		packets[i] = []byte{1}
+	}
+	if err := enc.Encode(packets); err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts[0] != maximumInBatch || counts[1] != 1 {
+		t.Fatalf("batch counts = %v, want [%d 1]", counts, maximumInBatch)
+	}
+}
+
 // batchWrites keeps each encoded batch as its own write, as a datagram transport would.
 type batchWrites [][]byte
 

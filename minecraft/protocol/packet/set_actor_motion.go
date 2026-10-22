@@ -28,3 +28,6 @@ func (pk *SetActorMotion) Marshal(io protocol.IO) {
 	io.Vec3(&pk.Velocity)
 	io.PlayerInputTick(&pk.Tick)
 }
+
+// CarriesInputTick reports whether this packet may carry a player input tick.
+func (*SetActorMotion) CarriesInputTick() bool { return true }

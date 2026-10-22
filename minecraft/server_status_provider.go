@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -145,31 +146,89 @@ func ParsePongData(pong []byte) ServerStatus {
 // ParsePong parses unconnected pong data into a ServerStatus, or returns an error when the pong lacks
 // the name, player count or max player count fields.
 func ParsePong(pong []byte) (ServerStatus, error) {
-	frag := splitPong(string(pong))
-	if len(frag) < 8 {
-		return ServerStatus{}, errors.New("invalid pong data")
-	}
-	serverName := frag[1]
-	serverSubName := frag[7]
-	online, err := strconv.Atoi(frag[4])
+	advertisement, err := parsePongAdvertisement(splitPong(string(pong)), 8, true)
 	if err != nil {
-		return ServerStatus{}, errors.New("invalid player count")
+		return ServerStatus{}, err
 	}
-	max, err := strconv.Atoi(frag[5])
-	if err != nil {
-		return ServerStatus{}, errors.New("invalid max player count")
+	return ServerStatus{
+		ServerName: advertisement.MOTD, ServerSubName: advertisement.MOTDLine2,
+		PlayerCount: advertisement.PlayerCount, MaxPlayers: advertisement.MaxPlayerCount,
+		GameType: parseGameType(advertisement.GameMode),
+	}, nil
+}
+
+// PongAdvertisement holds the Bedrock fields advertised in a RakNet unconnected
+// pong. Ports are status and discovery metadata; they do not override a caller's
+// dial address. Missing numeric fields are represented by zero; numeric conversion
+// errors are tolerated, retaining the result returned by strconv.Atoi.
+type PongAdvertisement struct {
+	Edition         string
+	MOTD            string
+	ProtocolVersion int
+	VersionName     string
+	PlayerCount     int
+	MaxPlayerCount  int
+	ServerID        string
+	MOTDLine2       string
+	GameMode        string
+	GameModeNumeric int
+	PortIPv4        int
+	PortIPv6        int
+}
+
+// PongFieldCountError reports an advertisement with fewer than six fields.
+type PongFieldCountError struct {
+	Fields int
+}
+
+// Error describes the missing advertisement fields.
+func (e PongFieldCountError) Error() string {
+	return fmt.Sprintf("invalid pong data: expected at least 6 fields, got %d", e.Fields)
+}
+
+// ParsePongAdvertisement parses all twelve Bedrock advertisement fields. It
+// accepts legacy pongs containing at least the first six fields. Semicolons are
+// literal delimiters and backslashes are preserved. Optional strings default to
+// empty, and numeric conversion errors are tolerated. Missing numeric fields are
+// zero. Use ParsePong for the stricter server-list status contract, which retains
+// its legacy backslash handling.
+func ParsePongAdvertisement(pong []byte) (PongAdvertisement, error) {
+	return parsePongAdvertisement(strings.Split(string(pong), ";"), 6, false)
+}
+
+// parsePongAdvertisement owns the field layout shared by both public parsers.
+func parsePongAdvertisement(fields []string, minimumFields int, strictCounts bool) (PongAdvertisement, error) {
+	if len(fields) < minimumFields {
+		if strictCounts {
+			return PongAdvertisement{}, errors.New("invalid pong data")
+		}
+		return PongAdvertisement{}, PongFieldCountError{Fields: len(fields)}
 	}
-	status := ServerStatus{
-		ServerName:    serverName,
-		ServerSubName: serverSubName,
-		PlayerCount:   online,
-		MaxPlayers:    max,
+	field := func(index int) string {
+		if index < len(fields) {
+			return fields[index]
+		}
+		return ""
 	}
-	// The game mode field is optional and, like the client, an unknown mode does not invalidate the pong.
-	if len(frag) > 8 {
-		status.GameType = parseGameType(frag[8])
+	number := func(index int) int {
+		value, _ := strconv.Atoi(field(index))
+		return value
 	}
-	return status, nil
+	count, countErr := strconv.Atoi(fields[4])
+	maximum, maximumErr := strconv.Atoi(fields[5])
+	if strictCounts {
+		if countErr != nil {
+			return PongAdvertisement{}, errors.New("invalid player count")
+		}
+		if maximumErr != nil {
+			return PongAdvertisement{}, errors.New("invalid max player count")
+		}
+	}
+	return PongAdvertisement{
+		Edition: field(0), MOTD: field(1), ProtocolVersion: number(2), VersionName: field(3),
+		PlayerCount: count, MaxPlayerCount: maximum, ServerID: field(6), MOTDLine2: field(7),
+		GameMode: field(8), GameModeNumeric: number(9), PortIPv4: number(10), PortIPv6: number(11),
+	}, nil
 }
 
 // gameTypeName returns the pong string for a ServerStatus.GameType. Types without a pong string are

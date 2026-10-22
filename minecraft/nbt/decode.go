@@ -20,12 +20,17 @@ type Decoder struct {
 	// technically invalid, but some implementations do this to represent an
 	// empty NBT tree.
 	AllowZero bool
+	// CompoundListLimits optionally bounds TAG_List lengths whose elements are
+	// compounds, by tag name. Limits are checked before allocating or decoding
+	// elements. Names absent from the map retain the normal byte/depth limits.
+	CompoundListLimits map[string]int32
 
 	r     *offsetReader
 	depth int
 }
 
 var mapStringAnyType = reflect.TypeOf(map[string]any(nil))
+var compoundType = reflect.TypeFor[Compound]()
 
 // NewDecoder returns a new Decoder for the input stream reader passed.
 func NewDecoder(r io.Reader) *Decoder {
@@ -51,9 +56,16 @@ func (d *Decoder) Decode(v any) error {
 	if tagType == tagEnd && d.AllowZero {
 		// Some implementations write an empty tree as a single TAG_End. When decoding into a map, make sure we
 		// clear it so callers don't accidentally keep stale data.
-		if m, ok := v.(*map[string]any); ok {
+		switch m := v.(type) {
+		case *map[string]any:
 			if *m == nil {
 				*m = make(map[string]any)
+			} else {
+				clear(*m)
+			}
+		case *Compound:
+			if *m == nil {
+				*m = make(Compound)
 			} else {
 				clear(*m)
 			}
@@ -80,7 +92,7 @@ func (d *Decoder) Decode(v any) error {
 //	TAG_List: []any(/any) (The value type of the slice may vary. Depending on the type of
 //	          values in the List tag, it might be of the type of any of the other tags, such as []int64.
 //
-// TAG_Compound: struct{...}/map[string]any(/any)
+// TAG_Compound: struct{...}/Compound/map[string]any(/any)
 // TAG_IntArray: [...]int32(/any) (The value must be an int32 array, not a slice)
 // TAG_LongArray: [...]int64(/any) (The value must be an int64 array, not a slice)
 //
@@ -379,6 +391,9 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 			if err != nil {
 				return err
 			}
+			if limit, ok := d.CompoundListLimits[tagName]; listType == tagStruct && ok && length > limit {
+				return fmt.Errorf("nbt: compound list %q length %d exceeds limit %d", tagName, length, limit)
+			}
 			c, err := d.r.sliceCap(length, 1, "Slice")
 			if err != nil {
 				return err
@@ -450,14 +465,20 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 				return InvalidTypeError{Off: d.r.off, FieldType: valType, Field: tagName, TagType: t}
 			}
 
-			// Fast path for TAG_Compound into map[string]any and any(map[string]any), avoid heavy SetMapIndex.
+			// Fast path for TAG_Compound into Compound, map[string]any and
+			// any(map[string]any), avoiding heavy SetMapIndex. Generic nested
+			// compounds retain their map[string]any representation.
 			// Always allocate a fresh map so callers can reuse structs across Decode calls safely.
-			if (valKind == reflect.Map && valType == mapStringAnyType) || (valKind == reflect.Interface && isAny(val)) {
+			if (valKind == reflect.Map && (valType == mapStringAnyType || valType == compoundType)) || (valKind == reflect.Interface && isAny(val)) {
 				m := make(map[string]any)
 				if err := d.unmarshalCompoundAny(m); err != nil {
 					return err
 				}
-				val.Set(reflect.ValueOf(m))
+				if valType == compoundType {
+					val.Set(reflect.ValueOf(Compound(m)))
+				} else {
+					val.Set(reflect.ValueOf(m))
+				}
 				break
 			}
 
