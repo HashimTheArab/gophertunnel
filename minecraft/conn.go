@@ -41,6 +41,11 @@ type exemptedResourcePack struct {
 	version string
 }
 
+// matches reports whether a server-named pack is this one by parsed UUID and numeric version.
+func (pack exemptedResourcePack) matches(id, version string) bool {
+	return resource.CanonicalUUID(pack.uuid) == resource.CanonicalUUID(id) && resource.SameVersion(pack.version, version)
+}
+
 const batchQueueRetainedCapacity = 8
 
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
@@ -1944,7 +1949,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 				DownloadURL: pack.DownloadURL(),
 			}
 			for _, entry := range resourcePackStackEntries {
-				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+				if entry.pack != nil && pack.SameIdentity(entry.UUID(), entry.Version()) {
 					texturePack.SubPackName = entry.SubPackName()
 					break
 				}
@@ -2100,7 +2105,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
 				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
 			})
-			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+			if err == nil && (newPack.UUID() != pack.UUID || !resource.SameVersion(newPack.Version(), pack.Version)) {
 				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
 			}
 			if err != nil {
@@ -2204,7 +2209,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	for _, stackPack := range pk.TexturePacks {
 		var matched *resource.Pack
 		for _, downloaded := range conn.resourcePacks {
-			if downloaded.UUID().String() == stackPack.UUID && downloaded.Version() == stackPack.Version {
+			if downloaded.SameIdentity(stackPack.UUID, stackPack.Version) {
 				matched = downloaded
 				break
 			}
@@ -2214,14 +2219,14 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 		}
 		available := false
 		for _, exempted := range exemptedPacks {
-			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+			if exempted.matches(stackPack.UUID, stackPack.Version) {
 				available = true
 				break
 			}
 		}
 		if !available {
 			for _, ignored := range conn.ignoredResourcePacks {
-				if ignored.uuid == stackPack.UUID && ignored.version == stackPack.Version {
+				if ignored.matches(stackPack.UUID, stackPack.Version) {
 					available = true
 					break
 				}

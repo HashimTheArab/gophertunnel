@@ -65,7 +65,7 @@ func (snapshot ResourcePackStackSnapshot) packet() *packet.ResourcePackStack {
 func (snapshot ResourcePackStackSnapshot) Entries() []ResourcePackStackEntry {
 	entries := make([]ResourcePackStackEntry, len(snapshot.stack.TexturePacks))
 	for i, info := range snapshot.stack.TexturePacks {
-		entries[i] = ResourcePackStackEntry{info: info, pack: snapshot.packs[resourcePackID{info.UUID, info.Version}]}
+		entries[i] = ResourcePackStackEntry{info: info, pack: snapshot.packs[newResourcePackID(info.UUID, info.Version)]}
 	}
 	return entries
 }
@@ -111,7 +111,7 @@ func (snapshot ResourcePackStackSnapshot) IncludeEditorPacks() bool {
 // without offering it for download. Identities match exactly, as the stack sends them.
 func IsBuiltinResourcePack(uuid, version string) bool {
 	for _, exempted := range exemptedPacks {
-		if exempted.uuid == uuid && exempted.version == version {
+		if exempted.matches(uuid, version) {
 			return true
 		}
 	}
