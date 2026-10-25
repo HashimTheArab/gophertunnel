@@ -2887,7 +2887,7 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	}
 }
 
-// handleLoginSuccess sends the client capabilities required before resource-pack negotiation.
+// handleLoginSuccess sends the client capabilities once, preserving any accepted resource-pack offer.
 func (conn *Conn) handleLoginSuccess() error {
 	if conn.loginSuccessReceived {
 		return nil
@@ -2898,7 +2898,10 @@ func (conn *Conn) handleLoginSuccess() error {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if conn.handoff != HandoffAfterLogin {
+	conn.packMu.Lock()
+	offerReceived := conn.resourcePackOffer != nil
+	conn.packMu.Unlock()
+	if conn.handoff != HandoffAfterLogin && !offerReceived {
 		conn.expect(packet.IDResourcePacksInfo)
 	}
 	return conn.Flush()
