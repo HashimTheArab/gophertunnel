@@ -202,7 +202,7 @@ func TestConfigureResourcePackOfferSnapshotRejectsUnservableEntries(t *testing.T
 			t.Fatal(err)
 		}
 		previousOffer, previousStack := conn.resourcePackOffer, conn.resourcePackStack
-		invalidInfo := *valid.packet()
+		invalidInfo := *valid.Packet()
 		var packs []*resource.Pack
 		if !missing {
 			packs = []*resource.Pack{pack}
@@ -237,15 +237,15 @@ func TestResourcePackSnapshotsPreserveWireMetadata(t *testing.T) {
 		Experiments:  []protocol.ExperimentData{{Name: "experiment", Enabled: true}},
 	}
 	stack := newResourcePackStackSnapshot(&stackInfo, nil)
-	if !reflect.DeepEqual(*offer.packet(), info) || !reflect.DeepEqual(*stack.packet(), stackInfo) {
+	if !reflect.DeepEqual(*offer.Packet(), info) || !reflect.DeepEqual(*stack.Packet(), stackInfo) {
 		t.Fatal("snapshot lost wire metadata")
 	}
 	info.TexturePacks[0].Version = "changed"
 	stackInfo.TexturePacks[0].SubPackName = "changed"
 	stackInfo.Experiments[0].Name = "changed"
-	offer.packet().TexturePacks[0].Version = "changed again"
-	stack.packet().TexturePacks[0].SubPackName = "changed again"
-	stack.packet().Experiments[0].Name = "changed again"
+	offer.Packet().TexturePacks[0].Version = "changed again"
+	stack.Packet().TexturePacks[0].SubPackName = "changed again"
+	stack.Packet().Experiments[0].Name = "changed again"
 	stack.Experiments()[0].Name = "changed again"
 	if offer.TexturePacks()[0].Info().Version != "1.0.0" || stack.Entries()[0].SubPackName() != "sub" || stack.Experiments()[0].Name != "experiment" {
 		t.Fatal("snapshot aliases caller-owned packet slices")
@@ -295,9 +295,9 @@ func TestResourcePackSnapshotsCopyAllPacketReferences(t *testing.T) {
 		var copied packet.Packet
 		switch pk := original.(type) {
 		case *packet.ResourcePacksInfo:
-			copied = newResourcePackOfferSnapshot(pk, nil).packet()
+			copied = newResourcePackOfferSnapshot(pk, nil).Packet()
 		case *packet.ResourcePackStack:
-			copied = newResourcePackStackSnapshot(pk, nil).packet()
+			copied = newResourcePackStackSnapshot(pk, nil).Packet()
 		}
 		clone := reflect.ValueOf(copied).Elem()
 		for i := 0; i < value.NumField(); i++ {

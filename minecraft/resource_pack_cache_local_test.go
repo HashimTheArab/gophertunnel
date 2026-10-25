@@ -1,8 +1,5 @@
 package minecraft
 
-// Local-only tests for the resource pack cache and delivery configuration. Not committed: kept out of the
-// branch on purpose so the upstream PR stays test-free per repo policy.
-
 import (
 	"bytes"
 	"context"
@@ -30,6 +27,7 @@ type memoryResourcePackCache struct {
 	stores []ResourcePackCacheKey
 }
 
+// Load returns an immutable in-memory pack, which does not own a file handle.
 func (c *memoryResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -37,13 +35,18 @@ func (c *memoryResourcePackCache) Load(_ context.Context, key ResourcePackCacheK
 	return c.packs[key], nil
 }
 
+// Store copies the archive so the cache survives the source connection closing its file.
 func (c *memoryResourcePackCache) Store(_ context.Context, key ResourcePackCacheKey, pack *resource.Pack) error {
+	copy, err := resource.Read(io.NewSectionReader(pack, 0, int64(pack.Size())))
+	if err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.packs == nil {
 		c.packs = make(map[ResourcePackCacheKey]*resource.Pack)
 	}
-	c.packs[key] = pack
+	c.packs[key] = copy
 	c.stores = append(c.stores, key)
 	return nil
 }
@@ -117,6 +120,7 @@ func TestResourcePackCacheRoundTrip(t *testing.T) {
 	if len(cache.stores) != 1 {
 		t.Fatalf("stores after first login = %d, want 1", len(cache.stores))
 	}
+	_ = first.Abort()
 
 	second := handle()
 	if requests != 1 {
@@ -130,6 +134,10 @@ func TestResourcePackCacheRoundTrip(t *testing.T) {
 	}
 	if got := second.resourcePacks[0].UUID(); got != packID {
 		t.Fatalf("cached pack UUID = %v, want %v", got, packID)
+	}
+	got := make([]byte, len(archive))
+	if _, err := second.resourcePacks[0].ReadAt(got, 0); err != nil || !bytes.Equal(got, archive) {
+		t.Fatalf("cached archive did not survive the first connection closing: %v", err)
 	}
 }
 
@@ -204,6 +212,7 @@ func TestDirResourcePackCache(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("Load after store = %v, %v; want pack, nil", got, err)
 	}
+	defer got.Close()
 	if !key.Matches(got) {
 		t.Fatalf("loaded pack does not match key: UUID=%v version=%v size=%v", got.UUID(), got.Version(), got.Size())
 	}
