@@ -14,6 +14,8 @@ type packetData struct {
 	full    []byte
 	payload *bytes.Buffer
 	owned   bool
+	// ownedCapacity records distinct owned byte arrays before payload reads advance their cursors.
+	ownedCapacity uint64
 }
 
 // RawPacket is one packet of a network batch read by Conn.ReadBatchRaw.
@@ -79,23 +81,27 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
 
+// ensureOwned detaches borrowed frame bytes and records their distinct backing capacities once.
 func (p *packetData) ensureOwned() *packetData {
 	if p.owned {
 		return p
 	}
 	full := bytes.Clone(p.full)
+	ownedCapacity := uint64(cap(full))
 	payloadOffset := len(p.full) - p.payload.Len()
 	var payload []byte
 	if payloadOffset < 0 {
 		payload = bytes.Clone(p.payload.Bytes())
+		ownedCapacity += uint64(cap(payload))
 	} else {
 		payload = full[payloadOffset:]
 	}
 	return &packetData{
-		h:       p.h,
-		full:    full,
-		payload: bytes.NewBuffer(payload),
-		owned:   true,
+		h:             p.h,
+		full:          full,
+		payload:       bytes.NewBuffer(payload),
+		owned:         true,
+		ownedCapacity: ownedCapacity,
 	}
 }
 

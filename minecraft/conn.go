@@ -41,8 +41,6 @@ type exemptedResourcePack struct {
 	version string
 }
 
-const batchQueueRetainedCapacity = 8
-
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
 // in the ResourcePackStack packet.
 var exemptedPacks = []exemptedResourcePack{
@@ -306,10 +304,8 @@ type Conn struct {
 	// ReadPacket after being connected.
 	deferredPackets []*packetData
 	// readBatches is ring storage holding complete network batches in receive order.
-	readBatches   [][]*packetData
-	readBatchHead int
-	readBatchLen  int
-	readDeadline  <-chan time.Time
+	readBatches  incomingBatchQueue
+	readDeadline <-chan time.Time
 
 	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
@@ -434,7 +430,7 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		disableEncryption:    disableEncryption,
 		packets:              make(chan *packetData, 8),
 		batchReady:           make(chan struct{}, 1),
-		readBatches:          make([][]*packetData, batchQueueRetainedCapacity),
+		readBatches:          incomingBatchQueue{entries: make([]incomingBatch, batchQueueRetainedCapacity)},
 		additional:           make(chan packet.Packet, 16),
 		spawn:                make(chan struct{}),
 		conn:                 netConn,
@@ -1347,56 +1343,6 @@ func (conn *Conn) takeDeferredPacket() (*packetData, bool) {
 	conn.deferredPackets[0] = nil
 	conn.deferredPackets = conn.deferredPackets[1:]
 	return data, true
-}
-
-// takeBatch takes the next complete network batch from the read queue.
-func (conn *Conn) takeBatch() ([]*packetData, bool) {
-	conn.readQueueMu.Lock()
-	defer conn.readQueueMu.Unlock()
-
-	if conn.readBatchLen == 0 {
-		return nil, false
-	}
-	batch := conn.readBatches[conn.readBatchHead]
-	// Explicitly clear out the consumed batch so that it may be garbage collected, like
-	// takeDeferredPacket does.
-	conn.readBatches[conn.readBatchHead] = nil
-	conn.readBatchHead = (conn.readBatchHead + 1) % len(conn.readBatches)
-	conn.readBatchLen--
-	if conn.readBatchLen == 0 {
-		// Reuse the old channel's small steady-state capacity, but release a queue that grew during
-		// a burst once it has been completely drained.
-		if len(conn.readBatches) > batchQueueRetainedCapacity {
-			conn.readBatches = make([][]*packetData, batchQueueRetainedCapacity)
-		}
-		conn.readBatchHead = 0
-		select {
-		case <-conn.batchReady:
-		default:
-		}
-	}
-	return batch, true
-}
-
-// queueBatch queues a complete network batch for ReadBatch without blocking the processing goroutine.
-func (conn *Conn) queueBatch(batch []*packetData) {
-	conn.readQueueMu.Lock()
-	if conn.readBatchLen == len(conn.readBatches) {
-		grown := make([][]*packetData, max(len(conn.readBatches)*2, batchQueueRetainedCapacity))
-		copied := copy(grown, conn.readBatches[conn.readBatchHead:])
-		copy(grown[copied:], conn.readBatches[:conn.readBatchHead])
-		clear(conn.readBatches)
-		conn.readBatches = grown
-		conn.readBatchHead = 0
-	}
-	tail := (conn.readBatchHead + conn.readBatchLen) % len(conn.readBatches)
-	conn.readBatches[tail] = batch
-	conn.readBatchLen++
-	select {
-	case conn.batchReady <- struct{}{}:
-	default:
-	}
-	conn.readQueueMu.Unlock()
 }
 
 // deferPacket defers a packet so that it is obtained in the next ReadPacket call. In batch-reading

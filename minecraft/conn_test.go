@@ -338,19 +338,19 @@ func TestBatchReadQueueDoesNotRelocateFullBacklogAfterOneRead(t *testing.T) {
 
 	// A FIFO that shifts the entire live backlog whenever a full queue loses and gains one entry
 	// performs O(capacity) work per batch under steady load. The remaining entries must stay put.
-	storage := conn.readBatches[:cap(conn.readBatches)]
+	storage := conn.readBatches.entries
 	positions := make(map[*packetData]int, batchQueueRetainedCapacity-1)
 	for i, batch := range storage {
-		if len(batch) != 0 {
-			positions[batch[0]] = i
+		if len(batch.packets) != 0 {
+			positions[batch.packets[0]] = i
 		}
 	}
 	batches[batchQueueRetainedCapacity] = []*packetData{{h: &packet.Header{PacketID: 2000}}}
 	conn.queueBatch(batches[batchQueueRetainedCapacity])
-	storage = conn.readBatches[:cap(conn.readBatches)]
+	storage = conn.readBatches.entries
 	for _, batch := range batches[1:batchQueueRetainedCapacity] {
 		position := positions[batch[0]]
-		if stored := storage[position]; len(stored) == 0 || stored[0] != batch[0] {
+		if stored := storage[position].packets; len(stored) == 0 || stored[0] != batch[0] {
 			t.Fatalf("queued batch moved from slot %d after one dequeue/enqueue", position)
 		}
 	}
@@ -388,8 +388,8 @@ func TestBatchReadQueueClearsAllSlotsAfterDrain(t *testing.T) {
 		}
 	}
 
-	for i, batch := range conn.readBatches[:cap(conn.readBatches)] {
-		if batch != nil {
+	for i, batch := range conn.readBatches.entries {
+		if batch.packets != nil {
 			t.Fatalf("drained queue retained a batch in physical slot %d", i)
 		}
 	}
@@ -450,11 +450,11 @@ func TestBatchReadQueuePreservesOrderAcrossWrapAndGrowth(t *testing.T) {
 		}
 		want = want[1:]
 	}
-	if len(conn.readBatches) != batchQueueRetainedCapacity {
-		t.Fatalf("drained burst queue capacity = %d, want %d", len(conn.readBatches), batchQueueRetainedCapacity)
+	if len(conn.readBatches.entries) != batchQueueRetainedCapacity {
+		t.Fatalf("drained burst queue capacity = %d, want %d", len(conn.readBatches.entries), batchQueueRetainedCapacity)
 	}
-	for i, batch := range conn.readBatches {
-		if batch != nil {
+	for i, batch := range conn.readBatches.entries {
+		if batch.packets != nil {
 			t.Fatalf("drained burst queue retained a batch in physical slot %d", i)
 		}
 	}
