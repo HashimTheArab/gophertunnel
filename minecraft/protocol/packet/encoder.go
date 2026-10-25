@@ -93,7 +93,7 @@ func (encoder *Encoder) EnableEncryption(keyBytes [32]byte) {
 	encoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Encoder.
+// EnableCompression configures negotiated compression; a zero threshold sends uncompressed batches.
 func (encoder *Encoder) EnableCompression(compression Compression, threshold int) {
 	encoder.compression = compression
 	encoder.compressionThreshold = threshold
@@ -163,10 +163,10 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 		if observer != nil {
 			stats.UncompressedLen = len(batch)
 		}
-		if len(batch) < encoder.compressionThreshold {
+		if encoder.compressionThreshold == 0 || len(batch) < encoder.compressionThreshold {
 			data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
 			if observer != nil {
-				stats.BelowThreshold = true
+				stats.BelowThreshold = len(batch) < encoder.compressionThreshold
 			}
 		} else {
 			var compressionStart time.Time
@@ -199,9 +199,17 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			if err != nil {
 				return fmt.Errorf("compress batch: %w", err)
 			}
+			compressed := len(data)-batchStart < len(batch)
+			if !compressed {
+				data = buf.Bytes()
+				data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
+			}
 			if observer != nil {
 				stats.CompressionDuration = time.Since(compressionStart)
-				stats.Compressed = true
+				stats.Compressed = compressed
+				if !compressed {
+					stats.CompressionID = CompressionAlgorithmNone
+				}
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
 			}
