@@ -93,10 +93,16 @@ func (encoder *Encoder) EnableEncryption(keyBytes [32]byte) {
 	encoder.encrypt = newEncrypt(keyBytes[:], stream)
 }
 
-// EnableCompression enables compression for the Encoder.
+// EnableCompression enables compression framing for the Encoder. A zero threshold skips compression work
+// while retaining the per-batch compression byte.
 func (encoder *Encoder) EnableCompression(compression Compression, threshold int) {
 	encoder.compression = compression
 	encoder.compressionThreshold = threshold
+}
+
+// DisableCompression disables compression framing without changing the encryption session.
+func (encoder *Encoder) DisableCompression() {
+	encoder.compression = nil
 }
 
 // SetBatchEncodeObserver sets an observer called with metadata for each encoded
@@ -163,10 +169,10 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 		if observer != nil {
 			stats.UncompressedLen = len(batch)
 		}
-		if len(batch) < encoder.compressionThreshold {
+		if encoder.compressionThreshold == 0 || len(batch) < encoder.compressionThreshold {
 			data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
 			if observer != nil {
-				stats.BelowThreshold = true
+				stats.BelowThreshold = len(batch) < encoder.compressionThreshold
 			}
 		} else {
 			var compressionStart time.Time
@@ -176,9 +182,6 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			compressedBuf = internal.BufferPool.Get().(*bytes.Buffer)
 			_, _ = compressedBuf.Write(encoder.header)
 			compressionID := compression.EncodeCompression()
-			if observer != nil {
-				stats.CompressionID = compressionID
-			}
 			_ = compressedBuf.WriteByte(byte(compressionID))
 			var err error
 			if appender, ok := compression.(appendCompression); ok {
@@ -199,9 +202,18 @@ func (encoder *Encoder) encodeBatch(packets [][]byte) error {
 			if err != nil {
 				return fmt.Errorf("compress batch: %w", err)
 			}
+			// Compare inner payloads before encryption or checksum overhead is added.
+			beneficial := len(data)-batchStart < len(batch)
+			if !beneficial {
+				data = buf.Bytes()
+				data[len(encoder.header)] = byte(NopCompression.EncodeCompression())
+			}
 			if observer != nil {
 				stats.CompressionDuration = time.Since(compressionStart)
-				stats.Compressed = true
+				stats.Compressed = beneficial
+				if beneficial {
+					stats.CompressionID = compressionID
+				}
 				stats.BufferCap = compressedBuf.Cap()
 				stats.PooledBuffer = stats.BufferCap <= maxPooledEncoderBufferCap
 			}
