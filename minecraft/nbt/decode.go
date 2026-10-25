@@ -30,7 +30,6 @@ type Decoder struct {
 }
 
 var mapStringAnyType = reflect.TypeOf(map[string]any(nil))
-var compoundType = reflect.TypeFor[Compound]()
 
 // NewDecoder returns a new Decoder for the input stream reader passed.
 func NewDecoder(r io.Reader) *Decoder {
@@ -56,16 +55,9 @@ func (d *Decoder) Decode(v any) error {
 	if tagType == tagEnd && d.AllowZero {
 		// Some implementations write an empty tree as a single TAG_End. When decoding into a map, make sure we
 		// clear it so callers don't accidentally keep stale data.
-		switch m := v.(type) {
-		case *map[string]any:
+		if m, ok := v.(*map[string]any); ok {
 			if *m == nil {
 				*m = make(map[string]any)
-			} else {
-				clear(*m)
-			}
-		case *Compound:
-			if *m == nil {
-				*m = make(Compound)
 			} else {
 				clear(*m)
 			}
@@ -92,7 +84,7 @@ func (d *Decoder) Decode(v any) error {
 //	TAG_List: []any(/any) (The value type of the slice may vary. Depending on the type of
 //	          values in the List tag, it might be of the type of any of the other tags, such as []int64.
 //
-// TAG_Compound: struct{...}/Compound/map[string]any(/any)
+// TAG_Compound: struct{...}/map[string]any(/any)
 // TAG_IntArray: [...]int32(/any) (The value must be an int32 array, not a slice)
 // TAG_LongArray: [...]int64(/any) (The value must be an int64 array, not a slice)
 //
@@ -465,20 +457,14 @@ func (d *Decoder) unmarshalTag(val reflect.Value, t tagType, tagName string) err
 				return InvalidTypeError{Off: d.r.off, FieldType: valType, Field: tagName, TagType: t}
 			}
 
-			// Fast path for TAG_Compound into Compound, map[string]any and
-			// any(map[string]any), avoiding heavy SetMapIndex. Generic nested
-			// compounds retain their map[string]any representation.
+			// Fast path for TAG_Compound into map[string]any and any(map[string]any), avoid heavy SetMapIndex.
 			// Always allocate a fresh map so callers can reuse structs across Decode calls safely.
-			if (valKind == reflect.Map && (valType == mapStringAnyType || valType == compoundType)) || (valKind == reflect.Interface && isAny(val)) {
+			if (valKind == reflect.Map && valType == mapStringAnyType) || (valKind == reflect.Interface && isAny(val)) {
 				m := make(map[string]any)
 				if err := d.unmarshalCompoundAny(m); err != nil {
 					return err
 				}
-				if valType == compoundType {
-					val.Set(reflect.ValueOf(Compound(m)))
-				} else {
-					val.Set(reflect.ValueOf(m))
-				}
+				val.Set(reflect.ValueOf(m))
 				break
 			}
 
