@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 	"github.com/sandertv/gophertunnel/minecraft/resource"
@@ -27,7 +26,6 @@ type resourcePackQueue struct {
 // downloadingPack is a resource pack that is being downloaded by a client connection.
 type downloadingPack struct {
 	buf        *bytes.Buffer
-	chunkSize  uint32
 	chunkCount uint32
 	size       uint64
 	newFrag    chan resourcePackChunk
@@ -35,9 +33,7 @@ type downloadingPack struct {
 	cacheKey   ResourcePackCacheKey
 	event      ResourcePackEvent // chunk-source template for progress events
 
-	// mu guards requested, which tracks the chunk indices requested but not yet received.
-	mu        sync.Mutex
-	requested map[uint32]struct{}
+	window *ResourcePackChunkWindow
 }
 
 // resourcePackChunk is a single received chunk of a resource pack, tagged with its index.
