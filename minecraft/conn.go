@@ -784,6 +784,10 @@ func (conn *Conn) WritePacketRaw(data []byte) error {
 	}
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
+	if conn.ctx.Err() != nil {
+		// Shutdown began while waiting for sendMu, as queuePackets also checks.
+		return conn.closeErr("write raw packet")
+	}
 	// Observe under sendMu, as WritePacket does, so the shield ID follows the order packets are queued in.
 	conn.observeRawWrite(data)
 	conn.bufferedSend = append(conn.bufferedSend, data)

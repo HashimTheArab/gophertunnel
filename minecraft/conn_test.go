@@ -1783,6 +1783,33 @@ func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
 	}
 }
 
+// A raw write waiting for sendMu while the connection aborts is rejected, not observed or buffered.
+func TestWritePacketRawRejectsAbortWhileWaiting(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	var observed atomic.Bool
+	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { observed.Store(true) }
+
+	conn.sendMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- conn.WritePacketRaw([]byte{0x09, 1}) }()
+	// Give the write time to pass its first shutdown check and wait for sendMu.
+	time.Sleep(20 * time.Millisecond)
+	_ = conn.Abort()
+	conn.sendMu.Unlock()
+
+	if err := <-done; err == nil {
+		t.Fatal("WritePacketRaw returned no error after the connection aborted")
+	}
+	if observed.Load() {
+		t.Fatal("WritePacketRaw observed a packet after the connection aborted")
+	}
+	if n := len(conn.bufferedSend); n != 0 {
+		t.Fatalf("WritePacketRaw buffered %d packets after the connection aborted", n)
+	}
+}
+
 // Concurrent raw writes leave the shield ID of the registry queued last.
 func TestWritePacketRawShieldFollowsQueueOrder(t *testing.T) {
 	client, peer := net.Pipe()
