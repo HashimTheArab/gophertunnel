@@ -89,6 +89,9 @@ type experience struct {
 	// displayed as 'Featured experiences' in the servers tab. Otherwise,
 	// the experience will be displayed as 'Creator experiences'.
 	Rank int `json:"rank"`
+	// RequiredExperiments are the treatment tags required to display/join
+	// this experience.
+	RequiredExperiments []string `json:"requiredExperiments"`
 }
 
 // UnmarshalJSON implements [json.Unmarshaler] for [Experience].

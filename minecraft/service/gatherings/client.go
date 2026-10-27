@@ -15,6 +15,7 @@ import (
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"golang.org/x/text/language"
@@ -149,7 +150,6 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 		return nil, fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 
 	opts = append(opts, playfab.AcceptLanguage([]language.Tag{language.AmericanEnglish}))
 	for _, opt := range opts {
@@ -163,6 +163,8 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 		return nil, fmt.Errorf("request service token: %w", err)
 	}
 	token.SetAuthHeader(req)
+	req.Header.Set("Client-Version", protocol.CurrentVersion)
+	req.Header.Set("User-Agent", internal.UserAgent)
 
 	httpClient := *c.client
 	if httpClient.Timeout == 0 || httpClient.Timeout > internal.CatalogRequestTimeout {
@@ -228,7 +230,7 @@ func (c *Client) FeaturedServers(ctx context.Context) ([]*FeaturedServer, error)
 		// and return the same result for any filter.
 		Filter:  "(ContentType eq '3PP_V2.0') and (DisplayProperties/experienceId eq '')",
 		OrderBy: "startDate desc",
-		Select:  "images", // I don't think this is needed
+		Select:  "images",
 	})
 	if err != nil {
 		return nil, err
@@ -270,15 +272,8 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 		return nil, fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 
-	token, err := c.src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-
-	resp, err := c.client.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -296,4 +291,81 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 	default:
 		return nil, service.NewResponseError(resp)
 	}
+}
+
+// do authorises req with a service token, sets the headers the vanilla client sends and sends it through
+// the Client's HTTP client. req must carry the context the token request should respect.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	token, err := c.src.ServiceToken(req.Context())
+	if err != nil {
+		return nil, fmt.Errorf("request service token: %w", err)
+	}
+	token.SetAuthHeader(req)
+
+	req.Header.Set("Client-Version", protocol.CurrentVersion)
+	req.Header.Set("User-Agent", internal.UserAgent)
+	return c.client.Do(req)
+}
+
+// JoinFriend attempts to join the same world as a friend using the friend's ID,
+// experience ID, and world ID. When a user joins an experience, they publish a
+// presence to the Xbox Live Multiplayer Session Directory (MPSD) containing
+// identifiers tied to the experience and world they are currently playing in.
+// The user's friends can use the identifiers published in the MPSD session's
+// custom properties to join the same world. The world ID or friend ID may be
+// [uuid.Nil] or an empty string if they're not available.
+func (c *Client) JoinFriend(ctx context.Context, experienceID, worldID uuid.UUID, friendID string) (*Address, error) {
+	if experienceID == uuid.Nil {
+		return nil, fmt.Errorf("service/gatherings: experience ID must not be nil")
+	}
+	buf := &bytes.Buffer{}
+	if err := json.NewEncoder(buf).Encode(joinFriendRequest{
+		ExperienceID: experienceID,
+		WorldID:      worldID,
+	}); err != nil {
+		return nil, fmt.Errorf("encode request body: %w", err)
+	}
+
+	requestURL := c.env.ServiceURI.JoinPath("/api/v2.0/join/world/client")
+	if friendID != "" {
+		q := requestURL.Query()
+		q.Set("friendId", friendID)
+		requestURL.RawQuery = q.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), buf)
+	if err != nil {
+		return nil, fmt.Errorf("make request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var result internal.Result[*Address]
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("decode response body: %w", err)
+		}
+		if result.Data == nil {
+			return nil, errors.New("service/gatherings: invalid JoinFriend response")
+		}
+		return result.Data, nil
+	default:
+		return nil, service.NewResponseError(resp)
+	}
+}
+
+// joinFriendRequest represents the JSON structure for the request body used in [Client.JoinFriend].
+// It includes identifiers of the experience/world to connect. The PlayFab ID of the friend is instead
+// included as the 'friendId' query parameter in the URL.
+type joinFriendRequest struct {
+	// ExperienceID identifies the experience to join.
+	ExperienceID uuid.UUID `json:"experienceId"`
+	// WorldID identifies the world within the experience to join.
+	// It may be absent if the server has no world ID associated with it.
+	WorldID uuid.UUID `json:"worldId,omitzero"`
 }

@@ -14,7 +14,9 @@ type packetData struct {
 	h       *packet.Header
 	full    []byte
 	payload *bytes.Buffer
-	owned   bool
+	// owned specifies if full and payload no longer alias the Decoder's pooled batch buffer, meaning the
+	// packetData may be retained after the read callback it was created in returns.
+	owned bool
 }
 
 // RawPacket is one packet of a network batch read by Conn.ReadBatchRaw.
@@ -87,6 +89,8 @@ func parsePacketData(data []byte) (*packetData, error) {
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
 
+// ensureOwned returns a packetData that owns its underlying data, copying it if it still aliases the
+// Decoder's pooled batch buffer.
 func (p *packetData) ensureOwned() *packetData {
 	if p.owned {
 		return p
