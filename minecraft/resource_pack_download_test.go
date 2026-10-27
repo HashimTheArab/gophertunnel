@@ -118,10 +118,10 @@ func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	if !waitForResourcePackRequest(t, pack, 99) {
 		t.Fatal("vanilla request window was not filled")
 	}
-	pack.mu.Lock()
-	_, requestedEarly := pack.requested[100]
-	requestCount := len(pack.requested)
-	pack.mu.Unlock()
+	pack.window.mu.Lock()
+	_, requestedEarly := pack.window.pending[100]
+	requestCount := len(pack.window.pending)
+	pack.window.mu.Unlock()
 	if requestedEarly {
 		t.Fatal("request window exceeded before a chunk was received")
 	}
@@ -144,9 +144,9 @@ func waitForResourcePackRequest(t *testing.T, pack *downloadingPack, index uint3
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		pack.mu.Lock()
-		_, ok := pack.requested[index]
-		pack.mu.Unlock()
+		pack.window.mu.Lock()
+		_, ok := pack.window.pending[index]
+		pack.window.mu.Unlock()
 		if ok {
 			return true
 		}
