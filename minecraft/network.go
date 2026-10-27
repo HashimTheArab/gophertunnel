@@ -32,6 +32,16 @@ type Network interface {
 	Listen(address string) (NetworkListener, error)
 }
 
+// IsRakNet reports whether network uses RakNet, including addressed-server fallbacks.
+func IsRakNet(network Network) bool {
+	switch network.(type) {
+	case RakNet, *RakNet, probedRakNet, *probedRakNet:
+		return true
+	default:
+		return false
+	}
+}
+
 // identityDialer is implemented by Networks that require an additional security measure
 // to prove possession of the player's private key. The identity token is issued by Minecraft's
 // authorization service and must include corresponding public key in the 'cpk' claim.
