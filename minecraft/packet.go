@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -56,25 +57,32 @@ func decodeRawServerPacket(conn *Conn, id uint32, payload []byte) (pks []packet.
 	return conn.proto.ConvertToLatest(pk, conn), nil
 }
 
-// parseData parses the packet data slice passed into a packetData struct.
+// parseData parses packet bytes and reports the payload to the connection observer.
 func parseData(data []byte, conn *Conn) (*packetData, error) {
+	p, err := parsePacketData(data)
+	if err != nil {
+		return nil, err
+	}
+	observe := conn.packetObserver.forPacket(p.h.PacketID)
+	if observe != nil || conn.packetFunc != nil {
+		payload := bytes.Clone(p.payload.Bytes())
+		source, destination := conn.RemoteAddr(), conn.LocalAddr()
+		if observe != nil {
+			observe(*p.h, payload, source, destination)
+		}
+		if conn.packetFunc != nil {
+			conn.packetFunc(*p.h, payload, source, destination)
+		}
+	}
+	return p, nil
+}
+
+// parsePacketData separates a packet header from its borrowed payload without connection policy.
+func parsePacketData(data []byte) (*packetData, error) {
 	buf := bytes.NewBuffer(data)
 	header := &packet.Header{}
 	if err := header.Read(buf); err != nil {
-		// We don't return this as an error as it's not in the hand of the user to control this. Instead,
-		// we return to reading a new packet.
 		return nil, fmt.Errorf("read packet header: %w", err)
-	}
-	observe := conn.packetObserver.forPacket(header.PacketID)
-	if observe != nil || conn.packetFunc != nil {
-		payload := bytes.Clone(buf.Bytes())
-		source, destination := conn.RemoteAddr(), conn.LocalAddr()
-		if observe != nil {
-			observe(*header, payload, source, destination)
-		}
-		if conn.packetFunc != nil {
-			conn.packetFunc(*header, payload, source, destination)
-		}
 	}
 	return &packetData{h: header, full: data, payload: buf}, nil
 }
@@ -127,9 +135,14 @@ func (p *packetData) probe(conn *Conn) ([]packet.Packet, error) {
 }
 
 // decodePacket decodes p without applying connection-level disconnect policies.
-func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
+func (p *packetData) decodePacket(conn *Conn) ([]packet.Packet, error) {
+	return p.decodeWith(conn.proto, conn.pool, conn.shieldID.Load(), conn.readerLimits, conn.actorIDs.Load(), conn)
+}
+
+// decodeWith shares packet decoding, unread-byte checks and conversion with codec-only callers.
+func (p *packetData) decodeWith(proto Protocol, pool packet.Pool, shieldID int32, limits bool, translation *protocol.ActorIDTranslation, conn *Conn) (pks []packet.Packet, err error) {
 	// Attempt to fetch the packet with the right packet ID from the pool.
-	pkFunc, ok := conn.pool[p.h.PacketID]
+	pkFunc, ok := pool[p.h.PacketID]
 	var pk packet.Packet
 	if !ok {
 		// No packet with the ID. This may be a custom packet of some sorts.
@@ -144,8 +157,8 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 		}
 	}()
 
-	r := conn.proto.NewReader(p.payload, conn.shieldID.Load(), conn.readerLimits)
-	if translation := conn.actorIDs.Load(); translation != nil {
+	r := proto.NewReader(p.payload, shieldID, limits)
+	if translation != nil {
 		r = translation.WrapReader(r)
 	}
 	pk.Marshal(r)
@@ -155,5 +168,35 @@ func (p *packetData) decodePacket(conn *Conn) (pks []packet.Packet, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return conn.proto.ConvertToLatest(pk, conn), err
+	return proto.ConvertToLatest(pk, conn), err
+}
+
+// DecodePacket decodes a current-protocol packet including its header, without connection-side
+// observers or disconnect policy. pool selects the allowed packet direction; unregistered IDs
+// become packet.Unknown. The connection's malformed-payload and unread-byte checks still apply.
+func DecodePacket(data []byte, pool packet.Pool, shieldID int32, enableLimits bool) (packet.Packet, error) {
+	p, err := parsePacketData(data)
+	if err != nil {
+		return nil, err
+	}
+	packets, err := p.decodeWith(DefaultProtocol, pool, shieldID, enableLimits, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return packets[0], nil
+}
+
+// EncodePacket writes pk and its header to buf using proto and the current shield/actor context.
+// It sets header.PacketID and returns the payload's offset in buf. Protocol conversion and write
+// observation belong to the caller. A marshal panic leaves only buf changed, before publication.
+func EncodePacket(buf *bytes.Buffer, header *packet.Header, pk packet.Packet, proto Protocol, shieldID int32, translation *protocol.ActorIDTranslation) int {
+	header.PacketID = pk.ID()
+	_ = header.Write(buf)
+	payload := buf.Len()
+	writer := proto.NewWriter(buf, shieldID)
+	if translation != nil {
+		writer = translation.WrapWriter(writer)
+	}
+	pk.Marshal(writer)
+	return payload
 }
