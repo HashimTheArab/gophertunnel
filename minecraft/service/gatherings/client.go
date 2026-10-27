@@ -135,8 +135,6 @@ func (c *Client) ParseFeaturedServer(item catalog.Item) (*FeaturedServer, error)
 // filter, so this method is only useful for listing gatherings experiences
 // and featured servers.
 func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, opts ...playfab.RequestOption) (*catalog.SearchResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, internal.CatalogCallTimeout)
-	defer cancel()
 	buf := &bytes.Buffer{}
 	defer buf.Reset()
 	if err := json.NewEncoder(buf).Encode(filter); err != nil {
@@ -144,31 +142,28 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 	}
 
 	requestURL := c.env.ServiceURI.JoinPath("/api/v2.0/discovery/blob/client").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-
-	opts = append(opts, playfab.AcceptLanguage([]language.Tag{language.AmericanEnglish}))
-	for _, opt := range opts {
-		if err := opt(req); err != nil {
-			return nil, fmt.Errorf("apply request option: %w", err)
+	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
 		}
-	}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 
-	token, err := c.src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
+		opts = append(opts, playfab.AcceptLanguage([]language.Tag{language.AmericanEnglish}))
+		for _, opt := range opts {
+			if err := opt(req); err != nil {
+				return nil, fmt.Errorf("apply request option: %w", err)
+			}
+		}
 
-	httpClient := *c.client
-	if httpClient.Timeout == 0 || httpClient.Timeout > internal.CatalogRequestTimeout {
-		httpClient.Timeout = internal.CatalogRequestTimeout
-	}
-	resp, err := authclient.SendRequestWithRetries(ctx, &httpClient, req, authclient.RetryOptions{Attempts: internal.CatalogRequestAttempts})
+		token, err := c.src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		return req, nil
+	}, internal.RequestOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -265,20 +260,21 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v2.0/join/experience").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 
-	token, err := c.src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-
-	resp, err := c.client.Do(req)
+		token, err := c.src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		return req, nil
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

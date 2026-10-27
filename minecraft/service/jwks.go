@@ -151,15 +151,16 @@ func (r *refreshingKeySet) keysFromRemote(ctx context.Context) ([]jose.JSONWebKe
 
 // updateKeys performs the HTTP request to fetch and decode the JWKS.
 func (r *refreshingKeySet) updateKeys() ([]jose.JSONWebKey, error) {
-	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, r.jwksURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-
-	resp, err := authclient.SendRequestWithRetries(r.ctx, r.env.httpClient(), req, authclient.RetryOptions{Attempts: 5})
+	resp, err := internal.SendRequest(r.ctx, r.env.httpClient(), func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.jwksURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		return req, nil
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}

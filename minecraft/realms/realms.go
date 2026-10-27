@@ -18,6 +18,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
+	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
 
@@ -378,7 +379,7 @@ func (r *Client) requestPost(ctx context.Context, path string, requestBody []byt
 }
 
 func (r *Client) request(ctx context.Context, method, path string, requestBody []byte) (body []byte, status int, err error) {
-	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{})
+	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{Attempts: 3})
 }
 
 // requestWithOptions performs a Realms request using the supplied HTTP retry policy while preserving version negotiation.
@@ -401,7 +402,7 @@ func (r *Client) requestWithOptions(ctx context.Context, method, path string, re
 // send performs a single request against the realms api with an explicit
 // Client-Version, without negotiating a replacement for a rejected one.
 func (r *Client) send(ctx context.Context, method, path string, requestBody []byte, clientVersion string) (body []byte, status int, err error) {
-	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{})
+	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{Attempts: 3})
 }
 
 // sendWithOptions performs one version-pinned Realms request using the supplied HTTP retry policy.
@@ -416,24 +417,25 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 	if base == "" {
 		base = realmsBaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	req.Header.Set("Client-Version", clientVersion)
-	req.Header.Set("X-ClientPlatform", "Android")
-	req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
-	if requestBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	xbl, err := r.xboxToken(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	xbl.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
+	resp, err := service.SendRequest(ctx, r.httpClient, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("Client-Version", clientVersion)
+		req.Header.Set("X-ClientPlatform", "Android")
+		req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
+		if requestBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		xbl, err := r.xboxToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xbl.SetAuthHeader(req)
+		return req, nil
+	}, service.RequestOptions{Retry: retryOptions})
 	if err != nil {
 		return nil, 0, err
 	}

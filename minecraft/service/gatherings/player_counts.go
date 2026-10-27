@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
@@ -97,18 +98,20 @@ func (c *Client) refreshPlayerCounts(ctx context.Context, refresh *playerCountsR
 // fetchPlayerCounts requests the shared population snapshot without per-experience requests.
 func (c *Client) fetchPlayerCounts(ctx context.Context) ([]ExperiencePlayerCount, error) {
 	target := c.env.ServiceURI.JoinPath("/api/v2.0/dataquery/playercounts")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-	token, err := c.src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-	response, err := c.client.Do(req)
+	response, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		token, err := c.src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		return req, nil
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

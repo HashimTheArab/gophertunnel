@@ -8,8 +8,6 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/sandertv/gophertunnel/minecraft/auth"
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -151,21 +149,15 @@ type discoveryFlight struct {
 
 // discover bounds one service lookup and retries transient HTTP failures.
 func discover(ctx context.Context, requestURL string) (*Discovery, error) {
-	ctx, cancel := context.WithTimeout(ctx, internal.CatalogCallTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-
-	httpClient := *auth.ContextClient(ctx)
-	if httpClient.Timeout == 0 || httpClient.Timeout > internal.CatalogRequestTimeout {
-		httpClient.Timeout = internal.CatalogRequestTimeout
-	}
-	resp, err := authclient.SendRequestWithRetries(ctx, &httpClient, req, authclient.RetryOptions{Attempts: internal.CatalogRequestAttempts})
+	resp, err := internal.SendRequest(ctx, nil, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		return req, nil
+	}, internal.RequestOptions{})
 	if err != nil {
 		return nil, err
 	}

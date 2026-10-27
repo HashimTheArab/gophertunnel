@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -91,11 +92,9 @@ func (c *Client) Images(ctx context.Context, xuid string) ([]Image, error) {
 		return nil, fmt.Errorf("service/gallery: invalid XUID %q", xuid)
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery/xuid", url.PathEscape(xuid)).String()
-	req, err := c.request(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.client.Do(req)
+	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		return c.request(ctx, http.MethodGet, requestURL, nil)
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -128,16 +127,18 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 		return Image{}, errors.New("service/gallery: image is nil")
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery").String()
-	req, err := c.request(ctx, http.MethodPost, requestURL, image)
-	if err != nil {
-		return Image{}, err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("X-Ms-Showcased-Featured", strconv.FormatBool(options.Featured))
-	if !options.TakenAt.IsZero() {
-		req.Header.Set("X-Ms-Showcased-Timetaken", options.TakenAt.UTC().Format("2006-01-02T15:04:05.000Z"))
-	}
-	resp, err := c.client.Do(req)
+	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := c.request(ctx, http.MethodPost, requestURL, image)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Ms-Showcased-Featured", strconv.FormatBool(options.Featured))
+		if !options.TakenAt.IsZero() {
+			req.Header.Set("X-Ms-Showcased-Timetaken", options.TakenAt.UTC().Format("2006-01-02T15:04:05.000Z"))
+		}
+		return req, nil
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return Image{}, err
 	}
@@ -165,15 +166,13 @@ func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) 
 	if image.client != c || image.fetchURL == "" || image.URL != image.fetchURL {
 		return nil, errors.New("service/gallery: image was not returned by this client or its URL was changed")
 	}
-	req, err := c.request(ctx, http.MethodGet, image.fetchURL, nil)
-	if err != nil {
-		return nil, err
-	}
 	client := *c.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	resp, err := client.Do(req)
+	resp, err := internal.SendRequest(ctx, &client, func(ctx context.Context) (*http.Request, error) {
+		return c.request(ctx, http.MethodGet, image.fetchURL, nil)
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +189,9 @@ func (c *Client) Delete(ctx context.Context, imageID string) error {
 		return errors.New("service/gallery: invalid image ID")
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery", url.PathEscape(imageID)).String()
-	req, err := c.request(ctx, http.MethodDelete, requestURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.client.Do(req)
+	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		return c.request(ctx, http.MethodDelete, requestURL, nil)
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -117,24 +118,31 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 		return PurchaseResult{}, fmt.Errorf("encode purchase: %w", err)
 	}
 	target := c.entitlements.endpoint("/api/v1.0/transaction/virtual")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
-	if err != nil {
-		return PurchaseResult{}, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-	req.Header[inventoryETagHeader] = []string{c.InventoryVersion()}
-	token, err := c.entitlements.src.ServiceToken(ctx)
-	if err != nil {
-		return PurchaseResult{}, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
 	// Redirects can replay the purchase body or turn the response into an unrelated GET.
 	client := *c.entitlements.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
+	prepared := false
+	resp, err := internal.SendRequest(ctx, &client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		req.Header[inventoryETagHeader] = []string{c.InventoryVersion()}
+		token, err := c.entitlements.src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		prepared = true
+		return req, nil
+	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
+		if !prepared {
+			return PurchaseResult{}, err
+		}
 		return PurchaseResult{Outcome: PurchaseUnknown, CorrelationID: tags.CorrelationID}, nil
 	}
 	defer resp.Body.Close()
