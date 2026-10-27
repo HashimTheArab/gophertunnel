@@ -1138,7 +1138,7 @@ func (conn *Conn) SetDeadline(t time.Time) error {
 // SetReadDeadline sets the read deadline of the Conn to the time passed. The time must be after time.Now().
 // Passing an empty time.Time to the method (time.Time{}) results in the read deadline being cleared.
 func (conn *Conn) SetReadDeadline(t time.Time) error {
-	if t.Equal(time.Time{}) {
+	if t.IsZero() {
 		conn.readDeadline = make(chan time.Time)
 	} else if t.Before(time.Now()) {
 		panic(fmt.Errorf("error setting read deadline: time passed is before time.Now()"))
@@ -1740,7 +1740,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
-	if pkc, ok := conn.conn.(publicKeyConn); ok {
+	if v, ok := conn.conn.(publicKeyVerifierConn); ok {
+		if err := v.VerifyPublicKey(authResult.PublicKey); err != nil {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+			return fmt.Errorf("verify identity public key: %w", err)
+		}
+	} else if pkc, ok := conn.conn.(publicKeyConn); ok {
 		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
 			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
 			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
@@ -1842,6 +1847,15 @@ type publicKeyConn interface {
 	// When non-nil, it must be compared against [login.AuthResult.PublicKey]
 	// to prevent login packet replay attacks.
 	PublicKey() *ecdsa.PublicKey
+}
+
+// publicKeyVerifierConn is implemented by underlying [net.Conn] of the Conn that bind the
+// connection to an identity without exposing its public key. It takes precedence over
+// publicKeyConn.
+type publicKeyVerifierConn interface {
+	// VerifyPublicKey returns an error if the validated [login.AuthResult.PublicKey]
+	// does not match the identity the connection was established for.
+	VerifyPublicKey(pub *ecdsa.PublicKey) error
 }
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
@@ -2797,9 +2811,7 @@ func (conn *Conn) handleLoginSuccess() error {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if conn.handoff != HandoffAfterLogin {
-		conn.expect(packet.IDResourcePacksInfo)
-	}
+	// ResourcePacksInfo is already expected, and may even have been handled if the server sent it first.
 	return conn.Flush()
 }
 
