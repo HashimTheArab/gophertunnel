@@ -130,7 +130,7 @@ func (decoder *Decoder) Decode() (packets [][]byte, err error) {
 		return nil, err
 	}
 	data = bytes.Clone(data)
-	err = decoder.walkBatch(data, func(packet []byte) error {
+	err = walkBatch(data, decoder.checkPacketLimit, func(packet []byte) error {
 		packets = append(packets, packet)
 		return nil
 	})
@@ -151,10 +151,25 @@ func (decoder *Decoder) DecodeFunc(f func([]byte) error) error {
 	if err != nil {
 		return err
 	}
-	if err := decoder.walkBatch(data, nil); err != nil {
+	if err := walkBatch(data, decoder.checkPacketLimit, nil); err != nil {
 		return err
 	}
-	return decoder.walkBatch(data, f)
+	return walkBatch(data, decoder.checkPacketLimit, f)
+}
+
+// SplitBatch splits an uncompressed, decrypted batch body into packets including their headers.
+// The returned slices borrow data and cannot be appended into following packets. Malformed bodies
+// return no packets. checkPacketLimit applies the decoder's client packet-count and empty-packet
+// checks; server decoders normally disable those checks. The caller owns the total byte budget.
+func SplitBatch(data []byte, checkPacketLimit bool) ([][]byte, error) {
+	var packets [][]byte
+	if err := walkBatch(data, checkPacketLimit, func(data []byte) error {
+		packets = append(packets, data)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return packets, nil
 }
 
 func (decoder *Decoder) readBatch() (data []byte, pooled *[]byte, err error) {
@@ -235,7 +250,8 @@ func (decoder *Decoder) decompressBatch(compression Compression, compressed []by
 	return data, nil, nil
 }
 
-func (decoder *Decoder) walkBatch(data []byte, f func([]byte) error) error {
+// walkBatch validates framing and optionally visits each nonempty packet in order.
+func walkBatch(data []byte, checkPacketLimit bool, f func([]byte) error) error {
 	var packetCount int
 	for len(data) != 0 {
 		length, n, err := readPacketLength(data)
@@ -244,7 +260,7 @@ func (decoder *Decoder) walkBatch(data []byte, f func([]byte) error) error {
 		}
 		data = data[n:]
 		if length == 0 {
-			if decoder.checkPacketLimit {
+			if checkPacketLimit {
 				return fmt.Errorf("decode batch: empty packet")
 			}
 			continue
@@ -252,7 +268,7 @@ func (decoder *Decoder) walkBatch(data []byte, f func([]byte) error) error {
 		if length > uint32(len(data)) {
 			return fmt.Errorf("decode batch: packet length %v exceeds remaining %v", length, len(data))
 		}
-		if packetCount >= maximumInBatch && decoder.checkPacketLimit {
+		if packetCount >= maximumInBatch && checkPacketLimit {
 			return fmt.Errorf("decode batch: number of packets exceeds max=%v", maximumInBatch)
 		}
 		if f != nil {
