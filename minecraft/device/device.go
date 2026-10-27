@@ -33,7 +33,7 @@ func (p Profile) Apply(data *login.ClientData) {
 // DefaultInputMode returns the input mode a client on os starts in.
 func DefaultInputMode(os protocol.DeviceOS) int {
 	switch os {
-	case protocol.DeviceOSX, protocol.DeviceWin10, protocol.DeviceWin32, protocol.DeviceTVOS, protocol.DeviceLinux:
+	case protocol.DeviceOSX, protocol.DeviceWin10, protocol.DeviceWin32, protocol.DeviceTVOS, protocol.DeviceLinux: //nolint:staticcheck // Logins may still report tvOS.
 		return packet.InputModeMouse
 	case protocol.DeviceOrbis, protocol.DeviceNX, protocol.DeviceXBOX:
 		return packet.InputModeGamePad

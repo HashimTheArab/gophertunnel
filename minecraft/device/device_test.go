@@ -44,8 +44,8 @@ func TestApplyDeviceToDecodedClientDataSerializesTheClaims(t *testing.T) {
 		}
 	}
 	text := string(encoded)
-	if !(strings.Index(text, `"CurrentInputMode"`) < strings.Index(text, `"DefaultInputMode"`) &&
-		strings.Index(text, `"DeviceOS"`) < strings.Index(text, `"GameVersion"`)) {
+	if strings.Index(text, `"CurrentInputMode"`) >= strings.Index(text, `"DefaultInputMode"`) ||
+		strings.Index(text, `"DeviceOS"`) >= strings.Index(text, `"GameVersion"`) {
 		t.Fatalf("device claims are out of vanilla order: %s", encoded)
 	}
 }
