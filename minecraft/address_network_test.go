@@ -255,6 +255,45 @@ func TestAddressNetworkReprobesAfterRakNetTimeoutButNotCancellation(t *testing.T
 	}
 }
 
+// headerTransport adds a header to every request, standing in for a differently configured client.
+type headerTransport struct{ header string }
+
+// RoundTrip sets the header and sends the request with the default transport.
+func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set(h.header, "1")
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// A probe answer for one HTTP client is not reused for another client probing the same address.
+func TestAddressNetworkProbeCacheIsPerHTTPClient(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Probe-Allowed") == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "OK")
+	}))
+	t.Cleanup(server.Close)
+	cache := newProbeCache()
+	plain := AddressNetwork{probes: cache, HTTPClient: &http.Client{}}
+	allowed := AddressNetwork{probes: cache, HTTPClient: &http.Client{Transport: headerTransport{header: "X-Probe-Allowed"}}}
+
+	if selected, err := plain.Select(t.Context(), server.Listener.Addr().String()); err != nil {
+		t.Fatalf("plain Select: %v", err)
+	} else if _, ok := selected.(probedRakNet); !ok {
+		t.Fatalf("plain Select chose %T, want RakNet", selected)
+	}
+	selected, err := allowed.Select(t.Context(), server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("allowed Select: %v", err)
+	}
+	if _, ok := selected.(httpNetherNet); !ok {
+		t.Fatalf("allowed Select chose %T, want NetherNet from its own probe", selected)
+	}
+}
+
 func TestAddressNetworkSelectsNetherNetWhenProbeAnswers(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

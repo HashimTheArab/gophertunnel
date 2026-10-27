@@ -20,7 +20,7 @@ import (
 // AddressNetwork is a Network for a server named by host:port. Like the vanilla client joining
 // such a server, it probes the address for NetherNet HTTP signaling and dials NetherNet when the
 // probe succeeds, RakNet otherwise. Unlike vanilla, which probes on every join, the answer is
-// remembered per address for probeCacheTTL or until a dial through it fails.
+// remembered per address and HTTP client for probeCacheTTL or until a dial through it fails.
 type AddressNetwork struct {
 	// RakNet dials servers that do not answer the probe.
 	RakNet RakNet
@@ -50,7 +50,7 @@ const defaultServerPort = 19132
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
-	cache, key := n.probeCache(), probeKey{host: host, port: port}
+	cache, key := n.probeCache(), probeKey{host: host, port: port, client: n.HTTPClient}
 	endpoint, ok := cache.lookup(key)
 	if !ok {
 		var err error
@@ -90,9 +90,12 @@ type probeCache struct {
 	entries map[probeKey]probeEntry
 }
 
+// probeKey identifies a probe answer. It includes the configured HTTP client, as clients with
+// different transports or proxies can get different answers for the same address.
 type probeKey struct {
-	host string
-	port uint16
+	host   string
+	port   uint16
+	client *http.Client
 }
 
 type probeEntry struct {
