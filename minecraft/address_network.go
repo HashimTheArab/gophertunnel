@@ -68,6 +68,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, cache: cache, key: key}, nil
 }
 
+// probeCache returns the configured cache or the process-wide cache.
 func (n AddressNetwork) probeCache() *probeCache {
 	if n.probes != nil {
 		return n.probes
@@ -99,10 +100,12 @@ type probeEntry struct {
 	expires  time.Time
 }
 
+// newProbeCache creates an empty cache of transport probe answers.
 func newProbeCache() *probeCache {
 	return &probeCache{entries: make(map[probeKey]probeEntry)}
 }
 
+// lookup returns an unexpired probe answer, or a cache miss.
 func (c *probeCache) lookup(key probeKey) (string, bool) {
 	if c == nil {
 		return "", false
@@ -116,6 +119,7 @@ func (c *probeCache) lookup(key probeKey) (string, bool) {
 	return entry.endpoint, true
 }
 
+// store records a probe answer and removes expired entries.
 func (c *probeCache) store(key probeKey, endpoint string) {
 	if c == nil {
 		return

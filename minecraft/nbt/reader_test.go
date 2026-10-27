@@ -77,6 +77,7 @@ func TestOffsetReaderNextFallbackReturnsOnlyReadBytes(t *testing.T) {
 	}
 }
 
+// writeAll writes each value in order and returns the first error.
 func writeAll[T any](w *offsetWriter, write func(*offsetWriter, T) error, values ...T) error {
 	for _, v := range values {
 		if err := write(w, v); err != nil {

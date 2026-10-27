@@ -1830,6 +1830,7 @@ func TestWritePacketRawShieldFollowsQueueOrder(t *testing.T) {
 // prefixedItemRegistry is an ItemRegistry whose wire layout differs from the latest protocol's.
 type prefixedItemRegistry struct{ packet.ItemRegistry }
 
+// Marshal writes the extra prefix before the registry payload.
 func (pk *prefixedItemRegistry) Marshal(io protocol.IO) {
 	var prefix uint8
 	io.Uint8(&prefix)
@@ -1839,6 +1840,7 @@ func (pk *prefixedItemRegistry) Marshal(io protocol.IO) {
 // prefixedRegistryProtocol registers prefixedItemRegistry as its server ItemRegistry.
 type prefixedRegistryProtocol struct{ Protocol }
 
+// Packets replaces the server registry codec with the prefixed test codec.
 func (p prefixedRegistryProtocol) Packets(listener bool) packet.Pool {
 	pool := p.Protocol.Packets(listener)
 	if !listener {
@@ -1847,6 +1849,7 @@ func (p prefixedRegistryProtocol) Packets(listener bool) packet.Pool {
 	return pool
 }
 
+// ConvertToLatest unwraps the test registry into its latest-protocol form.
 func (p prefixedRegistryProtocol) ConvertToLatest(pk packet.Packet, conn *Conn) []packet.Packet {
 	if registry, ok := pk.(*prefixedItemRegistry); ok {
 		return []packet.Packet{&registry.ItemRegistry}

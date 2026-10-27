@@ -98,6 +98,7 @@ type Metadata struct {
 // failing the whole manifest, since nothing here depends on it.
 type FormatVersion float64
 
+// UnmarshalJSON accepts numeric, string and array manifest format versions.
 func (f *FormatVersion) UnmarshalJSON(b []byte) error {
 	*f = 0
 	var number float64
