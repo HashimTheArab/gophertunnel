@@ -210,7 +210,7 @@ func (c *Client) trustImage(image *Image) error {
 	if err != nil || !imageURL.IsAbs() || imageURL.Host == "" || imageURL.User != nil {
 		return fmt.Errorf("service/gallery: invalid image URL %q", image.URL)
 	}
-	if imageURL.Scheme != "https" && !(c.env.ServiceURI.Scheme == "http" && imageURL.Scheme == "http") {
+	if imageURL.Scheme != "https" && (c.env.ServiceURI.Scheme != "http" || imageURL.Scheme != "http") {
 		return fmt.Errorf("service/gallery: unsupported image URL scheme %q", imageURL.Scheme)
 	}
 	image.client = c

@@ -98,18 +98,12 @@ func (c *Client) refreshPlayerCounts(ctx context.Context, refresh *playerCountsR
 // fetchPlayerCounts requests the shared population snapshot without per-experience requests.
 func (c *Client) fetchPlayerCounts(ctx context.Context) ([]ExperiencePlayerCount, error) {
 	target := c.env.ServiceURI.JoinPath("/api/v2.0/dataquery/playercounts")
-	response, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+	response, err := c.send(ctx, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", internal.UserAgent)
-		token, err := c.src.ServiceToken(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("request service token: %w", err)
-		}
-		token.SetAuthHeader(req)
 		return req, nil
 	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
