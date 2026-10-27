@@ -58,3 +58,35 @@ func TestDiscoveryStallDoesNotBlockCacheOrCancellation(t *testing.T) {
 		}
 	})
 }
+
+// A caller that cancels must not cancel the shared request for other callers waiting on it.
+func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		started := make(chan struct{})
+		base := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(r *http.Request) (*http.Response, error) {
+			close(started)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+		})})
+		ownerCtx, cancelOwner := context.WithCancel(base)
+		owner := make(chan error, 1)
+		go func() { _, err := Discover(ownerCtx, t.Name(), "shared"); owner <- err }()
+		<-started
+		waiter := make(chan error, 1)
+		go func() { _, err := Discover(base, t.Name(), "shared"); waiter <- err }()
+		synctest.Wait()
+		cancelOwner()
+		if err := <-owner; !errors.Is(err, context.Canceled) {
+			t.Fatalf("owner error = %v, want context.Canceled", err)
+		}
+		close(release)
+		if err := <-waiter; err != nil {
+			t.Fatalf("waiter error after the owner canceled = %v", err)
+		}
+	})
+}

@@ -116,18 +116,32 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		discoveryCacheMu.Unlock()
 		return d, nil
 	}
-	if flight := discoveryFlights[requestURL]; flight != nil {
-		discoveryCacheMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-flight.done:
-			return flight.value, flight.err
-		}
+	flight := discoveryFlights[requestURL]
+	if flight == nil {
+		flight = &discoveryFlight{done: make(chan struct{})}
+		discoveryFlights[requestURL] = flight
+		// The shared request ignores the cancellation of the caller that started it, so other callers waiting
+		// for it still get its result. The request itself stays bounded by its call deadline.
+		go flight.run(context.WithoutCancel(ctx), requestURL)
 	}
-	flight := &discoveryFlight{done: make(chan struct{})}
-	discoveryFlights[requestURL] = flight
 	discoveryCacheMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		return flight.value, flight.err
+	}
+}
+
+// discoveryFlight shares one discovery request without holding the cache lock over network I/O.
+type discoveryFlight struct {
+	done  chan struct{}
+	value *Discovery
+	err   error
+}
+
+// run performs the shared request, caches a successful result and releases every waiter.
+func (flight *discoveryFlight) run(ctx context.Context, requestURL string) {
 	value, err := discover(ctx, requestURL)
 	discoveryCacheMu.Lock()
 	if err == nil {
@@ -137,14 +151,6 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	delete(discoveryFlights, requestURL)
 	close(flight.done)
 	discoveryCacheMu.Unlock()
-	return value, err
-}
-
-// discoveryFlight shares one discovery request without holding the cache lock over network I/O.
-type discoveryFlight struct {
-	done  chan struct{}
-	value *Discovery
-	err   error
 }
 
 // discover bounds one service lookup and retries transient HTTP failures.
