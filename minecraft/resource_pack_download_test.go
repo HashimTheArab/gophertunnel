@@ -39,6 +39,59 @@ func TestResourcePackDownloadConfigNormalized(t *testing.T) {
 	}
 }
 
+func TestResourcePacksInfoDefersPayloadAllocation(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		count int
+		size  uint64
+	}{
+		{name: "single_large", count: 1, size: 32 << 20},
+		{name: "many_large", count: 1024, size: 32 << 20},
+		{name: "largest_size", count: 1, size: ^uint64(0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			defer conn.Abort()
+			offers := make([]protocol.TexturePackInfo, test.count)
+			requested := make([]string, test.count)
+			for i := range offers {
+				offers[i] = protocol.TexturePackInfo{UUID: uuid.New(), Version: "1.0.0", Size: test.size}
+				requested[i] = offers[i].UUID.String() + "_" + offers[i].Version
+			}
+			if err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: offers}); err != nil {
+				t.Fatal(err)
+			}
+			if conn.packQueue.packAmount != test.count || len(conn.packQueue.downloadingPacks) != test.count {
+				t.Fatalf("queued %d packs with %d remaining, want %d", len(conn.packQueue.downloadingPacks), conn.packQueue.packAmount, test.count)
+			}
+			for _, offer := range offers {
+				pack := conn.packQueue.downloadingPacks[offer.UUID.String()]
+				if pack == nil || pack.size != offer.Size {
+					t.Fatalf("offer %s was not retained with size %d", offer.UUID, offer.Size)
+				}
+				if pack.buf.Cap() != 0 {
+					t.Fatalf("offer %s reserved %d payload bytes before any chunks arrived", offer.UUID, pack.buf.Cap())
+				}
+			}
+			if len(conn.bufferedSend) != 1 {
+				t.Fatalf("buffered %d packets, want one download response", len(conn.bufferedSend))
+			}
+			buf := bytes.NewBuffer(conn.bufferedSend[0])
+			var header packet.Header
+			if err := header.Read(buf); err != nil || header.PacketID != packet.IDResourcePackClientResponse {
+				t.Fatalf("response header = %+v, err = %v", header, err)
+			}
+			var response packet.ResourcePackClientResponse
+			response.Marshal(protocol.NewReader(buf, 0, true))
+			if response.Response != packet.PackResponseSendPacks || !slices.Equal(response.PacksToDownload, requested) {
+				t.Fatal("download response did not request every offered pack in order")
+			}
+		})
+	}
+}
+
 func TestResourcePackDownloadReplenishesAfterOutOfOrderChunk(t *testing.T) {
 	client, peer := net.Pipe()
 	defer client.Close()
@@ -180,8 +233,10 @@ func TestResourcePacksInfoReportsCacheURLAndFallbackEvents(t *testing.T) {
 	if got := events.steps(); !slices.Equal(got, want) {
 		t.Fatalf("events = %+v\nwant %+v", got, want)
 	}
-	if _, queued := conn.packQueue.downloadingPacks[brokenID.String()]; !queued {
+	if pack, queued := conn.packQueue.downloadingPacks[brokenID.String()]; !queued {
 		t.Fatal("the failed URL pack did not fall back to chunks")
+	} else if pack.buf.Cap() != 0 {
+		t.Fatalf("failed URL pack reserved %d payload bytes before any chunks arrived", pack.buf.Cap())
 	}
 }
 
@@ -300,12 +355,10 @@ func TestChunkDownloadStoresBeforeDialReturns(t *testing.T) {
 	cache := &recordingPackCache{}
 	conn.resourcePackCache = cache
 	key := ResourcePackCacheKey{UUID: id, Version: "1.0.0", Size: uint64(len(archive))}
-	pack := &downloadingPack{buf: new(bytes.Buffer), size: key.Size, cacheKey: key}
-	conn.packQueue = &resourcePackQueue{
-		packAmount:       1,
-		downloadingPacks: map[string]*downloadingPack{id.String(): pack},
-		awaitingPacks:    make(map[string]*downloadingPack),
+	if err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: key.Version, Size: key.Size}}}); err != nil {
+		t.Fatal(err)
 	}
+	pack := conn.packQueue.downloadingPacks[id.String()]
 	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: id.String() + "_1.0.0", DataChunkSize: uint32(len(archive)), Size: key.Size}); err != nil {
 		t.Fatal(err)
 	}
