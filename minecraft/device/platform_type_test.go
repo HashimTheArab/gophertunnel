@@ -24,7 +24,7 @@ func TestApplySerializesPlatformType(t *testing.T) {
 		{name: "other os unchanged", os: protocol.DeviceIOS, want: login.PlatformTypeDesktop},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			profile := New(test.os)
+			profile := Profile{OS: test.os, Model: "Actual hardware model", ID: "00112233445566778899aabbccddeeff"}
 			data := login.ClientData{PlatformType: test.platform, SkinData: "fixture skin", LanguageCode: "de_DE"}
 			profile.Apply(&data)
 			claims := serializedPlatformClaims(t, data)
@@ -58,7 +58,7 @@ func TestApplySerializesDecodedAndroidPlatformType(t *testing.T) {
 			if err := json.Unmarshal([]byte(test.input), &data); err != nil {
 				t.Fatal(err)
 			}
-			profile := New(protocol.DeviceAndroid)
+			profile := Profile{OS: protocol.DeviceAndroid, Model: "Actual hardware model", ID: "00112233445566778899aabbccddeeff"}
 			profile.Apply(&data)
 			claims := serializedPlatformClaims(t, data)
 			if got := claims["PlatformType"]; got != float64(test.want) {
