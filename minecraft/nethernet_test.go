@@ -5,8 +5,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -335,5 +340,78 @@ func (s *testNetherNetSignaling) awaitClose(t *testing.T) {
 			t.Fatal("dialed signaling was not closed")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A saved key is reused across loads, so clients that trusted it on first use are not asked again.
+func TestNetherNetServerIdentityReusesSavedKey(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "keys", "nethernet.pem")
+	first, err := NetherNetServerIdentity(path)
+	if err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	second, err := NetherNetServerIdentity(path)
+	if err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	a, err := first(context.Background())
+	if err != nil {
+		t.Fatalf("issue first identity: %v", err)
+	}
+	b, err := second(context.Background())
+	if err != nil {
+		t.Fatalf("issue second identity: %v", err)
+	}
+	if !a.PrivateKey.Equal(b.PrivateKey) {
+		t.Fatal("second load generated a new key")
+	}
+	if a.Domain != "self" {
+		t.Fatalf("domain = %q, want self", a.Domain)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat key: %v", err)
+	}
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+		t.Fatalf("key file mode = %v, want 0600", perm)
+	}
+}
+
+// An unreadable key file is reported instead of being silently replaced with a new identity.
+func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
+	t.Parallel()
+
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-256 key: %v", err)
+	}
+	der, err := x509.MarshalECPrivateKey(p256)
+	if err != nil {
+		t.Fatalf("marshal P-256 key: %v", err)
+	}
+	for name, contents := range map[string][]byte{
+		"not PEM":  []byte("not a key"),
+		"P-256":    pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
+		"RSA type": pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "nethernet.pem")
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatalf("write key: %v", err)
+			}
+			if _, err := NetherNetServerIdentity(path); err == nil {
+				t.Fatal("invalid key was accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read key: %v", err)
+			}
+			if string(after) != string(contents) {
+				t.Fatal("invalid key file was overwritten")
+			}
+		})
 	}
 }
