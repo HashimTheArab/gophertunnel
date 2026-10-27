@@ -25,6 +25,9 @@ type RawPacket struct {
 	ID uint32
 	// Decoded holds the packet decoded and converted to the latest protocol, when it was selected.
 	Decoded []packet.Packet
+	// DecodeErr is set when a selected packet could not be decoded. Decoded is then nil and Data is
+	// still the packet as received, so the caller decides whether to pass it on.
+	DecodeErr error
 }
 
 // rawPacketID returns the packet ID of an encoded packet, or 0 if its header is malformed.
@@ -34,27 +37,6 @@ func rawPacketID(data []byte) uint32 {
 		return 0
 	}
 	return uint32(value) & 0x3ff
-}
-
-// decodeRawServerPacket decodes the payload of a server packet with conn's protocol, using that protocol's
-// layout for the packet, and converts it to the latest protocol.
-func decodeRawServerPacket(conn *Conn, id uint32, payload []byte) (pks []packet.Packet, err error) {
-	newPacket, ok := conn.proto.Packets(false)[id]
-	if !ok {
-		return nil, unknownPacketError{id: id}
-	}
-	pk := newPacket()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("decode packet %T: %v", pk, recovered)
-		}
-	}()
-	buf := bytes.NewBuffer(payload)
-	pk.Marshal(conn.proto.NewReader(buf, conn.shieldID.Load(), conn.readerLimits))
-	if buf.Len() != 0 {
-		return nil, fmt.Errorf("decode packet %T: %v unread bytes left", pk, buf.Len())
-	}
-	return conn.proto.ConvertToLatest(pk, conn), nil
 }
 
 // parseData parses packet bytes and reports the payload to the connection observer.

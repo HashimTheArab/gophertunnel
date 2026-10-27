@@ -775,8 +775,12 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 
 // WritePacketRaw buffers one encoded packet, header and payload as RawPacket.Data holds it, for the next
 // flush, which compresses and encrypts it with the rest of the batch. It bypasses protocol conversion and
-// actor ID translation. The Conn takes ownership of data.
+// actor ID translation, and raw packets are not passed to the WriteObserver. The Conn takes ownership of
+// data.
 func (conn *Conn) WritePacketRaw(data []byte) error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
 	select {
 	case <-conn.ctx.Done():
 		return conn.closeErr("write raw packet")
@@ -807,7 +811,8 @@ func (conn *Conn) observeRawWrite(data []byte) {
 		return
 	}
 	if header.PacketID == packet.IDItemRegistry {
-		pks, _ := decodeRawServerPacket(conn, header.PacketID, buf.Bytes())
+		registryData := &packetData{h: &header, payload: bytes.NewBuffer(buf.Bytes())}
+		pks, _ := registryData.decodeWith(conn.proto, conn.proto.Packets(false), conn.shieldID.Load(), conn.readerLimits, nil, conn)
 		for _, pk := range pks {
 			if registry, ok := pk.(*packet.ItemRegistry); ok {
 				conn.observeShield(registry.Items)
@@ -929,18 +934,10 @@ func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error)
 		for _, data := range batch {
 			raw := RawPacket{ID: data.h.PacketID, Data: data.full}
 			if decode != nil && decode(raw.ID) {
-				pks, err := data.decode(conn)
-				if err != nil {
-					conn.log.Error("read raw packets: " + err.Error())
-					if conn.ctx.Err() != nil {
-						break
-					}
-					continue
+				raw.Decoded, raw.DecodeErr = data.decode(conn)
+				if raw.DecodeErr != nil {
+					conn.log.Error("read raw packets: " + raw.DecodeErr.Error())
 				}
-				if len(pks) == 0 {
-					continue
-				}
-				raw.Decoded = pks
 			}
 			packets = append(packets, raw)
 		}

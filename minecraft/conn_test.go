@@ -1710,20 +1710,32 @@ func TestReadBatchRawKeepsBytesAndDecodesOnlySelected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadBatchRaw: %v", err)
 	}
-	// The selected malformed Text is skipped like ReadBatch skips it; the rest keep their order and bytes.
-	if len(packets) != 3 {
-		t.Fatalf("ReadBatchRaw returned %d packets, want 3", len(packets))
+	// A selected packet that fails to decode is still returned as received, with its decode error, so the
+	// caller decides whether to pass it on. Every packet keeps its order and bytes.
+	want := [][]byte{frames[0], malformed, frames[1], frames[2]}
+	if len(packets) != len(want) {
+		t.Fatalf("ReadBatchRaw returned %d packets, want %d", len(packets), len(want))
 	}
 	for i, raw := range packets {
-		if !bytes.Equal(raw.Data, frames[i]) {
-			t.Fatalf("packet %d bytes = %x, want %x", i, raw.Data, frames[i])
+		if !bytes.Equal(raw.Data, want[i]) {
+			t.Fatalf("packet %d bytes = %x, want %x", i, raw.Data, want[i])
 		}
-		if (raw.Decoded != nil) != (raw.ID == packet.IDText) {
+		if wantDecoded := raw.ID == packet.IDText && i != 1; (raw.Decoded != nil) != wantDecoded {
 			t.Fatalf("packet %d (ID %d) decoded = %v", i, raw.ID, raw.Decoded)
 		}
+		if (raw.DecodeErr != nil) != (i == 1) {
+			t.Fatalf("packet %d decode error = %v", i, raw.DecodeErr)
+		}
 	}
-	if got, ok := packets[1].Decoded[0].(*packet.Text); !ok || got.Message != text.Message || got.XUID != text.XUID {
-		t.Fatalf("decoded Text = %#v", packets[1].Decoded)
+	if got, ok := packets[2].Decoded[0].(*packet.Text); !ok || got.Message != text.Message || got.XUID != text.XUID {
+		t.Fatalf("decoded Text = %#v", packets[2].Decoded)
+	}
+}
+
+// A zero-value Conn rejects raw writes like decoded writes instead of panicking.
+func TestWritePacketRawOnZeroConnIsClosed(t *testing.T) {
+	if err := new(Conn).WritePacketRaw([]byte{1}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("WritePacketRaw error = %v, want %v", err, net.ErrClosed)
 	}
 }
 
