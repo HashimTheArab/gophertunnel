@@ -68,6 +68,7 @@ var (
 	// and the values are the result of [Discover], cached to reduce network time.
 	discoveryCache   = make(map[string]*Discovery)
 	discoveryCacheMu sync.Mutex
+	discoveryFlights = make(map[string]*discoveryFlight)
 )
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
@@ -108,13 +109,50 @@ func Default(ctx context.Context) (*Discovery, error) {
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
 func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
-	discoveryCacheMu.Lock()
-	defer discoveryCacheMu.Unlock()
-
 	requestURL := discoveryURL.JoinPath("/api/v1.0/discovery", appType, "builds", version).String()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	discoveryCacheMu.Lock()
 	if d, ok := discoveryCache[requestURL]; ok {
+		discoveryCacheMu.Unlock()
 		return d, nil
 	}
+	if flight := discoveryFlights[requestURL]; flight != nil {
+		discoveryCacheMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-flight.done:
+			return flight.value, flight.err
+		}
+	}
+	flight := &discoveryFlight{done: make(chan struct{})}
+	discoveryFlights[requestURL] = flight
+	discoveryCacheMu.Unlock()
+	value, err := discover(ctx, requestURL)
+	discoveryCacheMu.Lock()
+	if err == nil {
+		discoveryCache[requestURL] = value
+	}
+	flight.value, flight.err = value, err
+	delete(discoveryFlights, requestURL)
+	close(flight.done)
+	discoveryCacheMu.Unlock()
+	return value, err
+}
+
+// discoveryFlight shares one discovery request without holding the cache lock over network I/O.
+type discoveryFlight struct {
+	done  chan struct{}
+	value *Discovery
+	err   error
+}
+
+// discover bounds one service lookup and retries transient HTTP failures.
+func discover(ctx context.Context, requestURL string) (*Discovery, error) {
+	ctx, cancel := context.WithTimeout(ctx, internal.CatalogCallTimeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
@@ -123,8 +161,11 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", internal.UserAgent)
 
-	httpClient := auth.ContextClient(ctx)
-	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
+	httpClient := *auth.ContextClient(ctx)
+	if httpClient.Timeout == 0 || httpClient.Timeout > internal.CatalogRequestTimeout {
+		httpClient.Timeout = internal.CatalogRequestTimeout
+	}
+	resp, err := authclient.SendRequestWithRetries(ctx, &httpClient, req, authclient.RetryOptions{Attempts: internal.CatalogRequestAttempts})
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +179,5 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return nil, fmt.Errorf("decode response body: %w", err)
 	}
 	d := &result.Data
-	discoveryCache[requestURL] = d
 	return d, nil
 }
