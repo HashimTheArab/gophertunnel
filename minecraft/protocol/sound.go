@@ -29,6 +29,10 @@ type SoundDataUpdate struct {
 // Marshal encodes/decodes a SoundDataUpdate.
 func (x *SoundDataUpdate) Marshal(io IO) {
 	io.Varuint32(&x.Type)
+	// Each variant repeats its type as a byte after the variant index. The two always match, so the byte is
+	// written from Type and discarded when read.
+	typeByte := uint8(x.Type)
+	io.Uint8(&typeByte)
 	switch x.Type {
 	case SoundDataUpdateStop, SoundDataUpdatePause, SoundDataUpdateResume:
 	case SoundDataUpdateSetVolume:

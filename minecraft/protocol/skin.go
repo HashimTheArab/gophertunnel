@@ -204,6 +204,7 @@ const (
 	PieceTypeCapes
 	PieceTypeClassicSkin
 	PieceTypeEmote
+	PieceTypeCoCo
 	PieceTypeUnsupported
 )
 

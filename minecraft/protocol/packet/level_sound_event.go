@@ -583,6 +583,7 @@ const (
 	SoundEventMount                              = "mount"
 	SoundEventDismount                           = "dismount"
 	SoundEventStrawBedBreakLeave                 = "straw_bed.break_leave"
+	SoundEventIceBallBreak                       = "ice_ball.break"
 	SoundEventUndefined                          = "undefined"
 )
 
