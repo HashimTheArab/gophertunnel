@@ -77,7 +77,12 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
 	batches := probeBatches(host, port)
-	key := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	keyPort := port
+	if keyPort == 0 {
+		// No port probes exactly like 19132, so both share one cache entry.
+		keyPort = defaultServerPort
+	}
+	key := net.JoinHostPort(host, strconv.Itoa(int(keyPort)))
 	if n.Endpoints != nil {
 		if url, ok := n.Endpoints.lookup(key); ok {
 			batches = [][]string{{url}}
