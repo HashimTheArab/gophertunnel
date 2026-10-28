@@ -500,17 +500,20 @@ func closedTCPAddress(t *testing.T) string {
 	return address
 }
 
-// An address without a port probes exactly like 19132, so it reuses that port's cached answer.
-func TestAddressNetworkSharesProbeAnswerForDefaultPort(t *testing.T) {
+// Probe answers are keyed like vanilla's: the host case-insensitively and the port exactly as given.
+func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	t.Parallel()
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: "127.0.0.1", port: defaultServerPort}, "http://127.0.0.1:19132")
+	cache.store(probeKey{host: "play.example.com", port: 19132}, "http://play.example.com:19132")
 
-	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), "127.0.0.1")
+	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), "Play.Example.COM:19132")
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if n, ok := selected.(httpNetherNet); !ok || n.url != "http://127.0.0.1:19132" {
-		t.Fatalf("Select = %#v, want the answer cached for port 19132", selected)
+	if n, ok := selected.(httpNetherNet); !ok || n.url != "http://play.example.com:19132" {
+		t.Fatalf("Select = %#v, want the answer cached for the lower-cased host", selected)
+	}
+	if cache.lookup(probeKey{host: "play.example.com", port: 0}) != nil {
+		t.Fatal("an address without a port shared the 19132 answer")
 	}
 }

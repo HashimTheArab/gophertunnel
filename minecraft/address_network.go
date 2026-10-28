@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,12 +52,8 @@ const defaultServerPort = 19132
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
-	keyPort := port
-	if keyPort == 0 {
-		// No port probes exactly like 19132, so both share one answer.
-		keyPort = defaultServerPort
-	}
-	choice := probeChoice{cache: n.Probes, key: probeKey{host: host, port: keyPort}}
+	// Vanilla keys its probe cache by the lower-cased host and the port exactly as given.
+	choice := probeChoice{cache: n.Probes, key: probeKey{host: strings.ToLower(host), port: port}}
 	choice.entry = n.Probes.lookup(choice.key)
 	if choice.entry == nil {
 		endpoint, err := probeNetherNet(ctx, client, probeBatches(host, port), netherNetProbeTimeout)
