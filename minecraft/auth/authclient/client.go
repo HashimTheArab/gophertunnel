@@ -50,7 +50,19 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		opts.MaxDelay = opts.MinDelay
 	}
 
-	everSent := false // whether any attempt may have reached the server
+	everSent := false   // whether any attempt may have reached the server
+	redirected := false // whether the current attempt followed a redirect, so an earlier hop reached a server
+	client := *c
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		redirected = true
+		if c.CheckRedirect != nil {
+			return c.CheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
 	notSent := func(err error) error {
 		if err != nil && !everSent {
 			return fmt.Errorf("%w: %w", ErrNotSent, err)
@@ -73,8 +85,9 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			req.Body = body
 		}
 
-		resp, err := c.Do(req)
-		unsent := err != nil && (tlsFailed.Load() || dialFailed(err))
+		redirected = false
+		resp, err := client.Do(req)
+		unsent := err != nil && !redirected && (tlsFailed.Load() || dialFailed(err))
 		everSent = everSent || !unsent
 		var retryAfter time.Duration
 		retry := false

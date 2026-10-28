@@ -315,3 +315,18 @@ func TestCallHonorsCancellation(t *testing.T) {
 		}
 	}
 }
+
+// A request whose redirect target cannot be dialled already reached the server that redirected it.
+func TestCallTreatsFailedRedirectAsSent(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+		if calls++; calls == 1 {
+			return &http.Response{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": {"https://other.test/"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}
+	})}
+	_, err := Call(context.Background(), client, preparePost, CallOptions{Retry: RetryOptions{Attempts: 1}})
+	if err == nil || errors.Is(err, ErrNotSent) || calls != 2 {
+		t.Fatalf("err = %v, calls = %d, want a sent error after the redirect", err, calls)
+	}
+}
