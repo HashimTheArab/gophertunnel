@@ -50,6 +50,12 @@ func TestWireShapes(t *testing.T) {
 			prefix: "01",
 		},
 		{
+			name:   "video capture selector is a varuint32",
+			value:  &PlayerVideoCapture{Action: 128},
+			decode: func() marshaler { return &PlayerVideoCapture{} },
+			prefix: "8001",
+		},
+		{
 			name: "spline instruction fields are not optional",
 			value: &protocol.CameraSplineInstruction{
 				SplineType:       1,
