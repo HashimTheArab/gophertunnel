@@ -2,6 +2,7 @@ package authclient
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -21,13 +22,13 @@ type RetryOptions struct {
 	MaxDelay time.Duration // Maximum delay (default: 8s)
 }
 
-// ErrNotSent wraps the error of a request that never reached a connection, so its effect cannot have happened.
+// ErrNotSent wraps the error of a request that provably never left the client, so its effect cannot have happened.
 var ErrNotSent = errors.New("request not sent")
 
 // SendRequestWithRetries sends a request and retries on 429, 5xx and network errors. A request that may have
 // reached the server is only sent again if it is safe to repeat. A retry delay that would end after ctx's
-// deadline returns the last outcome instead of waiting. Errors from attempts that never got a connection wrap
-// ErrNotSent.
+// deadline returns the last outcome instead of waiting. Errors wrap ErrNotSent only when no attempt can have
+// reached the server.
 func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
 	var opts RetryOptions
 	if len(r) > 0 {
@@ -49,7 +50,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		opts.MaxDelay = opts.MinDelay
 	}
 
-	everSent := false
+	everSent := false // whether any attempt may have reached the server
 	notSent := func(err error) error {
 		if err != nil && !everSent {
 			return fmt.Errorf("%w: %w", ErrNotSent, err)
@@ -57,8 +58,12 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		return err
 	}
 	for i := 1; ; i++ {
-		var sent atomic.Bool
-		trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { sent.Store(true) }}
+		var tlsFailed atomic.Bool
+		trace := &httptrace.ClientTrace{TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err != nil {
+				tlsFailed.Store(true)
+			}
+		}}
 		req := request.Clone(httptrace.WithClientTrace(ctx, trace))
 		if request.Body != nil && request.GetBody != nil {
 			body, err := request.GetBody()
@@ -69,7 +74,8 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		}
 
 		resp, err := c.Do(req)
-		everSent = everSent || sent.Load()
+		unsent := err != nil && (tlsFailed.Load() || dialFailed(err))
+		everSent = everSent || !unsent
 		var retryAfter time.Duration
 		retry := false
 		if err != nil {
@@ -78,7 +84,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 			} else {
 				// Some proxies close the connection without a response, which often surfaces as EOF.
 				_, netErr := errors.AsType[net.Error](err)
-				retry = (netErr || errors.Is(err, io.EOF)) && (!sent.Load() || idempotent(request))
+				retry = (netErr || errors.Is(err, io.EOF)) && (unsent || idempotent(request))
 			}
 		} else if retryableStatus(resp.StatusCode) {
 			retry = true
@@ -106,6 +112,15 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		case <-time.After(delay):
 		}
 	}
+}
+
+// dialFailed reports whether err shows the connection was never made: a failed DNS lookup or dial.
+func dialFailed(err error) bool {
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
+		return true
+	}
+	op, ok := errors.AsType[*net.OpError](err)
+	return ok && op.Op == "dial"
 }
 
 // retryableStatus reports whether a response status is worth retrying: 429, 408, 5xx, and the non-standard 999

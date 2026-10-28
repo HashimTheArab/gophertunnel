@@ -2,6 +2,7 @@ package authclient
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -202,39 +203,35 @@ func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 	}
 }
 
-// connected reports a connection to the request's trace, as http.Transport does once one is obtained.
-func connected(req *http.Request) {
-	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
-		trace.GotConn(httptrace.GotConnInfo{})
-	}
-}
-
-// A failed attempt is resent only if it never got a connection or repeating it cannot repeat its effect.
+// A failed attempt is resent only if it provably never left the client or repeating it cannot repeat its effect.
 func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}
 	for _, test := range []struct {
 		name      string
 		method    string
 		header    string
 		noGetBody bool
-		connected bool
+		tlsFailed bool
 		err       error
+		unsent    bool
 		want      int
 	}{
-		{name: "post dial timeout", method: http.MethodPost, err: timeoutError{}, want: DefaultAttempts},
-		{name: "post timeout after connecting", method: http.MethodPost, connected: true, err: timeoutError{}, want: 1},
-		{name: "post reset after connecting", method: http.MethodPost, connected: true, err: reset, want: 1},
-		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", connected: true, err: reset, want: DefaultAttempts},
-		{name: "get reset after connecting", method: http.MethodGet, connected: true, err: reset, want: DefaultAttempts},
-		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, connected: true, err: reset, want: 1},
+		{name: "post dial timeout", method: http.MethodPost, err: dialTimeout, unsent: true, want: DefaultAttempts},
+		{name: "post failed TLS handshake", method: http.MethodPost, tlsFailed: true, err: timeoutError{}, unsent: true, want: DefaultAttempts},
+		{name: "post timeout without evidence", method: http.MethodPost, err: timeoutError{}, want: 1},
+		{name: "post reset", method: http.MethodPost, err: reset, want: 1},
+		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", err: reset, want: DefaultAttempts},
+		{name: "get reset", method: http.MethodGet, err: reset, want: DefaultAttempts},
+		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, err: reset, want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				calls := 0
 				client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
 					calls++
-					if test.connected {
-						connected(req)
+					if trace := httptrace.ContextClientTrace(req.Context()); test.tlsFailed && trace != nil {
+						trace.TLSHandshakeDone(tls.ConnectionState{}, errors.New("handshake failed"))
 					}
 					return nil, test.err
 				})}
@@ -251,8 +248,8 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 				if err == nil || calls != test.want {
 					t.Fatalf("err = %v, calls = %d, want %d", err, calls, test.want)
 				}
-				if errors.Is(err, ErrNotSent) == test.connected {
-					t.Fatalf("errors.Is(err, ErrNotSent) = %v with connected = %v", !test.connected, test.connected)
+				if errors.Is(err, ErrNotSent) != test.unsent {
+					t.Fatalf("errors.Is(err, ErrNotSent) = %v, want %v", !test.unsent, test.unsent)
 				}
 			})
 		})
