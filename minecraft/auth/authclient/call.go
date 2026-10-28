@@ -2,7 +2,6 @@ package authclient
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -27,8 +26,7 @@ type CallOptions struct {
 }
 
 // Call prepares a request under the call's deadline and sends it with SendRequestWithRetries. The deadline
-// lasts until the response body is closed, so the caller must close it. An error wraps ErrNotSent when the
-// request cannot have reached the server.
+// lasts until the response body is closed, so the caller must close it.
 func Call(ctx context.Context, client *http.Client, prepare func(context.Context) (*http.Request, error), opts CallOptions) (*http.Response, error) {
 	if client == nil {
 		client = http.DefaultClient
@@ -40,12 +38,12 @@ func Call(ctx context.Context, client *http.Client, prepare func(context.Context
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	if err := callCtx.Err(); err != nil {
 		cancel()
-		return nil, fmt.Errorf("%w: %w", ErrNotSent, err)
+		return nil, err
 	}
 	req, err := prepare(callCtx)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("%w: %w", ErrNotSent, err)
+		return nil, err
 	}
 	if opts.Stream {
 		cancel()

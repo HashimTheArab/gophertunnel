@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 )
 
@@ -296,8 +295,8 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 	}
 	client, closeServers := newStore(t, func(http.ResponseWriter, *http.Request) {})
 	closeServers()
-	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); !errors.Is(err, authclient.ErrNotSent) || result != (PurchaseResult{}) {
-		t.Fatalf("unreachable service: result = %+v err = %v, want an unsent error", result, err)
+	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); err != nil || result.Outcome != PurchaseUnknown {
+		t.Fatalf("unreachable service: result = %+v err = %v", result, err)
 	}
 	client, _ = newStore(t, func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) })
 	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); err != nil || result.Outcome != PurchaseUnknown || result.CorrelationID == "" {

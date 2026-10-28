@@ -2,12 +2,10 @@ package authclient
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"strings"
 	"syscall"
 	"testing"
@@ -213,8 +211,8 @@ func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 	}
 }
 
-// A failed attempt is resent only if it provably never left the client or repeating it cannot repeat its effect.
-func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
+// A failed attempt is resent only if repeating it cannot repeat its effect.
+func TestCallResendsOnlyReplayableRequests(t *testing.T) {
 	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}
 	for _, test := range []struct {
@@ -223,16 +221,11 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 		header     string
 		replayable bool
 		noGetBody  bool
-		tlsFailed  bool
-		gotConn    bool
 		err        error
-		unsent     bool
 		want       int
 	}{
-		{name: "post dial timeout", method: http.MethodPost, err: dialTimeout, unsent: true, want: DefaultAttempts},
-		{name: "post failed TLS handshake", method: http.MethodPost, tlsFailed: true, err: timeoutError{}, unsent: true, want: DefaultAttempts},
-		{name: "post sent while a speculative handshake failed", method: http.MethodPost, tlsFailed: true, gotConn: true, err: io.EOF, want: 1},
-		{name: "post timeout without evidence", method: http.MethodPost, err: timeoutError{}, want: 1},
+		{name: "post dial timeout", method: http.MethodPost, err: dialTimeout, want: 1},
+		{name: "post timeout", method: http.MethodPost, err: timeoutError{}, want: 1},
 		{name: "post reset", method: http.MethodPost, err: reset, want: 1},
 		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", err: reset, want: DefaultAttempts},
 		{name: "replayable post reset", method: http.MethodPost, replayable: true, err: reset, want: DefaultAttempts},
@@ -242,16 +235,8 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				calls := 0
-				client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+				client := &http.Client{Transport: callTransport(func(*http.Request) (*http.Response, error) {
 					calls++
-					if trace := httptrace.ContextClientTrace(req.Context()); trace != nil {
-						if test.tlsFailed {
-							trace.TLSHandshakeDone(tls.ConnectionState{}, errors.New("handshake failed"))
-						}
-						if test.gotConn {
-							trace.GotConn(httptrace.GotConnInfo{Reused: true})
-						}
-					}
 					return nil, test.err
 				})}
 				_, err := Call(context.Background(), client, func(ctx context.Context) (*http.Request, error) {
@@ -266,9 +251,6 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 				}, CallOptions{Retry: RetryOptions{Replayable: test.replayable}})
 				if err == nil || calls != test.want {
 					t.Fatalf("err = %v, calls = %d, want %d", err, calls, test.want)
-				}
-				if errors.Is(err, ErrNotSent) != test.unsent {
-					t.Fatalf("errors.Is(err, ErrNotSent) = %v, want %v", !test.unsent, test.unsent)
 				}
 			})
 		})
@@ -305,8 +287,8 @@ func TestCallStreamBoundsPreparation(t *testing.T) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}, CallOptions{Stream: true})
-		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrNotSent) {
-			t.Fatalf("err = %v, want an unsent deadline error", err)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want a deadline error", err)
 		}
 	})
 }
@@ -336,20 +318,5 @@ func TestCallHonorsCancellation(t *testing.T) {
 		if !alreadyCancelled && !strings.Contains(err.Error(), "https://service.test") {
 			t.Fatalf("err = %v, want the request URL kept", err)
 		}
-	}
-}
-
-// A request whose redirect target cannot be dialled already reached the server that redirected it.
-func TestCallTreatsFailedRedirectAsSent(t *testing.T) {
-	calls := 0
-	client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
-		if calls++; calls == 1 {
-			return &http.Response{StatusCode: http.StatusSeeOther, Header: http.Header{"Location": {"https://other.test/"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
-		}
-		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}
-	})}
-	_, err := Call(context.Background(), client, preparePost, CallOptions{Retry: RetryOptions{Attempts: 1}})
-	if err == nil || errors.Is(err, ErrNotSent) || calls != 2 {
-		t.Fatalf("err = %v, calls = %d, want a sent error after the redirect", err, calls)
 	}
 }
