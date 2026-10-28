@@ -444,3 +444,30 @@ func TestNetherNetDialContextIdentitySelfSignsWithoutToken(t *testing.T) {
 	}
 	_ = conn.Close()
 }
+
+// A preconfigured identity is kept on an offline dial instead of being replaced by a self-signed one.
+func TestNetherNetDialContextIdentityKeepsPreconfiguredIdentityWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	preset := &nethernet.Identity{Domain: "https://preset.example.test"}
+	network := NetherNet{
+		Signaling: newTestNetherNetSignaling(),
+		Dialer:    nethernet.Dialer{Identity: preset},
+		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			if dialer.Identity != preset {
+				t.Fatalf("offline dial presented %+v, want the preconfigured identity", dialer.Identity)
+			}
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			return client, nil
+		},
+	}
+	conn, err := network.DialContextIdentity(t.Context(), "remote-network-id", "", nil)
+	if err != nil {
+		t.Fatalf("DialContextIdentity: %v", err)
+	}
+	_ = conn.Close()
+}
+
+// Offline dials by address reach the self-signing path, so AddressNetwork must route identities too.
+var _ identityDialer = AddressNetwork{}
