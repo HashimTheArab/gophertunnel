@@ -66,6 +66,19 @@ func (n AddressNetwork) DialContext(ctx context.Context, address string) (net.Co
 	return network.DialContext(ctx, address)
 }
 
+// DialContextIdentity presents the identity, self-signed when token is empty, on NetherNet; RakNet
+// dials ignore it.
+func (n AddressNetwork) DialContextIdentity(ctx context.Context, address, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
+	network, err := n.Select(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	if dialer, ok := network.(identityDialer); ok {
+		return dialer.DialContextIdentity(ctx, address, token, key)
+	}
+	return network.DialContext(ctx, address)
+}
+
 // DialContextIdentityProvider presents the identity on NetherNet; RakNet dials ignore it.
 func (n AddressNetwork) DialContextIdentityProvider(ctx context.Context, address, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
 	network, err := n.Select(ctx, address)
