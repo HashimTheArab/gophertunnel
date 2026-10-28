@@ -1732,6 +1732,47 @@ func TestReadBatchRawKeepsBytesAndDecodesOnlySelected(t *testing.T) {
 	}
 }
 
+// A selected packet whose decode closes the connection ends the batch there, as ReadBatch does.
+func TestReadBatchRawStopsWhenDecodeClosesTheConnection(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+	conn.disconnectOnInvalidPacket = true
+
+	var frames [][]byte
+	for _, pk := range []packet.Packet{&packet.SetTime{Time: 1}, &packet.Text{TextType: packet.TextTypeRaw, Message: "hi"}, &packet.SetTime{Time: 2}} {
+		frame, err := encodePacket(pk)
+		if err != nil {
+			t.Fatalf("encode %T: %v", pk, err)
+		}
+		frames = append(frames, frame)
+	}
+	frames[1] = append(frames[1], 0xff)
+	for _, frame := range frames {
+		if err := conn.receive(bytes.Clone(frame)); err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+	}
+	conn.flushBatch()
+
+	packets, err := conn.ReadBatchRaw(func(id uint32) bool { return id == packet.IDText })
+	if err != nil {
+		t.Fatalf("ReadBatchRaw: %v", err)
+	}
+	if len(packets) != 1 || !bytes.Equal(packets[0].Data, frames[0]) {
+		t.Fatalf("ReadBatchRaw returned %d packets, want only the one before the invalid packet", len(packets))
+	}
+	if conn.ctx.Err() == nil {
+		t.Fatal("invalid packet did not close the connection")
+	}
+}
+
 // A zero-value Conn rejects raw writes like decoded writes instead of panicking.
 func TestWritePacketRawOnZeroConnIsClosed(t *testing.T) {
 	if err := new(Conn).WritePacketRaw([]byte{1}); !errors.Is(err, net.ErrClosed) {
@@ -1803,11 +1844,10 @@ func TestWritePacketRawRejectsAbortWhileWaiting(t *testing.T) {
 	var observed atomic.Bool
 	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { observed.Store(true) }
 
+	// The only shutdown check runs after taking sendMu, so the write cannot pass it before the abort.
 	conn.sendMu.Lock()
 	done := make(chan error, 1)
 	go func() { done <- conn.WritePacketRaw([]byte{0x09, 1}) }()
-	// Give the write time to pass its first shutdown check and wait for sendMu.
-	time.Sleep(20 * time.Millisecond)
 	_ = conn.Abort()
 	conn.sendMu.Unlock()
 
@@ -1822,47 +1862,38 @@ func TestWritePacketRawRejectsAbortWhileWaiting(t *testing.T) {
 	}
 }
 
-// Concurrent raw writes leave the shield ID of the registry queued last.
+// A raw ItemRegistry sets the shield ID in the same sendMu hold that queues it, so the ID follows queue order.
 func TestWritePacketRawShieldFollowsQueueOrder(t *testing.T) {
 	client, peer := net.Pipe()
 	defer peer.Close()
 	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	defer conn.Abort()
-	registry := func(id int16) []byte {
+	var want int32
+	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) {
+		if conn.sendMu.TryLock() {
+			conn.sendMu.Unlock()
+			t.Error("raw write observed outside sendMu")
+		}
+		if got := conn.shieldID.Load(); got != want {
+			t.Errorf("shield ID while observing = %d, want %d", got, want)
+		}
+	}
+	for _, id := range []int16{355, 356} {
 		frame, err := encodePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: id}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return frame
-	}
-	first, second := registry(355), registry(356)
-	entered, release := make(chan struct{}), make(chan struct{})
-	var calls atomic.Int32
-	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) {
-		if calls.Add(1) == 1 {
-			close(entered)
-			<-release
+		want = int32(id)
+		queued := len(conn.bufferedSend)
+		if err := conn.WritePacketRaw(frame); err != nil {
+			t.Fatalf("WritePacketRaw: %v", err)
 		}
-	}
-	firstDone, secondDone := make(chan struct{}), make(chan struct{})
-	go func() { _ = conn.WritePacketRaw(first); close(firstDone) }()
-	<-entered
-	go func() { _ = conn.WritePacketRaw(second); close(secondDone) }()
-	// Give the second write the chance to overtake the first, which is still being observed.
-	select {
-	case <-secondDone:
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
-	<-firstDone
-	<-secondDone
-
-	want := int32(356)
-	if bytes.Equal(conn.bufferedSend[len(conn.bufferedSend)-1], first) {
-		want = 355
-	}
-	if got := conn.shieldID.Load(); got != want {
-		t.Fatalf("shield ID = %d, but the registry queued last has %d", got, want)
+		if len(conn.bufferedSend) != queued+1 || !bytes.Equal(conn.bufferedSend[queued], frame) {
+			t.Fatalf("registry %d not queued last", id)
+		}
+		if got := conn.shieldID.Load(); got != want {
+			t.Fatalf("shield ID = %d, want %d", got, want)
+		}
 	}
 }
 

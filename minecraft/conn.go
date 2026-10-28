@@ -781,15 +781,10 @@ func (conn *Conn) WritePacketRaw(data []byte) error {
 	if conn.ctx == nil {
 		return net.ErrClosed
 	}
-	select {
-	case <-conn.ctx.Done():
-		return conn.closeErr("write raw packet")
-	default:
-	}
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 	if conn.ctx.Err() != nil {
-		// Shutdown began while waiting for sendMu, as queuePackets also checks.
+		// Checked under sendMu, as queuePackets does, so shutdown while waiting for it is also caught.
 		return conn.closeErr("write raw packet")
 	}
 	// Observe under sendMu, as WritePacket does, so the shield ID follows the order packets are queued in.
@@ -918,9 +913,11 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 }
 
 // ReadBatchRaw reads one network batch like ReadBatch, but leaves each packet encoded unless decode
-// reports true for its ID. A selected packet that fails to decode, or decodes to nothing, is skipped as
-// ReadBatch skips it. Raw packets bypass protocol conversion and actor ID translation, so relaying them
-// to another Conn is only valid when both share a protocol. A nil decode selects no packets.
+// reports true for its ID. A selected packet that fails to decode is returned with DecodeErr set, unless
+// the failure closed the connection: then, as with ReadBatch, it and the packets after it are dropped.
+// Unselected packets are never decoded, so the invalid and unknown packet disconnect policies don't apply
+// to them. Raw packets bypass protocol conversion and actor ID translation, so relaying them to another
+// Conn is only valid when both share a protocol. A nil decode selects no packets.
 func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error) {
 	if !conn.batchReading {
 		return nil, conn.wrap(errBatchReadingDisabled, "read raw packets")
@@ -937,6 +934,9 @@ func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error)
 				raw.Decoded, raw.DecodeErr = data.decode(conn)
 				if raw.DecodeErr != nil {
 					conn.log.Error("read raw packets: " + raw.DecodeErr.Error())
+					if conn.ctx.Err() != nil {
+						break
+					}
 				}
 			}
 			packets = append(packets, raw)

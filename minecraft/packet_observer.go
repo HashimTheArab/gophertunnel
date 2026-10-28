@@ -6,7 +6,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// PacketObserver observes only the declared packet IDs, in both directions. It
+// PacketObserver observes only the declared packet IDs of a Dialer connection, in both directions. It
 // runs before PacketFunc at the same observation phase. Incoming payloads are
 // owned copies shared with PacketFunc; changes do not affect packet decoding.
 // Outgoing payloads have PacketFunc's existing temporary, mutable lifetime.
