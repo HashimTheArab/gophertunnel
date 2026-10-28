@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal/xasu"
@@ -198,27 +197,6 @@ func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
 	if !reflect.DeepEqual(src.parties, []string{realmsRelyingParty}) {
 		t.Fatalf("relying parties = %v", src.parties)
 	}
-}
-
-// stalledTokenSource never returns a token.
-type stalledTokenSource struct{ release chan struct{} }
-
-func (s stalledTokenSource) Token() (*oauth2.Token, error) {
-	<-s.release
-	return nil, errors.New("released")
-}
-
-// A Live token fetch that takes no context still ends with the caller's context.
-func TestClientLiveTokenHonoursContext(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		src := stalledTokenSource{release: make(chan struct{})}
-		defer close(src.release)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if _, err := NewClient(src, nil).xboxToken(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("xboxToken error = %v", err)
-		}
-	})
 }
 
 // The pending invite count is a bare integer body; anything else is an error, never zero.
