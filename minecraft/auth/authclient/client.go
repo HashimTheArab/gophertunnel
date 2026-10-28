@@ -98,29 +98,17 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		resp, err := client.Do(req)
 		unsent := err != nil && !redirected && !gotConn.Load() && (tlsFailed.Load() || dialFailed(err))
 		everSent = everSent || !unsent
-		replayable := opts.Replayable || idempotent(request)
-		var retryAfter time.Duration
-		retry := false
-		if err != nil {
-			if ctx.Err() != nil {
-				if !errors.Is(err, ctx.Err()) {
-					err = fmt.Errorf("%w: %w", ctx.Err(), err)
-				}
-			} else {
-				// Some proxies close the connection without a response, which often surfaces as EOF.
-				_, netErr := errors.AsType[net.Error](err)
-				retry = (netErr || errors.Is(err, io.EOF)) && (unsent || replayable)
-			}
-		} else if retryableStatus(resp.StatusCode) {
-			retry = replayable || rejectedUnprocessed(resp)
-			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-				if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
-					retryAfter = time.Duration(seconds) * time.Second
-				}
-			}
+		if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+			err = fmt.Errorf("%w: %w", ctx.Err(), err)
 		}
-		if !retry || i >= opts.Attempts || !recreatable(request) {
+		if ctx.Err() != nil || i >= opts.Attempts || !retryable(request, opts.Replayable, resp, err, unsent) {
 			return resp, notSent(err)
+		}
+		var retryAfter time.Duration
+		if resp != nil {
+			if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
+				retryAfter = time.Duration(seconds) * time.Second
+			}
 		}
 
 		delay := max(min(opts.MinDelay*time.Duration(math.Pow(opts.Factor, float64(i))), opts.MaxDelay), retryAfter)
@@ -148,32 +136,32 @@ func dialFailed(err error) bool {
 	return ok && op.Op == "dial"
 }
 
-// retryableStatus reports whether a response status is worth retrying: 429, 408, 5xx, and the non-standard 999
-// some edges return for upstream failures.
-func retryableStatus(code int) bool {
-	return code == http.StatusTooManyRequests || code == http.StatusRequestTimeout || code == 999 || (code >= 500 && code < 600)
-}
-
-// rejectedUnprocessed reports whether resp shows the server refused the request without processing it. A 503
-// without Retry-After is excluded: edges such as Azure Front Door also send it when the origin timed out.
-func rejectedUnprocessed(resp *http.Response) bool {
-	return resp.StatusCode == http.StatusTooManyRequests ||
-		(resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != "")
-}
-
-// recreatable reports whether req's body can be sent again.
-func recreatable(req *http.Request) bool {
-	return req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
-}
-
-// idempotent reports whether sending req again cannot repeat its effect: an idempotent method or an idempotency
-// key as recognised by net/http.
-func idempotent(req *http.Request) bool {
+// retryable reports whether an attempt that ended with resp or err may be sent again. One that may have
+// reached the server is resent only if repeating it is safe, or the server refused it unprocessed: a 429,
+// or a 503 with Retry-After. Edges such as Azure Front Door also send a bare 503 after the origin timed out.
+func retryable(req *http.Request, replayable bool, resp *http.Response, err error, unsent bool) bool {
+	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
+		return false // the body cannot be sent again
+	}
 	switch req.Method {
 	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
-		return true
+		replayable = true
 	}
 	_, key := req.Header["Idempotency-Key"]
 	_, xKey := req.Header["X-Idempotency-Key"]
-	return key || xKey
+	replayable = replayable || key || xKey
+
+	if err != nil {
+		// Some proxies close the connection without a response, which often surfaces as EOF.
+		_, netErr := errors.AsType[net.Error](err)
+		return (netErr || errors.Is(err, io.EOF)) && (unsent || replayable)
+	}
+	switch code := resp.StatusCode; {
+	case code == http.StatusTooManyRequests, code == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != "":
+		return true
+	case code == http.StatusRequestTimeout, code == 999, code >= 500 && code < 600:
+		// 999 is a non-standard status some edges return for upstream failures.
+		return replayable
+	}
+	return false
 }
