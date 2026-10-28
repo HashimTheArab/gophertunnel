@@ -269,7 +269,7 @@ func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Ide
 	}
 	return func(context.Context) (*nethernet.Identity, error) {
 		// "self" is the domain Bedrock Dedicated Server presents.
-		return nethernet.GenerateServerIdentity(key, "self")
+		return nethernet.ServerIdentity(key, "self")
 	}, nil
 }
 
@@ -290,20 +290,28 @@ func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		// Another process created the key first; use that one.
-		return readNetherNetKey(path)
-	} else if err != nil {
+	// Write a complete, synced file first and link it into place, so a crash never leaves a partial
+	// key behind and a concurrent first start never reads one.
+	f, err := os.CreateTemp(filepath.Dir(path), ".nethernet-key-*")
+	if err != nil {
 		return nil, err
 	}
+	defer os.Remove(f.Name())
 	if err := pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der}); err != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
+		return nil, err
+	}
+	if err := os.Link(f.Name(), path); errors.Is(err, fs.ErrExist) {
+		// Another process created the key first; use that one.
+		return readNetherNetKey(path)
+	} else if err != nil {
 		return nil, err
 	}
 	return key, nil

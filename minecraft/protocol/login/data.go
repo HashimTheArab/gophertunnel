@@ -561,8 +561,6 @@ type SkinAnimation struct {
 // dots.
 var checkVersion = regexp.MustCompile("[0-9.]").MatchString
 
-// Validate validates the client data. It returns an error if any of the fields checked did not carry a valid
-// value.
 // SplitServerAddress returns the host and port a client joined with, from a ServerAddress in either the
 // 'host:port' form or the URL form of NetherNet joins. ok is false when it names no host or port, as for
 // a client that joined from LAN discovery over NetherNet.
@@ -596,6 +594,8 @@ func parseURLServerAddress(address string) (*url.URL, error) {
 	return url.Parse(address)
 }
 
+// Validate validates the client data. It returns an error if any of the fields checked did not carry a valid
+// value.
 func (data ClientData) Validate() error {
 	if data.DeviceOS <= 0 || data.DeviceOS > 15 {
 		return fmt.Errorf("DeviceOS must carry a value between 1 and 15, but got %v", data.DeviceOS)
