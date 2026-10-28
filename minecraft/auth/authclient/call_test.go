@@ -169,16 +169,23 @@ func TestCallReleasesContextOnClose(t *testing.T) {
 	}
 }
 
+// A POST is resent after a retryable status only if it is replayable or the server refused it unprocessed.
 func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 	for _, test := range []struct {
-		status   int
-		attempts int
-		want     int
+		status     int
+		retryAfter string
+		replayable bool
+		attempts   int
+		want       int
 	}{
-		{status: http.StatusUnauthorized, want: 1},
-		{status: http.StatusServiceUnavailable, want: DefaultAttempts},
-		{status: http.StatusServiceUnavailable, attempts: 1, want: 1},
-		{status: http.StatusServiceUnavailable, attempts: 4, want: 4},
+		{status: http.StatusUnauthorized, replayable: true, want: 1},
+		{status: http.StatusInternalServerError, want: 1},
+		{status: http.StatusServiceUnavailable, want: 1},
+		{status: http.StatusServiceUnavailable, retryAfter: "0", want: DefaultAttempts},
+		{status: http.StatusTooManyRequests, want: DefaultAttempts},
+		{status: http.StatusInternalServerError, replayable: true, want: DefaultAttempts},
+		{status: http.StatusServiceUnavailable, replayable: true, attempts: 1, want: 1},
+		{status: http.StatusServiceUnavailable, replayable: true, attempts: 4, want: 4},
 	} {
 		synctest.Test(t, func(t *testing.T) {
 			calls := 0
@@ -188,10 +195,13 @@ func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 					t.Fatalf("body = %q, err = %v", body, err)
 				}
 				resp := okResponse()
-				resp.StatusCode = test.status
+				resp.StatusCode, resp.Header = test.status, http.Header{}
+				if test.retryAfter != "" {
+					resp.Header.Set("Retry-After", test.retryAfter)
+				}
 				return resp, nil
 			})}
-			resp, err := Call(context.Background(), client, preparePost, CallOptions{Retry: RetryOptions{Attempts: test.attempts}})
+			resp, err := Call(context.Background(), client, preparePost, CallOptions{Retry: RetryOptions{Attempts: test.attempts, Replayable: test.replayable}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -208,15 +218,16 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeoutError{}}
 	for _, test := range []struct {
-		name      string
-		method    string
-		header    string
-		noGetBody bool
-		tlsFailed bool
-		gotConn   bool
-		err       error
-		unsent    bool
-		want      int
+		name       string
+		method     string
+		header     string
+		replayable bool
+		noGetBody  bool
+		tlsFailed  bool
+		gotConn    bool
+		err        error
+		unsent     bool
+		want       int
 	}{
 		{name: "post dial timeout", method: http.MethodPost, err: dialTimeout, unsent: true, want: DefaultAttempts},
 		{name: "post failed TLS handshake", method: http.MethodPost, tlsFailed: true, err: timeoutError{}, unsent: true, want: DefaultAttempts},
@@ -224,6 +235,7 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 		{name: "post timeout without evidence", method: http.MethodPost, err: timeoutError{}, want: 1},
 		{name: "post reset", method: http.MethodPost, err: reset, want: 1},
 		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", err: reset, want: DefaultAttempts},
+		{name: "replayable post reset", method: http.MethodPost, replayable: true, err: reset, want: DefaultAttempts},
 		{name: "get reset", method: http.MethodGet, err: reset, want: DefaultAttempts},
 		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, err: reset, want: 1},
 	} {
@@ -251,7 +263,7 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 						req.Body, req.GetBody = io.NopCloser(strings.NewReader("payload")), nil
 					}
 					return req, err
-				}, CallOptions{})
+				}, CallOptions{Retry: RetryOptions{Replayable: test.replayable}})
 				if err == nil || calls != test.want {
 					t.Fatalf("err = %v, calls = %d, want %d", err, calls, test.want)
 				}
@@ -299,6 +311,7 @@ func TestCallStreamBoundsPreparation(t *testing.T) {
 	})
 }
 
+// A cancelled call stops sending and keeps the failed request's method and URL in its error.
 func TestCallHonorsCancellation(t *testing.T) {
 	for _, alreadyCancelled := range []bool{false, true} {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -319,6 +332,9 @@ func TestCallHonorsCancellation(t *testing.T) {
 		}
 		if !errors.Is(err, context.Canceled) || calls != want {
 			t.Fatalf("err = %v, calls = %d, want %d", err, calls, want)
+		}
+		if !alreadyCancelled && !strings.Contains(err.Error(), "https://service.test") {
+			t.Fatalf("err = %v, want the request URL kept", err)
 		}
 	}
 }

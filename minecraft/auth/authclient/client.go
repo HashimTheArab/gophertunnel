@@ -20,13 +20,17 @@ type RetryOptions struct {
 	Factor   float64       // factor to multiply the delay by on each attempt (default: 2.0)
 	MinDelay time.Duration // minimum delay (default: 500ms)
 	MaxDelay time.Duration // Maximum delay (default: 8s)
+	// Replayable marks a request that may be sent again even if a previous attempt may have reached the
+	// server, such as a read-only POST. Idempotent methods and idempotency keys are replayable already.
+	Replayable bool
 }
 
 // ErrNotSent wraps the error of a request that provably never left the client, so its effect cannot have happened.
 var ErrNotSent = errors.New("request not sent")
 
-// SendRequestWithRetries sends a request and retries on 429, 5xx and network errors. A request that may have
-// reached the server is only sent again if it is safe to repeat. A retry delay that would end after ctx's
+// SendRequestWithRetries sends a request and retries on 429, 408, 5xx and network errors. A request that may
+// have reached the server is only sent again if it is replayable, unless the server rejected it unprocessed
+// with a 429, or a 503 carrying Retry-After. A retry delay that would end after ctx's
 // deadline returns the last outcome instead of waiting. Errors wrap ErrNotSent only when no attempt can have
 // reached the server.
 func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
@@ -94,18 +98,21 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		resp, err := client.Do(req)
 		unsent := err != nil && !redirected && !gotConn.Load() && (tlsFailed.Load() || dialFailed(err))
 		everSent = everSent || !unsent
+		replayable := opts.Replayable || idempotent(request)
 		var retryAfter time.Duration
 		retry := false
 		if err != nil {
 			if ctx.Err() != nil {
-				err = ctx.Err()
+				if !errors.Is(err, ctx.Err()) {
+					err = fmt.Errorf("%w: %w", ctx.Err(), err)
+				}
 			} else {
 				// Some proxies close the connection without a response, which often surfaces as EOF.
 				_, netErr := errors.AsType[net.Error](err)
-				retry = (netErr || errors.Is(err, io.EOF)) && (unsent || idempotent(request))
+				retry = (netErr || errors.Is(err, io.EOF)) && (unsent || replayable)
 			}
 		} else if retryableStatus(resp.StatusCode) {
-			retry = true
+			retry = replayable || rejectedUnprocessed(resp)
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 				if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
 					retryAfter = time.Duration(seconds) * time.Second
@@ -145,6 +152,13 @@ func dialFailed(err error) bool {
 // some edges return for upstream failures.
 func retryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code == http.StatusRequestTimeout || code == 999 || (code >= 500 && code < 600)
+}
+
+// rejectedUnprocessed reports whether resp shows the server refused the request without processing it. A 503
+// without Retry-After is excluded: edges such as Azure Front Door also send it when the origin timed out.
+func rejectedUnprocessed(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusTooManyRequests ||
+		(resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != "")
 }
 
 // recreatable reports whether req's body can be sent again.
