@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -326,6 +325,18 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		d.IdentityData = identityData
 	}
 
+	// A network that picks its transport per address picks it now, so the login can name the server
+	// the way vanilla does once it has chosen.
+	loginAddress := address
+	if s, ok := network.(transportSelector); ok {
+		if network, err = s.Select(ctx, address); err != nil {
+			return nil, err
+		}
+		if l, ok := network.(interface{ loginAddress() string }); ok {
+			loginAddress = l.loginAddress()
+		}
+	}
+
 	var netConn net.Conn
 	if i, ok := network.(identityDialer); ok && token == "" {
 		// Offline dials still prove the connection key, which servers check against the login since 1.26.60.
@@ -383,7 +394,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	if conn.clientData.GameVersion == "" {
 		conn.clientData.GameVersion = d.Protocol.Ver()
 	}
-	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
+	defaultClientData(loginAddress, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
 	if token == "" {
@@ -529,24 +540,11 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
-// serverAddress returns the address in the form clients report it in their login request. For
-// networks addressed by a URL, such as NetherNet, clients repeat the port of the address after
-// it: 'https://<host>:<port>:<port>'.
-func serverAddress(address string) string {
-	if !strings.Contains(address, "://") {
-		return address
-	}
-	u, err := url.Parse(address)
-	if err != nil || u.Port() == "" {
-		return address
-	}
-	return address + ":" + u.Port()
-}
-
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
-		d.ServerAddress = serverAddress(address)
+		// 1.26.60 clients send a URL-addressed server, such as NetherNet, as the URL itself.
+		d.ServerAddress = address
 	}
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,20 +42,26 @@ type AddressNetwork struct {
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
-const netherNetProbeTimeout = 3 * time.Second
+const netherNetProbeTimeout = 6 * time.Second
 
 // defaultServerPort is the port vanilla probes when a server address has none.
 const defaultServerPort = 19132
+
+// transportSelector is a Network that chooses the transport to dial an address with.
+type transportSelector interface {
+	Select(ctx context.Context, address string) (Network, error)
+}
 
 // Select returns the network to dial address with: RakNet, or NetherNet bound to the endpoint
 // that answered the probe. It fails only when ctx ends first.
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
-	choice := probeChoice{cache: n.Probes, key: probeKey{host: host, port: port}}
+	// Vanilla keys its probe cache by the lower-cased host and the port exactly as given.
+	choice := probeChoice{cache: n.Probes, key: probeKey{host: strings.ToLower(host), port: port}}
 	choice.entry = n.Probes.lookup(choice.key)
 	if choice.entry == nil {
-		endpoint, err := probeNetherNet(ctx, client, host, port, netherNetProbeTimeout)
+		endpoint, err := probeNetherNet(ctx, client, probeBatches(host, port), netherNetProbeTimeout)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -62,6 +69,15 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 			endpoint = ""
 		}
 		choice.entry = n.Probes.store(choice.key, endpoint)
+	} else if choice.entry.endpoint != "" {
+		// Vanilla still asks a remembered URL before every join, and joins over RakNet if it no
+		// longer answers.
+		if _, err := probeNetherNet(ctx, client, [][]string{{choice.entry.endpoint}}, netherNetProbeTimeout); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
+		}
 	}
 	if choice.entry.endpoint == "" {
 		return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
@@ -147,6 +163,12 @@ func (p probeChoice) forgetAfter(err error) {
 	}
 }
 
+// loginAddress returns the server address a vanilla client puts in its login after joining this
+// endpoint: the URL, with its port.
+func (n httpNetherNet) loginAddress() string {
+	return n.endpoint
+}
+
 // probedRakNet is the RakNet a probe chose; a failed dial forgets that choice.
 type probedRakNet struct {
 	RakNet
@@ -205,18 +227,19 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the NetherNet HTTP signaling endpoint a server answers
-// on. Candidates are tried in turn, HTTPS first, within three seconds in total; one answers when
-// GET {url}/v1/join returns a 2xx status. A port of zero also tries the scheme's default port.
+// on, probing as the vanilla client does: the HTTPS candidates together, then the HTTP ones once
+// all HTTPS requests have finished, within six seconds in total. A candidate answers when
+// GET {url}/v1/join returns a 2xx status. Port 19132 or zero also tries the scheme's default port.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
-	return probeNetherNet(ctx, probeHTTPClient(client), host, port, netherNetProbeTimeout)
+	return probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), netherNetProbeTimeout)
 }
 
-func probeNetherNet(ctx context.Context, client *http.Client, host string, port uint16, timeout time.Duration) (string, error) {
+func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var errs []error
-	for _, endpoint := range probeEndpoints(host, port) {
-		err := probeEndpoint(ctx, client, endpoint)
+	for _, batch := range batches {
+		endpoint, err := probeBatch(ctx, client, batch)
 		if err == nil {
 			return endpoint, nil
 		}
@@ -228,20 +251,42 @@ func probeNetherNet(ctx context.Context, client *http.Client, host string, port 
 	return "", fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
 }
 
-// probeEndpoints lists base URLs in vanilla's order. Hosts are formatted unbracketed as vanilla
-// formats them, so an IPv6 literal never answers.
-func probeEndpoints(host string, port uint16) []string {
-	if port != 0 {
-		return []string{
-			fmt.Sprintf("https://%s:%d", host, port),
-			fmt.Sprintf("http://%s:%d", host, port),
+// probeBatch requests every endpoint at once. The first to answer wins and cancels the others;
+// otherwise it returns once all have failed, since vanilla starts the next batch only then.
+func probeBatch(ctx context.Context, client *http.Client, endpoints []string) (string, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		endpoint string
+		err      error
+	}
+	results := make(chan result, len(endpoints))
+	for _, endpoint := range endpoints {
+		go func() { results <- result{endpoint, probeEndpoint(ctx, client, endpoint)} }()
+	}
+	var errs []error
+	for range endpoints {
+		if r := <-results; r.err != nil {
+			errs = append(errs, r.err)
+		} else {
+			return r.endpoint, nil
 		}
 	}
-	return []string{
-		fmt.Sprintf("https://%s:%d", host, defaultServerPort),
-		"https://" + host,
-		fmt.Sprintf("http://%s:%d", host, defaultServerPort),
-		"http://" + host,
+	return "", errors.Join(errs...)
+}
+
+// probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch. Hosts are
+// formatted unbracketed as vanilla formats them, so an IPv6 literal never answers.
+func probeBatches(host string, port uint16) [][]string {
+	if port != 0 && port != defaultServerPort {
+		return [][]string{
+			{fmt.Sprintf("https://%s:%d", host, port)},
+			{fmt.Sprintf("http://%s:%d", host, port)},
+		}
+	}
+	return [][]string{
+		{fmt.Sprintf("https://%s:%d", host, defaultServerPort), "https://" + host},
+		{fmt.Sprintf("http://%s:%d", host, defaultServerPort), "http://" + host},
 	}
 }
 
