@@ -47,16 +47,8 @@ func parseData(data []byte, conn *Conn) (*packetData, error) {
 	if err != nil {
 		return nil, err
 	}
-	observe := conn.packetObserver.forPacket(p.h.PacketID)
-	if observe != nil || conn.packetFunc != nil {
-		payload := bytes.Clone(p.payload.Bytes())
-		source, destination := conn.RemoteAddr(), conn.LocalAddr()
-		if observe != nil {
-			observe(*p.h, payload, source, destination)
-		}
-		if conn.packetFunc != nil {
-			conn.packetFunc(*p.h, payload, source, destination)
-		}
+	if conn.observes(p.h.PacketID) {
+		conn.observe(*p.h, bytes.Clone(p.payload.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return p, nil
 }

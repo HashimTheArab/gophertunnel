@@ -255,6 +255,10 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	if d.Handoff < HandoffNone || d.Handoff > HandoffAfterLogin {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("unknown Handoff %d", d.Handoff)}
 	}
+	packetObserver, err := d.PacketObserver.compile()
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
+	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
 	if err != nil {
@@ -356,7 +360,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
-	conn.packetObserver = d.PacketObserver.compile()
+	conn.packetObserver = packetObserver
 	conn.acceptPacketHeader = d.AcceptPacketHeader
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()

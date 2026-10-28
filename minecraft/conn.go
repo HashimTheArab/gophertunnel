@@ -753,15 +753,8 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
 			l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
-			observe := conn.packetObserver.forPacket(conn.hdr.PacketID)
-			if observe != nil || conn.packetFunc != nil {
-				source, destination := conn.LocalAddr(), conn.RemoteAddr()
-				if observe != nil {
-					observe(*conn.hdr, buf.Bytes()[l:], source, destination)
-				}
-				if conn.packetFunc != nil {
-					conn.packetFunc(*conn.hdr, buf.Bytes()[l:], source, destination)
-				}
+			if conn.observes(conn.hdr.PacketID) {
+				conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
@@ -796,8 +789,8 @@ func (conn *Conn) WritePacketRaw(data []byte) error {
 // observeRawWrite runs the write-side observation encodePacketsTo performs for a decoded packet.
 func (conn *Conn) observeRawWrite(data []byte) {
 	id := rawPacketID(data)
-	observe := conn.packetObserver.forPacket(id)
-	if conn.packetFunc == nil && observe == nil && id != packet.IDItemRegistry {
+	observed := conn.observes(id)
+	if !observed && id != packet.IDItemRegistry {
 		return
 	}
 	buf := bytes.NewBuffer(data)
@@ -814,14 +807,8 @@ func (conn *Conn) observeRawWrite(data []byte) {
 			}
 		}
 	}
-	if observe != nil || conn.packetFunc != nil {
-		source, destination := conn.LocalAddr(), conn.RemoteAddr()
-		if observe != nil {
-			observe(header, buf.Bytes(), source, destination)
-		}
-		if conn.packetFunc != nil {
-			conn.packetFunc(header, buf.Bytes(), source, destination)
-		}
+	if observed {
+		conn.observe(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
 	}
 }
 

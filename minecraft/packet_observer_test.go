@@ -21,7 +21,7 @@ func TestSelectiveObserverIncomingOwnershipAndOrder(t *testing.T) {
 	conn := observerTestConn(t)
 	var events []string
 	var selected, legacy []byte
-	conn.packetObserver = (PacketObserver{
+	conn.packetObserver = mustCompileObserver(t, PacketObserver{
 		PacketIDs: []uint32{observerUnknownID, observerUnknownID},
 		Func: func(header packet.Header, payload []byte, src, dst net.Addr) {
 			events = append(events, "selective")
@@ -31,7 +31,7 @@ func TestSelectiveObserverIncomingOwnershipAndOrder(t *testing.T) {
 			selected = payload
 			payload[0] = 9
 		},
-	}).compile()
+	})
 	conn.packetFunc = func(_ packet.Header, payload []byte, _, _ net.Addr) {
 		events = append(events, "legacy")
 		legacy = payload
@@ -83,7 +83,7 @@ func TestSelectiveObserverSelectionAndLegacyFallback(t *testing.T) {
 			if test.active {
 				observer.Func = func(packet.Header, []byte, net.Addr, net.Addr) { selected++ }
 			}
-			conn.packetObserver = observer.compile()
+			conn.packetObserver = mustCompileObserver(t, observer)
 			if test.legacy {
 				conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { legacy++ }
 			}
@@ -124,11 +124,11 @@ func TestSelectiveObserverSkipsUnrelatedBodyAllocations(t *testing.T) {
 		})
 	}
 	baseline := measure()
-	conn.packetObserver = (PacketObserver{PacketIDs: []uint32{packet.IDResourcePacksInfo}, Func: callback}).compile()
+	conn.packetObserver = mustCompileObserver(t, PacketObserver{PacketIDs: []uint32{packet.IDResourcePacksInfo}, Func: callback})
 	if got := measure(); got != baseline {
 		t.Fatalf("unselected allocations = %g, want baseline %g", got, baseline)
 	}
-	conn.packetObserver = (PacketObserver{PacketIDs: []uint32{observerUnknownID}, Func: callback}).compile()
+	conn.packetObserver = mustCompileObserver(t, PacketObserver{PacketIDs: []uint32{observerUnknownID}, Func: callback})
 	selected := measure()
 	conn.packetFunc = callback
 	both := measure()
@@ -147,7 +147,7 @@ func TestSelectiveObserverOutboundMutationAndRegistry(t *testing.T) {
 		t.Run(fmt.Sprintf("raw=%t", raw), func(t *testing.T) {
 			conn := observerTestConn(t)
 			var events []string
-			conn.packetObserver = (PacketObserver{
+			conn.packetObserver = mustCompileObserver(t, PacketObserver{
 				PacketIDs: []uint32{observerUnknownID},
 				Func: func(_ packet.Header, payload []byte, src, dst net.Addr) {
 					if src.String() != "local" || dst.String() != "remote" {
@@ -156,7 +156,7 @@ func TestSelectiveObserverOutboundMutationAndRegistry(t *testing.T) {
 					events = append(events, "selective")
 					payload[0] = 9
 				},
-			}).compile()
+			})
 			conn.packetFunc = func(_ packet.Header, payload []byte, _, _ net.Addr) {
 				events = append(events, "legacy")
 				if payload[0] != 9 {
@@ -238,6 +238,27 @@ func TestDialSnapshotsSelectiveObserverInterests(t *testing.T) {
 	if err == nil || ctx.Err() != nil || observed.Load() != 2 {
 		t.Fatalf("dial error/context/observations = %v/%v/%d", err, ctx.Err(), observed.Load())
 	}
+}
+
+func TestPacketObserverRejectsIDsOutsideHeader(t *testing.T) {
+	observer := PacketObserver{PacketIDs: []uint32{1023, 1024}, Func: func(packet.Header, []byte, net.Addr, net.Addr) {}}
+	if _, err := (Dialer{PacketObserver: observer}).DialContextNetwork(context.Background(), nil, "observer.invalid:19132"); err == nil {
+		t.Fatal("Dial accepted packet ID 1024")
+	}
+	observer.PacketIDs = observer.PacketIDs[:1]
+	compiled := mustCompileObserver(t, observer)
+	if !compiled.observes(1023) || compiled.observes(1022) || compiled.observes(1024+1023) {
+		t.Fatal("bitset selection does not match the declared IDs")
+	}
+}
+
+func mustCompileObserver(t *testing.T, observer PacketObserver) compiledPacketObserver {
+	t.Helper()
+	compiled, err := observer.compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
 }
 
 // observerTestConn supplies stable distinct addresses and aborts without flushing.
