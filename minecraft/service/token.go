@@ -151,7 +151,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 		}
 		req.Header.Set("Session-Id", sessionID)
 		return req, nil
-	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5, Replayable: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src Tok
 		}
 		token.SetAuthHeader(req)
 		return req, nil
-	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5, Replayable: true}})
 	if err != nil {
 		return "", nil, err
 	}

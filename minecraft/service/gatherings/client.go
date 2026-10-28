@@ -157,7 +157,7 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 			}
 		}
 		return req, nil
-	}, authclient.CallOptions{})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Replayable: true}})
 	if err != nil {
 		return nil, err
 	}

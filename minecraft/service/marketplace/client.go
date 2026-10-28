@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
@@ -177,12 +178,15 @@ func (c *serviceClient) endpoint(elem ...string) *url.URL {
 	return c.base.JoinPath(elem...)
 }
 
+// replayable lets do and raw resend their reads and refreshes; purchases send through Call with one attempt.
+var replayable = authclient.RetryOptions{Replayable: true}
+
 // do sends a request that may be retried on transient failures.
 func (c *serviceClient) do(ctx context.Context, method string, target *url.URL, body, out any, header http.Header) (*request.Response, error) {
 	if !sameOrigin(c.base, target) {
 		return nil, fmt.Errorf("service/marketplace: %s is off the service origin", target.Redacted())
 	}
-	return request.Do(ctx, c.http, c.src, method, target, body, out, request.Options{Header: header})
+	return request.Do(ctx, c.http, c.src, method, target, body, out, request.Options{Header: header, Retry: replayable})
 }
 
 // raw sends a retryable request and returns the whole body; for answers whose envelope carries
@@ -191,5 +195,5 @@ func (c *serviceClient) raw(ctx context.Context, method string, target *url.URL,
 	if !sameOrigin(c.base, target) {
 		return nil, nil, fmt.Errorf("service/marketplace: %s is off the service origin", target.Redacted())
 	}
-	return request.Raw(ctx, c.http, c.src, method, target, body, request.Options{})
+	return request.Raw(ctx, c.http, c.src, method, target, body, request.Options{Retry: replayable})
 }
