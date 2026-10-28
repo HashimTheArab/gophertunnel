@@ -360,13 +360,33 @@ func (r *Client) xboxToken(ctx context.Context) (*auth.XBLToken, error) {
 		return &auth.XBLToken{AuthorizationToken: token}, nil
 	}
 
-	t, err := r.tokenSrc.Token()
+	t, err := liveToken(ctx, r.tokenSrc)
 	if err != nil {
 		return nil, err
 	}
 
 	r.xblToken, err = auth.RequestXBLToken(ctx, t, realmsRelyingParty)
 	return r.xblToken, err
+}
+
+// liveToken returns src's token, or ctx's error once ctx ends first. src takes no context, so a fetch
+// still running then finishes in the background.
+func liveToken(ctx context.Context, src oauth2.TokenSource) (*oauth2.Token, error) {
+	type result struct {
+		token *oauth2.Token
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		t, err := src.Token()
+		ch <- result{t, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		return res.token, res.err
+	}
 }
 
 func (r *Client) requestGet(ctx context.Context, path string) (body []byte, status int, err error) {
