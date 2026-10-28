@@ -321,7 +321,10 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	}
 
 	var netConn net.Conn
-	if token == "" {
+	if i, ok := network.(identityDialer); ok && token == "" {
+		// Offline dials still prove the connection key, which servers check against the login since 1.26.60.
+		netConn, err = i.DialContextIdentity(ctx, address, "", key)
+	} else if token == "" {
 		netConn, err = network.DialContext(ctx, address)
 	} else if i, ok := network.(identityProviderDialer); ok {
 		netConn, err = i.DialContextIdentityProvider(ctx, address, token, key, identityProvider)
