@@ -331,3 +331,28 @@ func TestMultiplayerTokenBoundsAuthentication(t *testing.T) {
 		}
 	})
 }
+
+// blockingTickets holds every session ticket request until release is closed.
+type blockingTickets struct{ release chan struct{} }
+
+func (b blockingTickets) SessionTicket(context.Context) (string, error) {
+	<-b.release
+	return "", errors.New("no playfab session in this test")
+}
+
+// A caller waiting for another caller's token fetch stops when its own context ends.
+func TestServiceTokenWaitHonoursContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tickets := blockingTickets{release: make(chan struct{})}
+		src := (&AuthorizationEnvironment{}).ResumeTokenSource(tickets, TokenConfig{}, nil)
+		go func() { _, _ = src.ServiceToken(context.Background()) }()
+		synctest.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		started := time.Now()
+		if _, err := src.ServiceToken(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != time.Second {
+			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
+		}
+		close(tickets.release)
+	})
+}
