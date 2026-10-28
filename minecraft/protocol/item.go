@@ -111,6 +111,18 @@ func (x StackRequestItem) ItemStack(networkID int32) ItemStack {
 	}
 }
 
+// StackRequestItem describes x by the identifier its network ID names in the
+// caller's session item palette. It is the inverse of StackRequestItem.ItemStack.
+// Reference fields remain shared; callers retaining or mutating the result
+// must clone them.
+func (x ItemStack) StackRequestItem(identifier string) StackRequestItem {
+	return StackRequestItem{
+		Identifier: identifier, MetadataValue: x.MetadataValue, BlockRuntimeID: x.BlockRuntimeID,
+		Count: x.Count, NBTData: x.NBTData, CanBePlacedOn: x.CanBePlacedOn, CanBreak: x.CanBreak,
+		BlockingTick: x.BlockingTick,
+	}
+}
+
 type itemUserData struct {
 	nbtData       map[string]any
 	canBePlacedOn []string

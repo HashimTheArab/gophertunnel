@@ -118,3 +118,27 @@ func TestStackRequestItem_ItemStackPreservesEveryWireField(t *testing.T) {
 		}
 	}
 }
+
+func TestItemStack_StackRequestItemPreservesEveryWireField(t *testing.T) {
+	stack := ItemStack{ItemType: ItemType{NetworkID: 917, MetadataValue: 7}, BlockRuntimeID: 123, Count: 4, NBTData: map[string]any{"custom": "value"}, CanBePlacedOn: []string{"minecraft:grass"}, CanBreak: []string{"minecraft:dirt"}, BlockingTick: 45}
+	result := stack.StackRequestItem("minecraft:stone")
+	if result.Identifier != "minecraft:stone" {
+		t.Fatalf("identifier=%q", result.Identifier)
+	}
+	if !reflect.DeepEqual(result.ItemStack(stack.NetworkID), stack) {
+		t.Fatalf("round trip = %#v; want %#v", result.ItemStack(stack.NetworkID), stack)
+	}
+	// Every descriptor field other than the identifier must come from the stack,
+	// so a new wire field cannot silently disappear in this conversion.
+	typ, dst, src := reflect.TypeOf(result), reflect.ValueOf(result), reflect.ValueOf(stack)
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if name == "Identifier" {
+			continue
+		}
+		got := src.FieldByName(name)
+		if !got.IsValid() || !reflect.DeepEqual(dst.Field(i).Interface(), got.Interface()) {
+			t.Errorf("stack field %s lost", name)
+		}
+	}
+}
