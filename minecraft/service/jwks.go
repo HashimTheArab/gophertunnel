@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/go-jose/go-jose/v4"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
@@ -31,18 +33,11 @@ type refreshingKeySet struct {
 
 	mu sync.RWMutex
 
-	// inflight suppresses parallel key refresh and allows multiple goroutines to wait.
-	inflight *refreshingKeySetInflight
+	// refresh shares one key refresh between concurrent callers.
+	refresh singleflight.Group
 
 	cachedKeys []jose.JSONWebKey
 	lastFetch  time.Time
-}
-
-// refreshingKeySetInflight represents a single in-progress JWKS refresh shared by waiters.
-type refreshingKeySetInflight struct {
-	doneCh chan struct{}
-	keys   []jose.JSONWebKey
-	err    error
 }
 
 // newRefreshingKeySet constructs a refreshingKeySet for verifying JWT signatures against JWKS.
@@ -114,44 +109,31 @@ func (r *refreshingKeySet) keysFromCache() (keys []jose.JSONWebKey, lastFetch ti
 	return r.cachedKeys, r.lastFetch
 }
 
-// keysFromRemote refreshes keys from the JWKS endpoint, and de-duplicates concurrent refreshes.
+// keysFromRemote refreshes keys from the JWKS endpoint, sharing one refresh between concurrent callers.
 func (r *refreshingKeySet) keysFromRemote(ctx context.Context) ([]jose.JSONWebKey, error) {
-	// Lock to inspect the inflight request field.
-	r.mu.Lock()
-	if r.inflight == nil {
-		r.inflight = &refreshingKeySetInflight{doneCh: make(chan struct{})}
-		inflight := r.inflight
-
-		// This goroutine has exclusive ownership over the current inflight request.
-		go func() {
-			keys, err := r.updateKeys()
-			inflight.keys, inflight.err = keys, err
-
-			// Publish before waking waiters, so a returned refresh is visible to keysFromCache.
+	ch := r.refresh.DoChan("", func() (any, error) {
+		keys, err := r.updateKeys()
+		if err == nil {
 			r.mu.Lock()
-			if err == nil {
-				r.cachedKeys = keys
-				r.lastFetch = time.Now()
-			}
-			r.inflight = nil
+			r.cachedKeys, r.lastFetch = keys, time.Now()
 			r.mu.Unlock()
-			close(inflight.doneCh)
-		}()
-	}
-	inflight := r.inflight
-	r.mu.Unlock()
-
+		}
+		return keys, err
+	})
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-inflight.doneCh:
-		return inflight.keys, inflight.err
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.([]jose.JSONWebKey), nil
 	}
 }
 
 // updateKeys performs the HTTP request to fetch and decode the JWKS.
 func (r *refreshingKeySet) updateKeys() ([]jose.JSONWebKey, error) {
-	resp, err := internal.SendRequest(r.ctx, r.env.httpClient(), func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(r.ctx, r.env.httpClient(), func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.jwksURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -160,7 +142,7 @@ func (r *refreshingKeySet) updateKeys() ([]jose.JSONWebKey, error) {
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", internal.UserAgent)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}

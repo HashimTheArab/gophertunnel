@@ -68,10 +68,7 @@ func Raw(ctx context.Context, client *http.Client, src service.TokenSource, meth
 			return nil, nil, fmt.Errorf("encode request body: %w", err)
 		}
 	}
-	if opts.Retry.Attempts <= 0 {
-		opts.Retry.Attempts = 3
-	}
-	resp, err := internal.SendRequest(ctx, client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(encoded))
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -92,7 +89,7 @@ func Raw(ctx context.Context, client *http.Client, src service.TokenSource, meth
 		}
 		token.SetAuthHeader(req)
 		return req, nil
-	}, internal.RequestOptions{Retry: opts.Retry})
+	}, authclient.CallOptions{Retry: opts.Retry})
 	if err != nil {
 		return nil, nil, err
 	}

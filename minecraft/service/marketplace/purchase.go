@@ -122,7 +122,7 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	client := *c.entitlements.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	prepared := false
-	resp, err := internal.SendRequest(ctx, &client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, &client, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -138,7 +138,7 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 		token.SetAuthHeader(req)
 		prepared = true
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		if !prepared {
 			return PurchaseResult{}, err

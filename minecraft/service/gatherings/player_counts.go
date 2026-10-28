@@ -105,7 +105,7 @@ func (c *Client) fetchPlayerCounts(ctx context.Context) ([]ExperiencePlayerCount
 		}
 		req.Header.Set("Accept", "application/json")
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

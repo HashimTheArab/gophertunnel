@@ -8,6 +8,10 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
+	"golang.org/x/sync/singleflight"
+
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -66,7 +70,8 @@ var (
 	// and the values are the result of [Discover], cached to reduce network time.
 	discoveryCache   = make(map[string]*Discovery)
 	discoveryCacheMu sync.Mutex
-	discoveryFlights = make(map[string]*discoveryFlight)
+	// discoveryFlights shares one request between callers discovering the same URL with the same client.
+	discoveryFlights singleflight.Group
 )
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
@@ -112,50 +117,38 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return nil, err
 	}
 	discoveryCacheMu.Lock()
-	if d, ok := discoveryCache[requestURL]; ok {
-		discoveryCacheMu.Unlock()
+	d, ok := discoveryCache[requestURL]
+	discoveryCacheMu.Unlock()
+	if ok {
 		return d, nil
 	}
-	flight := discoveryFlights[requestURL]
-	if flight == nil {
-		flight = &discoveryFlight{done: make(chan struct{})}
-		discoveryFlights[requestURL] = flight
-		// The shared request ignores the cancellation of the caller that started it, so other callers waiting
-		// for it still get its result. The request itself stays bounded by its call deadline.
-		go flight.run(context.WithoutCancel(ctx), requestURL)
-	}
-	discoveryCacheMu.Unlock()
+	client := auth.ContextClient(ctx)
+	// The shared request ignores the cancellation of the caller that started it, so other callers still get its
+	// result; it stays bounded by its call deadline. Callers with different clients do not share a request.
+	shared := context.WithoutCancel(ctx)
+	ch := discoveryFlights.DoChan(fmt.Sprintf("%p %s", client, requestURL), func() (any, error) {
+		d, err := discover(shared, client, requestURL)
+		if err == nil {
+			discoveryCacheMu.Lock()
+			discoveryCache[requestURL] = d
+			discoveryCacheMu.Unlock()
+		}
+		return d, err
+	})
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-flight.done:
-		return flight.value, flight.err
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Discovery), nil
 	}
-}
-
-// discoveryFlight shares one discovery request without holding the cache lock over network I/O.
-type discoveryFlight struct {
-	done  chan struct{}
-	value *Discovery
-	err   error
-}
-
-// run performs the shared request, caches a successful result and releases every waiter.
-func (flight *discoveryFlight) run(ctx context.Context, requestURL string) {
-	value, err := discover(ctx, requestURL)
-	discoveryCacheMu.Lock()
-	if err == nil {
-		discoveryCache[requestURL] = value
-	}
-	flight.value, flight.err = value, err
-	delete(discoveryFlights, requestURL)
-	close(flight.done)
-	discoveryCacheMu.Unlock()
 }
 
 // discover bounds one service lookup and retries transient HTTP failures.
-func discover(ctx context.Context, requestURL string) (*Discovery, error) {
-	resp, err := internal.SendRequest(ctx, nil, func(ctx context.Context) (*http.Request, error) {
+func discover(ctx context.Context, client *http.Client, requestURL string) (*Discovery, error) {
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -163,7 +156,7 @@ func discover(ctx context.Context, requestURL string) (*Discovery, error) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", internal.UserAgent)
 		return req, nil
-	}, internal.RequestOptions{})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +169,5 @@ func discover(ctx context.Context, requestURL string) (*Discovery, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response body: %w", err)
 	}
-	d := &result.Data
-	return d, nil
+	return &result.Data, nil
 }

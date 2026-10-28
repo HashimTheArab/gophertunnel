@@ -157,7 +157,7 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 			}
 		}
 		return req, nil
-	}, internal.RequestOptions{})
+	}, authclient.CallOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 		}
 		req.Header.Set("Content-Type", "application/json")
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -283,8 +283,8 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 
 // send prepares a request, authorises it with a service token, sets the headers the vanilla client sends
 // and sends it through the Client's HTTP client within the service request bounds.
-func (c *Client) send(ctx context.Context, prepare func(context.Context) (*http.Request, error), opts internal.RequestOptions) (*http.Response, error) {
-	return internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+func (c *Client) send(ctx context.Context, prepare func(context.Context) (*http.Request, error), opts authclient.CallOptions) (*http.Response, error) {
+	return authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
 		req, err := prepare(ctx)
 		if err != nil {
 			return nil, err
@@ -333,7 +333,7 @@ func (c *Client) JoinFriend(ctx context.Context, experienceID, worldID uuid.UUID
 		}
 		req.Header.Set("Content-Type", "application/json")
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

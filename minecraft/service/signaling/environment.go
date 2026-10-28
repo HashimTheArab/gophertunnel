@@ -95,7 +95,7 @@ func (e *AFDEnvironment) ServiceName() string {
 // The returned Configuration is typically used by a Dialer to establish a WebSocket
 // connection with the signaling service.
 func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client, src service.TokenSource) (*Configuration, error) {
-	resp, err := internal.SendRequest(ctx, client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
 		token, err := src.ServiceToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("request service token: %w", err)
@@ -109,7 +109,7 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 		token.SetAuthHeader(req)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

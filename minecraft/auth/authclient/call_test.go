@@ -1,0 +1,259 @@
+package authclient
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+)
+
+// callTransport supplies HTTP responses without making network connections.
+type callTransport func(*http.Request) (*http.Response, error)
+
+// RoundTrip runs the test's HTTP handler.
+func (f callTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// preparePost creates a replayable POST so tests can check retries preserve its body.
+func preparePost(ctx context.Context) (*http.Request, error) {
+	return http.NewRequestWithContext(ctx, http.MethodPost, "https://service.test", strings.NewReader("payload"))
+}
+
+// okResponse returns an empty successful response.
+func okResponse() *http.Response {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}
+}
+
+// timeoutError is a network timeout, as returned when a client's own Timeout expires.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+// slowBody yields one byte after delay, modelling a slow but healthy response stream.
+type slowBody struct {
+	ctx   context.Context
+	delay time.Duration
+	done  bool
+}
+
+func (b *slowBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, io.EOF
+	}
+	select {
+	case <-time.After(b.delay):
+	case <-b.ctx.Done():
+		return 0, b.ctx.Err()
+	}
+	b.done = true
+	return copy(p, "x"), nil
+}
+
+func (*slowBody) Close() error { return nil }
+
+// A response body that takes longer than any single attempt used to be allowed must still be read in full.
+func TestCallDoesNotCutOffSlowBodies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: &slowBody{ctx: req.Context(), delay: 15 * time.Second}}, nil
+		})}
+		resp, err := Call(context.Background(), client, preparePost, CallOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if _, err := io.ReadAll(resp.Body); err != nil {
+			t.Fatalf("slow body cut off: %v", err)
+		}
+	})
+}
+
+// A negative timeout leaves streamed bodies bounded only by the caller's context.
+func TestCallNegativeTimeoutStreams(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: &slowBody{ctx: req.Context(), delay: 2 * DefaultCallTimeout}}, nil
+		})}
+		resp, err := Call(context.Background(), client, preparePost, CallOptions{Timeout: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if _, err := io.ReadAll(resp.Body); err != nil {
+			t.Fatalf("streamed body cut off: %v", err)
+		}
+	})
+}
+
+// The call deadline covers preparing the request and reading the response body.
+func TestCallDeadlineBoundsPreparationAndBody(t *testing.T) {
+	for _, timeout := range []time.Duration{0, time.Second} {
+		want := timeout
+		if want == 0 {
+			want = DefaultCallTimeout
+		}
+		synctest.Test(t, func(t *testing.T) {
+			started := time.Now()
+			_, err := Call(context.Background(), nil, func(ctx context.Context) (*http.Request, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}, CallOptions{Timeout: timeout})
+			if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != want {
+				t.Fatalf("prepare: err = %v, elapsed = %v, want %v", err, time.Since(started), want)
+			}
+		})
+		synctest.Test(t, func(t *testing.T) {
+			client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: &slowBody{ctx: req.Context(), delay: 2 * DefaultCallTimeout}}, nil
+			})}
+			started := time.Now()
+			resp, err := Call(context.Background(), client, preparePost, CallOptions{Timeout: timeout})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if _, err := io.ReadAll(resp.Body); !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != want {
+				t.Fatalf("body: err = %v, elapsed = %v, want %v", err, time.Since(started), want)
+			}
+		})
+	}
+}
+
+// A caller's own client timeout is used as it is.
+func TestCallKeepsCallerClientTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &http.Client{Timeout: 30 * time.Second, Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-time.After(20 * time.Second):
+				return okResponse(), nil
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+		})}
+		resp, err := Call(context.Background(), client, preparePost, CallOptions{})
+		if err != nil {
+			t.Fatalf("caller timeout shortened: %v", err)
+		}
+		resp.Body.Close()
+		if client.Timeout != 30*time.Second {
+			t.Fatalf("caller timeout changed to %v", client.Timeout)
+		}
+	})
+}
+
+func TestCallReleasesContextOnClose(t *testing.T) {
+	var requestCtx context.Context
+	client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+		requestCtx = req.Context()
+		return okResponse(), nil
+	})}
+	resp, err := Call(context.Background(), client, preparePost, CallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestCtx.Err() != nil {
+		t.Fatal("request context was cancelled before the body was closed")
+	}
+	resp.Body.Close()
+	if !errors.Is(requestCtx.Err(), context.Canceled) {
+		t.Fatalf("context after closing body = %v", requestCtx.Err())
+	}
+}
+
+func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
+	for _, test := range []struct {
+		status   int
+		attempts int
+		want     int
+	}{
+		{status: http.StatusUnauthorized, want: 1},
+		{status: http.StatusServiceUnavailable, want: DefaultAttempts},
+		{status: http.StatusServiceUnavailable, attempts: 1, want: 1},
+		{status: http.StatusServiceUnavailable, attempts: 4, want: 4},
+	} {
+		synctest.Test(t, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if body, err := io.ReadAll(req.Body); err != nil || string(body) != "payload" {
+					t.Fatalf("body = %q, err = %v", body, err)
+				}
+				resp := okResponse()
+				resp.StatusCode = test.status
+				return resp, nil
+			})}
+			resp, err := Call(context.Background(), client, preparePost, CallOptions{Retry: RetryOptions{Attempts: test.attempts}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if calls != test.want || resp.StatusCode != test.status {
+				t.Fatalf("calls = %d, want %d; status = %d", calls, test.want, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// A request that timed out is sent again only when repeating it cannot repeat its effect.
+func TestCallResendsTimedOutRequestsOnlyWhenReplayable(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		method string
+		header string
+		want   int
+	}{
+		{name: "post", method: http.MethodPost, want: 1},
+		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", want: DefaultAttempts},
+		{name: "get", method: http.MethodGet, want: DefaultAttempts},
+		{name: "delete", method: http.MethodDelete, want: DefaultAttempts},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				calls := 0
+				client := &http.Client{Transport: callTransport(func(*http.Request) (*http.Response, error) {
+					calls++
+					return nil, timeoutError{}
+				})}
+				_, err := Call(context.Background(), client, func(ctx context.Context) (*http.Request, error) {
+					req, err := http.NewRequestWithContext(ctx, test.method, "https://service.test", strings.NewReader("payload"))
+					if err == nil && test.header != "" {
+						req.Header.Set(test.header, "key")
+					}
+					return req, err
+				}, CallOptions{})
+				if err == nil || calls != test.want {
+					t.Fatalf("err = %v, calls = %d, want %d", err, calls, test.want)
+				}
+			})
+		})
+	}
+}
+
+func TestCallHonorsCancellation(t *testing.T) {
+	for _, alreadyCancelled := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
+			calls++
+			cancel()
+			return nil, req.Context().Err()
+		})}
+		if alreadyCancelled {
+			cancel()
+		}
+		_, err := Call(ctx, client, preparePost, CallOptions{})
+		cancel()
+		want := 1
+		if alreadyCancelled {
+			want = 0
+		}
+		if !errors.Is(err, context.Canceled) || calls != want {
+			t.Fatalf("err = %v, calls = %d, want %d", err, calls, want)
+		}
+	}
+}

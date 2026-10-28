@@ -18,7 +18,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
 
@@ -379,7 +378,7 @@ func (r *Client) requestPost(ctx context.Context, path string, requestBody []byt
 }
 
 func (r *Client) request(ctx context.Context, method, path string, requestBody []byte) (body []byte, status int, err error) {
-	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{Attempts: 3})
+	return r.requestWithOptions(ctx, method, path, requestBody, authclient.RetryOptions{})
 }
 
 // requestWithOptions performs a Realms request using the supplied HTTP retry policy while preserving version negotiation.
@@ -402,7 +401,7 @@ func (r *Client) requestWithOptions(ctx context.Context, method, path string, re
 // send performs a single request against the realms api with an explicit
 // Client-Version, without negotiating a replacement for a rejected one.
 func (r *Client) send(ctx context.Context, method, path string, requestBody []byte, clientVersion string) (body []byte, status int, err error) {
-	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{Attempts: 3})
+	return r.sendWithOptions(ctx, method, path, requestBody, clientVersion, authclient.RetryOptions{})
 }
 
 // sendWithOptions performs one version-pinned Realms request using the supplied HTTP retry policy.
@@ -417,7 +416,7 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 	if base == "" {
 		base = realmsBaseURL
 	}
-	resp, err := service.SendRequest(ctx, r.httpClient, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, r.httpClient, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
 		if err != nil {
 			return nil, err
@@ -435,7 +434,7 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 		}
 		xbl.SetAuthHeader(req)
 		return req, nil
-	}, service.RequestOptions{Retry: retryOptions})
+	}, authclient.CallOptions{Retry: retryOptions})
 	if err != nil {
 		return nil, 0, err
 	}

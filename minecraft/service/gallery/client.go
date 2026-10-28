@@ -92,9 +92,9 @@ func (c *Client) Images(ctx context.Context, xuid string) ([]Image, error) {
 		return nil, fmt.Errorf("service/gallery: invalid XUID %q", xuid)
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery/xuid", url.PathEscape(xuid)).String()
-	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
 		return c.request(ctx, http.MethodGet, requestURL, nil)
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 		return Image{}, errors.New("service/gallery: image is nil")
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery").String()
-	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
 		req, err := c.request(ctx, http.MethodPost, requestURL, image)
 		if err != nil {
 			return nil, err
@@ -138,7 +138,7 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 			req.Header.Set("X-Ms-Showcased-Timetaken", options.TakenAt.UTC().Format("2006-01-02T15:04:05.000Z"))
 		}
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Timeout: -1, Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return Image{}, err
 	}
@@ -170,9 +170,9 @@ func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) 
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	resp, err := internal.SendRequest(ctx, &client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, &client, func(ctx context.Context) (*http.Request, error) {
 		return c.request(ctx, http.MethodGet, image.fetchURL, nil)
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Timeout: -1, Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +189,9 @@ func (c *Client) Delete(ctx context.Context, imageID string) error {
 		return errors.New("service/gallery: invalid image ID")
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v1.0/gallery", url.PathEscape(imageID)).String()
-	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
 		return c.request(ctx, http.MethodDelete, requestURL, nil)
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return err
 	}

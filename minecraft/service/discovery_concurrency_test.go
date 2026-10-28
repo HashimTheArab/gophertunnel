@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 
@@ -18,8 +19,25 @@ type discoveryTransport func(*http.Request) (*http.Response, error)
 // RoundTrip runs the supplied discovery handler.
 func (f discoveryTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// isolateDiscoveryCache empties the process-wide discovery cache for the test and again after it.
+func isolateDiscoveryCache(t *testing.T) {
+	clear := func() {
+		discoveryCacheMu.Lock()
+		discoveryCache = make(map[string]*Discovery)
+		discoveryCacheMu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+// discoveryOK is a successful, empty discovery reply.
+func discoveryOK() *http.Response {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}
+}
+
 // Slow discovery must leave cached entries readable and let queued callers cancel.
 func TestDiscoveryStallDoesNotBlockCacheOrCancellation(t *testing.T) {
+	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		started := make(chan struct{})
@@ -61,6 +79,7 @@ func TestDiscoveryStallDoesNotBlockCacheOrCancellation(t *testing.T) {
 
 // A caller that cancels must not cancel the shared request for other callers waiting on it.
 func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
+	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		started := make(chan struct{})
@@ -87,6 +106,34 @@ func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
 		close(release)
 		if err := <-waiter; err != nil {
 			t.Fatalf("waiter error after the owner canceled = %v", err)
+		}
+	})
+}
+
+// Callers using different HTTP clients must not share one request, so one client's failure is not another's.
+func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		started := make(chan struct{})
+		var once sync.Once
+		failing := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			once.Do(func() { close(started) })
+			<-release
+			return nil, errors.New("proxy unavailable")
+		})})
+		working := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			return discoveryOK(), nil
+		})})
+		failed := make(chan error, 1)
+		go func() { _, err := Discover(failing, t.Name(), "shared"); failed <- err }()
+		<-started
+		if _, err := Discover(working, t.Name(), "shared"); err != nil {
+			t.Fatalf("working client got %v", err)
+		}
+		close(release)
+		if err := <-failed; err == nil {
+			t.Fatal("failing client unexpectedly succeeded")
 		}
 	})
 }

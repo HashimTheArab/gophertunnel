@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
-	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
 )
 
@@ -118,7 +117,7 @@ func (c *Client) Batch(ctx context.Context, xuids []string, statistics []Request
 	if err != nil {
 		return nil, fmt.Errorf("encode statistics request: %w", err)
 	}
-	resp, err := internal.SendRequest(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -128,7 +127,7 @@ func (c *Client) Batch(ctx context.Context, xuids []string, statistics []Request
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 		req.Header.Set("User-Agent", userAgent)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

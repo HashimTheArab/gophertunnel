@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 )
 
 // searchTransport lets tests stall one request without a real network connection.
@@ -20,32 +21,21 @@ type searchTransport func(*http.Request) (*http.Response, error)
 // RoundTrip runs the test's response handler.
 func (f searchTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// searchResponse returns a minimal successful catalog response.
-func searchResponse() *http.Response {
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":{"Items":[]}}`))}
-}
-
-// A stalled catalog request expires independently and the next attempt succeeds.
-func TestSearchItemsRetriesStalledRequest(t *testing.T) {
+// A stalled search request ends at the call deadline instead of waiting for the caller's longer one.
+func TestSearchItemsStalledRequestEndsAtCallDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		calls := 0
 		client := (&Environment{ServiceURI: &url.URL{Scheme: "https", Host: "gatherings.test"}, HTTPClient: &http.Client{Transport: searchTransport(func(r *http.Request) (*http.Response, error) {
 			calls++
-			body, err := io.ReadAll(r.Body)
-			if err != nil || !strings.Contains(string(body), "test filter") {
-				t.Errorf("retry lost request body: %q, %v", body, err)
-			}
-			if calls == 1 {
-				<-r.Context().Done()
-				return nil, r.Context().Err()
-			}
-			return searchResponse(), nil
+			<-r.Context().Done()
+			return nil, r.Context().Err()
 		})}}).New(fixedTokens{})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
-		result, err := client.SearchItems(ctx, catalog.SearchFilter{Filter: "test filter"})
-		if err != nil || result == nil || calls != 2 {
-			t.Fatalf("result = %v, err = %v, calls = %d", result, err, calls)
+		started := time.Now()
+		_, err := client.SearchItems(ctx, catalog.SearchFilter{Filter: "test filter"})
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != authclient.DefaultCallTimeout || calls != 1 {
+			t.Fatalf("err = %v, elapsed = %v, calls = %d", err, time.Since(started), calls)
 		}
 	})
 }

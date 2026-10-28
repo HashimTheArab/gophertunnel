@@ -18,8 +18,8 @@ import (
 
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
-	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
 func TestDecodeClaimsAllowsSmallIssuedAtSkew(t *testing.T) {
@@ -326,7 +326,7 @@ func TestMultiplayerTokenBoundsAuthentication(t *testing.T) {
 		env := &AuthorizationEnvironment{ServiceURI: target}
 		started := time.Now()
 		_, err = env.MultiplayerToken(context.Background(), stalledTokenSource{}, &key.PublicKey)
-		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != internal.CatalogCallTimeout {
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != authclient.DefaultCallTimeout {
 			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
 		}
 	})

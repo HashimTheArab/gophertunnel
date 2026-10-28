@@ -137,7 +137,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
 	requestURL := e.ServiceURI.JoinPath("/api/v1.0/session/start").String()
-	resp, err := internal.SendRequest(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -151,7 +151,7 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 		}
 		req.Header.Set("Session-Id", sessionID)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
 // may be used to resolve the signing keys and algorithms accepted when verifying
 // tokens issued by the authorization service.
 func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.ProviderConfig, error) {
-	resp, err := internal.SendRequest(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.Issuer.JoinPath("/.well-known/openid-configuration").String(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -245,7 +245,7 @@ func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.Pro
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", internal.UserAgent)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src Tok
 
 	requestURL := e.ServiceURI.JoinPath("/api/v1.0/multiplayer/session/start").String()
 	var token *Token
-	resp, err := internal.SendRequest(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
 		if err != nil {
 			return nil, fmt.Errorf("make request: %w", err)
@@ -317,7 +317,7 @@ func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src Tok
 		}
 		token.SetAuthHeader(req)
 		return req, nil
-	}, internal.RequestOptions{Retry: authclient.RetryOptions{Attempts: 5}})
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return "", nil, err
 	}

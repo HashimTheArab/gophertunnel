@@ -13,7 +13,6 @@ import (
 
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
-	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
 type tokens struct{}
@@ -79,7 +78,7 @@ func TestRawBoundsAuthentication(t *testing.T) {
 		target, _ := url.Parse("https://service.test")
 		started := time.Now()
 		_, _, err := Raw(context.Background(), nil, stalledTokens{}, http.MethodGet, target, nil, Options{})
-		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != internal.CatalogCallTimeout {
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != authclient.DefaultCallTimeout {
 			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
 		}
 	})
