@@ -165,19 +165,21 @@ func TestDiscoveryMakesOneRequestForConcurrentCallers(t *testing.T) {
 	})
 }
 
-// Once every caller waiting for a shared request has gone, the request is cancelled and a new caller starts afresh.
-func TestDiscoveryCancelsSharedRequestWithoutWaiters(t *testing.T) {
+// Once every caller has stopped waiting, the shared request still finishes within its deadline and fills the cache.
+func TestDiscoveryFinishesSharedRequestWithoutWaiters(t *testing.T) {
 	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
-		cancelled := make(chan struct{})
-		calls := 0
+		release := make(chan struct{})
+		calls, bounded := 0, false
 		base := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(r *http.Request) (*http.Response, error) {
-			if calls++; calls > 1 {
-				return discoveryOK(), nil
+			calls++
+			_, bounded = r.Context().Deadline()
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
 			}
-			<-r.Context().Done()
-			close(cancelled)
-			return nil, r.Context().Err()
+			return discoveryOK(), nil
 		})})
 		first, cancelFirst := context.WithCancel(base)
 		second, cancelSecond := context.WithCancel(base)
@@ -186,26 +188,16 @@ func TestDiscoveryCancelsSharedRequestWithoutWaiters(t *testing.T) {
 		go func() { _, err := Discover(second, t.Name(), "test"); errs <- err }()
 		synctest.Wait()
 		cancelFirst()
-		synctest.Wait()
-		select {
-		case <-cancelled:
-			t.Fatal("shared request cancelled while a caller still waited")
-		default:
-		}
 		cancelSecond()
-		synctest.Wait()
-		select {
-		case <-cancelled:
-		default:
-			t.Fatal("shared request kept running after every caller had gone")
-		}
 		for range 2 {
 			if err := <-errs; !errors.Is(err, context.Canceled) {
 				t.Fatalf("caller error = %v", err)
 			}
 		}
-		if _, err := Discover(base, t.Name(), "test"); err != nil {
-			t.Fatalf("new caller after cancellation: %v", err)
+		close(release)
+		synctest.Wait()
+		if _, err := Discover(base, t.Name(), "test"); err != nil || calls != 1 || !bounded {
+			t.Fatalf("err = %v, network calls = %d, want 1; request bounded = %v", err, calls, bounded)
 		}
 	})
 }

@@ -8,9 +8,10 @@ import (
 	"net/url"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
-
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -69,19 +70,9 @@ var (
 	// and the values are the result of [Discover], cached to reduce network time.
 	discoveryCache   = make(map[string]*Discovery)
 	discoveryCacheMu sync.Mutex
-	// discoveryFlights holds the request shared by callers discovering the same URL with the same client,
-	// guarded by discoveryCacheMu.
-	discoveryFlights = make(map[string]*discoveryFlight)
+	// discoveryRequests shares one request between callers discovering the same URL with the same client.
+	discoveryRequests singleflight.Group
 )
-
-// discoveryFlight is one discovery request shared by the callers waiting for it.
-type discoveryFlight struct {
-	done    chan struct{}
-	result  *Discovery
-	err     error
-	waiters int
-	cancel  context.CancelFunc
-}
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
 // using [Environment.ServiceName] as the key, then decodes the nested
@@ -125,52 +116,42 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	client := auth.ContextClient(ctx)
-	key := fmt.Sprintf("%p %s", client, requestURL)
-
-	discoveryCacheMu.Lock()
-	if d, ok := discoveryCache[requestURL]; ok {
-		discoveryCacheMu.Unlock()
+	if d, ok := cachedDiscovery(requestURL); ok {
 		return d, nil
 	}
-	f, ok := discoveryFlights[key]
-	if !ok {
-		// The shared request outlives the caller that started it, until every caller waiting for it has gone.
-		flightCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		f = &discoveryFlight{done: make(chan struct{}), cancel: cancel}
-		discoveryFlights[key] = f
-		go func() {
-			d, err := discover(flightCtx, client, requestURL)
-			cancel()
+	client := auth.ContextClient(ctx)
+	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
+	key := fmt.Sprintf("%p %s", client, requestURL)
+	ch := discoveryRequests.DoChan(key, func() (any, error) {
+		if d, ok := cachedDiscovery(requestURL); ok {
+			return d, nil
+		}
+		// The shared request outlives callers that stop waiting, bounded by its call deadline.
+		d, err := discover(context.WithoutCancel(ctx), client, requestURL)
+		if err == nil {
 			discoveryCacheMu.Lock()
-			if err == nil {
-				discoveryCache[requestURL] = d
-			}
-			if discoveryFlights[key] == f {
-				delete(discoveryFlights, key)
-			}
-			f.result, f.err = d, err
+			discoveryCache[requestURL] = d
 			discoveryCacheMu.Unlock()
-			close(f.done)
-		}()
-	}
-	f.waiters++
-	discoveryCacheMu.Unlock()
-
+		}
+		return d, err
+	})
 	select {
 	case <-ctx.Done():
-		discoveryCacheMu.Lock()
-		if f.waiters--; f.waiters == 0 {
-			f.cancel()
-			if discoveryFlights[key] == f {
-				delete(discoveryFlights, key)
-			}
-		}
-		discoveryCacheMu.Unlock()
 		return nil, ctx.Err()
-	case <-f.done:
-		return f.result, f.err
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Discovery), nil
 	}
+}
+
+// cachedDiscovery returns the cached result of an earlier discovery of requestURL.
+func cachedDiscovery(requestURL string) (*Discovery, bool) {
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	d, ok := discoveryCache[requestURL]
+	return d, ok
 }
 
 // discover bounds one service lookup and retries transient HTTP failures.
