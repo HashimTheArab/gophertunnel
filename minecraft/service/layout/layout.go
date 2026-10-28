@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
@@ -57,7 +58,7 @@ func (c *Client) Layout(ctx context.Context, id string) (*Layout, error) {
 		Structure *Layout `json:"layoutStructure"`
 	}
 	target := c.env.ServiceURI.JoinPath("/api/v1.0/layout", url.PathEscape(id))
-	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, target, struct{}{}, &result, request.Options{}); err != nil {
+	if _, err := request.Do(ctx, c.env.HTTPClient, c.src, http.MethodPost, target, struct{}{}, &result, request.Options{Retry: authclient.RetryOptions{Replayable: true}}); err != nil {
 		return nil, err
 	}
 	if result.Structure == nil {

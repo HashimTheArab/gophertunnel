@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/google/uuid"
@@ -59,6 +58,7 @@ func (e *AuthorizationEnvironment) ResumeTokenSource(tickets SessionTicketSource
 		env:     e,
 		config:  config,
 		token:   token,
+		sem:     make(chan struct{}, 1),
 	}
 }
 
@@ -70,14 +70,18 @@ type tokenSource struct {
 	config  TokenConfig
 
 	token *Token
-	mu    sync.Mutex
+	sem   chan struct{} // Held while reading or replacing token; a channel so waiting can stop with ctx.
 }
 
 // ServiceToken supplies a token by either re-using an already requested token, or
 // starting a new session with a valid PlayFab session ticket.
 func (s *tokenSource) ServiceToken(ctx context.Context) (*Token, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.sem }()
 	if s.token != nil && s.token.Valid() {
 		return s.token, nil
 	}
@@ -109,8 +113,8 @@ func (s *tokenSource) InvalidateServiceToken(rejected *Token) {
 	if rejected == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.sem <- struct{}{}
+	defer func() { <-s.sem }()
 	if s.token != nil && s.token.AuthorizationHeader == rejected.AuthorizationHeader {
 		s.token = nil
 	}
