@@ -337,3 +337,59 @@ func (s *testNetherNetSignaling) awaitClose(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// An offline dial still presents an identity signed by the connection key, since servers match it against the login.
+func TestNetherNetDialContextIdentitySelfSignsWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate identity key: %v", err)
+	}
+	network := NetherNet{
+		Signaling: newTestNetherNetSignaling(),
+		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			if dialer.Identity == nil || dialer.Identity.PrivateKey != key {
+				t.Fatal("offline dial did not present an identity for the connection key")
+			}
+			if dialer.Identity.Token == "" || dialer.Identity.Domain != offlineIdentityDomain {
+				t.Fatalf("offline identity = %+v, want a self-signed token from %s", dialer.Identity, offlineIdentityDomain)
+			}
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			return client, nil
+		},
+	}
+	conn, err := network.DialContextIdentity(t.Context(), "remote-network-id", "", key)
+	if err != nil {
+		t.Fatalf("DialContextIdentity: %v", err)
+	}
+	_ = conn.Close()
+}
+
+// A preconfigured identity is kept on an offline dial instead of being replaced by a self-signed one.
+func TestNetherNetDialContextIdentityKeepsPreconfiguredIdentityWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	preset := &nethernet.Identity{Domain: "https://preset.example.test"}
+	network := NetherNet{
+		Signaling: newTestNetherNetSignaling(),
+		Dialer:    nethernet.Dialer{Identity: preset},
+		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			if dialer.Identity != preset {
+				t.Fatalf("offline dial presented %+v, want the preconfigured identity", dialer.Identity)
+			}
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			return client, nil
+		},
+	}
+	conn, err := network.DialContextIdentity(t.Context(), "remote-network-id", "", nil)
+	if err != nil {
+		t.Fatalf("DialContextIdentity: %v", err)
+	}
+	_ = conn.Close()
+}
+
+// Offline dials by address reach the self-signing path, so AddressNetwork must route identities too.
+var _ identityDialer = AddressNetwork{}
