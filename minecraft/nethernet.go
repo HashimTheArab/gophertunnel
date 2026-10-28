@@ -64,9 +64,17 @@ func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, e
 	return n.dialContext(ctx, address, nil)
 }
 
-// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity].
+// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity], or with
+// an identity self-signed by privateKey when token is empty, as the vanilla client does offline.
 // Call [NetherNet.DialContextIdentityProvider] when the identity has not already been configured.
 func (n NetherNet) DialContextIdentity(ctx context.Context, address, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error) {
+	if token == "" {
+		identity, err := nethernet.SelfSignedIdentity(privateKey, offlineIdentityDomain)
+		if err != nil {
+			return nil, fmt.Errorf("minecraft: NetherNet.DialContextIdentity: self-sign identity: %w", err)
+		}
+		return n.dialContext(ctx, address, identity)
+	}
 	if n.Dialer.Identity == nil || n.Dialer.Identity.Domain == "" {
 		return nil, errors.New("minecraft: NetherNet.DialContextIdentity: identity provider is empty")
 	}
@@ -76,6 +84,9 @@ func (n NetherNet) DialContextIdentity(ctx context.Context, address, token strin
 		Domain:     n.Dialer.Identity.Domain,
 	})
 }
+
+// offlineIdentityDomain is the issuer the vanilla client puts on its self-signed identity when offline.
+const offlineIdentityDomain = "https://authorization.franchise.minecraft-services.net/"
 
 // DialContextIdentityProvider establishes a connection with the remote NetherNet peer using the
 // JWT token issued by identityProvider and the private key bound to the Minecraft connection.
