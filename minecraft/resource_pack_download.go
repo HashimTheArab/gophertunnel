@@ -5,11 +5,6 @@ import "github.com/google/uuid"
 // DefaultResourcePackMaxInFlightChunks matches the vanilla client request window.
 const DefaultResourcePackMaxInFlightChunks = 100
 
-// maxResourcePackPrealloc bounds the buffer reserved up front for a pack. The size comes from
-// ResourcePacksInfo and is only a claim at that point, so a server would otherwise turn one small packet
-// into an allocation of any size it names. Larger packs still grow their buffer as chunks arrive.
-const maxResourcePackPrealloc = 32 << 20
-
 // ResourcePackSource is where a Dialer obtained, or is obtaining, a resource pack.
 type ResourcePackSource uint8
 

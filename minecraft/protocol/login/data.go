@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -239,7 +240,8 @@ type ClientData struct {
 	// 3 - High, less than ~8GB of memory
 	// 4 - Super High, more than ~8GB of memory
 	MemoryTier int
-	// PlatformType is the type of platform the client is running.
+	// PlatformType is the client's platform category, distinct from DeviceOS. Known values are
+	// PlatformTypeDesktop and PlatformTypeMobile.
 	PlatformType int
 	// GraphicsMode is the graphics mode the client is running.
 	GraphicsMode int
@@ -342,6 +344,11 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		return nil, err
 	}
+	// Classic skins may explicitly send an empty ProfileHash. PocketMine requires the
+	// claim even then, so omitempty must not erase a value supplied by the client.
+	if slices.Contains(data.ClaimOrder, "ProfileHash") {
+		fields["ProfileHash"], _ = json.Marshal(data.ProfileHash)
+	}
 	for name, value := range data.ExtraData {
 		fields[name] = value
 	}
@@ -393,6 +400,30 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
+}
+
+// MarkClaims records claims set after decoding as present, at their vanilla position, so MarshalJSON
+// writes them. It preserves the claim order of shallow copies. A ClientData constructed
+// programmatically already writes every claim.
+func (data *ClientData) MarkClaims(names ...string) {
+	if data.ClaimOrder == nil {
+		return
+	}
+	data.ClaimOrder = slices.Clone(data.ClaimOrder)
+	for _, name := range names {
+		if slices.Contains(data.ClaimOrder, name) {
+			continue
+		}
+		rank := slices.Index(clientDataClaimOrder, name)
+		at := len(data.ClaimOrder)
+		for index, present := range data.ClaimOrder {
+			if other := slices.Index(clientDataClaimOrder, present); rank >= 0 && other > rank {
+				at = index
+				break
+			}
+		}
+		data.ClaimOrder = slices.Insert(data.ClaimOrder, at, name)
+	}
 }
 
 // UnmarshalJSON decodes ClientData while retaining unknown claims and the original claim order.

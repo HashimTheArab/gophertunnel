@@ -68,6 +68,10 @@ const (
 	ContainerRecipeFood
 	ContainerRecipeBlocks
 	ContainerRecipeFurnaceItems
+	ContainerReservedA
+	ContainerReservedB
+	ContainerReservedC
+	ContainerReservedD
 
 	// ContainerCount is the number of valid container IDs.
 	ContainerCount

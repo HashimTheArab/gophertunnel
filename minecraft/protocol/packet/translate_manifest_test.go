@@ -165,7 +165,7 @@ func plantSentinel(v reflect.Value, segments []string) (func() int64, error) {
 	switch field.Kind() {
 	case reflect.Int32, reflect.Int64:
 		field.SetInt(idSentinel)
-		return func() int64 { return field.Int() }, nil
+		return field.Int, nil
 	case reflect.Uint32, reflect.Uint64:
 		field.SetUint(idSentinel)
 		return func() int64 { return int64(field.Uint()) }, nil

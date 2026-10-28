@@ -124,7 +124,7 @@ func TestPrimitiveShapeEqualAndClone(t *testing.T) {
 	if shape.Equal(changed) || changed.Equal(shape) {
 		t.Fatal("missing shape data reported equal to present shape data")
 	}
-	if !changed.Equal(changed) {
+	if same := changed; !changed.Equal(same) {
 		t.Fatal("nil shape data is not equal to itself")
 	}
 }
