@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -94,20 +95,21 @@ func (e *AFDEnvironment) ServiceName() string {
 // The returned Configuration is typically used by a Dialer to establish a WebSocket
 // connection with the signaling service.
 func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client, src service.TokenSource) (*Configuration, error) {
-	token, err := src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
+		token, err := src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
 
-	requestURL := e.ServiceURI.JoinPath("/api/v1.0/configuration").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("request environment: %w", err)
-	}
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	token.SetAuthHeader(req)
-
-	resp, err := client.Do(req)
+		requestURL := e.ServiceURI.JoinPath("/api/v1.0/configuration").String()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("request environment: %w", err)
+		}
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		token.SetAuthHeader(req)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

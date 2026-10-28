@@ -19,7 +19,7 @@ import (
 
 // AddressNetwork is a Network for a server named by host:port. Like the vanilla client joining
 // such a server, it probes the address for NetherNet HTTP signaling and dials NetherNet when the
-// probe succeeds, RakNet otherwise. The choice is made per dial unless Endpoints is set.
+// probe succeeds, RakNet otherwise. Vanilla probes on every join; set Probes to reuse answers.
 type AddressNetwork struct {
 	// RakNet dials servers that do not answer the probe.
 	RakNet RakNet
@@ -33,36 +33,11 @@ type AddressNetwork struct {
 	// identity; servers without an identity are then refused, as in vanilla. A decision slow enough
 	// for the server to drop the idle connection is followed by one silent redial.
 	ServerTrust ServerTrust
-	// Endpoints, when set, remembers the URL that answered for each address. Later dials then try
-	// only that URL, as the vanilla client does, and join over RakNet if it no longer answers.
-	Endpoints *EndpointCache
+	// Probes, when set, reuses probe answers. Answers can depend on HTTPClient, so share a cache
+	// only between networks whose clients reach servers the same way. When nil, every dial probes.
+	Probes *ProbeCache
 
 	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
-}
-
-// EndpointCache maps server addresses to the NetherNet signaling URL that answered for them. The
-// zero value is ready to use and safe for concurrent use.
-type EndpointCache struct {
-	mu   sync.Mutex
-	urls map[string]string
-}
-
-// lookup returns the URL that last answered for key.
-func (c *EndpointCache) lookup(key string) (string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	url, ok := c.urls[key]
-	return url, ok
-}
-
-// store remembers that url answered for key.
-func (c *EndpointCache) store(key, url string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.urls == nil {
-		c.urls = make(map[string]string)
-	}
-	c.urls[key] = url
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
@@ -76,29 +51,118 @@ const defaultServerPort = 19132
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
-	batches := probeBatches(host, port)
 	keyPort := port
 	if keyPort == 0 {
-		// No port probes exactly like 19132, so both share one cache entry.
+		// No port probes exactly like 19132, so both share one answer.
 		keyPort = defaultServerPort
 	}
-	key := net.JoinHostPort(host, strconv.Itoa(int(keyPort)))
-	if n.Endpoints != nil {
-		if url, ok := n.Endpoints.lookup(key); ok {
-			batches = [][]string{{url}}
+	choice := probeChoice{cache: n.Probes, key: probeKey{host: host, port: keyPort}}
+	choice.entry = n.Probes.lookup(choice.key)
+	if choice.entry == nil {
+		endpoint, err := probeNetherNet(ctx, client, probeBatches(host, port), netherNetProbeTimeout)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			endpoint = ""
+		}
+		choice.entry = n.Probes.store(choice.key, endpoint)
+	}
+	if choice.entry.endpoint == "" {
+		return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
+	}
+	return httpNetherNet{nethernet: n.NetherNet, url: choice.entry.endpoint, endpoint: explicitPort(choice.entry.endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice}, nil
+}
+
+// probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport
+// without failing dials on the old one is picked up again.
+const probeCacheTTL = 10 * time.Minute
+
+// ProbeCache holds AddressNetwork probe answers per host and port for ten minutes, or until a dial
+// through one fails. The zero value is ready to use.
+type ProbeCache struct {
+	mu      sync.Mutex
+	entries map[probeKey]*probeEntry
+}
+
+type probeKey struct {
+	host string
+	port uint16
+}
+
+// probeEntry is one probe answer: a NetherNet endpoint, or "" for RakNet.
+type probeEntry struct {
+	endpoint string
+	expires  time.Time
+}
+
+// lookup returns an unexpired probe answer, or nil.
+func (c *ProbeCache) lookup(key probeKey) *probeEntry {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.entries[key]
+	if entry == nil || !time.Now().Before(entry.expires) {
+		return nil
+	}
+	return entry
+}
+
+// store records a probe answer, removes expired entries and returns the answer. A nil cache
+// returns it unrecorded.
+func (c *ProbeCache) store(key probeKey, endpoint string) *probeEntry {
+	now := time.Now()
+	entry := &probeEntry{endpoint: endpoint, expires: now.Add(probeCacheTTL)}
+	if c == nil {
+		return entry
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[probeKey]*probeEntry)
+	}
+	for k, stored := range c.entries {
+		if !now.Before(stored.expires) {
+			delete(c.entries, k)
 		}
 	}
-	endpoint, err := probeNetherNet(ctx, client, batches, netherNetProbeTimeout)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return n.RakNet, nil
+	c.entries[key] = entry
+	return entry
+}
+
+// probeChoice is the probe answer a Network was built from.
+type probeChoice struct {
+	cache *ProbeCache
+	key   probeKey
+	entry *probeEntry
+}
+
+// forgetAfter drops the answer after any failed dial, so the next Select probes again. An answer
+// stored since by another Select is kept.
+func (p probeChoice) forgetAfter(err error) {
+	if p.cache == nil || err == nil {
+		return
 	}
-	if n.Endpoints != nil {
-		n.Endpoints.store(key, endpoint)
+	p.cache.mu.Lock()
+	defer p.cache.mu.Unlock()
+	if p.cache.entries[p.key] == p.entry {
+		delete(p.cache.entries, p.key)
 	}
-	return httpNetherNet{nethernet: n.NetherNet, url: endpoint, endpoint: explicitPort(endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter}, nil
+}
+
+// probedRakNet is the RakNet a probe chose; a failed dial forgets that choice.
+type probedRakNet struct {
+	RakNet
+	choice probeChoice
+}
+
+// DialContext ...
+func (r probedRakNet) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	conn, err := r.RakNet.DialContext(ctx, address)
+	r.choice.forgetAfter(err)
+	return conn, err
 }
 
 // DialContext ...
@@ -263,6 +327,7 @@ type httpNetherNet struct {
 	trust     ServerTrust
 	// trustRedialAfter overrides the package default in tests.
 	trustRedialAfter time.Duration
+	choice           probeChoice // forgotten when a dial fails
 }
 
 // trustRedialAfter is how long a trust decision may keep a fresh connection idle before it is
@@ -292,7 +357,8 @@ func (n httpNetherNet) redialAfter() time.Duration {
 // dial runs a NetherNet dial and asks ServerTrust about the key the server proved it holds. A
 // decision slow enough that the server may have dropped the idle connection is followed by a
 // redial, which does not ask again about keys already trusted during this dial.
-func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (net.Conn, error) {
+func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (conn net.Conn, err error) {
+	defer func() { n.choice.forgetAfter(err) }()
 	var trusted []*ecdsa.PublicKey
 	for {
 		conn, err := dial(n.transport())

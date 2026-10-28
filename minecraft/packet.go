@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -18,14 +19,36 @@ type packetData struct {
 	owned bool
 }
 
+// RawPacket is one packet of a network batch read by Conn.ReadBatchRaw.
+type RawPacket struct {
+	// Data is the packet's header and payload exactly as received, owned by the caller.
+	Data []byte
+	// ID is the packet ID from the header.
+	ID uint32
+	// Decoded holds the packet decoded and converted to the latest protocol, when it was selected.
+	Decoded []packet.Packet
+	// DecodeErr is set when a selected packet could not be decoded. Decoded is then nil and Data is
+	// still the packet as received, so the caller decides whether to pass it on.
+	DecodeErr error
+}
+
+// rawPacketID returns the packet ID of an encoded packet, or 0 if its header is malformed.
+func rawPacketID(data []byte) uint32 {
+	value, n := binary.Uvarint(data)
+	if n <= 0 {
+		return 0
+	}
+	return uint32(value) & 0x3ff
+}
+
 // parseData parses packet bytes and reports the payload to the connection observer.
 func parseData(data []byte, conn *Conn) (*packetData, error) {
 	p, err := parsePacketData(data)
 	if err != nil {
 		return nil, err
 	}
-	if conn.packetFunc != nil {
-		conn.packetFunc(*p.h, bytes.Clone(p.payload.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
+	if conn.observes(p.h.PacketID) {
+		conn.observe(*p.h, bytes.Clone(p.payload.Bytes()), conn.RemoteAddr(), conn.LocalAddr())
 	}
 	return p, nil
 }

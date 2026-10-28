@@ -416,24 +416,25 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 	if base == "" {
 		base = realmsBaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	req.Header.Set("Client-Version", clientVersion)
-	req.Header.Set("X-ClientPlatform", "Android")
-	req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
-	if requestBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	xbl, err := r.xboxToken(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	xbl.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
+	resp, err := authclient.Call(ctx, r.httpClient, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("Client-Version", clientVersion)
+		req.Header.Set("X-ClientPlatform", "Android")
+		req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
+		if requestBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		xbl, err := r.xboxToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xbl.SetAuthHeader(req)
+		return req, nil
+	}, authclient.CallOptions{Retry: retryOptions})
 	if err != nil {
 		return nil, 0, err
 	}

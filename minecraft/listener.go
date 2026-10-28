@@ -164,7 +164,10 @@ type ListenConfig struct {
 	// packet. The function is called with the header of the packet and its raw payload, the address from which the
 	// packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
-	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// PacketObserver observes selected IDs before PacketFunc. Its interests are copied at listen time.
+	// Unlike PacketFunc, it does not require incoming payload copies for unrelated packets.
+	PacketObserver PacketObserver
+	// AcceptPacketHeader filters incoming packets after packet observers run and before body decoding
 	// or internal handling, including login and disconnect handling. Returning false silently drops only
 	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
 	// it must not block and may run concurrently for different connections. The header is passed
@@ -196,8 +199,9 @@ type ListenConfig struct {
 // login sequence of connecting clients and provides the implements the net.Listener interface to provide a
 // consistent API.
 type Listener struct {
-	cfg      ListenConfig
-	listener NetworkListener
+	cfg            ListenConfig
+	packetObserver compiledPacketObserver
+	listener       NetworkListener
 
 	packs   []*resource.Pack
 	packsMu sync.RWMutex
@@ -286,6 +290,10 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	if cfg.Handoff != HandoffNone && cfg.Handoff != HandoffAfterLogin {
 		return nil, fmt.Errorf("listen: Handoff %d does not apply to a Listener", cfg.Handoff)
 	}
+	packetObserver, err := cfg.PacketObserver.compile()
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 256
 	} else if cfg.CompressionThreshold < 0 {
@@ -314,14 +322,15 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 	listener := &Listener{
-		cfg:      cfg,
-		listener: netListener,
-		group:    cfg.ListenerGroup,
-		packs:    slices.Clone(cfg.ResourcePacks),
-		incoming: make(chan *Conn),
-		close:    make(chan struct{}),
-		key:      key,
-		verifier: verifier,
+		cfg:            cfg,
+		packetObserver: packetObserver,
+		listener:       netListener,
+		group:          cfg.ListenerGroup,
+		packs:          slices.Clone(cfg.ResourcePacks),
+		incoming:       make(chan *Conn),
+		close:          make(chan struct{}),
+		key:            key,
+		verifier:       verifier,
 	}
 
 	// Actually start listening.
@@ -549,6 +558,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.packetObserver = listener.packetObserver
 	conn.acceptPacketHeader = listener.cfg.AcceptPacketHeader
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
