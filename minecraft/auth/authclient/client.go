@@ -3,11 +3,14 @@ package authclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,8 +21,13 @@ type RetryOptions struct {
 	MaxDelay time.Duration // Maximum delay (default: 8s)
 }
 
-// SendRequestWithRetries sends a request and retries on 429, 5xx and network errors. A request that timed out
-// is only sent again if it is safe to repeat.
+// ErrNotSent wraps the error of a request that never reached a connection, so its effect cannot have happened.
+var ErrNotSent = errors.New("request not sent")
+
+// SendRequestWithRetries sends a request and retries on 429, 5xx and network errors. A request that may have
+// reached the server is only sent again if it is safe to repeat. A retry delay that would end after ctx's
+// deadline returns the last outcome instead of waiting. Errors from attempts that never got a connection wrap
+// ErrNotSent.
 func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.Request, r ...RetryOptions) (*http.Response, error) {
 	var opts RetryOptions
 	if len(r) > 0 {
@@ -41,101 +49,79 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		opts.MaxDelay = opts.MinDelay
 	}
 
-	var resp *http.Response
-	var err error
-	var retryAfterDelay time.Duration
-
-	for i := range opts.Attempts {
-		if i > 0 {
-			delay := min(opts.MinDelay*time.Duration(math.Pow(opts.Factor, float64(i))), opts.MaxDelay)
-
-			// Use any retry-after delay from previous response
-			if retryAfterDelay > 0 {
-				delay = max(delay, retryAfterDelay)
-				retryAfterDelay = 0 // Reset for next iteration
-			}
-
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-			}
+	everSent := false
+	notSent := func(err error) error {
+		if err != nil && !everSent {
+			return fmt.Errorf("%w: %w", ErrNotSent, err)
 		}
-
-		// Clone the request for each attempt to avoid issues with consumed request bodies
-		req := request.Clone(ctx)
+		return err
+	}
+	for i := 1; ; i++ {
+		var sent atomic.Bool
+		trace := &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { sent.Store(true) }}
+		req := request.Clone(httptrace.WithClientTrace(ctx, trace))
 		if request.Body != nil && request.GetBody != nil {
-			req.Body, err = request.GetBody()
+			body, err := request.GetBody()
 			if err != nil {
-				return nil, err
+				return nil, notSent(err)
 			}
+			req.Body = body
 		}
 
-		resp, err = c.Do(req)
+		resp, err := c.Do(req)
+		everSent = everSent || sent.Load()
+		var retryAfter time.Duration
+		retry := false
 		if err != nil {
 			if ctx.Err() != nil {
-				return resp, ctx.Err()
+				err = ctx.Err()
+			} else {
+				// Some proxies close the connection without a response, which often surfaces as EOF.
+				_, netErr := errors.AsType[net.Error](err)
+				retry = (netErr || errors.Is(err, io.EOF)) && (!sent.Load() || idempotent(request))
 			}
-			if isTimeout(err) && !replayable(request) {
-				// The server may have handled a request that timed out, so one that is unsafe to repeat is not
-				// sent again.
-				return resp, err
-			}
-			// Some proxies close the connection without returning a response, which often surfaces as EOF.
-			// Treat that as retryable.
-			if errors.Is(err, io.EOF) {
-				continue
-			}
-			if _, ok := errors.AsType[net.Error](err); ok {
-				continue
-			}
-			// Not a network error, so don't retry
-			return resp, err
-		}
-
-		// Retry on 429, 408, and server errors.
-		//
-		// Some proxies/edges return non-standard status codes (e.g. 999) for upstream/internal failures.
-		// Treat those as retryable too.
-		if resp.StatusCode == http.StatusTooManyRequests ||
-			resp.StatusCode == http.StatusRequestTimeout ||
-			resp.StatusCode == 999 ||
-			(resp.StatusCode >= 500 && resp.StatusCode < 600) {
-			// Read Retry-After header before closing body
+		} else if retryableStatus(resp.StatusCode) {
+			retry = true
 			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
-				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
-					if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil {
-						retryAfterDelay = time.Duration(seconds) * time.Second
-					}
+				if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
+					retryAfter = time.Duration(seconds) * time.Second
 				}
 			}
-			if i+1 < opts.Attempts {
-				resp.Body.Close()
-				continue
-			}
-			return resp, nil
+		}
+		if !retry || i >= opts.Attempts || !recreatable(request) {
+			return resp, notSent(err)
 		}
 
-		// Success or a non-5xx error code.
-		return resp, nil
+		delay := max(min(opts.MinDelay*time.Duration(math.Pow(opts.Factor, float64(i))), opts.MaxDelay), retryAfter)
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
+			// Waiting would end after the deadline, so the last outcome is more useful than a deadline error.
+			return resp, notSent(err)
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, notSent(ctx.Err())
+		case <-time.After(delay):
+		}
 	}
-
-	// No more attempts, return last resp and error.
-	return resp, err
 }
 
-// isTimeout reports whether err is a network timeout.
-func isTimeout(err error) bool {
-	netErr, ok := errors.AsType[net.Error](err)
-	return ok && netErr.Timeout()
+// retryableStatus reports whether a response status is worth retrying: 429, 408, 5xx, and the non-standard 999
+// some edges return for upstream failures.
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusRequestTimeout || code == 999 || (code >= 500 && code < 600)
 }
 
-// replayable reports whether req can be sent again without repeating its effect: an idempotent method or an
-// idempotency key as recognised by net/http, and a body that can be recreated.
-func replayable(req *http.Request) bool {
-	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
-		return false
-	}
+// recreatable reports whether req's body can be sent again.
+func recreatable(req *http.Request) bool {
+	return req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
+}
+
+// idempotent reports whether sending req again cannot repeat its effect: an idempotent method or an idempotency
+// key as recognised by net/http.
+func idempotent(req *http.Request) bool {
 	switch req.Method {
 	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
 		return true

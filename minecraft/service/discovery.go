@@ -10,7 +10,6 @@ import (
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
@@ -70,9 +69,19 @@ var (
 	// and the values are the result of [Discover], cached to reduce network time.
 	discoveryCache   = make(map[string]*Discovery)
 	discoveryCacheMu sync.Mutex
-	// discoveryFlights shares one request between callers discovering the same URL with the same client.
-	discoveryFlights singleflight.Group
+	// discoveryFlights holds the request shared by callers discovering the same URL with the same client,
+	// guarded by discoveryCacheMu.
+	discoveryFlights = make(map[string]*discoveryFlight)
 )
+
+// discoveryFlight is one discovery request shared by the callers waiting for it.
+type discoveryFlight struct {
+	done    chan struct{}
+	result  *Discovery
+	err     error
+	waiters int
+	cancel  context.CancelFunc
+}
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
 // using [Environment.ServiceName] as the key, then decodes the nested
@@ -116,40 +125,51 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	client := auth.ContextClient(ctx)
+	key := fmt.Sprintf("%p %s", client, requestURL)
+
 	discoveryCacheMu.Lock()
-	d, ok := discoveryCache[requestURL]
-	discoveryCacheMu.Unlock()
-	if ok {
+	if d, ok := discoveryCache[requestURL]; ok {
+		discoveryCacheMu.Unlock()
 		return d, nil
 	}
-	client := auth.ContextClient(ctx)
-	// The shared request ignores the cancellation of the caller that started it, so other callers still get its
-	// result; it stays bounded by its call deadline. Callers with different clients do not share a request.
-	shared := context.WithoutCancel(ctx)
-	ch := discoveryFlights.DoChan(fmt.Sprintf("%p %s", client, requestURL), func() (any, error) {
-		// Another caller may have cached the result between the check above and joining this flight.
-		discoveryCacheMu.Lock()
-		d, ok := discoveryCache[requestURL]
-		discoveryCacheMu.Unlock()
-		if ok {
-			return d, nil
-		}
-		d, err := discover(shared, client, requestURL)
-		if err == nil {
+	f, ok := discoveryFlights[key]
+	if !ok {
+		// The shared request outlives the caller that started it, until every caller waiting for it has gone.
+		flightCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		f = &discoveryFlight{done: make(chan struct{}), cancel: cancel}
+		discoveryFlights[key] = f
+		go func() {
+			d, err := discover(flightCtx, client, requestURL)
+			cancel()
 			discoveryCacheMu.Lock()
-			discoveryCache[requestURL] = d
+			if err == nil {
+				discoveryCache[requestURL] = d
+			}
+			if discoveryFlights[key] == f {
+				delete(discoveryFlights, key)
+			}
+			f.result, f.err = d, err
 			discoveryCacheMu.Unlock()
-		}
-		return d, err
-	})
+			close(f.done)
+		}()
+	}
+	f.waiters++
+	discoveryCacheMu.Unlock()
+
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
-	case res := <-ch:
-		if res.Err != nil {
-			return nil, res.Err
+		discoveryCacheMu.Lock()
+		if f.waiters--; f.waiters == 0 {
+			f.cancel()
+			if discoveryFlights[key] == f {
+				delete(discoveryFlights, key)
+			}
 		}
-		return res.Val.(*Discovery), nil
+		discoveryCacheMu.Unlock()
+		return nil, ctx.Err()
+	case <-f.done:
+		return f.result, f.err
 	}
 }
 

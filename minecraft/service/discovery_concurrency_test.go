@@ -138,41 +138,74 @@ func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 	})
 }
 
-// pauseContext blocks its first value lookup, which Discover makes after its cache check.
-type pauseContext struct {
-	context.Context
-	once             sync.Once
-	entered, release chan struct{}
-}
-
-// Value pauses once before returning the wrapped context's value.
-func (c *pauseContext) Value(key any) any {
-	c.once.Do(func() { close(c.entered); <-c.release })
-	return c.Context.Value(key)
-}
-
-// A result cached while a caller was between its cache check and the shared request must be used, not fetched again.
-func TestDiscoveryUsesResultCachedAfterMiss(t *testing.T) {
+// Concurrent callers for the same URL share one request, and later callers use its cached result.
+func TestDiscoveryMakesOneRequestForConcurrentCallers(t *testing.T) {
 	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
-		calls := 0
-		base := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+		calls, release := 0, make(chan struct{})
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
 			calls++
-			if calls > 1 {
-				return nil, errors.New("second request")
-			}
+			<-release
 			return discoveryOK(), nil
 		})})
-		paused := &pauseContext{Context: base, entered: make(chan struct{}), release: make(chan struct{})}
-		done := make(chan error, 1)
-		go func() { _, err := Discover(paused, t.Name(), "test"); done <- err }()
-		<-paused.entered
-		if _, err := Discover(base, t.Name(), "test"); err != nil {
-			t.Fatal(err)
+		errs := make(chan error, 3)
+		for range 3 {
+			go func() { _, err := Discover(ctx, t.Name(), "test"); errs <- err }()
 		}
-		close(paused.release)
-		if err := <-done; err != nil || calls != 1 {
-			t.Fatalf("paused caller err = %v, network calls = %d", err, calls)
+		synctest.Wait()
+		close(release)
+		for range 3 {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := Discover(ctx, t.Name(), "test"); err != nil || calls != 1 {
+			t.Fatalf("err = %v, network calls = %d, want 1", err, calls)
+		}
+	})
+}
+
+// Once every caller waiting for a shared request has gone, the request is cancelled and a new caller starts afresh.
+func TestDiscoveryCancelsSharedRequestWithoutWaiters(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		cancelled := make(chan struct{})
+		calls := 0
+		base := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(r *http.Request) (*http.Response, error) {
+			if calls++; calls > 1 {
+				return discoveryOK(), nil
+			}
+			<-r.Context().Done()
+			close(cancelled)
+			return nil, r.Context().Err()
+		})})
+		first, cancelFirst := context.WithCancel(base)
+		second, cancelSecond := context.WithCancel(base)
+		errs := make(chan error, 2)
+		go func() { _, err := Discover(first, t.Name(), "test"); errs <- err }()
+		go func() { _, err := Discover(second, t.Name(), "test"); errs <- err }()
+		synctest.Wait()
+		cancelFirst()
+		synctest.Wait()
+		select {
+		case <-cancelled:
+			t.Fatal("shared request cancelled while a caller still waited")
+		default:
+		}
+		cancelSecond()
+		synctest.Wait()
+		select {
+		case <-cancelled:
+		default:
+			t.Fatal("shared request kept running after every caller had gone")
+		}
+		for range 2 {
+			if err := <-errs; !errors.Is(err, context.Canceled) {
+				t.Fatalf("caller error = %v", err)
+			}
+		}
+		if _, err := Discover(base, t.Name(), "test"); err != nil {
+			t.Fatalf("new caller after cancellation: %v", err)
 		}
 	})
 }

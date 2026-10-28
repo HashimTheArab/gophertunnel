@@ -121,7 +121,6 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	// Redirects can replay the purchase body or turn the response into an unrelated GET.
 	client := *c.entitlements.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	prepared := false
 	resp, err := authclient.Call(ctx, &client, func(ctx context.Context) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(encoded))
 		if err != nil {
@@ -136,11 +135,10 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 			return nil, fmt.Errorf("request service token: %w", err)
 		}
 		token.SetAuthHeader(req)
-		prepared = true
 		return req, nil
 	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
-		if !prepared {
+		if errors.Is(err, authclient.ErrNotSent) {
 			return PurchaseResult{}, err
 		}
 		return PurchaseResult{Outcome: PurchaseUnknown, CorrelationID: tags.CorrelationID}, nil

@@ -2,6 +2,7 @@ package authclient
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -16,36 +17,41 @@ const DefaultCallTimeout = 40 * time.Second
 // CallOptions bounds a Call and sets its retry policy.
 type CallOptions struct {
 	// Timeout bounds the call, from preparing the request until its response body is closed. Zero uses
-	// DefaultCallTimeout; a negative value leaves only ctx's deadline, for streamed bodies.
+	// DefaultCallTimeout.
 	Timeout time.Duration
+	// Stream bounds only preparing the request by Timeout, leaving sending and the body to ctx, for streamed
+	// request or response bodies.
+	Stream bool
 	// Retry is the transient-failure policy passed to SendRequestWithRetries.
 	Retry RetryOptions
 }
 
 // Call prepares a request under the call's deadline and sends it with SendRequestWithRetries. The deadline
-// lasts until the response body is closed, so the caller must close it.
+// lasts until the response body is closed, so the caller must close it. An error wraps ErrNotSent when the
+// request cannot have reached the server.
 func Call(ctx context.Context, client *http.Client, prepare func(context.Context) (*http.Request, error), opts CallOptions) (*http.Response, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	timeout := opts.Timeout
-	if timeout == 0 {
+	if timeout <= 0 {
 		timeout = DefaultCallTimeout
 	}
-	cancel := context.CancelFunc(func() {})
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-	}
-	if err := ctx.Err(); err != nil {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	if err := callCtx.Err(); err != nil {
 		cancel()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
-	req, err := prepare(ctx)
+	req, err := prepare(callCtx)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
-	resp, err := SendRequestWithRetries(ctx, client, req, opts.Retry)
+	if opts.Stream {
+		cancel()
+		callCtx, cancel = ctx, func() {}
+	}
+	resp, err := SendRequestWithRetries(callCtx, client, req, opts.Retry)
 	if err != nil {
 		if resp != nil {
 			_ = resp.Body.Close()

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -56,7 +59,7 @@ func (b *slowBody) Read(p []byte) (int, error) {
 
 func (*slowBody) Close() error { return nil }
 
-// A response body that takes longer than any single attempt used to be allowed must still be read in full.
+// A slow response body is read in full within the call's deadline.
 func TestCallDoesNotCutOffSlowBodies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
@@ -73,13 +76,13 @@ func TestCallDoesNotCutOffSlowBodies(t *testing.T) {
 	})
 }
 
-// A negative timeout leaves streamed bodies bounded only by the caller's context.
-func TestCallNegativeTimeoutStreams(t *testing.T) {
+// A streamed call leaves its body bounded only by the caller's context.
+func TestCallStreamLeavesBodyToContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: &slowBody{ctx: req.Context(), delay: 2 * DefaultCallTimeout}}, nil
 		})}
-		resp, err := Call(context.Background(), client, preparePost, CallOptions{Timeout: -1})
+		resp, err := Call(context.Background(), client, preparePost, CallOptions{Stream: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,27 +202,41 @@ func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 	}
 }
 
-// A request that timed out is sent again only when repeating it cannot repeat its effect.
-func TestCallResendsTimedOutRequestsOnlyWhenReplayable(t *testing.T) {
+// connected reports a connection to the request's trace, as http.Transport does once one is obtained.
+func connected(req *http.Request) {
+	if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.GotConn != nil {
+		trace.GotConn(httptrace.GotConnInfo{})
+	}
+}
+
+// A failed attempt is resent only if it never got a connection or repeating it cannot repeat its effect.
+func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	for _, test := range []struct {
 		name      string
 		method    string
 		header    string
 		noGetBody bool
+		connected bool
+		err       error
 		want      int
 	}{
-		{name: "post", method: http.MethodPost, want: 1},
-		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", want: DefaultAttempts},
-		{name: "get", method: http.MethodGet, want: DefaultAttempts},
-		{name: "delete", method: http.MethodDelete, want: DefaultAttempts},
-		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, want: 1},
+		{name: "post dial timeout", method: http.MethodPost, err: timeoutError{}, want: DefaultAttempts},
+		{name: "post timeout after connecting", method: http.MethodPost, connected: true, err: timeoutError{}, want: 1},
+		{name: "post reset after connecting", method: http.MethodPost, connected: true, err: reset, want: 1},
+		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", connected: true, err: reset, want: DefaultAttempts},
+		{name: "get reset after connecting", method: http.MethodGet, connected: true, err: reset, want: DefaultAttempts},
+		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, connected: true, err: reset, want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				calls := 0
-				client := &http.Client{Transport: callTransport(func(*http.Request) (*http.Response, error) {
+				client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
 					calls++
-					return nil, timeoutError{}
+					if test.connected {
+						connected(req)
+					}
+					return nil, test.err
 				})}
 				_, err := Call(context.Background(), client, func(ctx context.Context) (*http.Request, error) {
 					req, err := http.NewRequestWithContext(ctx, test.method, "https://service.test", strings.NewReader("payload"))
@@ -234,9 +251,48 @@ func TestCallResendsTimedOutRequestsOnlyWhenReplayable(t *testing.T) {
 				if err == nil || calls != test.want {
 					t.Fatalf("err = %v, calls = %d, want %d", err, calls, test.want)
 				}
+				if errors.Is(err, ErrNotSent) == test.connected {
+					t.Fatalf("errors.Is(err, ErrNotSent) = %v with connected = %v", !test.connected, test.connected)
+				}
 			})
 		})
 	}
+}
+
+// A Retry-After wait that would end after the call's deadline returns that response instead of a deadline error.
+func TestCallReturnsResponseWhenRetryAfterOutlastsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		client := &http.Client{Transport: callTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			resp := &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("busy"))}
+			resp.Header.Set("Retry-After", "60")
+			return resp, nil
+		})}
+		start := time.Now()
+		resp, err := Call(context.Background(), client, preparePost, CallOptions{})
+		if err != nil {
+			t.Fatalf("err = %v, want the 503 response", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusServiceUnavailable || string(body) != "busy" || calls != 1 || time.Since(start) != 0 {
+			t.Fatalf("status = %d, body = %q, calls = %d, waited %v", resp.StatusCode, body, calls, time.Since(start))
+		}
+	})
+}
+
+// A streamed call still bounds preparing the request, which includes fetching its token.
+func TestCallStreamBoundsPreparation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		_, err := Call(context.Background(), http.DefaultClient, func(ctx context.Context) (*http.Request, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}, CallOptions{Stream: true})
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrNotSent) {
+			t.Fatalf("err = %v, want an unsent deadline error", err)
+		}
+	})
 }
 
 func TestCallHonorsCancellation(t *testing.T) {

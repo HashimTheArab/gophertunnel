@@ -138,7 +138,7 @@ func (c *Client) Upload(ctx context.Context, image io.Reader, options UploadOpti
 			req.Header.Set("X-Ms-Showcased-Timetaken", options.TakenAt.UTC().Format("2006-01-02T15:04:05.000Z"))
 		}
 		return req, nil
-	}, authclient.CallOptions{Timeout: -1, Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Stream: true, Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return Image{}, err
 	}
@@ -172,7 +172,7 @@ func (c *Client) Fetch(ctx context.Context, image Image) (io.ReadCloser, error) 
 	}
 	resp, err := authclient.Call(ctx, &client, func(ctx context.Context) (*http.Request, error) {
 		return c.request(ctx, http.MethodGet, image.fetchURL, nil)
-	}, authclient.CallOptions{Timeout: -1, Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Stream: true, Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
