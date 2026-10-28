@@ -47,6 +47,11 @@ const netherNetProbeTimeout = 6 * time.Second
 // defaultServerPort is the port vanilla probes when a server address has none.
 const defaultServerPort = 19132
 
+// transportSelector is a Network that chooses the transport to dial an address with.
+type transportSelector interface {
+	Select(ctx context.Context, address string) (Network, error)
+}
+
 // Select returns the network to dial address with: RakNet, or NetherNet bound to the endpoint
 // that answered the probe. It fails only when ctx ends first.
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
@@ -64,6 +69,15 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 			endpoint = ""
 		}
 		choice.entry = n.Probes.store(choice.key, endpoint)
+	} else if choice.entry.endpoint != "" {
+		// Vanilla still asks a remembered URL before every join, and joins over RakNet if it no
+		// longer answers.
+		if _, err := probeNetherNet(ctx, client, [][]string{{choice.entry.endpoint}}, netherNetProbeTimeout); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
+		}
 	}
 	if choice.entry.endpoint == "" {
 		return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
@@ -147,6 +161,12 @@ func (p probeChoice) forgetAfter(err error) {
 	if p.cache.entries[p.key] == p.entry {
 		delete(p.cache.entries, p.key)
 	}
+}
+
+// loginAddress returns the server address a vanilla client puts in its login after joining this
+// endpoint: the URL, with its port.
+func (n httpNetherNet) loginAddress() string {
+	return n.endpoint
 }
 
 // probedRakNet is the RakNet a probe chose; a failed dial forgets that choice.

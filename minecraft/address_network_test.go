@@ -503,17 +503,114 @@ func closedTCPAddress(t *testing.T) string {
 // Probe answers are keyed like vanilla's: the host case-insensitively and the port exactly as given.
 func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: "play.example.com", port: 19132}, "http://play.example.com:19132")
+	cache.store(probeKey{host: "play.example.com", port: 19132}, server.URL)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), "Play.Example.COM:19132")
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if n, ok := selected.(httpNetherNet); !ok || n.url != "http://play.example.com:19132" {
+	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
 		t.Fatalf("Select = %#v, want the answer cached for the lower-cased host", selected)
 	}
 	if cache.lookup(probeKey{host: "play.example.com", port: 0}) != nil {
 		t.Fatal("an address without a port shared the 19132 answer")
+	}
+}
+
+// A remembered NetherNet URL is still asked before the join, as vanilla does.
+func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
+	t.Parallel()
+	var probes int
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		probes++
+		mu.Unlock()
+	}))
+	t.Cleanup(server.Close)
+	address := closedTCPAddress(t)
+	host, port := splitServerAddress(address)
+	cache := &ProbeCache{}
+	cache.store(probeKey{host: host, port: port}, server.URL)
+
+	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
+		t.Fatalf("Select = %#v, want NetherNet at the cached %q", selected, server.URL)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if probes != 1 {
+		t.Fatalf("cached URL was asked %d times, want 1", probes)
+	}
+}
+
+// A remembered NetherNet URL that no longer answers joins over RakNet, as vanilla does.
+func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T) {
+	t.Parallel()
+	address := closedTCPAddress(t)
+	host, port := splitServerAddress(address)
+	cache := &ProbeCache{}
+	cache.store(probeKey{host: host, port: port}, "http://"+closedTCPAddress(t))
+
+	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if _, ok := selected.(probedRakNet); !ok {
+		t.Fatalf("Select = %#v, want RakNet", selected)
+	}
+}
+
+// A Dialer joining by address names the endpoint the probe chose in its login, as vanilla does.
+func TestDialerSendsChosenEndpointAsServerAddress(t *testing.T) {
+	t.Parallel()
+	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
+	t.Cleanup(func() { _ = signaling.Close() })
+	server := httptest.NewServer(signaling)
+	t.Cleanup(server.Close)
+	listener, err := ListenConfig{AuthenticationDisabled: true, ErrorLog: slog.New(slog.DiscardHandler)}.ListenNetwork(NetherNet{
+		Signaling:    signaling,
+		ListenConfig: nethernet.ListenConfig{AllowAnonymous: true},
+	}, signaling.NetworkID())
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	accepted := make(chan *Conn, 1)
+	go func() {
+		c, err := listener.Accept()
+		if err != nil {
+			close(accepted)
+			return
+		}
+		accepted <- c.(*Conn)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	network := AddressNetwork{NetherNet: NetherNet{Dialer: nethernet.Dialer{AllowIdentitylessServer: true}}}
+	go func() {
+		if conn, err := (Dialer{}).DialContextNetwork(ctx, network, server.Listener.Addr().String()); err == nil {
+			_ = conn.Close()
+		}
+	}()
+	select {
+	case conn := <-accepted:
+		if conn == nil {
+			t.Fatal("listener stopped before a client joined")
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		if got, want := conn.ClientData().ServerAddress, server.URL; got != want {
+			t.Fatalf("login ServerAddress = %q, want %q", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("no client joined over NetherNet")
 	}
 }

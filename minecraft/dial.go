@@ -325,6 +325,18 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		d.IdentityData = identityData
 	}
 
+	// A network that picks its transport per address picks it now, so the login can name the server
+	// the way vanilla does once it has chosen.
+	loginAddress := address
+	if s, ok := network.(transportSelector); ok {
+		if network, err = s.Select(ctx, address); err != nil {
+			return nil, err
+		}
+		if l, ok := network.(interface{ loginAddress() string }); ok {
+			loginAddress = l.loginAddress()
+		}
+	}
+
 	var netConn net.Conn
 	if i, ok := network.(identityDialer); ok && token == "" {
 		// Offline dials still prove the connection key, which servers check against the login since 1.26.60.
@@ -382,7 +394,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	if conn.clientData.GameVersion == "" {
 		conn.clientData.GameVersion = d.Protocol.Ver()
 	}
-	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
+	defaultClientData(loginAddress, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
 	if token == "" {
