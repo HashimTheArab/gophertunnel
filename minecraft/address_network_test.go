@@ -21,9 +21,6 @@ import (
 	"github.com/df-mc/go-nethernet/endpoint"
 )
 
-// Tests reuse loopback ports, so a shared probe cache would leak answers between them.
-func init() { netherNetProbes = nil }
-
 func TestProbeEndpointsFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
 	if got, want := probeEndpoints("example.com", 19133), []string{"https://example.com:19133", "http://example.com:19133"}; !reflect.DeepEqual(got, want) {
@@ -166,7 +163,7 @@ func TestAddressNetworkCachesRakNetAnswer(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(server.Close)
-	network := AddressNetwork{probes: newProbeCache()}
+	network := AddressNetwork{Probes: &ProbeCache{}}
 
 	if _, err := network.Select(t.Context(), server.Listener.Addr().String()); err != nil {
 		t.Fatalf("first Select: %v", err)
@@ -200,7 +197,7 @@ func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
 		http.Error(w, "no session", http.StatusInternalServerError)
 	}))
 	t.Cleanup(server.Close)
-	network := AddressNetwork{probes: newProbeCache(), NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
+	network := AddressNetwork{Probes: &ProbeCache{}, NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
 	address := server.Listener.Addr().String()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -221,85 +218,76 @@ func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
 	}
 }
 
-func TestAddressNetworkReprobesAfterRakNetTimeoutButNotCancellation(t *testing.T) {
-	for _, timeout := range []bool{true, false} {
-		name := "cancelled"
-		if timeout {
-			name = "timed_out"
-		}
-		t.Run(name, func(t *testing.T) {
-			var probes atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				probes.Add(1)
-				http.NotFound(w, r)
-			}))
-			t.Cleanup(server.Close)
-			network := AddressNetwork{probes: newProbeCache(), RakNet: RakNet{
-				UpstreamDialer: upstreamDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
-					return nil, ctx.Err()
-				}),
-			}}
-			address := server.Listener.Addr().String()
-			selected, err := network.Select(t.Context(), address)
-			if err != nil {
-				t.Fatal(err)
-			}
-			before := probes.Load()
-			ctx, cancel := context.WithCancel(t.Context())
-			if timeout {
-				cancel()
-				ctx, cancel = context.WithDeadline(t.Context(), time.Time{})
-			}
-			cancel()
-			if _, err := selected.DialContext(ctx, address); !errors.Is(err, ctx.Err()) {
-				t.Fatalf("dial error = %v, want %v", err, ctx.Err())
-			}
-			if _, err := network.Select(t.Context(), address); err != nil {
-				t.Fatal(err)
-			}
-			if reprobed := probes.Load() > before; reprobed != timeout {
-				t.Fatalf("probed again = %v, want %v", reprobed, timeout)
-			}
-		})
-	}
-}
-
-// headerTransport adds a header to every request, standing in for a differently configured client.
-type headerTransport struct{ header string }
-
-// RoundTrip sets the header and sends the request with the default transport.
-func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r = r.Clone(r.Context())
-	r.Header.Set(h.header, "1")
-	return http.DefaultTransport.RoundTrip(r)
-}
-
-// A probe answer for one HTTP client is not reused for another client probing the same address.
-func TestAddressNetworkProbeCacheIsPerHTTPClient(t *testing.T) {
+// A dial cancelled while hung on a stale RakNet answer makes the next Select probe again.
+func TestAddressNetworkReprobesAfterCancelledRakNetDial(t *testing.T) {
 	t.Parallel()
+	var probes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Probe-Allowed") == "" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = io.WriteString(w, "OK")
+		probes.Add(1)
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(server.Close)
-	cache := newProbeCache()
-	plain := AddressNetwork{probes: cache, HTTPClient: &http.Client{}}
-	allowed := AddressNetwork{probes: cache, HTTPClient: &http.Client{Transport: headerTransport{header: "X-Probe-Allowed"}}}
-
-	if selected, err := plain.Select(t.Context(), server.Listener.Addr().String()); err != nil {
-		t.Fatalf("plain Select: %v", err)
-	} else if _, ok := selected.(probedRakNet); !ok {
-		t.Fatalf("plain Select chose %T, want RakNet", selected)
-	}
-	selected, err := allowed.Select(t.Context(), server.Listener.Addr().String())
+	network := AddressNetwork{Probes: &ProbeCache{}, RakNet: RakNet{
+		UpstreamDialer: upstreamDialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+	}}
+	address := server.Listener.Addr().String()
+	selected, err := network.Select(t.Context(), address)
 	if err != nil {
-		t.Fatalf("allowed Select: %v", err)
+		t.Fatal(err)
 	}
-	if _, ok := selected.(httpNetherNet); !ok {
-		t.Fatalf("allowed Select chose %T, want NetherNet from its own probe", selected)
+	before := probes.Load()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := selected.DialContext(ctx, address); !errors.Is(err, context.Canceled) {
+		t.Fatalf("dial error = %v, want context.Canceled", err)
+	}
+	if _, err := network.Select(t.Context(), address); err != nil {
+		t.Fatal(err)
+	}
+	if probes.Load() == before {
+		t.Fatal("Select after a cancelled dial reused the cached answer")
+	}
+}
+
+// A slow dial failing on an old answer keeps the answer another Select stored since.
+func TestAddressNetworkFailedDialKeepsNewerAnswer(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{Probes: &ProbeCache{}, RakNet: RakNet{
+		UpstreamDialer: upstreamDialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("unreachable")
+		}),
+	}}
+	address := server.Listener.Addr().String()
+	selectNetwork := func() Network {
+		t.Helper()
+		selected, err := network.Select(t.Context(), address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return selected
+	}
+
+	slow, failed := selectNetwork(), selectNetwork()
+	if _, err := failed.DialContext(t.Context(), address); err == nil {
+		t.Fatal("dial succeeded, want the RakNet failure")
+	}
+	selectNetwork()
+	stored := probes.Load()
+	if _, err := slow.DialContext(t.Context(), address); err == nil {
+		t.Fatal("dial succeeded, want the RakNet failure")
+	}
+	selectNetwork()
+	if got := probes.Load(); got != stored {
+		t.Fatalf("Select sent %d more probe requests after an old answer failed, want none", got-stored)
 	}
 }
 
