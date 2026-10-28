@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -68,6 +70,8 @@ var (
 	// and the values are the result of [Discover], cached to reduce network time.
 	discoveryCache   = make(map[string]*Discovery)
 	discoveryCacheMu sync.Mutex
+	// discoveryRequests shares one request between callers discovering the same URL with the same client.
+	discoveryRequests singleflight.Group
 )
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
@@ -108,23 +112,59 @@ func Default(ctx context.Context) (*Discovery, error) {
 // Discover caches the result and can be called multiple times by various
 // services without waiting for network latency each time if cache was hit.
 func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
-	discoveryCacheMu.Lock()
-	defer discoveryCacheMu.Unlock()
-
 	requestURL := discoveryURL.JoinPath("/api/v1.0/discovery", appType, "builds", version).String()
-	if d, ok := discoveryCache[requestURL]; ok {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if d, ok := cachedDiscovery(requestURL); ok {
 		return d, nil
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
+	client := auth.ContextClient(ctx)
+	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
+	key := fmt.Sprintf("%p %s", client, requestURL)
+	ch := discoveryRequests.DoChan(key, func() (any, error) {
+		if d, ok := cachedDiscovery(requestURL); ok {
+			return d, nil
+		}
+		// The shared request outlives callers that stop waiting, bounded by its call deadline.
+		d, err := discover(context.WithoutCancel(ctx), client, requestURL)
+		if err == nil {
+			discoveryCacheMu.Lock()
+			discoveryCache[requestURL] = d
+			discoveryCacheMu.Unlock()
+		}
+		return d, err
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Discovery), nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
+}
 
-	httpClient := auth.ContextClient(ctx)
-	resp, err := authclient.SendRequestWithRetries(ctx, httpClient, req, authclient.RetryOptions{Attempts: 5})
+// cachedDiscovery returns the cached result of an earlier discovery of requestURL.
+func cachedDiscovery(requestURL string) (*Discovery, bool) {
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	d, ok := discoveryCache[requestURL]
+	return d, ok
+}
+
+// discover bounds one service lookup and retries transient HTTP failures.
+func discover(ctx context.Context, client *http.Client, requestURL string) (*Discovery, error) {
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +177,5 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response body: %w", err)
 	}
-	d := &result.Data
-	discoveryCache[requestURL] = d
-	return d, nil
+	return &result.Data, nil
 }

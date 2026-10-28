@@ -14,6 +14,7 @@ import (
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
@@ -142,20 +143,21 @@ func (c *Client) SearchItems(ctx context.Context, filter catalog.SearchFilter, o
 	}
 
 	requestURL := c.env.ServiceURI.JoinPath("/api/v2.0/discovery/blob/client").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	opts = append(opts, playfab.AcceptLanguage([]language.Tag{language.AmericanEnglish}))
-	for _, opt := range opts {
-		if err := opt(req); err != nil {
-			return nil, fmt.Errorf("apply request option: %w", err)
+	resp, err := c.send(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
 		}
-	}
+		req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.do(req)
+		opts = append(opts, playfab.AcceptLanguage([]language.Tag{language.AmericanEnglish}))
+		for _, opt := range opts {
+			if err := opt(req); err != nil {
+				return nil, fmt.Errorf("apply request option: %w", err)
+			}
+		}
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Replayable: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -252,13 +254,14 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
 	requestURL := c.env.ServiceURI.JoinPath("/api/v2.0/join/experience").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(req)
+	resp, err := c.send(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}
@@ -278,18 +281,23 @@ func (c *Client) JoinExperience(ctx context.Context, id uuid.UUID) (*Address, er
 	}
 }
 
-// do authorises req with a service token, sets the headers the vanilla client sends and sends it through
-// the Client's HTTP client. req must carry the context the token request should respect.
-func (c *Client) do(req *http.Request) (*http.Response, error) {
-	token, err := c.src.ServiceToken(req.Context())
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-
-	req.Header.Set("Client-Version", protocol.CurrentVersion)
-	req.Header.Set("User-Agent", internal.UserAgent)
-	return c.client.Do(req)
+// send prepares a request, authorises it with a service token, sets the headers the vanilla client sends
+// and sends it through the Client's HTTP client within the service request bounds.
+func (c *Client) send(ctx context.Context, prepare func(context.Context) (*http.Request, error), opts authclient.CallOptions) (*http.Response, error) {
+	return authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := prepare(ctx)
+		if err != nil {
+			return nil, err
+		}
+		token, err := c.src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		req.Header.Set("Client-Version", protocol.CurrentVersion)
+		req.Header.Set("User-Agent", internal.UserAgent)
+		return req, nil
+	}, opts)
 }
 
 // JoinFriend attempts to join the same world as a friend using the friend's ID,
@@ -318,13 +326,14 @@ func (c *Client) JoinFriend(ctx context.Context, experienceID, worldID uuid.UUID
 		requestURL.RawQuery = q.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.do(req)
+	resp, err := c.send(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

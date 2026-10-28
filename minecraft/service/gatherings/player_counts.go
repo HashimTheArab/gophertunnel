@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
@@ -97,12 +98,14 @@ func (c *Client) refreshPlayerCounts(ctx context.Context, refresh *playerCountsR
 // fetchPlayerCounts requests the shared population snapshot without per-experience requests.
 func (c *Client) fetchPlayerCounts(ctx context.Context) ([]ExperiencePlayerCount, error) {
 	target := c.env.ServiceURI.JoinPath("/api/v2.0/dataquery/playercounts")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	response, err := c.do(req)
+	response, err := c.send(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

@@ -137,20 +137,21 @@ func (e *AuthorizationEnvironment) Token(ctx context.Context, config TokenConfig
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
 	requestURL := e.ServiceURI.JoinPath("/api/v1.0/session/start").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-	sessionID := config.SessionID
-	if sessionID == "" {
-		sessionID = uuid.NewString()
-	}
-	req.Header.Set("Session-Id", sessionID)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		sessionID := config.SessionID
+		if sessionID == "" {
+			sessionID = uuid.NewString()
+		}
+		req.Header.Set("Session-Id", sessionID)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5, Replayable: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -235,15 +236,16 @@ func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
 // may be used to resolve the signing keys and algorithms accepted when verifying
 // tokens issued by the authorization service.
 func (e *AuthorizationEnvironment) configuration(ctx context.Context) (*oidc.ProviderConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.Issuer.JoinPath("/.well-known/openid-configuration").String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.Issuer.JoinPath("/.well-known/openid-configuration").String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5}})
 	if err != nil {
 		return nil, err
 	}
@@ -281,65 +283,60 @@ func (e *AuthorizationEnvironment) MultiplayerToken(ctx context.Context, src Tok
 // multiplayerToken requests one multiplayer token; it returns the service token when the
 // service rejected it as unauthorized.
 func (e *AuthorizationEnvironment) multiplayerToken(ctx context.Context, src TokenSource, key *ecdsa.PublicKey) (string, *Token, error) {
-	token, err := src.ServiceToken(ctx)
-	if err != nil {
-		return "", nil, fmt.Errorf("request service token: %w", err)
-	}
-	var sessionID string
-	if id, ok := src.(SessionIdentifier); ok {
-		sessionID = id.SessionID()
-	}
-	jwt, err := e.startMultiplayerSession(ctx, token, sessionID, key)
-	var responseErr *ResponseError
-	if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusUnauthorized {
-		return "", token, err
-	}
-	return jwt, nil, err
-}
-
-// startMultiplayerSession exchanges token for a multiplayer token bound to key.
-func (e *AuthorizationEnvironment) startMultiplayerSession(ctx context.Context, token *Token, sessionID string, key *ecdsa.PublicKey) (string, error) {
 	b, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
-		return "", fmt.Errorf("encode public key: %w", err)
+		return "", nil, fmt.Errorf("encode public key: %w", err)
 	}
 	buf := &bytes.Buffer{}
 	if err := json.NewEncoder(buf).Encode(map[string]any{
 		// This will be directly used as the 'cpk' claim in the token.
 		"publicKey": base64.StdEncoding.EncodeToString(b),
 	}); err != nil {
-		return "", fmt.Errorf("encode request body: %w", err)
+		return "", nil, fmt.Errorf("encode request body: %w", err)
 	}
 
 	requestURL := e.ServiceURI.JoinPath("/api/v1.0/multiplayer/session/start").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+	var token *Token
+	resp, err := authclient.Call(ctx, e.httpClient(), func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		token, err = src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		var sessionID string
+		if id, ok := src.(SessionIdentifier); ok {
+			sessionID = id.SessionID()
+		}
+		if sessionID != "" {
+			req.Header.Set("Session-Id", sessionID)
+		}
+		token.SetAuthHeader(req)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 5, Replayable: true}})
 	if err != nil {
-		return "", fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if sessionID != "" {
-		req.Header.Set("Session-Id", sessionID)
-	}
-	token.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, e.httpClient(), req, authclient.RetryOptions{Attempts: 5})
-	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", NewResponseError(resp)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return "", token, NewResponseError(resp)
+		}
+		return "", nil, NewResponseError(resp)
 	}
 	var result internal.Result[*multiplayerToken]
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode response body: %w", err)
+		return "", nil, fmt.Errorf("decode response body: %w", err)
 	}
 	validationTime, _ := responseValidationTime(resp)
 	if result.Data == nil || result.Data.SignedToken == "" || !validationTime.Before(result.Data.ValidUntil) {
-		return "", errors.New("minecraft/service: invalid multiplayer token result")
+		return "", nil, errors.New("minecraft/service: invalid multiplayer token result")
 	}
-	return result.Data.SignedToken, nil
+	return result.Data.SignedToken, nil, nil
 }
 
 // multiplayerToken encapsulates a JWT token issued by the authorization
