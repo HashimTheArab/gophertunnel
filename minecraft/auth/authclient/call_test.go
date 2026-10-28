@@ -213,12 +213,14 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 		header    string
 		noGetBody bool
 		tlsFailed bool
+		gotConn   bool
 		err       error
 		unsent    bool
 		want      int
 	}{
 		{name: "post dial timeout", method: http.MethodPost, err: dialTimeout, unsent: true, want: DefaultAttempts},
 		{name: "post failed TLS handshake", method: http.MethodPost, tlsFailed: true, err: timeoutError{}, unsent: true, want: DefaultAttempts},
+		{name: "post sent while a speculative handshake failed", method: http.MethodPost, tlsFailed: true, gotConn: true, err: io.EOF, want: 1},
 		{name: "post timeout without evidence", method: http.MethodPost, err: timeoutError{}, want: 1},
 		{name: "post reset", method: http.MethodPost, err: reset, want: 1},
 		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", err: reset, want: DefaultAttempts},
@@ -230,8 +232,13 @@ func TestCallResendsOnlyUnsentOrReplayableRequests(t *testing.T) {
 				calls := 0
 				client := &http.Client{Transport: callTransport(func(req *http.Request) (*http.Response, error) {
 					calls++
-					if trace := httptrace.ContextClientTrace(req.Context()); test.tlsFailed && trace != nil {
-						trace.TLSHandshakeDone(tls.ConnectionState{}, errors.New("handshake failed"))
+					if trace := httptrace.ContextClientTrace(req.Context()); trace != nil {
+						if test.tlsFailed {
+							trace.TLSHandshakeDone(tls.ConnectionState{}, errors.New("handshake failed"))
+						}
+						if test.gotConn {
+							trace.GotConn(httptrace.GotConnInfo{Reused: true})
+						}
 					}
 					return nil, test.err
 				})}

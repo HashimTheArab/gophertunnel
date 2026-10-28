@@ -70,12 +70,17 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 		return err
 	}
 	for i := 1; ; i++ {
-		var tlsFailed atomic.Bool
-		trace := &httptrace.ClientTrace{TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
-			if err != nil {
-				tlsFailed.Store(true)
-			}
-		}}
+		// A failed handshake only proves nothing was sent if no connection was obtained: http.Transport may
+		// send over a reused connection while a speculative dial fails.
+		var tlsFailed, gotConn atomic.Bool
+		trace := &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) { gotConn.Store(true) },
+			TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+				if err != nil {
+					tlsFailed.Store(true)
+				}
+			},
+		}
 		req := request.Clone(httptrace.WithClientTrace(ctx, trace))
 		if request.Body != nil && request.GetBody != nil {
 			body, err := request.GetBody()
@@ -87,7 +92,7 @@ func SendRequestWithRetries(ctx context.Context, c *http.Client, request *http.R
 
 		redirected = false
 		resp, err := client.Do(req)
-		unsent := err != nil && !redirected && (tlsFailed.Load() || dialFailed(err))
+		unsent := err != nil && !redirected && !gotConn.Load() && (tlsFailed.Load() || dialFailed(err))
 		everSent = everSent || !unsent
 		var retryAfter time.Duration
 		retry := false
