@@ -7,7 +7,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creachadair/jrpc2 v1.3.5
-	github.com/df-mc/go-nethernet v1.0.25-0.20260928201420-215e46422b58
+	github.com/df-mc/go-nethernet v1.0.25
 	github.com/df-mc/go-playfab/v2 v2.0.3
 	github.com/df-mc/go-xsapi/v2 v2.0.4-0.20261012072832-90ce120e31cd
 	github.com/df-mc/jsonc v1.0.5

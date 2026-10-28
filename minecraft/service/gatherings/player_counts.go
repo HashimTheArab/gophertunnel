@@ -102,13 +102,7 @@ func (c *Client) fetchPlayerCounts(ctx context.Context) ([]ExperiencePlayerCount
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-	token, err := c.src.ServiceToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-	response, err := c.client.Do(req)
+	response, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}

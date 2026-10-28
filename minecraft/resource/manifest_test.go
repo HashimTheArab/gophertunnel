@@ -23,10 +23,14 @@ func TestManifestFormatVersionRepresentations(t *testing.T) {
 
 // Version strings follow vanilla's grammar, so partial versions name the same version as their full form.
 func TestManifestVersionStrings(t *testing.T) {
-	for text, want := range map[string]Version{
-		"1": {1, 0, 0}, "1.2": {1, 2, 0}, "1.2.3": {1, 2, 3}, " 1.2.3 ": {1, 2, 3},
-		"1.2.3-beta.1": {1, 2, 3}, "1.2.3+build": {1, 2, 3}, "01.0.11": {1, 0, 11},
+	for _, tc := range []struct {
+		text string
+		want Version
+	}{
+		{"1", Version{1, 0, 0}}, {"1.2", Version{1, 2, 0}}, {"1.2.3", Version{1, 2, 3}}, {" 1.2.3 ", Version{1, 2, 3}},
+		{"1.2.3-beta.1", Version{1, 2, 3}}, {"1.2.3+build", Version{1, 2, 3}}, {"01.0.11", Version{1, 0, 11}},
 	} {
+		text, want := tc.text, tc.want
 		if got, ok := parseVersion(text); !ok || got != want {
 			t.Fatalf("parseVersion(%q) = %v, %t, want %v", text, got, ok, want)
 		}
