@@ -64,11 +64,15 @@ func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, e
 	return n.dialContext(ctx, address, nil)
 }
 
-// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity], or with
-// an identity self-signed by privateKey when token is empty, as the vanilla client does offline.
+// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity]. When
+// token is empty and none is preconfigured, it presents an identity self-signed by privateKey, as the
+// vanilla client does offline.
 // Call [NetherNet.DialContextIdentityProvider] when the identity has not already been configured.
 func (n NetherNet) DialContextIdentity(ctx context.Context, address, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error) {
 	if token == "" {
+		if n.Dialer.Identity != nil {
+			return n.dialContext(ctx, address, nil)
+		}
 		identity, err := nethernet.SelfSignedIdentity(privateKey, offlineIdentityDomain)
 		if err != nil {
 			return nil, fmt.Errorf("minecraft: NetherNet.DialContextIdentity: self-sign identity: %w", err)
