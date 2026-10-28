@@ -143,8 +143,17 @@ func TestAddressNetworkSelectsRakNetWhenProbeFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if rakNet, ok := selected.(probedRakNet); !ok || !reflect.DeepEqual(rakNet.RakNet, network.RakNet) {
+	rakNet, ok := selected.(probedRakNet)
+	if !ok || !reflect.DeepEqual(rakNet.RakNet, network.RakNet) {
 		t.Fatalf("selected %#v, want the configured RakNet", selected)
+	}
+	for _, n := range []Network{network.RakNet, &network.RakNet, rakNet, &rakNet} {
+		if !IsRakNet(n) {
+			t.Errorf("IsRakNet(%T) = false, want true", n)
+		}
+	}
+	if IsRakNet(network) {
+		t.Error("IsRakNet(AddressNetwork) = true, want false")
 	}
 }
 
@@ -308,6 +317,9 @@ func TestAddressNetworkSelectsNetherNetWhenProbeAnswers(t *testing.T) {
 	netherNet, ok := selected.(httpNetherNet)
 	if !ok {
 		t.Fatalf("selected %T, want NetherNet over HTTP signaling", selected)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("IsRakNet reports NetherNet as RakNet")
 	}
 	if netherNet.endpoint != server.URL {
 		t.Fatalf("endpoint = %q, want %q", netherNet.endpoint, server.URL)
