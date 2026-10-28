@@ -7,13 +7,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// PacketObserver observes only the declared packet IDs of a Dialer connection, in both
+// PacketObserver observes only the declared packet IDs of a Dialer or Listener connection, in both
 // directions. It runs before PacketFunc at the same observation phase. Incoming payloads are
 // owned copies shared with PacketFunc; changes do not affect packet decoding.
 // Outgoing payloads have PacketFunc's existing temporary, mutable lifetime.
 // Callbacks must not block. A nil Func or empty PacketIDs disables observation.
 type PacketObserver struct {
-	// PacketIDs must be below 1024, as packet headers hold 10-bit IDs; Dial rejects others.
+	// PacketIDs must be below 1024, as packet headers hold 10-bit IDs; Dial and Listen reject others.
 	PacketIDs []uint32
 	Func      func(header packet.Header, payload []byte, src, dst net.Addr)
 }
@@ -24,7 +24,7 @@ type compiledPacketObserver struct {
 	callback func(packet.Header, []byte, net.Addr, net.Addr)
 }
 
-// compile copies the interests so changing the Dialer cannot reconfigure a Conn.
+// compile copies the interests so changing the Dialer or ListenConfig cannot reconfigure a Conn.
 func (observer PacketObserver) compile() (compiledPacketObserver, error) {
 	if observer.Func == nil || len(observer.PacketIDs) == 0 {
 		return compiledPacketObserver{}, nil

@@ -240,10 +240,60 @@ func TestDialSnapshotsSelectiveObserverInterests(t *testing.T) {
 	}
 }
 
+func TestListenSnapshotsSelectiveObserverInterests(t *testing.T) {
+	ids := []uint32{packet.IDRequestNetworkSettings, packet.IDNetworkSettings}
+	observed := make(chan string, 4)
+	network := listenTestNetwork{listen: func(string) (NetworkListener, error) {
+		return fakeNetworkListener{addr: &net.UDPAddr{IP: net.IPv4zero, Port: 19132}}, nil
+	}}
+	listener, err := ListenConfig{AuthenticationDisabled: true, PacketObserver: PacketObserver{
+		PacketIDs: ids,
+		Func: func(header packet.Header, _ []byte, src, _ net.Addr) {
+			observed <- fmt.Sprintf("%d from %v", header.PacketID, src)
+		},
+	}}.ListenNetwork(network, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ids[0], ids[1] = packet.IDLevelChunk, packet.IDLevelChunk
+
+	client, server := net.Pipe()
+	defer client.Close()
+	conn := listener.createConn(server)
+	defer conn.Abort()
+	request, err := encodePacket(&packet.RequestNetworkSettings{ClientProtocol: protocol.CurrentProtocol})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if err := packet.NewEncoder(client).Encode([][]byte{request}); err == nil {
+			_, _ = packet.NewDecoder(client).Decode()
+		}
+	}()
+	want := []string{
+		fmt.Sprintf("%d from %v", packet.IDRequestNetworkSettings, server.RemoteAddr()),
+		fmt.Sprintf("%d from %v", packet.IDNetworkSettings, server.LocalAddr()),
+	}
+	for _, w := range want {
+		select {
+		case got := <-observed:
+			if got != w {
+				t.Fatalf("observed %q, want %q", got, w)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("listener conn did not observe %q", w)
+		}
+	}
+}
+
 func TestPacketObserverRejectsIDsOutsideHeader(t *testing.T) {
 	observer := PacketObserver{PacketIDs: []uint32{1023, 1024}, Func: func(packet.Header, []byte, net.Addr, net.Addr) {}}
 	if _, err := (Dialer{PacketObserver: observer}).DialContextNetwork(context.Background(), nil, "observer.invalid:19132"); err == nil {
 		t.Fatal("Dial accepted packet ID 1024")
+	}
+	if _, err := (ListenConfig{AuthenticationDisabled: true, PacketObserver: observer}).ListenNetwork(nil, ""); err == nil {
+		t.Fatal("Listen accepted packet ID 1024")
 	}
 	observer.PacketIDs = observer.PacketIDs[:1]
 	compiled := mustCompileObserver(t, observer)
