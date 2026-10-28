@@ -3,11 +3,18 @@ package minecraft
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
@@ -250,4 +257,96 @@ func init() {
 	RegisterNetwork("nethernet", func(l *slog.Logger) Network {
 		return NetherNet{Log: l}
 	})
+}
+
+// NetherNetServerIdentity returns a nethernet.ListenConfig.IssueServerIdentity backed by the P-384
+// key saved at path, creating it on first use. Clients trust plain-HTTP servers on first use by key,
+// so a key that survives restarts is only ever confirmed once.
+func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Identity, error), error) {
+	key, err := loadOrCreateNetherNetKey(path)
+	if err != nil {
+		return nil, fmt.Errorf("minecraft: NetherNet server key: %w", err)
+	}
+	return func(context.Context) (*nethernet.Identity, error) {
+		// "self" is the domain Bedrock Dedicated Server presents.
+		return nethernet.ServerIdentity(key, "self")
+	}, nil
+}
+
+// loadOrCreateNetherNetKey reads the PEM key at path, or generates and saves one when the file does
+// not exist. A file that exists but cannot be read as a P-384 key is an error, never replaced.
+func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
+		return key, err
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	// Write a complete, synced file first and link it into place, so a crash never leaves a partial
+	// key behind and a concurrent first start never reads one.
+	f, err := os.CreateTemp(filepath.Dir(path), ".nethernet-key-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(f.Name())
+	if err := pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der}); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Link(f.Name(), path); errors.Is(err, fs.ErrExist) {
+		// Another process created the key first; use that one.
+		return readNetherNetKey(path)
+	} else if err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// readNetherNetKey parses a P-384 key from a SEC 1 or PKCS #8 PEM file.
+func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(b)
+	if block == nil {
+		return nil, fmt.Errorf("%s: no PEM block", path)
+	}
+	var key *ecdsa.PrivateKey
+	switch block.Type {
+	case "EC PRIVATE KEY":
+		key, err = x509.ParseECPrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		var parsed any
+		if parsed, err = x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+			var ok bool
+			if key, ok = parsed.(*ecdsa.PrivateKey); !ok {
+				err = fmt.Errorf("%s: %T is not an ECDSA key", path, parsed)
+			}
+		}
+	default:
+		err = fmt.Errorf("%s: unexpected PEM block %q", path, block.Type)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if key.Curve != elliptic.P384() {
+		return nil, fmt.Errorf("%s: key is not P-384", path)
+	}
+	return key, nil
 }

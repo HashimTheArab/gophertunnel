@@ -149,3 +149,30 @@ func jsonObjectKeys(t *testing.T, data []byte) []string {
 	}
 	return keys
 }
+
+// SplitServerAddress reads both NetherNet URL forms and plain addresses, and rejects a LAN NetherNet join's ":0".
+func TestSplitServerAddress(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		host string
+		port uint16
+		ok   bool
+	}{
+		{in: "play.example.com:19132", host: "play.example.com", port: 19132, ok: true},
+		{in: "[::1]:19133", host: "::1", port: 19133, ok: true},
+		{in: "http://127.0.0.1:19132", host: "127.0.0.1", port: 19132, ok: true},
+		{in: "http://127.0.0.1:19132:19132", host: "127.0.0.1", port: 19132, ok: true},
+		{in: "https://play.example.com:443:443", host: "play.example.com", port: 443, ok: true},
+		{in: "https://[::1]:19133", host: "::1", port: 19133, ok: true},
+		{in: ":0"},
+		{in: ""},
+		{in: "play.example.com"},
+		{in: "play.example.com:0"},
+		{in: "https://play.example.com"},
+	} {
+		host, port, ok := SplitServerAddress(tc.in)
+		if host != tc.host || port != tc.port || ok != tc.ok {
+			t.Errorf("SplitServerAddress(%q) = %q, %d, %v; want %q, %d, %v", tc.in, host, port, ok, tc.host, tc.port, tc.ok)
+		}
+	}
+}
