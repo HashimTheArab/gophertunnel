@@ -1065,13 +1065,12 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 	return nil
 }
 
-// Write writes a slice of serialised packet data to the Conn. The data is buffered until the next 20th of a
-// tick, after which it is flushed to the connection. Write returns the amount of bytes written n.
+// Write buffers a copy of b, one encoded packet, through WritePacketRaw. It copies b because io.Writer
+// forbids retaining it; use WritePacketRaw to hand over ownership instead.
 func (conn *Conn) Write(b []byte) (n int, err error) {
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
-	conn.bufferedSend = append(conn.bufferedSend, b)
+	if err := conn.WritePacketRaw(bytes.Clone(b)); err != nil {
+		return 0, err
+	}
 	return len(b), nil
 }
 

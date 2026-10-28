@@ -1778,6 +1778,9 @@ func TestWritePacketRawOnZeroConnIsClosed(t *testing.T) {
 	if err := new(Conn).WritePacketRaw([]byte{1}); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("WritePacketRaw error = %v, want %v", err, net.ErrClosed)
 	}
+	if n, err := new(Conn).Write([]byte{1}); n != 0 || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Write = %d, %v, want 0, %v", n, err, net.ErrClosed)
+	}
 }
 
 func TestReadBatchRawRequiresBatchReading(t *testing.T) {
@@ -1815,11 +1818,15 @@ func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
 	if err := conn.WritePacket(&packet.SetTime{Time: 1}); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
-	for _, data := range [][]byte{raw, registry} {
-		if err := conn.WritePacketRaw(data); err != nil {
-			t.Fatalf("WritePacketRaw: %v", err)
-		}
+	if err := conn.WritePacketRaw(raw); err != nil {
+		t.Fatalf("WritePacketRaw: %v", err)
 	}
+	// Write takes the same path but copies, as io.Writer must not retain its argument.
+	written := bytes.Clone(registry)
+	if n, err := conn.Write(written); n != len(written) || err != nil {
+		t.Fatalf("Write = %d, %v, want %d, nil", n, err, len(written))
+	}
+	clear(written)
 	if err := conn.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -1833,6 +1840,9 @@ func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
 	_ = conn.Close()
 	if err := conn.WritePacketRaw(raw); err == nil {
 		t.Fatal("WritePacketRaw after Close returned no error")
+	}
+	if n, err := conn.Write(raw); n != 0 || err == nil {
+		t.Fatalf("Write after Close = %d, %v, want 0 and an error", n, err)
 	}
 }
 
