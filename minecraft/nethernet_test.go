@@ -337,3 +337,32 @@ func (s *testNetherNetSignaling) awaitClose(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// An offline dial still presents an identity signed by the connection key, since servers match it against the login.
+func TestNetherNetDialContextIdentitySelfSignsWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate identity key: %v", err)
+	}
+	network := NetherNet{
+		Signaling: newTestNetherNetSignaling(),
+		dial: func(_ context.Context, _ string, _ nethernet.Signaling, dialer nethernet.Dialer) (net.Conn, error) {
+			if dialer.Identity == nil || dialer.Identity.PrivateKey != key {
+				t.Fatal("offline dial did not present an identity for the connection key")
+			}
+			if dialer.Identity.Token == "" || dialer.Identity.Domain != offlineIdentityDomain {
+				t.Fatalf("offline identity = %+v, want a self-signed token from %s", dialer.Identity, offlineIdentityDomain)
+			}
+			client, server := net.Pipe()
+			t.Cleanup(func() { _ = server.Close() })
+			return client, nil
+		},
+	}
+	conn, err := network.DialContextIdentity(t.Context(), "remote-network-id", "", key)
+	if err != nil {
+		t.Fatalf("DialContextIdentity: %v", err)
+	}
+	_ = conn.Close()
+}
