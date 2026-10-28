@@ -547,6 +547,10 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.DeviceOS == 0 {
 		d.DeviceOS = protocol.DeviceAndroid
 	}
+	if d.DeviceOS == protocol.DeviceAndroid && d.PlatformType == login.PlatformTypeDesktop {
+		d.PlatformType = login.PlatformTypeMobile
+		d.MarkClaims("PlatformType")
+	}
 	if d.DefaultInputMode == 0 {
 		d.DefaultInputMode = packet.InputModeTouch
 	}

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// errListenerDeliveryClosed stops a connection's read loop when the listener closes before the connection
+// could be delivered to Accept.
 var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
@@ -467,8 +470,10 @@ func (listener *Listener) PlayerCount() int {
 // method, it will directly call the method after updating its pong data.
 func (listener *Listener) updatePongData() {
 	var port uint16
-	if addr, ok := listener.Addr().(*net.UDPAddr); ok {
-		port = uint16(addr.Port)
+	if a, ok := listener.Addr().(interface {
+		AddrPort() netip.AddrPort
+	}); ok {
+		port = a.AddrPort().Port()
 	}
 
 	// Use configured ports for LAN discovery, or fall back to actual port
@@ -482,6 +487,8 @@ func (listener *Listener) updatePongData() {
 	}
 
 	s := listener.status()
+	// The field after the game mode is a separate flag: clients drop pongs of ten or more fields unless it
+	// is exactly 1.
 	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
 		listener.listener.ID(), s.ServerSubName, gameTypeName(s.GameType), 1, ipv4Port, ipv6Port, "0", "0",
@@ -531,7 +538,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
 	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
-	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
+	conn.acceptedProto = append(slices.Clone(listener.cfg.AcceptedProtocols), proto{})
 	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
 	conn.acceptNewerProtocols = listener.cfg.AcceptNewerProtocols
 	conn.compression = listener.cfg.Compression
