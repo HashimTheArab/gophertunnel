@@ -563,6 +563,39 @@ var checkVersion = regexp.MustCompile("[0-9.]").MatchString
 
 // Validate validates the client data. It returns an error if any of the fields checked did not carry a valid
 // value.
+// SplitServerAddress returns the host and port a client joined with, from a ServerAddress in either the
+// 'host:port' form or the URL form of NetherNet joins. ok is false when it names no host or port, as for
+// a client that joined from LAN discovery over NetherNet.
+func SplitServerAddress(address string) (host string, port uint16, ok bool) {
+	if strings.Contains(address, "://") {
+		u, err := parseURLServerAddress(address)
+		if err != nil {
+			return "", 0, false
+		}
+		address = u.Host
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return "", 0, false
+	}
+	p, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || p == 0 {
+		return "", 0, false
+	}
+	return host, uint16(p), true
+}
+
+// parseURLServerAddress parses the URL form of a ServerAddress, dropping the repeated port older
+// clients append after it.
+func parseURLServerAddress(address string) (*url.URL, error) {
+	if ind := strings.LastIndex(address, ":"); ind > 0 {
+		if u, err := url.Parse(address[:ind]); err == nil && u.Port() != "" && u.Port() == address[ind+1:] {
+			address = address[:ind]
+		}
+	}
+	return url.Parse(address)
+}
+
 func (data ClientData) Validate() error {
 	if data.DeviceOS <= 0 || data.DeviceOS > 15 {
 		return fmt.Errorf("DeviceOS must carry a value between 1 and 15, but got %v", data.DeviceOS)
@@ -587,13 +620,7 @@ func (data ClientData) Validate() error {
 		// sent by 1.26.60 clients:
 		// https://<host>:<port>:<port>
 		// https://<host>:<port>
-		addr := data.ServerAddress
-		if ind := strings.LastIndex(addr, ":"); ind > 0 {
-			if u, err := url.Parse(addr[:ind]); err == nil && u.Port() != "" && u.Port() == addr[ind+1:] {
-				addr = addr[:ind]
-			}
-		}
-		u, err := url.Parse(addr)
+		u, err := parseURLServerAddress(data.ServerAddress)
 		if err != nil {
 			return fmt.Errorf("ServerAddress must be a URL, but got %v", data.ServerAddress)
 		}

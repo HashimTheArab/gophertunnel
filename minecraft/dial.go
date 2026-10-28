@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -534,30 +533,6 @@ func serverAddress(address string) string {
 		return address
 	}
 	return address + ":" + u.Port()
-}
-
-// ParseServerAddress returns the host and port a client joined with, read from its login
-// ServerAddress in either the 'host:port' form or the 'https://<host>:<port>:<port>' form of
-// URL-addressed networks. ok is false when it names no host or port, as for a LAN NetherNet join.
-func ParseServerAddress(address string) (host string, port uint16, ok bool) {
-	if strings.Contains(address, "://") {
-		// The port is repeated after the URL, so parse the URL before it.
-		i := strings.LastIndexByte(address, ':')
-		u, err := url.Parse(address[:max(i, 0)])
-		if i < 0 || err != nil {
-			return "", 0, false
-		}
-		address = u.Host
-	}
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil || host == "" {
-		return "", 0, false
-	}
-	p, err := strconv.ParseUint(portText, 10, 16)
-	if err != nil || p == 0 {
-		return "", 0, false
-	}
-	return host, uint16(p), true
 }
 
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.

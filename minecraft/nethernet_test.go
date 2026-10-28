@@ -414,6 +414,7 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 			}
 		})
 	}
+}
 
 // An offline dial still presents an identity signed by the connection key, since servers match it against the login.
 func TestNetherNetDialContextIdentitySelfSignsWithoutToken(t *testing.T) {
