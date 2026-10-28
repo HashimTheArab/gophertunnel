@@ -130,9 +130,12 @@ func isTimeout(err error) bool {
 	return ok && netErr.Timeout()
 }
 
-// replayable reports whether sending req again cannot repeat its effect: an idempotent method, or an
-// idempotency key as recognised by net/http.
+// replayable reports whether req can be sent again without repeating its effect: an idempotent method or an
+// idempotency key as recognised by net/http, and a body that can be recreated.
 func replayable(req *http.Request) bool {
+	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
+		return false
+	}
 	switch req.Method {
 	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
 		return true

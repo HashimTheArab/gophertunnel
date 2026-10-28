@@ -137,3 +137,42 @@ func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 		}
 	})
 }
+
+// pauseContext blocks its first value lookup, which Discover makes after its cache check.
+type pauseContext struct {
+	context.Context
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+// Value pauses once before returning the wrapped context's value.
+func (c *pauseContext) Value(key any) any {
+	c.once.Do(func() { close(c.entered); <-c.release })
+	return c.Context.Value(key)
+}
+
+// A result cached while a caller was between its cache check and the shared request must be used, not fetched again.
+func TestDiscoveryUsesResultCachedAfterMiss(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		base := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			if calls > 1 {
+				return nil, errors.New("second request")
+			}
+			return discoveryOK(), nil
+		})})
+		paused := &pauseContext{Context: base, entered: make(chan struct{}), release: make(chan struct{})}
+		done := make(chan error, 1)
+		go func() { _, err := Discover(paused, t.Name(), "test"); done <- err }()
+		<-paused.entered
+		if _, err := Discover(base, t.Name(), "test"); err != nil {
+			t.Fatal(err)
+		}
+		close(paused.release)
+		if err := <-done; err != nil || calls != 1 {
+			t.Fatalf("paused caller err = %v, network calls = %d", err, calls)
+		}
+	})
+}

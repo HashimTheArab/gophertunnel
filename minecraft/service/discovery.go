@@ -127,6 +127,13 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	// result; it stays bounded by its call deadline. Callers with different clients do not share a request.
 	shared := context.WithoutCancel(ctx)
 	ch := discoveryFlights.DoChan(fmt.Sprintf("%p %s", client, requestURL), func() (any, error) {
+		// Another caller may have cached the result between the check above and joining this flight.
+		discoveryCacheMu.Lock()
+		d, ok := discoveryCache[requestURL]
+		discoveryCacheMu.Unlock()
+		if ok {
+			return d, nil
+		}
 		d, err := discover(shared, client, requestURL)
 		if err == nil {
 			discoveryCacheMu.Lock()

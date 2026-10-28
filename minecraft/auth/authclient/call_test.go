@@ -202,15 +202,17 @@ func TestCallRetriesPreserveBodyAndPolicy(t *testing.T) {
 // A request that timed out is sent again only when repeating it cannot repeat its effect.
 func TestCallResendsTimedOutRequestsOnlyWhenReplayable(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		method string
-		header string
-		want   int
+		name      string
+		method    string
+		header    string
+		noGetBody bool
+		want      int
 	}{
 		{name: "post", method: http.MethodPost, want: 1},
 		{name: "post with idempotency key", method: http.MethodPost, header: "Idempotency-Key", want: DefaultAttempts},
 		{name: "get", method: http.MethodGet, want: DefaultAttempts},
 		{name: "delete", method: http.MethodDelete, want: DefaultAttempts},
+		{name: "put without GetBody", method: http.MethodPut, noGetBody: true, want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -223,6 +225,9 @@ func TestCallResendsTimedOutRequestsOnlyWhenReplayable(t *testing.T) {
 					req, err := http.NewRequestWithContext(ctx, test.method, "https://service.test", strings.NewReader("payload"))
 					if err == nil && test.header != "" {
 						req.Header.Set(test.header, "key")
+					}
+					if err == nil && test.noGetBody {
+						req.Body, req.GetBody = io.NopCloser(strings.NewReader("payload")), nil
 					}
 					return req, err
 				}, CallOptions{})
