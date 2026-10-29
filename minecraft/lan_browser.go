@@ -34,7 +34,8 @@ type LANWorld struct {
 	GameMode string
 	// Hardcore reports a hardcore world; only NetherNet hosts advertise it.
 	Hardcore bool
-	// Address is the RakNet address to join, or the UDP address a NetherNet host answers from.
+	// Address is the RakNet address to join; nil for NetherNet worlds, which are joined by
+	// NetworkID through the browser's NetherNet listener.
 	Address *net.UDPAddr
 	// NetworkID is the NetherNet network ID of the host; zero for RakNet worlds.
 	NetworkID uint64
@@ -235,7 +236,7 @@ func (b *LANBrowser) pruneLocked(now time.Time) {
 // least four fields, and the advertised IPv4 port replaces the source port when present. editor
 // reports an Editor Mode world.
 func parseLANPong(data []byte, from *net.UDPAddr) (world LANWorld, editor, ok bool) {
-	fields := splitPong(string(data))
+	fields := splitLANPong(string(data))
 	if len(fields) < 4 || fields[0] != "MCPE" || !isLANVersion(fields[3]) {
 		return LANWorld{}, false, false
 	}
@@ -265,6 +266,24 @@ func parseLANPong(data []byte, from *net.UDPAddr) (world LANWorld, editor, ok bo
 		GameMode:       field(8),
 		Address:        addr,
 	}, number(12) != 0, true
+}
+
+// splitLANPong splits a pong on semicolons as the LAN list does: every character is kept, and a
+// semicolon directly after a backslash belongs to its field.
+func splitLANPong(s string) []string {
+	var fields []string
+	var field strings.Builder
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == ';' && !escaped {
+			fields = append(fields, field.String())
+			field.Reset()
+			continue
+		}
+		field.WriteByte(s[i])
+		escaped = s[i] == '\\'
+	}
+	return append(fields, field.String())
 }
 
 // isLANVersion reports whether a pong's version holds only digits and dots.

@@ -37,6 +37,20 @@ func TestParseLANPong(t *testing.T) {
 	}
 }
 
+// Backslashes stay in the text, and a semicolon right after one does not split a field.
+func TestSplitLANPong(t *testing.T) {
+	got := splitLANPong(`MCPE;World\Name;a\;b;\\;end`)
+	want := []string{"MCPE", `World\Name`, `a\;b`, `\\;end`}
+	if len(got) != len(want) {
+		t.Fatalf("splitLANPong() = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("splitLANPong() = %q, want %q", got, want)
+		}
+	}
+}
+
 // RakNet worlds update in place by address or GUID and expire ten seconds after their last pong.
 func TestLANBrowserRakNetEntries(t *testing.T) {
 	b := &LANBrowser{}
@@ -156,4 +170,42 @@ func freeUDPAddr(t *testing.T) *net.UDPAddr {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr)
+}
+
+// A NetherNet world drops out a few seconds after its host stops answering.
+func TestLANBrowserExpiresSilentNetherNetWorld(t *testing.T) {
+	addr := freeUDPAddr(t)
+	host, err := discovery.ListenConfig{}.Listen(addr.String())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	host.ServerData(&discovery.ServerData{ServerName: "Host", LevelName: "Gone", ConnectionType: 4})
+	browser, err := LANBrowserConfig{RakNetPort: freeUDPAddr(t).Port, NetherNetAddress: addr}.Browse()
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	defer browser.Close()
+
+	listed := func() bool {
+		for _, world := range browser.Worlds() {
+			if world.NetherNet && world.LevelName == "Gone" {
+				return true
+			}
+		}
+		return false
+	}
+	waitFor := func(want bool, within time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(within)
+		for time.Now().Before(deadline) {
+			if listed() == want {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("world listed = %t after %s, want %t", listed(), within, want)
+	}
+	waitFor(true, 6*time.Second)
+	_ = host.Close()
+	waitFor(false, 8*time.Second)
 }
