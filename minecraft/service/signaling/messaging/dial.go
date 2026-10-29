@@ -156,7 +156,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		},
 	})
 	go conn.ping(cfg.PingFrequency)
-	go conn.refreshCredentials()
+	conn.refreshCredentials()
 	return conn, nil
 }
 

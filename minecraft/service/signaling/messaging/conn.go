@@ -50,7 +50,9 @@ type Conn struct {
 	credentialsExpiry time.Time
 	// credentialsRequest is the TURN request in flight, if any.
 	credentialsRequest *credentialsRequest
-	// credentialsMu guards credentials, credentialsExpiry and credentialsRequest.
+	// credentialsRefresh requests new credentials once credentialsExpiry passes.
+	credentialsRefresh *time.Timer
+	// credentialsMu guards credentials, credentialsExpiry, credentialsRequest and credentialsRefresh.
 	credentialsMu sync.Mutex
 }
 
@@ -131,17 +133,15 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 	}
 }
 
-// Credentials returns the TURN credentials last received from the server, requesting new ones once
-// they expire. Like vanilla, a failed request or malformed answer yields no ICE servers, so
-// connections still gather host candidates; only closure of the Conn or ctx returns an error.
-// Concurrent callers share one in-flight request, and each stops waiting when its ctx is done.
+// Credentials returns the TURN credentials last received from the server, waiting for the request
+// in flight if they are missing or expired. A failed, unanswered or undecodable request yields no
+// ICE servers, so connections still gather host candidates; only closure of the Conn or ctx
+// returns an error. Concurrent callers share one request, and each stops waiting when its ctx is done.
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
-	if conn.ctx != nil {
-		select {
-		case <-conn.ctx.Done():
-			return nil, context.Cause(conn.ctx)
-		default:
-		}
+	select {
+	case <-conn.ctx.Done():
+		return nil, context.Cause(conn.ctx)
+	default:
 	}
 
 	conn.credentialsMu.Lock()
@@ -150,12 +150,7 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 		conn.credentialsMu.Unlock()
 		return credentials, nil
 	}
-	request := conn.credentialsRequest
-	if request == nil {
-		request = &credentialsRequest{done: make(chan struct{})}
-		conn.credentialsRequest = request
-		go conn.requestCredentials(request)
-	}
+	request := conn.startCredentialsRequestLocked()
 	conn.credentialsMu.Unlock()
 
 	select {
@@ -175,103 +170,66 @@ type credentialsRequest struct {
 	err         error
 }
 
-// credentialsRequestTimeout bounds a TURN request the server leaves unanswered, after which
-// connections proceed without relay servers and the next Credentials call requests again.
-const credentialsRequestTimeout = 5 * time.Second
+// credentialsRequestTimeout is how long the Bedrock client waits for a JSON-RPC response before
+// failing the request.
+const credentialsRequestTimeout = 60 * time.Second
 
-// requestCredentials performs request and caches its answer until expiry.
+// refreshCredentials starts a TURN request unless one is in flight. The Conn calls it once
+// connected and again when the received credentials expire.
+func (conn *Conn) refreshCredentials() {
+	conn.credentialsMu.Lock()
+	if conn.ctx.Err() == nil {
+		conn.startCredentialsRequestLocked()
+	}
+	conn.credentialsMu.Unlock()
+}
+
+// startCredentialsRequestLocked returns the TURN request in flight, starting one if there is none.
+// credentialsMu must be held.
+func (conn *Conn) startCredentialsRequestLocked() *credentialsRequest {
+	if conn.credentialsRequest == nil {
+		conn.credentialsRequest = &credentialsRequest{done: make(chan struct{})}
+		go conn.requestCredentials(conn.credentialsRequest)
+	}
+	return conn.credentialsRequest
+}
+
+// requestCredentials performs request. An answer is cached until now plus its ExpirationInSeconds,
+// when a refresh is scheduled; a failure leaves the cache and its expiry as they were.
 func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	ctx, cancel := context.WithTimeout(conn.ctx, credentialsRequestTimeout)
 	defer cancel()
-	var result json.RawMessage
-	err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &result)
-	credentials, expiry := &nethernet.Credentials{}, time.Time{}
+	var credentials *nethernet.Credentials
+	err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials)
+	if err == nil && credentials == nil {
+		err = errors.New("null result")
+	}
+	now := time.Now()
+
+	conn.credentialsMu.Lock()
 	switch {
 	case err != nil && conn.ctx.Err() != nil:
 		request.err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
 	case err != nil:
 		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers",
 			slog.Any("error", &CredentialsError{Method: MethodSignalingCredentials, Err: err}))
+		request.credentials = &nethernet.Credentials{}
 	default:
-		var parsed *nethernet.Credentials
-		if parsed, expiry, err = parseCredentials(result, time.Now()); err != nil {
-			conn.d.Log.Warn("invalid TURN credentials, gathering without relay servers", slog.Any("error", err))
-		} else {
-			credentials = parsed
-		}
-	}
-	if request.err == nil {
 		request.credentials = credentials
-	}
-
-	conn.credentialsMu.Lock()
-	if !expiry.IsZero() {
-		conn.credentials, conn.credentialsExpiry = credentials, expiry
+		conn.credentials = credentials
+		conn.credentialsExpiry = now.Add(time.Duration(credentials.ExpirationInSeconds) * time.Second)
+		if conn.credentialsRefresh != nil {
+			conn.credentialsRefresh.Stop()
+			conn.credentialsRefresh = nil
+		}
+		// A non-positive expiry is already due, so the next Credentials call requests again.
+		if wait := conn.credentialsExpiry.Sub(now); wait > 0 && conn.ctx.Err() == nil {
+			conn.credentialsRefresh = time.AfterFunc(wait, conn.refreshCredentials)
+		}
 	}
 	conn.credentialsRequest = nil
 	conn.credentialsMu.Unlock()
 	close(request.done)
-}
-
-// parseCredentials validates a TURN answer as vanilla does. The expiry is now plus any numeric
-// ExpirationInSeconds, zero when that is missing; it is returned even when the servers are invalid.
-func parseCredentials(result json.RawMessage, now time.Time) (*nethernet.Credentials, time.Time, error) {
-	var answer map[string]json.RawMessage
-	var expiration *float64
-	if json.Unmarshal(result, &answer) != nil || json.Unmarshal(answer["ExpirationInSeconds"], &expiration) != nil || expiration == nil {
-		return nil, time.Time{}, errors.New("missing ExpirationInSeconds")
-	}
-	seconds := int(*expiration)
-	expiry := now.Add(time.Duration(seconds) * time.Second)
-	var servers []json.RawMessage
-	if json.Unmarshal(answer["TurnAuthServers"], &servers) != nil || servers == nil {
-		return nil, expiry, errors.New("TurnAuthServers is not an array")
-	}
-	credentials := &nethernet.Credentials{ExpirationInSeconds: seconds}
-	for _, raw := range servers {
-		var server struct {
-			Username *string  `json:"Username"`
-			Password *string  `json:"Password"`
-			URLs     []string `json:"Urls"`
-		}
-		if err := json.Unmarshal(raw, &server); err != nil {
-			return nil, expiry, fmt.Errorf("decode TURN server: %w", err)
-		}
-		if server.Username == nil || server.Password == nil {
-			return nil, expiry, errors.New("TURN server without credentials")
-		}
-		if len(server.URLs) == 0 {
-			return nil, expiry, errors.New("TURN server without URLs")
-		}
-		credentials.ICEServers = append(credentials.ICEServers, nethernet.ICEServer{
-			Username: *server.Username, Password: *server.Password, URLs: server.URLs,
-		})
-	}
-	return credentials, expiry, nil
-}
-
-// refreshCredentials requests TURN credentials as soon as the Conn connects and again whenever
-// they expire, as vanilla does, so dials rarely wait on the request.
-func (conn *Conn) refreshCredentials() {
-	for {
-		if _, err := conn.Credentials(conn.ctx); err != nil {
-			return
-		}
-		conn.credentialsMu.Lock()
-		wait := time.Until(conn.credentialsExpiry)
-		conn.credentialsMu.Unlock()
-		if wait <= 0 {
-			// No usable expiry: the next Credentials call requests again.
-			return
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-conn.ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
 }
 
 // PongData ...
@@ -315,6 +273,12 @@ func (conn *Conn) close(cause error) (err error) {
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
+	conn.credentialsMu.Lock()
+	if conn.credentialsRefresh != nil {
+		conn.credentialsRefresh.Stop()
+		conn.credentialsRefresh = nil
+	}
+	conn.credentialsMu.Unlock()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
@@ -499,8 +463,9 @@ func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
 	return internal.NotifySignal(notifiers, signal)
 }
 
-// ping sends [MethodSystemPing] as a notification at the given interval, as vanilla does, so a
-// missing reply never closes the Conn; a failed write closes it with the cause.
+// ping sends [MethodSystemPing] as a notification at the given interval. Like the Bedrock client,
+// it never closes the Conn: a missing reply goes unnoticed and a failed send is only logged, since
+// a broken connection is detected by its reader.
 func (conn *Conn) ping(frequency time.Duration) {
 	if frequency <= 0 {
 		frequency = signaling.DefaultPingFrequency
@@ -515,8 +480,6 @@ func (conn *Conn) ping(frequency time.Duration) {
 		case <-ticker.C:
 			if err := conn.client.Notify(conn.ctx, MethodSystemPing, map[string]any{}); err != nil {
 				conn.d.Log.Error("error pinging", slog.Any("error", err))
-				_ = conn.close(fmt.Errorf("notify %q: %w", MethodSystemPing, err))
-				return
 			}
 		}
 	}
