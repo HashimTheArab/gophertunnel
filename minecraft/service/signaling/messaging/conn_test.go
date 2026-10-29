@@ -119,6 +119,28 @@ func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
 	}
 }
 
+// An unanswered TURN request ends without relay servers and the next call requests again.
+func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return nil, errors.New("released")
+		})
+		for want := 1; want <= 2; want++ {
+			credentials, err := conn.Credentials(context.Background())
+			if err != nil || len(credentials.ICEServers) != 0 {
+				t.Fatalf("Credentials() = %v, %v, want no servers and no error", credentials, err)
+			}
+			synctest.Wait()
+			if *calls != want {
+				t.Fatalf("TURN requests = %d, want %d", *calls, want)
+			}
+		}
+	})
+}
+
 // Pings are notifications: they carry no id and an unanswered ping keeps the Conn open.
 func TestPingIsANotification(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

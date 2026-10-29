@@ -175,10 +175,16 @@ type credentialsRequest struct {
 	err         error
 }
 
-// requestCredentials performs request for the life of the Conn and caches its answer until expiry.
+// credentialsRequestTimeout bounds a TURN request the server leaves unanswered, after which
+// connections proceed without relay servers and the next Credentials call requests again.
+const credentialsRequestTimeout = 5 * time.Second
+
+// requestCredentials performs request and caches its answer until expiry.
 func (conn *Conn) requestCredentials(request *credentialsRequest) {
+	ctx, cancel := context.WithTimeout(conn.ctx, credentialsRequestTimeout)
+	defer cancel()
 	var result json.RawMessage
-	err := conn.client.CallResult(conn.ctx, MethodSignalingCredentials, map[string]any{}, &result)
+	err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &result)
 	credentials, expiry := &nethernet.Credentials{}, time.Time{}
 	switch {
 	case err != nil && conn.ctx.Err() != nil:
