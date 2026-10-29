@@ -129,9 +129,9 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 	}
 }
 
-// Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
-// is done. It returns a [nethernet.Credentials] or an error if the Conn is closed or the [context.Context]
-// is canceled or exceeded a deadline.
+// Credentials returns the TURN credentials last received from the server, requesting new ones once
+// they expire. Like vanilla, a failed request or malformed answer yields no ICE servers, so
+// connections still gather host candidates; only closure of the Conn or ctx returns an error.
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
@@ -147,18 +147,85 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 		return conn.credentials, nil
 	}
 
-	var credentials *nethernet.Credentials
-	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
-		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
+	var result json.RawMessage
+	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &result); err != nil {
+		err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
+		if ctx.Err() != nil || (conn.ctx != nil && conn.ctx.Err() != nil) {
+			return nil, err
+		}
+		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers", slog.Any("error", err))
+		return &nethernet.Credentials{}, nil
 	}
-	if credentials == nil || credentials.ExpirationInSeconds <= 0 {
-		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
+	credentials, expiry, err := parseCredentials(result, time.Now())
+	if err != nil {
+		conn.d.Log.Warn("invalid TURN credentials, gathering without relay servers", slog.Any("error", err))
+		credentials = &nethernet.Credentials{}
 	}
+	if !expiry.IsZero() {
+		conn.credentials, conn.credentialsExpiry = credentials, expiry
+	}
+	return credentials, nil
+}
 
-	conn.credentials = credentials
-	conn.credentialsExpiry = time.Now().Add(time.Duration(credentials.ExpirationInSeconds) * time.Second)
+// parseCredentials validates a TURN answer as vanilla does. The expiry is now plus any numeric
+// ExpirationInSeconds, zero when that is missing; it is returned even when the servers are invalid.
+func parseCredentials(result json.RawMessage, now time.Time) (*nethernet.Credentials, time.Time, error) {
+	var answer map[string]json.RawMessage
+	var expiration *float64
+	if json.Unmarshal(result, &answer) != nil || json.Unmarshal(answer["ExpirationInSeconds"], &expiration) != nil || expiration == nil {
+		return nil, time.Time{}, errors.New("missing ExpirationInSeconds")
+	}
+	seconds := int(*expiration)
+	expiry := now.Add(time.Duration(seconds) * time.Second)
+	var servers []json.RawMessage
+	if json.Unmarshal(answer["TurnAuthServers"], &servers) != nil || servers == nil {
+		return nil, expiry, errors.New("TurnAuthServers is not an array")
+	}
+	credentials := &nethernet.Credentials{ExpirationInSeconds: seconds}
+	for _, raw := range servers {
+		var server struct {
+			Username *string  `json:"Username"`
+			Password *string  `json:"Password"`
+			URLs     []string `json:"Urls"`
+		}
+		if err := json.Unmarshal(raw, &server); err != nil {
+			return nil, expiry, fmt.Errorf("decode TURN server: %w", err)
+		}
+		if server.Username == nil || server.Password == nil {
+			return nil, expiry, errors.New("TURN server without credentials")
+		}
+		if len(server.URLs) == 0 {
+			return nil, expiry, errors.New("TURN server without URLs")
+		}
+		credentials.ICEServers = append(credentials.ICEServers, nethernet.ICEServer{
+			Username: *server.Username, Password: *server.Password, URLs: server.URLs,
+		})
+	}
+	return credentials, expiry, nil
+}
 
-	return conn.credentials, nil
+// refreshCredentials requests TURN credentials as soon as the Conn connects and again whenever
+// they expire, as vanilla does, so dials rarely wait on the request.
+func (conn *Conn) refreshCredentials() {
+	for {
+		if _, err := conn.Credentials(conn.ctx); err != nil {
+			return
+		}
+		conn.credentialsMu.Lock()
+		wait := time.Until(conn.credentialsExpiry)
+		conn.credentialsMu.Unlock()
+		if wait <= 0 {
+			// No usable expiry: the next Credentials call requests again.
+			return
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-conn.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 // PongData ...
@@ -386,8 +453,8 @@ func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
 	return internal.NotifySignal(notifiers, signal)
 }
 
-// ping starts calling [MethodSystemPing] at 50 seconds interval.
-// On failure, it closes the Conn immediately with the cause.
+// ping sends [MethodSystemPing] as a notification at the given interval, as vanilla does, so a
+// missing reply never closes the Conn; a failed write closes it with the cause.
 func (conn *Conn) ping(frequency time.Duration) {
 	if frequency <= 0 {
 		frequency = signaling.DefaultPingFrequency
@@ -400,12 +467,9 @@ func (conn *Conn) ping(frequency time.Duration) {
 		case <-conn.ctx.Done():
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(conn.ctx, time.Second*5)
-			_, err := conn.client.Call(ctx, MethodSystemPing, map[string]any{})
-			cancel()
-			if err != nil {
+			if err := conn.client.Notify(conn.ctx, MethodSystemPing, map[string]any{}); err != nil {
 				conn.d.Log.Error("error pinging", slog.Any("error", err))
-				_ = conn.close(fmt.Errorf("call %q: %w", MethodSystemPing, err))
+				_ = conn.close(fmt.Errorf("notify %q: %w", MethodSystemPing, err))
 				return
 			}
 		}

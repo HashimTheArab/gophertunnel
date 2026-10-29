@@ -86,3 +86,55 @@ type staticTokenSource struct {
 func (s staticTokenSource) ServiceToken(context.Context) (*service.Token, error) {
 	return s.token, nil
 }
+
+// TURN credentials are requested as soon as the Conn connects, before any dial asks for them.
+func TestDialContextRequestsCredentialsOnConnect(t *testing.T) {
+	methods := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept websocket: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		_, frame, err := conn.Read(context.Background())
+		if err != nil {
+			return
+		}
+		var request struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(frame, &request)
+		methods <- request.Method
+		_, _, _ = conn.Read(context.Background())
+	}))
+	defer server.Close()
+
+	serviceURI, err := url.Parse("ws" + strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatalf("parse service URL: %v", err)
+	}
+	conn, err := (Dialer{
+		Environment: staticConfigurationProvider{configuration: &signaling.Configuration{
+			ServiceURI:    serviceURI,
+			PingFrequency: time.Hour,
+		}},
+		Log: slog.New(slog.DiscardHandler),
+	}).DialContext(context.Background(), staticTokenSource{token: &service.Token{
+		AuthorizationHeader: "test-token",
+		Claims:              service.Claims{PlayerMessagingID: uuid.New()},
+	}})
+	if err != nil {
+		t.Fatalf("dial messaging service: %v", err)
+	}
+	defer conn.Close()
+
+	select {
+	case got := <-methods:
+		if got != MethodSignalingCredentials {
+			t.Fatalf("first request = %q, want %q", got, MethodSignalingCredentials)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no TURN request after connecting")
+	}
+}

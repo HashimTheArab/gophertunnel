@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/creachadair/jrpc2"
@@ -36,31 +36,102 @@ func TestCredentialsRejectsWarmCacheAfterClose(t *testing.T) {
 	}
 }
 
-func TestCredentialsRejectsNonPositiveExpiry(t *testing.T) {
-	t.Parallel()
+// credentialsConn returns a Conn whose TURN requests are answered by handle.
+func credentialsConn(t *testing.T, handle func() (json.RawMessage, error)) (*Conn, *int) {
+	t.Helper()
+	calls := new(int)
+	clientChannel, serverChannel := channel.Direct()
+	server := jrpc2.NewServer(handler.Map{
+		MethodSignalingCredentials: handler.New(func(context.Context, map[string]any) (json.RawMessage, error) {
+			*calls++
+			return handle()
+		}),
+	}, nil).Start(serverChannel)
+	t.Cleanup(server.Stop)
+	client := jrpc2.NewClient(clientChannel, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	t.Cleanup(func() { cancel(net.ErrClosed) })
+	return &Conn{client: client, ctx: ctx, d: Dialer{Log: slog.New(slog.DiscardHandler)}}, calls
+}
 
-	for _, expiry := range []int{0, -1} {
-		expiry := expiry
-		t.Run(fmt.Sprint(expiry), func(t *testing.T) {
-			t.Parallel()
-			clientChannel, serverChannel := channel.Direct()
-			server := jrpc2.NewServer(handler.Map{
-				MethodSignalingCredentials: handler.New(func(context.Context, map[string]any) (*nethernet.Credentials, error) {
-					return &nethernet.Credentials{ExpirationInSeconds: expiry}, nil
-				}),
-			}, nil).Start(serverChannel)
-			defer server.Stop()
-			client := jrpc2.NewClient(clientChannel, nil)
-			defer client.Close()
-			ctx, cancel := context.WithCancelCause(context.Background())
-			defer cancel(net.ErrClosed)
-			conn := &Conn{client: client, ctx: ctx}
-
-			if _, err := conn.Credentials(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid credentials") {
-				t.Fatalf("Credentials() error = %v, want invalid credentials for expiry %d", err, expiry)
+// A failed or malformed TURN answer yields no ICE servers instead of failing the dial.
+func TestCredentialsFailureYieldsNoServers(t *testing.T) {
+	for name, handle := range map[string]func() (json.RawMessage, error){
+		"call error":     func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") },
+		"missing expiry": func() (json.RawMessage, error) { return json.RawMessage(`{"TurnAuthServers":[]}`), nil },
+		"null expiry": func() (json.RawMessage, error) {
+			return json.RawMessage(`{"ExpirationInSeconds":null,"TurnAuthServers":[]}`), nil
+		},
+		"servers not list": func() (json.RawMessage, error) {
+			return json.RawMessage(`{"ExpirationInSeconds":60,"TurnAuthServers":null}`), nil
+		},
+		"no urls": func() (json.RawMessage, error) {
+			return json.RawMessage(`{"ExpirationInSeconds":60,"TurnAuthServers":[{"Username":"u","Password":"p","Urls":[]}]}`), nil
+		},
+		"no password": func() (json.RawMessage, error) {
+			return json.RawMessage(`{"ExpirationInSeconds":60,"TurnAuthServers":[{"Username":"u","Urls":["turn:a"]}]}`), nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, _ := credentialsConn(t, handle)
+			credentials, err := conn.Credentials(context.Background())
+			if err != nil {
+				t.Fatalf("Credentials() error = %v, want nil", err)
+			}
+			if len(credentials.ICEServers) != 0 {
+				t.Fatalf("Credentials() servers = %v, want none", credentials.ICEServers)
 			}
 		})
 	}
+}
+
+// Any numeric expiry is accepted; a non-positive one is already due, so the next call requests again.
+func TestCredentialsAcceptNonPositiveExpiry(t *testing.T) {
+	conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
+		return json.RawMessage(`{"ExpirationInSeconds":0,"TurnAuthServers":[{"Username":"u","Password":"p","Urls":["turn:a"]}]}`), nil
+	})
+	for range 2 {
+		credentials, err := conn.Credentials(context.Background())
+		if err != nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("Credentials() = %v, %v, want one server", credentials, err)
+		}
+	}
+	if *calls != 2 {
+		t.Fatalf("TURN requests = %d, want 2", *calls)
+	}
+}
+
+// Pings are notifications: they carry no id and an unanswered ping keeps the Conn open.
+func TestPingIsANotification(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		clientChannel, serverChannel := channel.Direct()
+		client := jrpc2.NewClient(clientChannel, nil)
+		defer client.Close()
+		defer serverChannel.Close()
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(net.ErrClosed)
+		conn := &Conn{client: client, ctx: ctx, cancel: cancel, d: Dialer{Log: slog.New(slog.DiscardHandler)}}
+		go conn.ping(time.Second)
+
+		for range 2 {
+			frame, err := serverChannel.Recv()
+			if err != nil {
+				t.Fatalf("receive ping: %v", err)
+			}
+			var ping map[string]json.RawMessage
+			if err := json.Unmarshal(frame, &ping); err != nil {
+				t.Fatalf("decode ping %s: %v", frame, err)
+			}
+			if _, ok := ping["id"]; ok || string(ping["method"]) != `"`+MethodSystemPing+`"` {
+				t.Fatalf("ping frame = %s, want a %s notification", frame, MethodSystemPing)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("Conn closed after unanswered pings: %v", context.Cause(ctx))
+		}
+		cancel(net.ErrClosed)
+	})
 }
 
 // acceptingNotifier accepts every signal delivered by a test.
