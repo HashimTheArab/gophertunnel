@@ -48,7 +48,9 @@ type Conn struct {
 	credentials *nethernet.Credentials
 	// credentialsExpiry is the expiry of the credentials, estimated from [nethernet.Credentials.ExpirationInSeconds].
 	credentialsExpiry time.Time
-	// credentialsMu guards credentials and credentialsExpiry from concurrent read/write access.
+	// credentialsRequest is the TURN request in flight, if any.
+	credentialsRequest *credentialsRequest
+	// credentialsMu guards credentials, credentialsExpiry and credentialsRequest.
 	credentialsMu sync.Mutex
 }
 
@@ -132,9 +134,8 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 // Credentials returns the TURN credentials last received from the server, requesting new ones once
 // they expire. Like vanilla, a failed request or malformed answer yields no ICE servers, so
 // connections still gather host candidates; only closure of the Conn or ctx returns an error.
+// Concurrent callers share one in-flight request, and each stops waiting when its ctx is done.
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
-	conn.credentialsMu.Lock()
-	defer conn.credentialsMu.Unlock()
 	if conn.ctx != nil {
 		select {
 		case <-conn.ctx.Done():
@@ -143,28 +144,67 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 		}
 	}
 
+	conn.credentialsMu.Lock()
 	if conn.credentials != nil && time.Now().Before(conn.credentialsExpiry) {
-		return conn.credentials, nil
+		credentials := conn.credentials
+		conn.credentialsMu.Unlock()
+		return credentials, nil
+	}
+	request := conn.credentialsRequest
+	if request == nil {
+		request = &credentialsRequest{done: make(chan struct{})}
+		conn.credentialsRequest = request
+		go conn.requestCredentials(request)
+	}
+	conn.credentialsMu.Unlock()
+
+	select {
+	case <-request.done:
+		return request.credentials, request.err
+	case <-ctx.Done():
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(ctx)}
+	case <-conn.ctx.Done():
+		return nil, context.Cause(conn.ctx)
+	}
+}
+
+// credentialsRequest is one TURN request whose result every waiting Credentials call shares.
+type credentialsRequest struct {
+	done        chan struct{} // closed once credentials and err are set
+	credentials *nethernet.Credentials
+	err         error
+}
+
+// requestCredentials performs request for the life of the Conn and caches its answer until expiry.
+func (conn *Conn) requestCredentials(request *credentialsRequest) {
+	var result json.RawMessage
+	err := conn.client.CallResult(conn.ctx, MethodSignalingCredentials, map[string]any{}, &result)
+	credentials, expiry := &nethernet.Credentials{}, time.Time{}
+	switch {
+	case err != nil && conn.ctx.Err() != nil:
+		request.err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
+	case err != nil:
+		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers",
+			slog.Any("error", &CredentialsError{Method: MethodSignalingCredentials, Err: err}))
+	default:
+		var parsed *nethernet.Credentials
+		if parsed, expiry, err = parseCredentials(result, time.Now()); err != nil {
+			conn.d.Log.Warn("invalid TURN credentials, gathering without relay servers", slog.Any("error", err))
+		} else {
+			credentials = parsed
+		}
+	}
+	if request.err == nil {
+		request.credentials = credentials
 	}
 
-	var result json.RawMessage
-	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &result); err != nil {
-		err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
-		if ctx.Err() != nil || (conn.ctx != nil && conn.ctx.Err() != nil) {
-			return nil, err
-		}
-		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers", slog.Any("error", err))
-		return &nethernet.Credentials{}, nil
-	}
-	credentials, expiry, err := parseCredentials(result, time.Now())
-	if err != nil {
-		conn.d.Log.Warn("invalid TURN credentials, gathering without relay servers", slog.Any("error", err))
-		credentials = &nethernet.Credentials{}
-	}
+	conn.credentialsMu.Lock()
 	if !expiry.IsZero() {
 		conn.credentials, conn.credentialsExpiry = credentials, expiry
 	}
-	return credentials, nil
+	conn.credentialsRequest = nil
+	conn.credentialsMu.Unlock()
+	close(request.done)
 }
 
 // parseCredentials validates a TURN answer as vanilla does. The expiry is now plus any numeric

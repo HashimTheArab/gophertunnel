@@ -102,6 +102,23 @@ func TestCredentialsAcceptNonPositiveExpiry(t *testing.T) {
 	}
 }
 
+// An unanswered TURN request never holds a caller past its own context.
+func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
+		<-release
+		return nil, errors.New("released")
+	})
+	go conn.refreshCredentials()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := conn.Credentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Credentials() error = %v, want context deadline exceeded", err)
+	}
+}
+
 // Pings are notifications: they carry no id and an unanswered ping keeps the Conn open.
 func TestPingIsANotification(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
