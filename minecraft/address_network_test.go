@@ -538,22 +538,16 @@ func TestDialerNamesTheTransportOfAFailedAddressDial(t *testing.T) {
 	}
 }
 
-// Wrapping a dial error names its transport without changing whether it is a net.Error.
-func TestTransportErrorKeepsNetErrorBehaviour(t *testing.T) {
+// A timeout wrapped in a TransportError is still found as a timing-out net.Error through Unwrap.
+func TestTransportErrorUnwrapsNetError(t *testing.T) {
 	t.Parallel()
-	timeout := &net.OpError{Op: "read", Net: "udp", Err: os.ErrDeadlineExceeded}
-	wrapped := wrapTransportError(RakNet{}, timeout)
-	if !os.IsTimeout(wrapped) {
-		t.Fatal("wrapped timeout no longer reports os.IsTimeout")
+	var err error = &TransportError{Network: RakNet{}, Err: &net.OpError{Op: "read", Net: "udp", Err: os.ErrDeadlineExceeded}}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("wrapped timeout %v is not found as a timing-out net.Error", err)
 	}
-	if netErr, ok := wrapped.(net.Error); !ok || !netErr.Timeout() {
-		t.Fatalf("wrapped timeout %T is not a timing-out net.Error", wrapped)
-	}
-	if transportErr, ok := errors.AsType[*TransportError](wrapped); !ok || !IsRakNet(transportErr.Network) || !errors.Is(wrapped, os.ErrDeadlineExceeded) {
+	if transportErr, ok := errors.AsType[*TransportError](err); !ok || !IsRakNet(transportErr.Network) || !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatal("wrapped timeout does not name RakNet or lost its cause")
-	}
-	if _, ok := wrapTransportError(RakNet{}, errors.New("kicked")).(net.Error); ok {
-		t.Fatal("a wrapped non-network error became a net.Error")
 	}
 }
 

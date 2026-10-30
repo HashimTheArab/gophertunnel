@@ -331,14 +331,14 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	if s, ok := network.(transportSelector); ok {
 		if network, err = s.Select(ctx, address); err != nil {
 			if fixed, ok := s.(interface{ fixedTransport() Network }); ok {
-				return nil, wrapTransportError(fixed.fixedTransport(), err)
+				return nil, &TransportError{Network: fixed.fixedTransport(), Err: err}
 			}
 			return nil, err
 		}
 		selected := network
 		defer func() {
 			if err != nil {
-				err = wrapTransportError(selected, err)
+				err = &TransportError{Network: selected, Err: err}
 			}
 		}()
 		if l, ok := network.(interface{ loginAddress() string }); ok {
