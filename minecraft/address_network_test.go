@@ -14,6 +14,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
+	"github.com/pion/ice/v4"
+	"github.com/pion/webrtc/v4"
 )
 
 func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
@@ -549,6 +552,83 @@ func TestTransportErrorUnwrapsNetError(t *testing.T) {
 	if transportErr, ok := errors.AsType[*TransportError](err); !ok || !IsRakNet(transportErr.Network) || !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatal("wrapped timeout does not name RakNet or lost its cause")
 	}
+}
+
+// A NetherNet dial whose ICE fails before the deadline makes the next Select join over RakNet
+// without probing: an unreachable WebRTC path must not lock the server out.
+func TestAddressNetworkRakNetAfterICEFailure(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	address := iceUnreachableServer(t, &probes)
+	var settings webrtc.SettingEngine
+	settings.SetICETimeouts(100*time.Millisecond, 300*time.Millisecond, 50*time.Millisecond)
+	network := AddressNetwork{
+		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
+			API:                     webrtc.NewAPI(webrtc.WithSettingEngine(settings)),
+			AllowIdentitylessServer: true,
+		}},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, ice.ErrCanceledByCaller) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want ICE failing before the deadline", err)
+	}
+	before := probes.Load()
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !IsRakNet(selected) || probes.Load() != before {
+		t.Fatalf("Select chose %T after probing %d more times, want RakNet without a probe", selected, probes.Load()-before)
+	}
+}
+
+// iceUnreachableServer returns the address of a NetherNet server that answers the join probe and the
+// offer, then stops: its ICE agent closes and its answer names a UDP socket that drops every packet.
+func iceUnreachableServer(t *testing.T, probes *atomic.Int32) string {
+	t.Helper()
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Close() })
+	silentHost, silentPort, _ := net.SplitHostPort(silent.LocalAddr().String())
+	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
+	t.Cleanup(func() { _ = signaling.Close() })
+	listener, err := (nethernet.ListenConfig{AllowAnonymous: true, DisableTrickleICE: true, Log: slog.New(slog.DiscardHandler)}).Listen(signaling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			probes.Add(1)
+		}
+		recorder := httptest.NewRecorder()
+		signaling.ServeHTTP(recorder, r)
+		if r.Method != http.MethodPost {
+			w.WriteHeader(recorder.Code)
+			_, _ = w.Write(recorder.Body.Bytes())
+			return
+		}
+		_ = listener.Close()
+		lines := strings.Split(recorder.Body.String(), "\r\n")
+		for i, line := range lines {
+			if fields := strings.Fields(line); strings.HasPrefix(line, "a=candidate:") && len(fields) > 5 {
+				fields[4], fields[5] = silentHost, silentPort
+				lines[i] = strings.Join(fields, " ")
+			}
+		}
+		w.WriteHeader(recorder.Code)
+		_, _ = io.WriteString(w, strings.Join(lines, "\r\n"))
+	}))
+	t.Cleanup(server.Close)
+	return server.Listener.Addr().String()
 }
 
 // A dial cancelled while hung on a stale RakNet answer makes the next Select probe again.
