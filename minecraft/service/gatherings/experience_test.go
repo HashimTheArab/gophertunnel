@@ -1,51 +1,69 @@
 package gatherings
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/realms"
 )
 
-// TestAddressDialAddress pins vanilla's choice of transport and of which fields it reads per protocol.
-func TestAddressDialAddress(t *testing.T) {
+// networks returns Networks whose JSON-RPC route opens signaling that fails with errSignaling.
+func networks() realms.Networks {
+	return realms.Networks{DialSignaling: func(context.Context, int) (minecraft.SignalingConn, error) { return nil, errSignaling }}
+}
+
+var errSignaling = errors.New("test signaling")
+
+// TestAddressNetwork pins which assignment fields vanilla reads per protocol and the network each gets.
+func TestAddressNetwork(t *testing.T) {
 	const id = "550e8400-e29b-41d4-a716-446655440000"
 	tests := []struct {
-		name          string
-		address       Address
-		wantTransport Transport
-		want          string
-		wantErr       bool
+		name    string
+		address Address
+		want    string // the network's type name
+		target  string
 	}{
-		{name: "Default", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "127.0.0.1", Port: 19132}, wantTransport: TransportRakNet, want: "127.0.0.1:19132"},
-		{name: "Default hostname", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportRakNet, want: "play.example.com:19132"},
-		{name: "missing protocol is Default", address: Address{IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportRakNet, want: "play.example.com:19132"},
-		{name: "Default ignores ID", address: Address{NetworkProtocol: NetworkProtocolDefault, NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportRakNet, want: "play.example.com:19132"},
-		{name: "Default ID only", address: Address{NetworkProtocol: NetworkProtocolDefault, NetherNetID: id}, wantErr: true},
-		{name: "Default missing port", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "play.example.com"}, wantErr: true},
-		{name: "Default whitespace host", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "   ", Port: 19132}, wantErr: true},
-		{name: "NetherNet", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNet, want: "play.example.com:19132"},
-		{name: "NetherNet ignores ID", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789", IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNet, want: "play.example.com:19132"},
-		{name: "NetherNet ID only", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789"}, wantErr: true},
-		{name: "NetherNet missing host", address: Address{NetworkProtocol: "NetherNet", Port: 19132}, wantErr: true},
-		{name: "NetherNet missing port", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com"}, wantErr: true},
-		{name: "NetherNet whitespace host", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "   ", Port: 19132}, wantErr: true},
-		{name: "NetherNet_JsonRpc", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id}, wantTransport: TransportNetherNetJSONRPC, want: id},
-		{name: "NetherNet_JsonRpc any case", address: Address{NetworkProtocol: "NETHERNET_JSONRPC", NetherNetID: id}, wantTransport: TransportNetherNetJSONRPC, want: id},
-		{name: "NetherNet_JsonRpc ignores host", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNetJSONRPC, want: id},
-		{name: "NetherNet_JsonRpc host only", address: Address{NetworkProtocol: "NetherNet_JsonRpc", IPv4Address: "play.example.com", Port: 19132}, wantErr: true},
-		{name: "NetherNet_JsonRpc whitespace ID", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: "   "}, wantErr: true},
-		{name: "unsupported", address: Address{NetworkProtocol: "QUIC", IPv4Address: "127.0.0.1", Port: 19132}, wantErr: true},
+		{name: "Default", address: Address{NetworkProtocol: "Default", IPv4Address: "127.0.0.1", Port: 19132}, want: "RakNet", target: "127.0.0.1:19132"},
+		{name: "Default hostname", address: Address{NetworkProtocol: "Default", IPv4Address: "play.example.com", Port: 19132}, want: "RakNet", target: "play.example.com:19132"},
+		{name: "missing protocol is Default", address: Address{IPv4Address: "play.example.com", Port: 19132}, want: "RakNet", target: "play.example.com:19132"},
+		{name: "Default ignores ID", address: Address{NetworkProtocol: "Default", NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, want: "RakNet", target: "play.example.com:19132"},
+		{name: "Default ID only", address: Address{NetworkProtocol: "Default", NetherNetID: id}},
+		{name: "Default missing port", address: Address{NetworkProtocol: "Default", IPv4Address: "play.example.com"}},
+		{name: "Default whitespace host", address: Address{NetworkProtocol: "Default", IPv4Address: "   ", Port: 19132}},
+		{name: "NetherNet", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com", Port: 19132}, want: "NetherNetHTTP", target: "play.example.com:19132"},
+		{name: "NetherNet ignores ID", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789", IPv4Address: "play.example.com", Port: 19132}, want: "NetherNetHTTP", target: "play.example.com:19132"},
+		{name: "NetherNet ID only", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789"}},
+		{name: "NetherNet missing port", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com"}},
+		{name: "NetherNet whitespace host", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "   ", Port: 19132}},
+		{name: "NetherNet_JsonRpc", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id}, want: "NetherNet", target: id},
+		{name: "NetherNet_JsonRpc ignores host", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, want: "NetherNet", target: id},
+		{name: "NetherNet_JsonRpc host only", address: Address{NetworkProtocol: "NetherNet_JsonRpc", IPv4Address: "play.example.com", Port: 19132}},
+		{name: "unsupported", address: Address{NetworkProtocol: "QUIC", IPv4Address: "127.0.0.1", Port: 19132}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			transport, got, err := test.address.DialAddress()
-			if (err != nil) != test.wantErr {
-				t.Fatalf("DialAddress() error = %v, wantErr %t", err, test.wantErr)
+			network, target, err := test.address.Network(networks())
+			if test.want == "" {
+				if err == nil {
+					t.Fatalf("Network() = %T, %q, want an error", network, target)
+				}
+				return
 			}
-			if transport != test.wantTransport || got != test.want {
-				t.Fatalf("DialAddress() = %d, %q, want %d, %q", transport, got, test.wantTransport, test.want)
+			if err != nil {
+				t.Fatalf("Network(): %v", err)
+			}
+			if got := reflect.TypeOf(network).Name(); got != test.want || target != test.target {
+				t.Fatalf("Network() = %s, %q, want %s, %q", got, target, test.want, test.target)
+			}
+			if n, ok := network.(minecraft.NetherNet); ok {
+				if _, err := n.DialSignaling(t.Context(), target); !errors.Is(err, errSignaling) {
+					t.Fatalf("NetherNet signaling error = %v, want the caller's", err)
+				}
 			}
 		})
 	}
@@ -57,9 +75,9 @@ func TestAddressUnmarshalJSONMissingProtocol(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"ipV4Address":"play.example.com","port":19132}`), &address); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	transport, got, err := address.DialAddress()
-	if err != nil || transport != TransportRakNet || got != "play.example.com:19132" {
-		t.Fatalf("DialAddress() = %d, %q, %v, want RakNet play.example.com:19132", transport, got, err)
+	network, target, err := address.Network(networks())
+	if _, ok := network.(minecraft.RakNet); err != nil || !ok || target != "play.example.com:19132" {
+		t.Fatalf("Network() = %T, %q, %v, want RakNet play.example.com:19132", network, target, err)
 	}
 }
 

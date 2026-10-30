@@ -10,6 +10,8 @@ import (
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/p2p"
+	"github.com/sandertv/gophertunnel/minecraft/realms"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/gatherings"
 )
@@ -54,18 +56,21 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error joining experience: %s", err))
 	}
-	transport, dialAddress, err := address.DialAddress()
+	network, target, err := address.Network(realms.Networks{
+		DialSignaling: func(ctx context.Context, connectionType int) (minecraft.SignalingConn, error) {
+			return p2p.DialClientSignaling(ctx, connectionType, src, p2p.ClientSignalingOptions{})
+		},
+	})
 	if err != nil {
-		panic(fmt.Sprintf("error resolving experience transport: %s", err))
-	}
-	if transport != gatherings.TransportRakNet {
-		panic("example does not configure NetherNet signaling")
+		panic(fmt.Sprintf("error resolving experience network: %s", err))
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
 	conn, err := minecraft.Dialer{
 		XBLClient:     xbl,
 		PlayFabClient: pf,
-	}.DialTimeout("raknet", dialAddress, time.Minute*5)
+	}.DialContextNetwork(ctx, network, target)
 	if err != nil {
 		panic(fmt.Sprintf("error connecting to experience: %s", err))
 	}

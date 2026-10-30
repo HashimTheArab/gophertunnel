@@ -3,14 +3,13 @@ package gatherings
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/realms"
 )
 
@@ -124,12 +123,11 @@ func (e *Experience) Join(ctx context.Context) (*Address, error) {
 
 // Address contains the network information returned by [Experience.Join].
 type Address struct {
-	// NetworkProtocol names the transport expected by the experience server.
-	// Empty means [NetworkProtocolDefault].
+	// NetworkProtocol names the transport expected by the experience server. Empty means DEFAULT.
 	NetworkProtocol realms.NetworkProtocol `json:"networkProtocol"`
-	// IPv4Address is the host for the Default and NetherNet protocols. It may be a hostname.
+	// IPv4Address is the host for the DEFAULT and NETHERNET protocols. It may be a hostname.
 	IPv4Address string `json:"ipV4Address"`
-	// NetherNetID is the network ID of a NetherNet_JsonRpc server.
+	// NetherNetID is the network ID of a NETHERNET_JSONRPC server.
 	NetherNetID string `json:"netherNetId"`
 	// Port is the port paired with IPv4Address.
 	Port uint16 `json:"port"`
@@ -138,46 +136,11 @@ type Address struct {
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
 }
 
-// Transport is how the vanilla client connects to an [Address]. Its zero value is invalid.
-type Transport uint8
-
-const (
-	// TransportRakNet connects to host:port over RakNet.
-	TransportRakNet Transport = iota + 1
-	// TransportNetherNet connects to host:port over NetherNet with HTTP signaling, without probing
-	// the address or falling back to RakNet. The caller chooses the http or https URL scheme.
-	TransportNetherNet
-	// TransportNetherNetJSONRPC connects to a NetherNet network ID over JSON-RPC signaling.
-	TransportNetherNetJSONRPC
-)
-
-// DialAddress returns the transport and address the vanilla client connects to: host:port, or the
-// NetherNet ID for [TransportNetherNetJSONRPC]. Fields the protocol does not use are ignored.
-func (a Address) DialAddress() (Transport, string, error) {
-	var transport Transport
-	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
-	case realms.NetworkProtocolDefault, "":
-		transport = TransportRakNet
-	case realms.NetworkProtocolNetherNet:
-		transport = TransportNetherNet
-	case realms.NetworkProtocolNetherNetJSONRPC:
-		if strings.TrimSpace(a.NetherNetID) == "" {
-			return 0, "", errors.New("service/gatherings: NetherNet_JsonRpc experience address has no NetherNet ID")
-		}
-		return TransportNetherNetJSONRPC, a.NetherNetID, nil
-	default:
-		return 0, "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
-	}
-	if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
-		return 0, "", errors.New("service/gatherings: experience address has no host or port")
-	}
-	return transport, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
+// Network returns the network and address to pass to [minecraft.Dialer.DialContextNetwork] for this
+// experience server, as [realms.Networks.Network] maps Gatherings protocols.
+func (a Address) Network(n realms.Networks) (minecraft.Network, string, error) {
+	return n.Network(realms.ServiceGatherings, a.NetworkProtocol, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), a.NetherNetID)
 }
-
-// NetworkProtocolDefault indicates that the experience should be contacted
-// using the default transport of the Bedrock Edition, RakNet. Gatherings uses
-// different casing on the wire than [realms.NetworkProtocolDefault].
-const NetworkProtocolDefault realms.NetworkProtocol = "Default"
 
 // DestinationInfo describes the destination selected by [Experience.Join].
 //
