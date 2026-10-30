@@ -268,6 +268,98 @@ func TestAddressNetworkServerTrustRefusesIdentitylessServers(t *testing.T) {
 	_ = conn.Close()
 }
 
+// An identityless server refused under ServerTrust is probed again, never joined over RakNet
+// instead, even with RakNetAfterNetherNetFailure.
+func TestAddressNetworkIdentitylessServerIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, func(line string) (string, bool) {
+		return line, !strings.HasPrefix(line, "a=identity:")
+	})
+	network := AddressNetwork{
+		ServerTrust:                 &FirstUseTrust{Confirm: (&confirmRecorder{answer: true}).confirm},
+		NetherNet:                   NetherNet{Log: slog.New(slog.DiscardHandler)},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); err == nil {
+		_ = conn.Close()
+		t.Fatal("identityless server accepted under ServerTrust")
+	}
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("refused identityless server chosen for RakNet, want it probed again")
+	}
+}
+
+// A server whose identity token the configured verifier fails to check, even with a network error,
+// is probed again rather than joined over RakNet.
+func TestAddressNetworkFailedIdentityVerificationIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, nil)
+	verifyErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	network := AddressNetwork{
+		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
+			VerifyServerIdentity: func(context.Context, *nethernet.RemoteIdentity) (*ecdsa.PublicKey, error) { return nil, verifyErr },
+		}},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, verifyErr) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want the verifier's error", err)
+	}
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("server failing identity verification chosen for RakNet, want it probed again")
+	}
+}
+
+// deadlineTrust accepts every server, but only once the dial's deadline has passed.
+type deadlineTrust struct{}
+
+func (deadlineTrust) TrustServer(ctx context.Context, _ string, _ *ecdsa.PublicKey) (bool, error) {
+	<-ctx.Done()
+	return true, nil
+}
+
+// A server reached and trusted only after the dial ran out of time is probed again, not joined over
+// RakNet: the deadline passed during trust, not while connecting.
+func TestAddressNetworkTrustOutlastingTheDialIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, nil)
+	network := AddressNetwork{
+		ServerTrust:                 deadlineTrust{},
+		NetherNet:                   NetherNet{Log: slog.New(slog.DiscardHandler)},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+		trustRedialAfter:            time.Minute,
+	}
+	dialCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(dialCtx, address); !errors.Is(err, context.DeadlineExceeded) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want the deadline that passed during trust", err)
+	}
+	selected, err := network.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("server reached before the deadline chosen for RakNet, want it probed again")
+	}
+}
+
 type slowTrust struct {
 	delay time.Duration
 	asked int
