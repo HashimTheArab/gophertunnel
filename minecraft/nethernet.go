@@ -263,7 +263,7 @@ func init() {
 // key saved at path, creating it on first use. Clients trust plain-HTTP servers on first use by key,
 // so a key that survives restarts is only ever confirmed once.
 func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Identity, error), error) {
-	key, err := loadOrCreateNetherNetKey(path)
+	key, err := netherNetKeys.loadOrCreate(path)
 	if err != nil {
 		return nil, fmt.Errorf("minecraft: NetherNet server key: %w", err)
 	}
@@ -273,12 +273,66 @@ func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Ide
 	}, nil
 }
 
-// loadOrCreateNetherNetKey reads the PEM key at path, or generates and saves one when the file does
-// not exist. A file that exists but cannot be read as a P-384 key is an error, never replaced.
-func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
-	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
+// netherNetKeyFile loads and creates listener key files. A key is only ever published where no file
+// exists, so concurrent first starts agree on one key; tests swap the primitives a filesystem may lack.
+type netherNetKeyFile struct {
+	link            func(oldname, newname string) error
+	renameNoReplace func(oldname, newname string) error
+	claimTimeout    time.Duration // how long an empty file is taken to be another creator's unpublished claim
+}
+
+// netherNetKeys is the netherNetKeyFile backed by the real filesystem primitives.
+var netherNetKeys = netherNetKeyFile{link: os.Link, renameNoReplace: renameNoReplace, claimTimeout: 2 * time.Second}
+
+// errNetherNetKeyClaimStale reports an empty key file that no creator filled within the claim timeout.
+var errNetherNetKeyClaimStale = errors.New("key file stayed empty")
+
+// loadOrCreate reads the PEM key at path, or generates and saves one when the file does not exist.
+// A non-empty file that is not a P-384 key is an error, never replaced.
+func (k netherNetKeyFile) loadOrCreate(path string) (*ecdsa.PrivateKey, error) {
+	key, err := k.load(path)
+	if errors.Is(err, errNetherNetKeyClaimStale) {
+		// The creator died between claiming and publishing. An empty file holds no key, so clearing it
+		// cannot change an identity a client has trusted.
+		if info, statErr := os.Stat(path); statErr == nil && info.Size() == 0 {
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+		}
+		err = fs.ErrNotExist
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
 		return key, err
 	}
+	if key, err = k.create(path); errors.Is(err, fs.ErrExist) {
+		// Another process published first; use its key.
+		return k.load(path)
+	}
+	return key, err
+}
+
+// load reads the key at path. An empty file is a claim another creator has not published over yet, so
+// load waits up to claimTimeout for it to fill before returning errNetherNetKeyClaimStale.
+func (k netherNetKeyFile) load(path string) (*ecdsa.PrivateKey, error) {
+	deadline := time.Now().Add(k.claimTimeout)
+	for {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if len(b) != 0 {
+			return parseNetherNetKey(path, b)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s: %w", path, errNetherNetKeyClaimStale)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// create generates a key and publishes it at path, returning an error matching fs.ErrExist when
+// another file is already there.
+func (k netherNetKeyFile) create(path string) (*ecdsa.PrivateKey, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -290,7 +344,7 @@ func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	// Write a complete, synced file first and link it into place, so a crash never leaves a partial
+	// Write a complete, synced file first and publish it whole, so a crash never leaves a partial
 	// key behind and a concurrent first start never reads one.
 	f, err := os.CreateTemp(filepath.Dir(path), ".nethernet-key-*")
 	if err != nil {
@@ -308,26 +362,46 @@ func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
-	if err := os.Link(f.Name(), path); errors.Is(err, fs.ErrExist) {
-		// Another process created the key first; use that one.
-		return readNetherNetKey(path)
-	} else if err != nil {
+	if err := k.publish(f.Name(), path); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-// readNetherNetKey parses a P-384 key from a SEC 1 or PKCS #8 PEM file.
-func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// publish moves the complete file at tmp to path, failing with an error matching fs.ErrExist if path
+// exists. Android denies apps hard links and FAT has none, so it falls back to a no-replace rename, then
+// to an exclusive empty claim renamed over: the only state at path other than a complete key.
+func (k netherNetKeyFile) publish(tmp, path string) error {
+	if err := k.link(tmp, path); err == nil || errors.Is(err, fs.ErrExist) {
+		return err
 	}
+	if err := k.renameNoReplace(tmp, path); err == nil || errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	claim, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	err = claim.Close()
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
+// parseNetherNetKey parses a P-384 key from the SEC 1 or PKCS #8 PEM contents b of the file at path.
+func parseNetherNetKey(path string, b []byte) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode(b)
 	if block == nil {
 		return nil, fmt.Errorf("%s: no PEM block", path)
 	}
-	var key *ecdsa.PrivateKey
+	var (
+		key *ecdsa.PrivateKey
+		err error
+	)
 	switch block.Type {
 	case "EC PRIVATE KEY":
 		key, err = x509.ParseECPrivateKey(block.Bytes)

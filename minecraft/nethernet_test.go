@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -391,10 +392,12 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal P-256 key: %v", err)
 	}
+	full := encodeNetherNetTestKey(t)
 	for name, contents := range map[string][]byte{
-		"not PEM":  []byte("not a key"),
-		"P-256":    pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
-		"RSA type": pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
+		"not PEM":   []byte("not a key"),
+		"P-256":     pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
+		"RSA type":  pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
+		"truncated": full[:len(full)/2],
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -414,6 +417,220 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Concurrent first starts all use the one key that reached disk, through every publish fallback.
+func TestNetherNetKeyFileConcurrentCreatorsAgree(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range netherNetKeyFileFallbacks(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "nethernet.pem")
+			keys := make([]*ecdsa.PrivateKey, 8)
+			var wg sync.WaitGroup
+			for i := range keys {
+				wg.Go(func() {
+					key, err := store.loadOrCreate(path)
+					if err != nil {
+						t.Errorf("creator %d: %v", i, err)
+					}
+					keys[i] = key
+				})
+			}
+			wg.Wait()
+			if t.Failed() {
+				return
+			}
+			saved, err := netherNetKeys.load(path)
+			if err != nil {
+				t.Fatalf("load saved key: %v", err)
+			}
+			for i, key := range keys {
+				if !key.Equal(saved) {
+					t.Fatalf("creator %d uses a key that is not the saved one", i)
+				}
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("read key dir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("key dir holds %d entries, want only the key", len(entries))
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat key: %v", err)
+			}
+			if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+				t.Fatalf("key file mode = %v, want 0600", perm)
+			}
+		})
+	}
+}
+
+// A creator that loses the race to an existing file reports it rather than replacing the key.
+func TestNetherNetKeyFilePublishNeverReplaces(t *testing.T) {
+	t.Parallel()
+
+	for name, store := range netherNetKeyFileFallbacks(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path, tmp := filepath.Join(dir, "nethernet.pem"), filepath.Join(dir, "tmp")
+			existing := encodeNetherNetTestKey(t)
+			if err := os.WriteFile(path, existing, 0o600); err != nil {
+				t.Fatalf("write existing key: %v", err)
+			}
+			if err := os.WriteFile(tmp, encodeNetherNetTestKey(t), 0o600); err != nil {
+				t.Fatalf("write new key: %v", err)
+			}
+			if err := store.publish(tmp, path); !errors.Is(err, fs.ErrExist) {
+				t.Fatalf("publish over existing key: err = %v, want fs.ErrExist", err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read key: %v", err)
+			}
+			if string(after) != string(existing) {
+				t.Fatal("existing key was replaced")
+			}
+		})
+	}
+}
+
+// An empty file is another creator's pending claim, so its published key is used instead of a new one.
+func TestNetherNetKeyFileWaitsForPendingClaim(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write claim: %v", err)
+	}
+	published := encodeNetherNetTestKey(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(50 * time.Millisecond)
+		tmp := filepath.Join(dir, "tmp")
+		if err := os.WriteFile(tmp, published, 0o600); err != nil {
+			t.Errorf("write published key: %v", err)
+			return
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			t.Errorf("publish over claim: %v", err)
+		}
+	}()
+	store := netherNetKeys
+	store.claimTimeout = 10 * time.Second
+	key, err := store.loadOrCreate(path)
+	<-done
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	want, err := parseNetherNetKey(path, published)
+	if err != nil {
+		t.Fatalf("parse published key: %v", err)
+	}
+	if !key.Equal(want) {
+		t.Fatal("pending claim was not waited for")
+	}
+}
+
+// A claim whose creator died before publishing holds no key, so it is replaced by a fresh one.
+func TestNetherNetKeyFileReplacesStaleClaim(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write claim: %v", err)
+	}
+	store := netherNetKeys
+	store.claimTimeout = 20 * time.Millisecond
+	key, err := store.loadOrCreate(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	saved, err := store.load(path)
+	if err != nil {
+		t.Fatalf("load saved key: %v", err)
+	}
+	if !key.Equal(saved) {
+		t.Fatal("returned key is not the saved one")
+	}
+}
+
+// The platform no-replace rename moves into a free name and refuses an occupied one.
+func TestRenameNoReplace(t *testing.T) {
+	t.Parallel()
+
+	if err := probeRenameNoReplace(t); err != nil {
+		t.Skipf("no-replace rename unavailable: %v", err)
+	}
+	dir := t.TempDir()
+	src, dst := filepath.Join(dir, "src"), filepath.Join(dir, "dst")
+	if err := os.WriteFile(src, []byte("new"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := renameNoReplace(src, dst); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("rename onto existing file: err = %v, want fs.ErrExist", err)
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "old" {
+		t.Fatalf("target after refused rename = %q, %v; want old", b, err)
+	}
+	if err := os.Remove(dst); err != nil {
+		t.Fatalf("remove target: %v", err)
+	}
+	if err := renameNoReplace(src, dst); err != nil {
+		t.Fatalf("rename onto free name: %v", err)
+	}
+	if b, err := os.ReadFile(dst); err != nil || string(b) != "new" {
+		t.Fatalf("target after rename = %q, %v; want new", b, err)
+	}
+}
+
+// netherNetKeyFileFallbacks returns key stores that each publish through one step of the fallback chain.
+func netherNetKeyFileFallbacks(t *testing.T) map[string]netherNetKeyFile {
+	noLink := func(string, string) error { return fs.ErrPermission } // as Android's SELinux policy answers apps
+	noRename := func(string, string) error { return errors.ErrUnsupported }
+	stores := map[string]netherNetKeyFile{
+		"link":  {link: os.Link, renameNoReplace: noRename, claimTimeout: 10 * time.Second},
+		"claim": {link: noLink, renameNoReplace: noRename, claimTimeout: 10 * time.Second},
+	}
+	if err := probeRenameNoReplace(t); err == nil {
+		stores["rename"] = netherNetKeyFile{link: noLink, renameNoReplace: renameNoReplace, claimTimeout: 10 * time.Second}
+	} else {
+		t.Logf("no-replace rename unavailable, skipping that fallback: %v", err)
+	}
+	return stores
+}
+
+// probeRenameNoReplace reports whether the platform no-replace rename works in a test directory.
+func probeRenameNoReplace(t *testing.T) error {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, nil, 0o600); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+	return renameNoReplace(src, filepath.Join(dir, "dst"))
+}
+
+// encodeNetherNetTestKey returns a fresh P-384 key as SEC 1 PEM.
+func encodeNetherNetTestKey(t *testing.T) []byte {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
 }
 
 // An offline dial still presents an identity signed by the connection key, since servers match it against the login.
