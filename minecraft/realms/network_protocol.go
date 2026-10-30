@@ -76,8 +76,8 @@ func realmNetherNetID(protocol NetworkProtocol, address string) (string, error) 
 }
 
 // Experience returns the network and address to pass to minecraft.Dialer.DialContextNetwork for an
-// experience server, reading only the address form protocol uses. Vanilla builds no signaling URL for
-// a NETHERNET assignment, so its host and port are probed, HTTPS first, as minecraft.ProbeNetherNet does.
+// experience server, reading only the address form protocol uses. A NETHERNET host and port are probed as
+// minecraft.ProbeNetherNet does, since its signaling may answer only on the default HTTPS or HTTP port.
 func (n Networks) Experience(protocol NetworkProtocol, host string, port uint16, id string) (minecraft.Network, string, error) {
 	switch ParseNetworkProtocol(string(protocol)) {
 	case NetworkProtocolDefault, "":
