@@ -335,7 +335,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		selected := network
 		defer func() {
 			if err != nil {
-				err = &TransportError{Network: selected, Err: err}
+				err = wrapTransportError(selected, err)
 			}
 		}()
 		if l, ok := network.(interface{ loginAddress() string }); ok {
