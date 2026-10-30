@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -194,6 +195,11 @@ type RealmAddress struct {
 		RegionName     string `json:"regionName"`
 		ServiceQuality int    `json:"serviceQuality"`
 	} `json:"sessionRegionData"`
+}
+
+// Network returns the network and address to pass to minecraft.Dialer.DialContextNetwork for this realm.
+func (a RealmAddress) Network(n Networks) (minecraft.Network, string, error) {
+	return n.Realm(a.NetworkProtocol, a.Address)
 }
 
 // Address requests the address and protocol used to connect to this realm. The optional ping results are sent to
