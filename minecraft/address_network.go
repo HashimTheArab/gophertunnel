@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"errors"
@@ -38,11 +39,17 @@ type AddressNetwork struct {
 	// only between networks whose clients reach servers the same way. When nil, every dial probes.
 	Probes *ProbeCache
 
+	probeHeadStart   time.Duration // overrides httpProbeHeadStart in tests
+	probeTimeout     time.Duration // overrides netherNetProbeTimeout in tests
 	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
 }
 
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
 const netherNetProbeTimeout = 6 * time.Second
+
+// httpProbeHeadStart is how long an HTTPS request runs alone before its HTTP fallback is asked
+// too. Vanilla waits for every HTTPS request, so a dropped 443 hides HTTP until the timeout.
+const httpProbeHeadStart = time.Second
 
 // defaultServerPort is the port vanilla probes when a server address has none.
 const defaultServerPort = 19132
@@ -61,7 +68,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	choice := probeChoice{cache: n.Probes, key: probeKey{host: strings.ToLower(host), port: port}}
 	choice.entry = n.Probes.lookup(choice.key)
 	if choice.entry == nil {
-		endpoint, err := probeNetherNet(ctx, client, probeBatches(host, port), netherNetProbeTimeout)
+		endpoint, err := n.probe(ctx, client, probeCandidates(host, port))
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -72,7 +79,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	} else if choice.entry.endpoint != "" {
 		// Vanilla still asks a remembered URL before every join, and joins over RakNet if it no
 		// longer answers.
-		if _, err := probeNetherNet(ctx, client, [][]string{{choice.entry.endpoint}}, netherNetProbeTimeout); err != nil {
+		if _, err := n.probe(ctx, client, [][]string{{choice.entry.endpoint}}); err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -83,6 +90,11 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 		return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
 	}
 	return httpNetherNet{nethernet: n.NetherNet, url: choice.entry.endpoint, endpoint: explicitPort(choice.entry.endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice}, nil
+}
+
+// probe runs probeNetherNet with the package timings unless a test overrides them.
+func (n AddressNetwork) probe(ctx context.Context, client *http.Client, candidates [][]string) (string, error) {
+	return probeNetherNet(ctx, client, candidates, cmp.Or(n.probeHeadStart, httpProbeHeadStart), cmp.Or(n.probeTimeout, netherNetProbeTimeout))
 }
 
 // probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport
@@ -227,66 +239,79 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the NetherNet HTTP signaling endpoint a server answers
-// on, probing as the vanilla client does: the HTTPS candidates together, then the HTTP ones once
-// all HTTPS requests have finished, within six seconds in total. A candidate answers when
-// GET {url}/v1/join returns a 2xx status. Port 19132 or zero also tries the scheme's default port.
+// on: the first whose GET {url}/v1/join returns a 2xx status within six seconds. Port 19132 or
+// zero also tries the schemes' default ports. Each HTTPS URL is followed by its HTTP fallback once
+// it fails or after a second; vanilla asks HTTP only once every HTTPS request has finished.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
-	return probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), netherNetProbeTimeout)
+	return probeNetherNet(ctx, probeHTTPClient(client), probeCandidates(host, port), httpProbeHeadStart, netherNetProbeTimeout)
 }
 
-func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, timeout time.Duration) (string, error) {
+// probeNetherNet probes every group of candidates at once, each group in order with headStart.
+// The first 2xx wins and cancels the rest, even a preferred candidate about to answer too.
+func probeNetherNet(ctx context.Context, client *http.Client, candidates [][]string, headStart, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	var errs []error
-	for _, batch := range batches {
-		endpoint, err := probeBatch(ctx, client, batch)
-		if err == nil {
-			return endpoint, nil
-		}
-		errs = append(errs, err)
-		if ctx.Err() != nil {
-			break
-		}
+	total := 0
+	for _, endpoints := range candidates {
+		total += len(endpoints)
 	}
-	return "", fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
-}
-
-// probeBatch requests every endpoint at once. The first to answer wins and cancels the others;
-// otherwise it returns once all have failed, since vanilla starts the next batch only then.
-func probeBatch(ctx context.Context, client *http.Client, endpoints []string) (string, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type result struct {
-		endpoint string
-		err      error
-	}
-	results := make(chan result, len(endpoints))
-	for _, endpoint := range endpoints {
-		go func() { results <- result{endpoint, probeEndpoint(ctx, client, endpoint)} }()
+	results := make(chan probeResult, total)
+	for _, endpoints := range candidates {
+		go probeInOrder(ctx, client, endpoints, headStart, results)
 	}
 	var errs []error
-	for range endpoints {
+	for range total {
 		if r := <-results; r.err != nil {
 			errs = append(errs, r.err)
 		} else {
 			return r.endpoint, nil
 		}
 	}
-	return "", errors.Join(errs...)
+	return "", fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
 }
 
-// probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch. Hosts are
-// formatted unbracketed as vanilla formats them, so an IPv6 literal never answers.
-func probeBatches(host string, port uint16) [][]string {
-	if port != 0 && port != defaultServerPort {
-		return [][]string{
-			{fmt.Sprintf("https://%s:%d", host, port)},
-			{fmt.Sprintf("http://%s:%d", host, port)},
+// probeResult is one candidate's answer; err is nil for a 2xx.
+type probeResult struct {
+	endpoint string
+	err      error
+}
+
+// probeInOrder sends one result per endpoint. Each endpoint is requested once the one before it
+// has failed or headStart has passed, and none is once ctx is done.
+func probeInOrder(ctx context.Context, client *http.Client, endpoints []string, headStart time.Duration, results chan<- probeResult) {
+	for i, endpoint := range endpoints {
+		if err := ctx.Err(); err != nil {
+			results <- probeResult{endpoint, fmt.Errorf("%s: %w", endpoint, err)}
+			continue
+		}
+		failed := make(chan struct{})
+		go func() {
+			err := probeEndpoint(ctx, client, endpoint)
+			if err != nil {
+				close(failed)
+			}
+			results <- probeResult{endpoint, err}
+		}()
+		if i < len(endpoints)-1 {
+			select {
+			case <-failed:
+			case <-time.After(headStart):
+			case <-ctx.Done():
+			}
 		}
 	}
+}
+
+// probeCandidates returns the base URLs vanilla probes, each HTTPS URL grouped with its HTTP
+// fallback: on the port given, and for 19132 or zero also on the schemes' default ports. Hosts are
+// formatted unbracketed as vanilla formats them, so an IPv6 literal never answers.
+func probeCandidates(host string, port uint16) [][]string {
+	if port != 0 && port != defaultServerPort {
+		return [][]string{{fmt.Sprintf("https://%s:%d", host, port), fmt.Sprintf("http://%s:%d", host, port)}}
+	}
 	return [][]string{
-		{fmt.Sprintf("https://%s:%d", host, defaultServerPort), "https://" + host},
-		{fmt.Sprintf("http://%s:%d", host, defaultServerPort), "http://" + host},
+		{fmt.Sprintf("https://%s:%d", host, defaultServerPort), fmt.Sprintf("http://%s:%d", host, defaultServerPort)},
+		{"https://" + host, "http://" + host},
 	}
 }
 
