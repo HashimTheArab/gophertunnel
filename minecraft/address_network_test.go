@@ -67,6 +67,28 @@ func TestAddressNetworkProbesIPv6Literal(t *testing.T) {
 	}
 }
 
+// Only failures release the next batch, so HTTP never starts behind an HTTPS answer.
+func TestProbeBatchReleasesOnlyOnFailure(t *testing.T) {
+	t.Parallel()
+	released := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	b := newProbeBatch(2)
+	b.fail(false)
+	if released(b.failed) || released(b.gameFailed) {
+		t.Fatal("next batch released while the game port has not failed")
+	}
+	b.fail(true)
+	if !released(b.failed) || !released(b.gameFailed) {
+		t.Fatal("next batch held after every request failed")
+	}
+}
+
 // The first endpoint of a batch to answer wins without waiting for one that never responds.
 func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 	t.Parallel()

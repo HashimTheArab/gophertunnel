@@ -282,8 +282,8 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 }
 
 // probeNetherNet returns the first endpoint to answer with a 2xx, cancelling the rest even if a
-// preferred one is about to answer. Each batch starts once the one before it has finished or
-// headStart has passed; its first endpoint, the game port, also starts once the one before fails.
+// preferred one is about to answer. Each batch starts once every request of the one before it has
+// failed or headStart has passed; its first endpoint, the game port, also once the one before fails.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -307,8 +307,10 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				} else {
 					err = probeEndpoint(ctx, client, endpoint)
 				}
-				batch.finish(j == 0, err)
 				results <- probeResult{endpoint, err}
+				if err != nil {
+					batch.fail(j == 0)
+				}
 			}()
 		}
 		before = batch
@@ -331,37 +333,39 @@ type probeResult struct {
 }
 
 // probeBatch tells the batch after it when to start.
+// A 2xx ends the whole probe, so only failures release the next batch.
 type probeBatch struct {
 	pending    atomic.Int32
-	finished   chan struct{} // closed once every request has finished
+	failed     chan struct{} // closed once every request has failed
 	gameFailed chan struct{} // closed once the request to the game port has failed
 }
 
 func newProbeBatch(size int) *probeBatch {
-	b := &probeBatch{finished: make(chan struct{}), gameFailed: make(chan struct{})}
+	b := &probeBatch{failed: make(chan struct{}), gameFailed: make(chan struct{})}
 	b.pending.Store(int32(size))
 	return b
 }
 
-// finish records one finished request; game reports whether it went to the game port.
-func (b *probeBatch) finish(game bool, err error) {
-	if game && err != nil {
+// fail records one failed request, after its result was sent; game reports whether it went to the
+// game port.
+func (b *probeBatch) fail(game bool) {
+	if game {
 		close(b.gameFailed)
 	}
 	if b.pending.Add(-1) == 0 {
-		close(b.finished)
+		close(b.failed)
 	}
 }
 
-// wait blocks until the next batch may start: once this one has finished, at startBy, or, for the
-// game port, once the game port here has failed.
+// wait blocks until the next batch may start: once every request here has failed, at startBy, or,
+// for the game port, once the game port here has failed.
 func (b *probeBatch) wait(ctx context.Context, startBy time.Time, game bool) {
 	var gameFailed <-chan struct{}
 	if game {
 		gameFailed = b.gameFailed
 	}
 	select {
-	case <-b.finished:
+	case <-b.failed:
 	case <-gameFailed:
 	case <-time.After(time.Until(startBy)):
 	case <-ctx.Done():
