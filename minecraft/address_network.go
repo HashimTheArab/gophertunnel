@@ -39,9 +39,10 @@ type AddressNetwork struct {
 	// Probes, when set, reuses probe answers. Answers can depend on HTTPClient, so share a cache
 	// only between networks whose clients reach servers the same way. When nil, every dial probes.
 	Probes *ProbeCache
-	// RakNetAfterNetherNetFailure makes a failed NetherNet dial store a RakNet answer in Probes, so
-	// later dials join over RakNet until it expires or fails too. Vanilla probes again instead.
-	// A cancelled dial or a server refused by ServerTrust is probed again either way.
+	// RakNetAfterNetherNetFailure makes a NetherNet dial that never reached the server, by timing
+	// out or failing to connect to signaling, store a RakNet answer in Probes until it expires or
+	// fails too. Any other failure, such as a refused identity or a server error, is probed again,
+	// as vanilla probes again after every failure.
 	RakNetAfterNetherNetFailure bool
 
 	probeHeadStart   time.Duration // overrides httpProbeHeadStart in tests
@@ -378,8 +379,10 @@ func probeBatches(host string, port uint16) [][]string {
 	}
 }
 
-// probeURL returns scheme://host:port, or scheme://host for port zero, bracketing an IPv6 literal.
+// probeURL returns scheme://host:port, or scheme://host for port zero, bracketing an IPv6 literal
+// whether or not host came bracketed.
 func probeURL(scheme, host string, port uint16) string {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
@@ -493,8 +496,24 @@ func (n NetherNetHTTP) transport() NetherNet {
 	if n.ServerTrust != nil {
 		transport.Dialer.AllowIdentitylessServer = false
 	}
+	if verify := transport.Dialer.VerifyServerToken; verify != nil {
+		transport.Dialer.VerifyServerToken = func(ctx context.Context, token, domain string) (*ecdsa.PublicKey, error) {
+			key, err := verify(ctx, token, domain)
+			if err != nil {
+				return nil, identityError{err}
+			}
+			return key, nil
+		}
+	}
 	return transport
 }
+
+// identityError is a failed server identity verification. It may wrap a network error or a
+// deadline, but never means the server was unreachable.
+type identityError struct{ error }
+
+// Unwrap ...
+func (e identityError) Unwrap() error { return e.error }
 
 func (n NetherNetHTTP) redialAfter() time.Duration {
 	if n.trustRedialAfter > 0 {
@@ -508,7 +527,7 @@ func (n NetherNetHTTP) redialAfter() time.Duration {
 // connection is followed by a redial, which does not ask again about keys already trusted.
 func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t NetherNet, endpoint string) (net.Conn, error)) (conn net.Conn, err error) {
 	defer func() {
-		if n.rakNetAfterFailure && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
+		if n.rakNetAfterFailure && unreachable(err) && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
 			n.choice.rakNetAfter(err)
 			return
 		}
@@ -555,6 +574,17 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 		trusted = append(trusted, key)
 		_ = conn.Close()
 	}
+}
+
+// unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
+// or a connection to the signaling endpoint failed. Rejections, identity verification failures
+// and server errors are not.
+func unreachable(err error) bool {
+	if _, ok := errors.AsType[identityError](err); ok {
+		return false
+	}
+	var opErr *net.OpError
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr)
 }
 
 // DialContext dials the endpoint; address is used only to find one when URL is empty.

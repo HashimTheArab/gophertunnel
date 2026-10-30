@@ -268,6 +268,62 @@ func TestAddressNetworkServerTrustRefusesIdentitylessServers(t *testing.T) {
 	_ = conn.Close()
 }
 
+// An identityless server refused under ServerTrust is probed again, never joined over RakNet
+// instead, even with RakNetAfterNetherNetFailure.
+func TestAddressNetworkIdentitylessServerIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, func(line string) (string, bool) {
+		return line, !strings.HasPrefix(line, "a=identity:")
+	})
+	network := AddressNetwork{
+		ServerTrust:                 &FirstUseTrust{Confirm: (&confirmRecorder{answer: true}).confirm},
+		NetherNet:                   NetherNet{Log: slog.New(slog.DiscardHandler)},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); err == nil {
+		_ = conn.Close()
+		t.Fatal("identityless server accepted under ServerTrust")
+	}
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("refused identityless server chosen for RakNet, want it probed again")
+	}
+}
+
+// A server whose identity token the configured verifier fails to check, even with a network error,
+// is probed again rather than joined over RakNet.
+func TestAddressNetworkFailedIdentityVerificationIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, nil)
+	verifyErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	network := AddressNetwork{
+		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
+			VerifyServerToken: func(context.Context, string, string) (*ecdsa.PublicKey, error) { return nil, verifyErr },
+		}},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, verifyErr) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want the verifier's error", err)
+	}
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("server failing identity verification chosen for RakNet, want it probed again")
+	}
+}
+
 type slowTrust struct {
 	delay time.Duration
 	asked int
