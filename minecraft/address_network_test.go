@@ -985,3 +985,18 @@ func TestNetherNetHTTPNeverFallsBackToRakNet(t *testing.T) {
 		t.Fatalf("dial waited for its deadline: %v", err)
 	}
 }
+
+// A Dialer whose NetherNetHTTP finds no endpoint still names NetherNet as the failed transport.
+func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := (Dialer{}).DialContextNetwork(ctx, NetherNetHTTP{NetherNet: openNetherNet}, closedTCPAddress(t))
+	transportErr, ok := errors.AsType[*TransportError](err)
+	if !ok {
+		t.Fatalf("dial error = %v, want a TransportError", err)
+	}
+	if _, ok := transportErr.Network.(NetherNetHTTP); !ok || IsRakNet(transportErr.Network) {
+		t.Fatalf("failed transport = %T, want NetherNetHTTP", transportErr.Network)
+	}
+}

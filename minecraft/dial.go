@@ -330,6 +330,10 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	loginAddress := address
 	if s, ok := network.(transportSelector); ok {
 		if network, err = s.Select(ctx, address); err != nil {
+			if fixed, ok := s.(NetherNetHTTP); ok {
+				// Its transport is NetherNet even when no endpoint answered.
+				return nil, &TransportError{Network: fixed, Err: err}
+			}
 			return nil, err
 		}
 		selected := network

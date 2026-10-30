@@ -465,6 +465,7 @@ func (n NetherNetHTTP) Select(ctx context.Context, address string) (Network, err
 	return n.resolve(ctx, address)
 }
 
+// resolve returns n with URL set, probing address for it when it is empty.
 func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHTTP, error) {
 	if n.URL != "" {
 		return n, nil
@@ -536,10 +537,10 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 	if n, err = n.resolve(ctx, address); err != nil {
 		return nil, err
 	}
-	endpoint := explicitPort(n.URL)
+	target := explicitPort(n.URL)
 	var trusted []*ecdsa.PublicKey
 	for {
-		conn, err := dial(n.transport(), endpoint)
+		conn, err := dial(n.transport(), target)
 		if err != nil || n.ServerTrust == nil {
 			return conn, err
 		}
