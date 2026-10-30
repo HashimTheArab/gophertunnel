@@ -413,6 +413,41 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 	}
 }
 
+// A failed Dialer dial over an AddressNetwork names the transport it used, keeping its error text.
+func TestDialerNamesTheTransportOfAFailedAddressDial(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, "OK")
+			return
+		}
+		http.Error(w, "no session", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	for name, test := range map[string]struct {
+		address string
+		rakNet  bool
+	}{
+		"raknet":    {closedTCPAddress(t), true},
+		"nethernet": {server.Listener.Addr().String(), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			network := AddressNetwork{NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
+			_, err := Dialer{}.DialContextNetwork(ctx, network, test.address)
+			transportErr, ok := errors.AsType[*TransportError](err)
+			if !ok {
+				t.Fatalf("dial error %v does not name its transport", err)
+			}
+			if IsRakNet(transportErr.Network) != test.rakNet || err.Error() != transportErr.Err.Error() {
+				t.Fatalf("dial error names %T as %q, want RakNet = %v and the unwrapped text", transportErr.Network, err, test.rakNet)
+			}
+		})
+	}
+}
+
 // A dial cancelled while hung on a stale RakNet answer makes the next Select probe again.
 func TestAddressNetworkReprobesAfterCancelledRakNetDial(t *testing.T) {
 	t.Parallel()
