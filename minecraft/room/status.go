@@ -38,6 +38,16 @@ type StatusProvider interface {
 	RoomStatus() Status
 }
 
+func NewStatusProvider(status Status) StatusProvider {
+	return statusProvider{status: status}
+}
+
+type statusProvider struct{ status Status }
+
+func (p statusProvider) RoomStatus() Status {
+	return p.status
+}
+
 func DefaultStatus() Status {
 	levelID := make([]byte, 8)
 	_, _ = rand.Read(levelID)
