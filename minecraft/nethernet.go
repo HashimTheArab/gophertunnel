@@ -395,11 +395,10 @@ func (k netherNetKeyFile) publish(tmp, path string) error {
 	if err != nil {
 		return err
 	}
+	// Closing unlocks the claim, so one left by a failure below is removed by the next reader.
 	defer claim.Close()
 	locked, err := k.tryLock(claim)
 	if err != nil {
-		// No one can lock the claim, so no one else removes it either.
-		_ = os.Remove(path)
 		return err
 	}
 	// A reader that found the claim before it was locked may have removed it; it is no longer ours.
@@ -408,11 +407,7 @@ func (k netherNetKeyFile) publish(tmp, path string) error {
 	if !locked || heldErr != nil || curErr != nil || !os.SameFile(held, cur) {
 		return &fs.PathError{Op: "claim", Path: path, Err: fs.ErrExist}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(path)
-		return err
-	}
-	return nil
+	return os.Rename(tmp, path)
 }
 
 // parseNetherNetKey parses a P-384 key from the SEC 1 or PKCS #8 PEM contents b of the file at path.

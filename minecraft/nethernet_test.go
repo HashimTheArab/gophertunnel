@@ -572,6 +572,29 @@ func TestNetherNetKeyFileReplacesDeadClaim(t *testing.T) {
 	}
 }
 
+// A claim left by a publish that failed after claiming is unlocked, so the next load replaces it.
+func TestNetherNetKeyFileRecoversFailedPublish(t *testing.T) {
+	t.Parallel()
+	requireTryLock(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	store := netherNetKeyFileFallbacks(t)["claim"]
+	if err := store.publish(filepath.Join(dir, "missing"), path); err == nil || errors.Is(err, fs.ErrExist) {
+		t.Fatalf("publish of a missing file: err = %v, want a rename failure", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+		t.Fatalf("failed publish did not leave its empty claim: %v", err)
+	}
+	key, err := store.loadOrCreate(path)
+	if err != nil {
+		t.Fatalf("load after failed publish: %v", err)
+	}
+	if !key.Equal(readNetherNetTestKey(t, path)) {
+		t.Fatal("returned key is not the saved one")
+	}
+}
+
 // A creator paused between claiming and locking adopts the key published after its claim was cleared,
 // rather than renaming its own key over it.
 func TestNetherNetKeyFilePausedCreatorKeepsReplacement(t *testing.T) {
