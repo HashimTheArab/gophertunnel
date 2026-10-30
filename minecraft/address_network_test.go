@@ -33,6 +33,35 @@ func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 			t.Fatalf("probeBatches with port %d = %q, want %q", port, got, want)
 		}
 	}
+	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
+	if got := probeBatches("::1", 0); !reflect.DeepEqual(got, want) {
+		t.Fatalf("probeBatches for an IPv6 literal = %q, want %q", got, want)
+	}
+}
+
+// An IPv6 literal, with or without its port, is probed at a bracketed URL that can answer.
+func TestAddressNetworkProbesIPv6Literal(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "OK")
+	})}}
+	server.Start()
+	t.Cleanup(server.Close)
+
+	selected, err := AddressNetwork{}.Select(t.Context(), listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
+		t.Fatalf("Select = %#v, want NetherNet at %q", selected, server.URL)
+	}
+	if host, port := splitServerAddress("[::1]"); host != "::1" || port != 0 {
+		t.Fatalf("splitServerAddress([::1]) = %q, %d; want ::1 without a port", host, port)
+	}
 }
 
 // The first endpoint of a batch to answer wins without waiting for one that never responds.
