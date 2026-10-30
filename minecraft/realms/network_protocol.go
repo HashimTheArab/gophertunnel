@@ -52,13 +52,26 @@ type Networks struct {
 // Realm returns the network and address to pass to minecraft.Dialer.DialContextNetwork for a realm
 // whose join response names protocol and address.
 func (n Networks) Realm(protocol NetworkProtocol, address string) (minecraft.Network, string, error) {
+	id, err := realmNetherNetID(protocol, address)
+	if err != nil {
+		return nil, "", err
+	}
+	return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+}
+
+// realmNetherNetID returns the NetherNet ID a realm whose join response names protocol and address is
+// reached at through JSON-RPC signaling, the only way vanilla joins a realm.
+func realmNetherNetID(protocol NetworkProtocol, address string) (string, error) {
 	switch ParseNetworkProtocol(string(protocol)) {
 	case NetworkProtocolNetherNetJSONRPC:
-		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, address)
+		if id := strings.TrimSpace(address); id != "" {
+			return id, nil
+		}
+		return "", errors.New("realms: server address has no NetherNet ID")
 	case NetworkProtocolNetherNet:
-		return nil, "", errors.New("realms: legacy NetherNet realms are no longer supported")
+		return "", errors.New("realms: legacy NetherNet realms are no longer supported")
 	default:
-		return nil, "", fmt.Errorf("realms: RakNet is no longer supported in Realms (network protocol %q)", protocol)
+		return "", fmt.Errorf("realms: RakNet is no longer supported in Realms (network protocol %q)", protocol)
 	}
 }
 

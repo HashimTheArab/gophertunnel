@@ -167,6 +167,20 @@ func TestNetworksSignaled(t *testing.T) {
 	}
 }
 
+// NetherNetID accepts exactly the realms Network can dial and returns the ID Network dials.
+func TestRealmAddressNetherNetID(t *testing.T) {
+	for _, protocol := range []NetworkProtocol{"NETHERNET_JSONRPC", "NETHERNET", "DEFAULT", "", "QUIC"} {
+		for _, address := range []string{testID, " " + testID + " ", " "} {
+			a := RealmAddress{Address: address, NetworkProtocol: protocol}
+			_, wantID, wantErr := a.Network(testNetworks())
+			id, err := a.NetherNetID()
+			if (err != nil) != (wantErr != nil) || id != wantID {
+				t.Fatalf("NetherNetID(%q, %q) = %q, %v; Network gives %q, %v", protocol, address, id, err, wantID, wantErr)
+			}
+		}
+	}
+}
+
 // A Realms join response carries the NetherNet ID in its one address field.
 func TestRealmAddressNetwork(t *testing.T) {
 	n := testNetworks()
