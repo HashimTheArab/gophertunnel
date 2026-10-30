@@ -67,7 +67,7 @@ func TestProbeNetherNetDoesNotWaitForSilentHTTPS(t *testing.T) {
 		headStart  time.Duration
 	}{
 		"https fails on the game port": {[][]string{{gameHTTPS, game.URL}, {silent443, silent80}}, netherNetProbeTimeout},
-		"https never answers":          {[][]string{{silent443, game.URL}, {silent443, silent80}}, 100 * time.Millisecond},
+		"https never answers":          {[][]string{{silent443, game.URL}, {silent443, silent80}}, httpProbeHeadStart},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -77,7 +77,7 @@ func TestProbeNetherNetDoesNotWaitForSilentHTTPS(t *testing.T) {
 			if err != nil || endpoint != game.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, game.URL)
 			}
-			if elapsed > time.Second {
+			if elapsed > netherNetProbeTimeout/2 {
 				t.Fatalf("probeNetherNet took %v, want HTTP asked well before the %v timeout", elapsed, netherNetProbeTimeout)
 			}
 		})
