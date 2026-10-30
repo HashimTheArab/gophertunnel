@@ -302,7 +302,7 @@ func TestAddressNetworkFailedIdentityVerificationIsNotJoinedOverRakNet(t *testin
 	verifyErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
 	network := AddressNetwork{
 		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
-			VerifyServerToken: func(context.Context, string, string) (*ecdsa.PublicKey, error) { return nil, verifyErr },
+			VerifyServerIdentity: func(context.Context, *nethernet.RemoteIdentity) (*ecdsa.PublicKey, error) { return nil, verifyErr },
 		}},
 		Probes:                      &ProbeCache{},
 		RakNetAfterNetherNetFailure: true,

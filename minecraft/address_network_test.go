@@ -464,14 +464,15 @@ func TestUnreachableNetherNetDial(t *testing.T) {
 	t.Parallel()
 	refused := &url.Error{Op: "Post", URL: "http://example.com/v1/join", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
 	for err, want := range map[error]bool{
-		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded): true,
-		fmt.Errorf("signal offer: %w", refused):                                 true,
-		errors.New("identityless answer SDP not allowed"):                       false,
-		errors.New("signal offer: POST http://example.com/v1/join: 500"):        false,
-		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):     true, // excluded by the caller
-		fmt.Errorf("verify server identity token: %w", identityError{refused}):  false,
-		identityError{context.DeadlineExceeded}:                                 false,
-		context.Canceled:                                                        false,
+		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded):   true,
+		fmt.Errorf("signal offer: %w", refused):                                   true,
+		errors.New("identityless answer SDP not allowed"):                         false,
+		errors.New("signal offer: POST http://example.com/v1/join: 500"):          false,
+		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):       true, // excluded by the caller
+		fmt.Errorf("verify server identity token: %w", identityError{refused}):    false,
+		identityError{context.DeadlineExceeded}:                                   false,
+		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}: false,
+		context.Canceled: false,
 	} {
 		if got := unreachable(err); got != want {
 			t.Errorf("unreachable(%v) = %v, want %v", err, got, want)
