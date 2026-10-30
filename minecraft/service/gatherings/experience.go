@@ -139,7 +139,7 @@ type Address struct {
 
 // DialAddress returns the address expected by the transport selected through
 // [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
-// assignments use [Address.NetherNetID].
+// assignments use [Address.NetherNetID] or a host:port HTTP signaling endpoint.
 func (a Address) DialAddress() (string, error) {
 	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
 	case realms.NetworkProtocolDefault:
@@ -150,6 +150,9 @@ func (a Address) DialAddress() (string, error) {
 	case realms.NetworkProtocolNetherNet, realms.NetworkProtocolNetherNetJSONRPC:
 		if address := strings.TrimSpace(a.NetherNetID); address != "" {
 			return address, nil
+		}
+		if realms.ParseNetworkProtocol(string(a.NetworkProtocol)) == realms.NetworkProtocolNetherNet && strings.TrimSpace(a.IPv4Address) != "" && a.Port != 0 {
+			return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
 		}
 		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
 	default:

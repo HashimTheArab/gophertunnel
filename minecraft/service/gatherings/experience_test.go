@@ -39,6 +39,11 @@ func TestAddressDialAddress(t *testing.T) {
 			},
 			want: "123456789",
 		},
+		{name: "NetherNet HTTP", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com", Port: 19132}, want: "play.example.com:19132"},
+		{name: "NetherNet ID takes priority", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789", IPv4Address: "play.example.com", Port: 19132}, want: "123456789"},
+		{name: "NetherNet missing host", address: Address{NetworkProtocol: "NetherNet", Port: 19132}, wantErr: true},
+		{name: "NetherNet missing port", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com"}, wantErr: true},
+		{name: "JSON-RPC requires ID", address: Address{NetworkProtocol: "NetherNet_JsonRpc", IPv4Address: "play.example.com", Port: 19132}, wantErr: true},
 		{
 			name: "unsupported",
 			address: Address{
