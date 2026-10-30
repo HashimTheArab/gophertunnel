@@ -69,7 +69,8 @@ func route(t *testing.T, n Networks, network minecraft.Network) string {
 }
 
 const (
-	testHostPort = "play.example.com:19132"
+	testHost     = "play.example.com"
+	testHostPort = testHost + ":19132"
 	testID       = "550e8400-e29b-41d4-a716-446655440000"
 )
 
@@ -114,27 +115,28 @@ func TestNetworksExperience(t *testing.T) {
 	tests := []struct {
 		name        string
 		protocol    NetworkProtocol
-		hostPort    string
+		host        string
+		port        uint16
 		id          string
 		wantRoute   string
 		wantAddress string
 	}{
-		{name: "Default", protocol: "Default", hostPort: testHostPort, id: testID, wantRoute: "raknet", wantAddress: testHostPort},
-		{name: "missing protocol", hostPort: testHostPort, wantRoute: "raknet", wantAddress: testHostPort},
-		{name: "NetherNet", protocol: "NetherNet", hostPort: testHostPort, id: testID, wantRoute: "http", wantAddress: testHostPort},
-		{name: "NetherNet_JsonRpc", protocol: "NetherNet_JsonRpc", hostPort: testHostPort, id: testID, wantRoute: "jsonrpc", wantAddress: testID},
+		{name: "Default", protocol: "Default", host: testHost, port: 19132, id: testID, wantRoute: "raknet", wantAddress: testHostPort},
+		{name: "missing protocol", host: testHost, port: 19132, wantRoute: "raknet", wantAddress: testHostPort},
+		{name: "IPv6 literal", protocol: "Default", host: "::1", port: 19132, wantRoute: "raknet", wantAddress: "[::1]:19132"},
+		{name: "NetherNet", protocol: "NetherNet", host: testHost, port: 19132, id: testID, wantRoute: "http", wantAddress: testHostPort},
+		{name: "NetherNet_JsonRpc", protocol: "NetherNet_JsonRpc", host: testHost, port: 19132, id: testID, wantRoute: "jsonrpc", wantAddress: testID},
 		{name: "NetherNet_JsonRpc padded ID", protocol: "NetherNet_JsonRpc", id: "\t" + testID + " ", wantRoute: "jsonrpc", wantAddress: testID},
-		{name: "Default without port", protocol: "Default", hostPort: "play.example.com"},
-		{name: "Default port zero", protocol: "Default", hostPort: "play.example.com:0"},
-		{name: "Default blank host", protocol: "Default", hostPort: "   :19132"},
-		{name: "NetherNet without host", protocol: "NetherNet", hostPort: ":19132", id: testID},
-		{name: "NetherNet_JsonRpc without ID", protocol: "NetherNet_JsonRpc", hostPort: testHostPort},
-		{name: "unknown protocol", protocol: "QUIC", hostPort: testHostPort, id: testID},
+		{name: "Default port zero", protocol: "Default", host: testHost},
+		{name: "Default blank host", protocol: "Default", host: "   ", port: 19132},
+		{name: "NetherNet without host", protocol: "NetherNet", port: 19132, id: testID},
+		{name: "NetherNet_JsonRpc without ID", protocol: "NetherNet_JsonRpc", host: testHost, port: 19132},
+		{name: "unknown protocol", protocol: "QUIC", host: testHost, port: 19132, id: testID},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			n := testNetworks()
-			network, address, err := n.Experience(test.protocol, test.hostPort, test.id)
+			network, address, err := n.Experience(test.protocol, test.host, test.port, test.id)
 			if test.wantRoute == "" {
 				if err == nil {
 					t.Fatalf("Experience() = %T, %q, want an error", network, address)

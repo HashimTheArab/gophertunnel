@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/sandertv/gophertunnel/minecraft"
@@ -25,16 +26,6 @@ const (
 // ParseNetworkProtocol converts a network protocol string to a NetworkProtocol value.
 func ParseNetworkProtocol(protocol string) NetworkProtocol {
 	return NetworkProtocol(strings.ToUpper(strings.TrimSpace(protocol)))
-}
-
-// Valid reports whether the protocol is one of the known constants.
-func (p NetworkProtocol) Valid() bool {
-	switch ParseNetworkProtocol(string(p)) {
-	case NetworkProtocolDefault, NetworkProtocolNetherNet, NetworkProtocolNetherNetJSONRPC:
-		return true
-	default:
-		return false
-	}
 }
 
 // Networks holds the caller's transports for dialing a server a join response names. Realms and
@@ -72,12 +63,12 @@ func (n Networks) Realm(protocol NetworkProtocol, address string) (minecraft.Net
 // Experience returns the network and address to pass to minecraft.Dialer.DialContextNetwork for an
 // experience server, reading only the address form protocol uses. A NETHERNET assignment names no URL
 // scheme, so HTTPS is asked before HTTP, as minecraft.ProbeNetherNet does.
-func (n Networks) Experience(protocol NetworkProtocol, hostPort, id string) (minecraft.Network, string, error) {
+func (n Networks) Experience(protocol NetworkProtocol, host string, port uint16, id string) (minecraft.Network, string, error) {
 	switch ParseNetworkProtocol(string(protocol)) {
 	case NetworkProtocolDefault, "":
-		return hostPortNetwork(n.RakNet, hostPort)
+		return hostPortNetwork(n.RakNet, host, port)
 	case NetworkProtocolNetherNet:
-		return hostPortNetwork(minecraft.NetherNetHTTP{NetherNet: n.NetherNet, HTTPClient: n.HTTPClient}, hostPort)
+		return hostPortNetwork(minecraft.NetherNetHTTP{NetherNet: n.NetherNet, HTTPClient: n.HTTPClient}, host, port)
 	case NetworkProtocolNetherNetJSONRPC:
 		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
 	default:
@@ -85,13 +76,12 @@ func (n Networks) Experience(protocol NetworkProtocol, hostPort, id string) (min
 	}
 }
 
-// hostPortNetwork returns network with hostPort once it names both a host and a nonzero port.
-func hostPortNetwork(network minecraft.Network, hostPort string) (minecraft.Network, string, error) {
-	host, port, err := net.SplitHostPort(hostPort)
-	if err != nil || strings.TrimSpace(host) == "" || strings.TrimLeft(port, "0") == "" {
-		return nil, "", fmt.Errorf("realms: server address %q has no host or port", hostPort)
+// hostPortNetwork returns network with host:port once host is not blank and port is not zero.
+func hostPortNetwork(network minecraft.Network, host string, port uint16) (minecraft.Network, string, error) {
+	if strings.TrimSpace(host) == "" || port == 0 {
+		return nil, "", fmt.Errorf("realms: server address %q:%d has no host or port", host, port)
 	}
-	return network, hostPort, nil
+	return network, net.JoinHostPort(host, strconv.Itoa(int(port))), nil
 }
 
 // Signaled returns NetherNet that reaches the NetherNet ID id through Xbox signaling of
