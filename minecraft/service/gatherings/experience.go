@@ -3,10 +3,10 @@ package gatherings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
@@ -124,48 +124,53 @@ func (e *Experience) Join(ctx context.Context) (*Address, error) {
 // Address contains the network information returned by [Experience.Join].
 type Address struct {
 	// NetworkProtocol names the transport expected by the experience server.
-	// Most experiences use [NetworkProtocolDefault] at the moment.
+	// Empty means [NetworkProtocolDefault].
 	NetworkProtocol realms.NetworkProtocol `json:"networkProtocol"`
-	// IPv4Address is the IPv4 address of a RakNet server.
+	// IPv4Address is the host for the Default and NetherNet protocols. It may be a hostname.
 	IPv4Address string `json:"ipV4Address"`
-	// NetherNetID is the network ID of a NetherNet server.
+	// NetherNetID is the network ID of a NetherNet_JsonRpc server.
 	NetherNetID string `json:"netherNetId"`
-	// Port is the UDP port of the resolved server.
+	// Port is the port paired with IPv4Address.
 	Port uint16 `json:"port"`
 	// DestinationInfo contains additional identifiers for the resolved
 	// destination.
 	DestinationInfo DestinationInfo `json:"destinationInfo"`
 }
 
-// DialAddress returns the address expected by the transport selected through
-// [Address.NetworkProtocol]. RakNet assignments use host:port, while NetherNet
-// assignments use [Address.NetherNetID] or a host:port HTTP signaling endpoint.
-func (a Address) DialAddress() (string, error) {
-	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
-	case realms.NetworkProtocolDefault:
-		if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
-			return "", fmt.Errorf("service/gatherings: invalid RakNet experience address")
-		}
-		return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
-	case realms.NetworkProtocolNetherNet, realms.NetworkProtocolNetherNetJSONRPC:
-		if address := strings.TrimSpace(a.NetherNetID); address != "" {
-			return address, nil
-		}
-		if realms.ParseNetworkProtocol(string(a.NetworkProtocol)) == realms.NetworkProtocolNetherNet && strings.TrimSpace(a.IPv4Address) != "" && a.Port != 0 {
-			return net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
-		}
-		return "", fmt.Errorf("service/gatherings: invalid NetherNet experience address")
-	default:
-		return "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
-	}
-}
+// Transport is how the vanilla client connects to an [Address]. Its zero value is invalid.
+type Transport uint8
 
-// String returns the dial address, or an empty string if the assignment is
-// invalid or uses an unsupported network protocol. Call [Address.DialAddress]
-// when the error is relevant.
-func (a Address) String() string {
-	address, _ := a.DialAddress()
-	return address
+const (
+	// TransportRakNet connects to host:port over RakNet.
+	TransportRakNet Transport = iota + 1
+	// TransportNetherNet connects to host:port over NetherNet with HTTP signaling, without probing
+	// the address or falling back to RakNet. The caller chooses the http or https URL scheme.
+	TransportNetherNet
+	// TransportNetherNetJSONRPC connects to a NetherNet network ID over JSON-RPC signaling.
+	TransportNetherNetJSONRPC
+)
+
+// DialAddress returns the transport and address the vanilla client connects to: host:port, or the
+// NetherNet ID for [TransportNetherNetJSONRPC]. Fields the protocol does not use are ignored.
+func (a Address) DialAddress() (Transport, string, error) {
+	var transport Transport
+	switch realms.ParseNetworkProtocol(string(a.NetworkProtocol)) {
+	case realms.NetworkProtocolDefault, "":
+		transport = TransportRakNet
+	case realms.NetworkProtocolNetherNet:
+		transport = TransportNetherNet
+	case realms.NetworkProtocolNetherNetJSONRPC:
+		if a.NetherNetID == "" {
+			return 0, "", errors.New("service/gatherings: NetherNet_JsonRpc experience address has no NetherNet ID")
+		}
+		return TransportNetherNetJSONRPC, a.NetherNetID, nil
+	default:
+		return 0, "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
+	}
+	if a.IPv4Address == "" || a.Port == 0 {
+		return 0, "", errors.New("service/gatherings: experience address has no host or port")
+	}
+	return transport, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil
 }
 
 // NetworkProtocolDefault indicates that the experience should be contacted
