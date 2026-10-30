@@ -443,10 +443,7 @@ func TestNetherNetKeyFileConcurrentCreatorsAgree(t *testing.T) {
 			if t.Failed() {
 				return
 			}
-			saved, err := netherNetKeys.load(path)
-			if err != nil {
-				t.Fatalf("load saved key: %v", err)
-			}
+			saved := readNetherNetTestKey(t, path)
 			for i, key := range keys {
 				if !key.Equal(saved) {
 					t.Fatalf("creator %d uses a key that is not the saved one", i)
@@ -500,19 +497,19 @@ func TestNetherNetKeyFilePublishNeverReplaces(t *testing.T) {
 	}
 }
 
-// An empty file is another creator's pending claim, so its published key is used instead of a new one.
-func TestNetherNetKeyFileWaitsForPendingClaim(t *testing.T) {
+// A locked empty claim belongs to a live creator, so its published key is used instead of a new one.
+func TestNetherNetKeyFileWaitsForLiveClaim(t *testing.T) {
 	t.Parallel()
+	requireTryLock(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nethernet.pem")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatalf("write claim: %v", err)
-	}
+	claim := lockedNetherNetTestClaim(t, path)
 	published := encodeNetherNetTestKey(t)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer claim.Close()
 		time.Sleep(50 * time.Millisecond)
 		tmp := filepath.Join(dir, "tmp")
 		if err := os.WriteFile(tmp, published, 0o600); err != nil {
@@ -530,35 +527,139 @@ func TestNetherNetKeyFileWaitsForPendingClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want, err := parseNetherNetKey(path, published)
-	if err != nil {
-		t.Fatalf("parse published key: %v", err)
-	}
-	if !key.Equal(want) {
-		t.Fatal("pending claim was not waited for")
+	if want := readNetherNetTestKey(t, path); !key.Equal(want) || string(encodeNetherNetTestPrivateKey(t, key)) != string(published) {
+		t.Fatal("live claim was not waited for")
 	}
 }
 
-// A claim whose creator died before publishing holds no key, so it is replaced by a fresh one.
-func TestNetherNetKeyFileReplacesStaleClaim(t *testing.T) {
+// A live creator's claim is never removed, even when it outlasts the wait.
+func TestNetherNetKeyFileKeepsLiveClaim(t *testing.T) {
 	t.Parallel()
+	requireTryLock(t)
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	claim := lockedNetherNetTestClaim(t, path)
+	defer claim.Close()
+	store := netherNetKeys
+	store.claimTimeout = 50 * time.Millisecond
+	if _, err := store.loadOrCreate(path); err == nil {
+		t.Fatal("load succeeded while a live creator held its claim")
+	}
+	held, err := claim.Stat()
+	if err != nil {
+		t.Fatalf("stat claim: %v", err)
+	}
+	if cur, err := os.Stat(path); err != nil || !os.SameFile(held, cur) {
+		t.Fatalf("live claim was removed or replaced: %v", err)
+	}
+}
+
+// An unlocked empty claim was left by a creator that died, so it is replaced by a fresh key.
+func TestNetherNetKeyFileReplacesDeadClaim(t *testing.T) {
+	t.Parallel()
+	requireTryLock(t)
 
 	path := filepath.Join(t.TempDir(), "nethernet.pem")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write claim: %v", err)
 	}
-	store := netherNetKeys
-	store.claimTimeout = 20 * time.Millisecond
-	key, err := store.loadOrCreate(path)
+	key, err := netherNetKeys.loadOrCreate(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	saved, err := store.load(path)
-	if err != nil {
-		t.Fatalf("load saved key: %v", err)
-	}
-	if !key.Equal(saved) {
+	if !key.Equal(readNetherNetTestKey(t, path)) {
 		t.Fatal("returned key is not the saved one")
+	}
+}
+
+// A creator paused between claiming and locking adopts the key published after its claim was cleared,
+// rather than renaming its own key over it.
+func TestNetherNetKeyFilePausedCreatorKeepsReplacement(t *testing.T) {
+	t.Parallel()
+	requireTryLock(t)
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	claimOnly := netherNetKeyFileFallbacks(t)["claim"]
+	resume := make(chan struct{})
+	paused := claimOnly
+	paused.tryLock = func(f *os.File) (bool, error) {
+		<-resume
+		return netherNetKeys.tryLock(f)
+	}
+	type result struct {
+		key *ecdsa.PrivateKey
+		err error
+	}
+	pausedResult := make(chan result, 1)
+	go func() {
+		key, err := paused.loadOrCreate(path)
+		pausedResult <- result{key, err}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(resume)
+			t.Fatal("paused creator never claimed the key file")
+		}
+	}
+	replacement, err := claimOnly.loadOrCreate(path)
+	close(resume)
+	if err != nil {
+		t.Fatalf("replace dead-looking claim: %v", err)
+	}
+	r := <-pausedResult
+	if r.err != nil {
+		t.Fatalf("paused creator: %v", r.err)
+	}
+	saved := readNetherNetTestKey(t, path)
+	if !replacement.Equal(saved) {
+		t.Fatal("paused creator overwrote the replacement key")
+	}
+	if !r.key.Equal(saved) {
+		t.Fatal("paused creator uses a key that is not the saved one")
+	}
+}
+
+// Without file locks an empty file cannot be told from a live claim, so it is reported and kept.
+func TestNetherNetKeyFileWithoutLocksKeepsEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	store := netherNetKeys
+	store.tryLock = nil
+	if _, err := store.loadOrCreate(path); err == nil {
+		t.Fatal("empty key file was accepted")
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+		t.Fatalf("empty key file was replaced: %v", err)
+	}
+}
+
+// Locks exclude every other open of the file, in this process too, and are released on close.
+func TestTryLock(t *testing.T) {
+	t.Parallel()
+	requireTryLock(t)
+
+	path := filepath.Join(t.TempDir(), "lock")
+	first := lockedNetherNetTestClaim(t, path)
+	second, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open second: %v", err)
+	}
+	defer second.Close()
+	if locked, err := netherNetKeys.tryLock(second); err != nil || locked {
+		t.Fatalf("second lock while first held = %v, %v; want false, nil", locked, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first: %v", err)
+	}
+	if locked, err := netherNetKeys.tryLock(second); err != nil || !locked {
+		t.Fatalf("second lock after first closed = %v, %v; want true, nil", locked, err)
 	}
 }
 
@@ -599,11 +700,13 @@ func netherNetKeyFileFallbacks(t *testing.T) map[string]netherNetKeyFile {
 	noLink := func(string, string) error { return fs.ErrPermission } // as Android's SELinux policy answers apps
 	noRename := func(string, string) error { return errors.ErrUnsupported }
 	stores := map[string]netherNetKeyFile{
-		"link":  {link: os.Link, renameNoReplace: noRename, claimTimeout: 10 * time.Second},
-		"claim": {link: noLink, renameNoReplace: noRename, claimTimeout: 10 * time.Second},
+		"link": {link: os.Link, renameNoReplace: noRename, tryLock: netherNetKeys.tryLock, claimTimeout: 10 * time.Second},
+	}
+	if netherNetKeys.tryLock != nil {
+		stores["claim"] = netherNetKeyFile{link: noLink, renameNoReplace: noRename, tryLock: netherNetKeys.tryLock, claimTimeout: 10 * time.Second}
 	}
 	if err := probeRenameNoReplace(t); err == nil {
-		stores["rename"] = netherNetKeyFile{link: noLink, renameNoReplace: renameNoReplace, claimTimeout: 10 * time.Second}
+		stores["rename"] = netherNetKeyFile{link: noLink, renameNoReplace: renameNoReplace, tryLock: netherNetKeys.tryLock, claimTimeout: 10 * time.Second}
 	} else {
 		t.Logf("no-replace rename unavailable, skipping that fallback: %v", err)
 	}
@@ -620,12 +723,50 @@ func probeRenameNoReplace(t *testing.T) error {
 	return renameNoReplace(src, filepath.Join(dir, "dst"))
 }
 
+// requireTryLock skips tests of claims on platforms without file locks, where publishing never claims.
+func requireTryLock(t *testing.T) {
+	if netherNetKeys.tryLock == nil {
+		t.Skip("file locks unavailable")
+	}
+}
+
+// lockedNetherNetTestClaim creates an empty file at path and returns it locked, as a live creator holds it.
+func lockedNetherNetTestClaim(t *testing.T, path string) *os.File {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("create claim: %v", err)
+	}
+	if locked, err := netherNetKeys.tryLock(f); err != nil || !locked {
+		_ = f.Close()
+		t.Fatalf("lock claim = %v, %v", locked, err)
+	}
+	return f
+}
+
+// readNetherNetTestKey parses the key saved at path.
+func readNetherNetTestKey(t *testing.T, path string) *ecdsa.PrivateKey {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved key: %v", err)
+	}
+	key, err := parseNetherNetKey(path, b)
+	if err != nil {
+		t.Fatalf("parse saved key: %v", err)
+	}
+	return key
+}
+
 // encodeNetherNetTestKey returns a fresh P-384 key as SEC 1 PEM.
 func encodeNetherNetTestKey(t *testing.T) []byte {
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
+	return encodeNetherNetTestPrivateKey(t, key)
+}
+
+// encodeNetherNetTestPrivateKey returns key as SEC 1 PEM.
+func encodeNetherNetTestPrivateKey(t *testing.T, key *ecdsa.PrivateKey) []byte {
 	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		t.Fatalf("marshal key: %v", err)

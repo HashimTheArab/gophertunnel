@@ -4,7 +4,7 @@ package minecraft
 
 import "errors"
 
-// renameNoReplace is unavailable here, so publishing falls back to an exclusive claim.
+// renameNoReplace is unavailable here, so publishing falls back to a locked claim.
 func renameNoReplace(string, string) error {
 	return errors.ErrUnsupported
 }
