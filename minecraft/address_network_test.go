@@ -56,7 +56,7 @@ func TestAddressNetworkProbesIPv6Literal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
+	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
 		t.Fatalf("Select = %#v, want NetherNet at %q", selected, server.URL)
 	}
 	if host, port := splitServerAddress("[::1]"); host != "::1" || port != 0 {
