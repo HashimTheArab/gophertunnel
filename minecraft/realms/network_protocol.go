@@ -14,7 +14,8 @@ import (
 )
 
 // NetworkProtocol is the protocol a Realms or Gatherings join response names for reaching the server.
-// The services spell it in different cases; compare values through ParseNetworkProtocol.
+// The services spell it in different cases; compare values through ParseNetworkProtocol. Realms and
+// Gatherings read the same value differently; Networks documents what each one means.
 type NetworkProtocol string
 
 const (
@@ -44,25 +45,39 @@ type Networks struct {
 	HTTPClient *http.Client
 	// DialSignaling opens Xbox signaling of a p2p connection type for one dial, such as
 	// p2p.DialClientSignaling with the caller's token source. Without it, NetherNet IDs cannot be dialed.
+	// Signaled only asks it for p2p.ConnectionTypeSignalingOverJSONRPC.
 	DialSignaling func(ctx context.Context, connectionType int) (minecraft.SignalingConn, error)
 }
 
 // Realm returns the network and address to pass to minecraft.Dialer.DialContextNetwork for a realm
 // whose join response names protocol and address.
 func (n Networks) Realm(protocol NetworkProtocol, address string) (minecraft.Network, string, error) {
+	id, err := realmNetherNetID(protocol, address)
+	if err != nil {
+		return nil, "", err
+	}
+	return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+}
+
+// realmNetherNetID returns the NetherNet ID a realm whose join response names protocol and address is
+// reached at through JSON-RPC signaling, the only way vanilla joins a realm.
+func realmNetherNetID(protocol NetworkProtocol, address string) (string, error) {
 	switch ParseNetworkProtocol(string(protocol)) {
 	case NetworkProtocolNetherNetJSONRPC:
-		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, address)
+		if id := strings.TrimSpace(address); id != "" {
+			return id, nil
+		}
+		return "", errors.New("realms: server address has no NetherNet ID")
 	case NetworkProtocolNetherNet:
-		return nil, "", errors.New("realms: legacy NetherNet realms are no longer supported")
+		return "", errors.New("realms: legacy NetherNet realms are no longer supported")
 	default:
-		return nil, "", fmt.Errorf("realms: RakNet is no longer supported in Realms (network protocol %q)", protocol)
+		return "", fmt.Errorf("realms: RakNet is no longer supported in Realms (network protocol %q)", protocol)
 	}
 }
 
 // Experience returns the network and address to pass to minecraft.Dialer.DialContextNetwork for an
-// experience server, reading only the address form protocol uses. Vanilla builds no signaling URL for
-// a NETHERNET assignment, so its host and port are probed, HTTPS first, as minecraft.ProbeNetherNet does.
+// experience server, reading only the address form protocol uses. A NETHERNET host and port are probed as
+// minecraft.ProbeNetherNet does, since its signaling may answer only on the default HTTPS or HTTP port.
 func (n Networks) Experience(protocol NetworkProtocol, host string, port uint16, id string) (minecraft.Network, string, error) {
 	switch ParseNetworkProtocol(string(protocol)) {
 	case NetworkProtocolDefault, "":
@@ -84,10 +99,10 @@ func hostPortNetwork(network minecraft.Network, host string, port uint16) (minec
 	return network, net.JoinHostPort(host, strconv.Itoa(int(port))), nil
 }
 
-// Signaled returns NetherNet that reaches the NetherNet ID id through Xbox signaling of
-// connectionType, p2p.ConnectionTypeSignalingOverJSONRPC or p2p.ConnectionTypeSignalingOverWebSocket.
+// Signaled returns NetherNet that reaches the NetherNet ID id through Xbox signaling of connectionType,
+// which must be p2p.ConnectionTypeSignalingOverJSONRPC.
 func (n Networks) Signaled(connectionType int, id string) (minecraft.Network, string, error) {
-	if connectionType != p2p.ConnectionTypeSignalingOverJSONRPC && connectionType != p2p.ConnectionTypeSignalingOverWebSocket {
+	if connectionType != p2p.ConnectionTypeSignalingOverJSONRPC {
 		return nil, "", fmt.Errorf("realms: unsupported signaling connection type %d", connectionType)
 	}
 	if id = strings.TrimSpace(id); id == "" {

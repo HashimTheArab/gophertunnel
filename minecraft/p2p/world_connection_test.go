@@ -3,8 +3,10 @@ package p2p
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/google/uuid"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestNetherNetIDMarshalJSONPreservesVanillaNumberShape(t *testing.T) {
@@ -48,27 +50,31 @@ func TestNetherNetIDRejectsInvalidDecimalForms(t *testing.T) {
 	}
 }
 
-func TestConnectionUnmarshalWebSocketUsesRakNetGUID(t *testing.T) {
+// A world is joined only through JSON-RPC signaling: a legacy WebSocket-signaling entry is skipped,
+// and a world that advertises nothing else is refused before any signaling is dialed.
+func TestWorldConnectionSelectsOnlyJSONRPC(t *testing.T) {
 	t.Parallel()
 
-	var connection Connection
-	err := json.Unmarshal([]byte(`{
-		"ConnectionType": 3,
-		"HostIpAddress": "",
-		"HostPort": 0,
-		"RakNetGUID": "6503399194777609304"
-	}`), &connection)
+	const legacy = `{"ConnectionType":3,"HostIpAddress":"","HostPort":0,"RakNetGUID":"6503399194777609304"}`
+	const jsonrpc = `{"ConnectionType":7,"HostIpAddress":"","HostPort":0,"NetherNetId":6503399194777609304,"PmsgId":"11111111-2222-3333-4444-555555555555"}`
+	decode := func(connections ...string) World {
+		t.Helper()
+		var world World
+		if err := json.Unmarshal([]byte(`{"TransportLayer":2,"SupportedConnections":[`+strings.Join(connections, ",")+`]}`), &world); err != nil {
+			t.Fatal(err)
+		}
+		return world
+	}
+
+	if _, err := decode(legacy).Connection(); err == nil || !strings.Contains(err.Error(), "no supported signaling connection") {
+		t.Fatalf("Connection() of a WebSocket-only world error = %v, want no supported signaling connection", err)
+	}
+	connection, err := decode(legacy, jsonrpc).Connection()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Connection(): %v", err)
 	}
-	if got := connection.NetherNetID; got != "6503399194777609304" {
-		t.Fatalf("NetherNetID = %q, want the RakNetGUID network ID", got)
-	}
-	if err := connection.Validate(); err != nil {
-		t.Fatalf("validate WebSocket connection: %v", err)
-	}
-	if got := connection.Address(); got != "6503399194777609304" {
-		t.Fatalf("Address = %q, want the WebSocket network ID", got)
+	if connection.Type != ConnectionTypeSignalingOverJSONRPC || connection.Address() != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("Connection() = %+v, want the JSON-RPC entry", connection)
 	}
 }
 

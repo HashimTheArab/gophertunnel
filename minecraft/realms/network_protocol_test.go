@@ -56,10 +56,7 @@ func route(t *testing.T, n Networks, network minecraft.Network) string {
 		if _, err := network.DialSignaling(t.Context(), "unused"); !errors.As(err, &signaling) {
 			t.Fatalf("DialSignaling error = %v, want the caller's", err)
 		}
-		switch signaling.connectionType {
-		case p2p.ConnectionTypeSignalingOverWebSocket:
-			return "websocket"
-		case p2p.ConnectionTypeSignalingOverJSONRPC:
+		if signaling.connectionType == p2p.ConnectionTypeSignalingOverJSONRPC {
 			return "jsonrpc"
 		}
 		t.Fatalf("signaling opened connection type %d", signaling.connectionType)
@@ -153,23 +150,34 @@ func TestNetworksExperience(t *testing.T) {
 	}
 }
 
-// Signaled opens the signaling it was asked for and refuses what it cannot dial.
+// Signaled opens JSON-RPC signaling and refuses every other connection type.
 func TestNetworksSignaled(t *testing.T) {
 	n := testNetworks()
-	for connectionType, want := range map[int]string{
-		p2p.ConnectionTypeSignalingOverJSONRPC:   "jsonrpc",
-		p2p.ConnectionTypeSignalingOverWebSocket: "websocket",
-	} {
-		network, address, err := n.Signaled(connectionType, testID)
-		if err != nil || address != testID || route(t, n, network) != want {
-			t.Fatalf("Signaled(%d) = %T, %q, %v; want %s to the ID", connectionType, network, address, err, want)
-		}
+	network, address, err := n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, testID)
+	if err != nil || address != testID || route(t, n, network) != "jsonrpc" {
+		t.Fatalf("Signaled(JSON-RPC) = %T, %q, %v; want jsonrpc to the ID", network, address, err)
 	}
-	if _, _, err := n.Signaled(4, testID); err == nil {
-		t.Fatal("Signaled with LAN signaling succeeded")
+	for _, connectionType := range []int{3, p2p.ConnectionTypeSignalingOverLAN} {
+		if _, _, err := n.Signaled(connectionType, testID); err == nil {
+			t.Fatalf("Signaled with connection type %d succeeded", connectionType)
+		}
 	}
 	if _, _, err := (Networks{}).Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, testID); err == nil {
 		t.Fatal("Signaled without DialSignaling succeeded")
+	}
+}
+
+// NetherNetID accepts exactly the realms Network can dial and returns the ID Network dials.
+func TestRealmAddressNetherNetID(t *testing.T) {
+	for _, protocol := range []NetworkProtocol{"NETHERNET_JSONRPC", "NETHERNET", "DEFAULT", "", "QUIC"} {
+		for _, address := range []string{testID, " " + testID + " ", " "} {
+			a := RealmAddress{Address: address, NetworkProtocol: protocol}
+			_, wantID, wantErr := a.Network(testNetworks())
+			id, err := a.NetherNetID()
+			if (err != nil) != (wantErr != nil) || id != wantID {
+				t.Fatalf("NetherNetID(%q, %q) = %q, %v; Network gives %q, %v", protocol, address, id, err, wantID, wantErr)
+			}
+		}
 	}
 }
 

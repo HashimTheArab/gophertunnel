@@ -1,4 +1,4 @@
-package internal
+package signaling
 
 import (
 	"sync"
@@ -6,22 +6,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// NewPendingMap returns a PendingMap ready for use.
-func NewPendingMap() *PendingMap {
-	return &PendingMap{expected: make(map[uuid.UUID]chan error)}
+// newPendingMap returns a pendingMap ready for use.
+func newPendingMap() *pendingMap {
+	return &pendingMap{expected: make(map[uuid.UUID]chan error)}
 }
 
-// PendingMap tracks pending outbound messages by ID.
+// pendingMap tracks pending outbound messages by ID.
 // Each registered ID maps to a channel that is completed when the
 // corresponding message is completed.
-type PendingMap struct {
+type pendingMap struct {
 	expected map[uuid.UUID]chan error
 	mu       sync.Mutex
 }
 
 // Add registers interest in the completion of the outbound message with
-// the given ID and returns a channel that is completed by [PendingMap.Done].
-func (i *PendingMap) Add(id uuid.UUID) <-chan error {
+// the given ID and returns a channel that is completed by [pendingMap.Done].
+func (i *pendingMap) Add(id uuid.UUID) <-chan error {
 	ch := make(chan error, 1)
 	i.mu.Lock()
 	i.expected[id] = ch
@@ -31,9 +31,9 @@ func (i *PendingMap) Add(id uuid.UUID) <-chan error {
 
 // Remove stops tracking the outbound message with the given ID and closes
 // its channel if it is still registered.
-// It is typically deferred after [PendingMap.Add] once waiting for
+// It is typically deferred after [pendingMap.Add] once waiting for
 // completion is no longer needed.
-func (i *PendingMap) Remove(id uuid.UUID) {
+func (i *pendingMap) Remove(id uuid.UUID) {
 	i.mu.Lock()
 	ch, ok := i.expected[id]
 	delete(i.expected, id)
@@ -46,7 +46,7 @@ func (i *PendingMap) Remove(id uuid.UUID) {
 // Done resolves the pending message registered with the given ID.
 // It sends err on the associated channel, closes it, and reports whether
 // the ID was registered.
-func (i *PendingMap) Done(id uuid.UUID, err error) bool {
+func (i *pendingMap) Done(id uuid.UUID, err error) bool {
 	i.mu.Lock()
 	ch, ok := i.expected[id]
 	delete(i.expected, id)

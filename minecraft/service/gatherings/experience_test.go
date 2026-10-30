@@ -81,16 +81,22 @@ func TestAddressUnmarshalJSONMissingProtocol(t *testing.T) {
 	}
 }
 
+// A NetherNet_JsonRpc assignment carries its netherNetId as a UUID string and is dialed at that ID.
 func TestAddressUnmarshalJSONNetherNetID(t *testing.T) {
+	const id = "550e8400-e29b-41d4-a716-446655440000"
 	var address Address
 	if err := json.Unmarshal([]byte(`{
 		"networkProtocol":"NetherNet_JsonRpc",
-		"netherNetId":"550e8400-e29b-41d4-a716-446655440000"
+		"netherNetId":"`+id+`"
 	}`), &address); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if got, want := address.NetherNetID, "550e8400-e29b-41d4-a716-446655440000"; got != want {
-		t.Fatalf("NetherNetID = %q, want %q", got, want)
+	if address.NetherNetID != id {
+		t.Fatalf("NetherNetID = %q, want %q", address.NetherNetID, id)
+	}
+	network, target, err := address.Network(networks())
+	if _, ok := network.(minecraft.NetherNet); err != nil || !ok || target != id {
+		t.Fatalf("Network() = %T, %q, %v; want JSON-RPC NetherNet to %q", network, target, err, id)
 	}
 }
 

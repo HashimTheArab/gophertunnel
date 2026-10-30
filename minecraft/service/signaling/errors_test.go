@@ -1,4 +1,4 @@
-package messaging
+package signaling
 
 import (
 	"errors"

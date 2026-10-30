@@ -202,6 +202,12 @@ func (a RealmAddress) Network(n Networks) (minecraft.Network, string, error) {
 	return n.Realm(a.NetworkProtocol, a.Address)
 }
 
+// NetherNetID returns the NetherNet ID to reach this realm at through JSON-RPC signaling, for a caller
+// that dials with its own NetherNet transport. It fails for the protocols Network rejects.
+func (a RealmAddress) NetherNetID() (string, error) {
+	return realmNetherNetID(a.NetworkProtocol, a.Address)
+}
+
 // Address requests the address and protocol used to connect to this realm. The optional ping results are sent to
 // Realms to select a suitable service region; omitting them sends an empty pingRegions array. An offline Realm is
 // retried when the service supplies Retry-After.
