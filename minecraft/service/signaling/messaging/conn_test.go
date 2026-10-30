@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/creachadair/jrpc2"
@@ -36,31 +38,213 @@ func TestCredentialsRejectsWarmCacheAfterClose(t *testing.T) {
 	}
 }
 
-func TestCredentialsRejectsNonPositiveExpiry(t *testing.T) {
-	t.Parallel()
+// credentialsConn returns a Conn whose TURN requests are answered by handle, and the request count.
+func credentialsConn(t *testing.T, handle func() (json.RawMessage, error)) (*Conn, *atomic.Int32) {
+	t.Helper()
+	calls := new(atomic.Int32)
+	clientChannel, serverChannel := channel.Direct()
+	server := jrpc2.NewServer(handler.Map{
+		MethodSignalingCredentials: handler.New(func(context.Context, map[string]any) (json.RawMessage, error) {
+			calls.Add(1)
+			return handle()
+		}),
+	}, nil).Start(serverChannel)
+	t.Cleanup(server.Stop)
+	client := jrpc2.NewClient(clientChannel, nil)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	conn := &Conn{client: client, ctx: ctx, cancel: cancel, d: Dialer{Log: slog.New(slog.DiscardHandler)}}
+	t.Cleanup(func() { conn.stop(net.ErrClosed) })
+	return conn, calls
+}
 
-	for _, expiry := range []int{0, -1} {
-		expiry := expiry
-		t.Run(fmt.Sprint(expiry), func(t *testing.T) {
-			t.Parallel()
-			clientChannel, serverChannel := channel.Direct()
-			server := jrpc2.NewServer(handler.Map{
-				MethodSignalingCredentials: handler.New(func(context.Context, map[string]any) (*nethernet.Credentials, error) {
-					return &nethernet.Credentials{ExpirationInSeconds: expiry}, nil
-				}),
-			}, nil).Start(serverChannel)
-			defer server.Stop()
-			client := jrpc2.NewClient(clientChannel, nil)
-			defer client.Close()
-			ctx, cancel := context.WithCancelCause(context.Background())
-			defer cancel(net.ErrClosed)
-			conn := &Conn{client: client, ctx: ctx}
+// turnAnswer is a TURN answer with one server that expires after the given seconds.
+func turnAnswer(seconds int) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"ExpirationInSeconds":%d,"TurnAuthServers":[{"Username":"u","Password":"p","Urls":["turn:a"]}]}`, seconds))
+}
 
-			if _, err := conn.Credentials(context.Background()); err == nil || !strings.Contains(err.Error(), "invalid credentials") {
-				t.Fatalf("Credentials() error = %v, want invalid credentials for expiry %d", err, expiry)
+// A failed or undecodable TURN answer yields no ICE servers instead of failing the dial.
+func TestCredentialsFailureYieldsNoServers(t *testing.T) {
+	for name, handle := range map[string]func() (json.RawMessage, error){
+		"call error":    func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") },
+		"null result":   func() (json.RawMessage, error) { return json.RawMessage(`null`), nil },
+		"wrong shape":   func() (json.RawMessage, error) { return json.RawMessage(`{"ExpirationInSeconds":"soon"}`), nil },
+		"not an object": func() (json.RawMessage, error) { return json.RawMessage(`[]`), nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, _ := credentialsConn(t, handle)
+			credentials, err := conn.Credentials(context.Background())
+			if err != nil {
+				t.Fatalf("Credentials() error = %v, want nil", err)
+			}
+			if len(credentials.ICEServers) != 0 {
+				t.Fatalf("Credentials() servers = %v, want none", credentials.ICEServers)
 			}
 		})
 	}
+}
+
+// Any expiry is accepted; a non-positive one is already due, so the next call requests again.
+func TestCredentialsAcceptNonPositiveExpiry(t *testing.T) {
+	for _, seconds := range []int{0, -1} {
+		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
+			conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(seconds), nil })
+			for range 2 {
+				credentials, err := conn.Credentials(context.Background())
+				if err != nil || len(credentials.ICEServers) != 1 {
+					t.Fatalf("Credentials() = %v, %v, want one server", credentials, err)
+				}
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("TURN requests = %d, want 2", got)
+			}
+		})
+	}
+}
+
+// A caller whose ctx ends stops waiting without cancelling the request another caller shares.
+func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return turnAnswer(60), nil
+		})
+		conn.refreshCredentials()
+		shared := make(chan *nethernet.Credentials)
+		go func() {
+			credentials, _ := conn.Credentials(context.Background())
+			shared <- credentials
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := conn.Credentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Credentials() error = %v, want context deadline exceeded", err)
+		}
+		close(release)
+		if credentials := <-shared; credentials == nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("shared Credentials() = %v, want one server", credentials)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests = %d, want 1", got)
+		}
+	})
+}
+
+// An unanswered TURN request fails after the client's 60 second JSON-RPC timeout, yielding no
+// relay servers, and the next call requests again.
+func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return nil, errors.New("released")
+		})
+		for want := int32(1); want <= 2; want++ {
+			start := time.Now()
+			credentials, err := conn.Credentials(context.Background())
+			if err != nil || len(credentials.ICEServers) != 0 {
+				t.Fatalf("Credentials() = %v, %v, want no servers and no error", credentials, err)
+			}
+			if waited := time.Since(start); waited != 60*time.Second {
+				t.Fatalf("unanswered request failed after %v, want 60s", waited)
+			}
+			synctest.Wait()
+			if got := calls.Load(); got != want {
+				t.Fatalf("TURN requests = %d, want %d", got, want)
+			}
+		}
+	})
+}
+
+// Received credentials are requested again in the background as soon as they expire, not before.
+func TestCredentialsRefreshOnExpiry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(60), nil })
+		conn.refreshCredentials()
+		synctest.Wait()
+		time.Sleep(60*time.Second - time.Nanosecond)
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests before expiry = %d, want 1", got)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("TURN requests after expiry = %d, want 2", got)
+		}
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// No TURN request is made after the Conn closes, even when a refresh was due.
+func TestCredentialsRefreshStopsOnClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(60), nil })
+		conn.refreshCredentials()
+		synctest.Wait()
+		conn.stop(net.ErrClosed)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests after close = %d, want 1", got)
+		}
+	})
+}
+
+// Pings are notifications: they carry no id and an unanswered ping keeps the Conn open.
+func TestPingIsANotification(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		clientChannel, serverChannel := channel.Direct()
+		client := jrpc2.NewClient(clientChannel, nil)
+		defer client.Close()
+		defer serverChannel.Close()
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(net.ErrClosed)
+		conn := &Conn{client: client, ctx: ctx, cancel: cancel, d: Dialer{Log: slog.New(slog.DiscardHandler)}}
+		go conn.ping(time.Second)
+
+		for range 2 {
+			frame, err := serverChannel.Recv()
+			if err != nil {
+				t.Fatalf("receive ping: %v", err)
+			}
+			var ping map[string]json.RawMessage
+			if err := json.Unmarshal(frame, &ping); err != nil {
+				t.Fatalf("decode ping %s: %v", frame, err)
+			}
+			if _, ok := ping["id"]; ok || string(ping["method"]) != `"`+MethodSystemPing+`"` {
+				t.Fatalf("ping frame = %s, want a %s notification", frame, MethodSystemPing)
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("Conn closed after unanswered pings: %v", context.Cause(ctx))
+		}
+		cancel(net.ErrClosed)
+	})
+}
+
+// A ping that cannot be sent is logged without closing the Conn.
+func TestPingSendFailureKeepsConn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		clientChannel, serverChannel := channel.Direct()
+		client := jrpc2.NewClient(clientChannel, nil)
+		defer client.Close()
+		_ = serverChannel.Close()
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(net.ErrClosed)
+		conn := &Conn{client: client, ctx: ctx, cancel: cancel, d: Dialer{Log: slog.New(slog.DiscardHandler)}}
+		go conn.ping(time.Second)
+
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("Conn closed after a failed ping: %v", context.Cause(ctx))
+		}
+		cancel(net.ErrClosed)
+	})
 }
 
 // acceptingNotifier accepts every signal delivered by a test.
