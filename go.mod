@@ -17,6 +17,7 @@ require (
 	github.com/klauspost/compress v1.18.1
 	github.com/pelletier/go-toml v1.9.5
 	github.com/pion/ice/v4 v4.4.8
+	github.com/pion/webrtc/v4 v4.2.26
 	github.com/sandertv/go-raknet v1.15.2-0.20260705184311-0d1fd09e2cf6
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
 	golang.org/x/net v0.50.0
@@ -43,7 +44,6 @@ require (
 	github.com/pion/stun/v4 v4.0.1 // indirect
 	github.com/pion/transport/v5 v5.1.4 // indirect
 	github.com/pion/turn/v5 v5.1.3 // indirect
-	github.com/pion/webrtc/v4 v4.2.26 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/image v0.21.0 // indirect
