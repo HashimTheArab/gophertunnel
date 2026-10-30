@@ -64,6 +64,19 @@ type transportSelector interface {
 	Select(ctx context.Context, address string) (Network, error)
 }
 
+// TransportError is a failed Dialer dial on a network that picks its transport per address, such
+// as AddressNetwork. Network is the transport picked, which IsRakNet tells apart from NetherNet.
+type TransportError struct {
+	Network Network
+	Err     error
+}
+
+// Error returns Err's message unchanged.
+func (e *TransportError) Error() string { return e.Err.Error() }
+
+// Unwrap ...
+func (e *TransportError) Unwrap() error { return e.Err }
+
 // Select returns the network to dial address with: RakNet, or NetherNet bound to the endpoint
 // that answered the probe. It fails only when ctx ends first.
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
