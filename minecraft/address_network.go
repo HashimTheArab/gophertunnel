@@ -367,19 +367,26 @@ func (b *probeBatch) wait(ctx context.Context, startBy time.Time, game bool) {
 }
 
 // probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch, each with
-// the game port first. Hosts are formatted unbracketed as vanilla formats them, so an IPv6 literal
-// never answers.
+// the game port first. Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
 func probeBatches(host string, port uint16) [][]string {
 	if port != 0 && port != defaultServerPort {
-		return [][]string{
-			{fmt.Sprintf("https://%s:%d", host, port)},
-			{fmt.Sprintf("http://%s:%d", host, port)},
-		}
+		return [][]string{{probeURL("https", host, port)}, {probeURL("http", host, port)}}
 	}
 	return [][]string{
-		{fmt.Sprintf("https://%s:%d", host, defaultServerPort), "https://" + host},
-		{fmt.Sprintf("http://%s:%d", host, defaultServerPort), "http://" + host},
+		{probeURL("https", host, defaultServerPort), probeURL("https", host, 0)},
+		{probeURL("http", host, defaultServerPort), probeURL("http", host, 0)},
 	}
+}
+
+// probeURL returns scheme://host:port, or scheme://host for port zero, bracketing an IPv6 literal.
+func probeURL(scheme, host string, port uint16) string {
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != 0 {
+		host += ":" + strconv.Itoa(int(port))
+	}
+	return scheme + "://" + host
 }
 
 func probeEndpoint(ctx context.Context, client *http.Client, endpoint string) error {
@@ -414,11 +421,12 @@ func probeHTTPClient(client *http.Client) *http.Client {
 	return &copied
 }
 
-// splitServerAddress splits host:port; an address without a valid port gets port zero.
+// splitServerAddress splits host:port, unbracketing an IPv6 host; an address without a valid port
+// gets port zero.
 func splitServerAddress(address string) (string, uint16) {
 	host, portText, err := net.SplitHostPort(address)
 	if err != nil {
-		return address, 0
+		return strings.TrimSuffix(strings.TrimPrefix(address, "["), "]"), 0
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
 	if err != nil {
