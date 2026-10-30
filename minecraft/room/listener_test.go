@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/df-mc/go-nethernet"
+	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft"
+	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
 
 func TestListenConfigWrapDefaultsLogger(t *testing.T) {
@@ -69,6 +73,57 @@ func TestListenerCloseCancelsAnnounce(t *testing.T) {
 		t.Fatal("Close did not cancel the announcement")
 	}
 }
+
+// A NetherNet listener advertises the JSON-RPC signaling it was given, and nothing without it.
+func TestListenerServerStatusAdvertisesJSONRPCSignaling(t *testing.T) {
+	t.Parallel()
+
+	signaling := testJSONRPCSignaling{networkID: "6503399194777609304", pmid: uuid.New()}
+	for name, test := range map[string]struct {
+		signaling p2p.JSONRPCSignaling
+		want      []p2p.Connection
+	}{
+		"with signaling": {signaling: signaling, want: []p2p.Connection{{
+			Type:              p2p.ConnectionTypeSignalingOverJSONRPC,
+			NetherNetID:       p2p.NetherNetID(signaling.networkID),
+			PlayerMessagingID: signaling.pmid,
+		}}},
+		"without signaling": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			announcer := &recordingAnnouncer{}
+			l := ListenConfig{
+				Announcer: announcer,
+				Signaling: test.signaling,
+			}.Wrap(fakeNetworkListener{addr: &nethernet.Addr{NetworkID: signaling.networkID}})
+
+			l.ServerStatus(minecraft.ServerStatus{})
+			if got := announcer.status.SupportedConnections; !slices.Equal(got, test.want) {
+				t.Fatalf("SupportedConnections = %+v, want %+v", got, test.want)
+			}
+			if got := announcer.status.TransportLayer; got != p2p.TransportLayerNetherNet {
+				t.Fatalf("TransportLayer = %d, want NetherNet", got)
+			}
+		})
+	}
+}
+
+type testJSONRPCSignaling struct {
+	networkID string
+	pmid      uuid.UUID
+}
+
+func (s testJSONRPCSignaling) NetworkID() string            { return s.networkID }
+func (s testJSONRPCSignaling) PlayerMessagingID() uuid.UUID { return s.pmid }
+
+// recordingAnnouncer keeps the last announced Status.
+type recordingAnnouncer struct{ status Status }
+
+func (a *recordingAnnouncer) Announce(_ context.Context, status Status) error {
+	a.status = status
+	return nil
+}
+func (*recordingAnnouncer) Close() error { return nil }
 
 type blockingAnnouncer struct{ err chan error }
 

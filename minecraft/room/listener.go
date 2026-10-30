@@ -34,6 +34,10 @@ type ListenConfig struct {
 	// [Status.MaxMemberCount], [Status.WorldName], and [Status.HostName].
 	DisableServerStatusOverride bool // TODO: Find a good name
 
+	// Signaling is the JSON-RPC signaling a wrapped NetherNet listener accepts connections through. Its IDs
+	// are advertised as the Status connection; without it, a NetherNet listener advertises no connection.
+	Signaling p2p.JSONRPCSignaling
+
 	// AnnounceTimeout bounds each announcement made from [Listener.ServerStatus], which runs on the
 	// listener's status ticker. If zero, DefaultAnnounceTimeout is used.
 	AnnounceTimeout time.Duration
@@ -111,10 +115,16 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 			if status.TransportLayer == 0 {
 				status.TransportLayer = p2p.TransportLayerNetherNet
 			}
-			status.SupportedConnections = append(status.SupportedConnections, p2p.Connection{
-				Type:        p2p.ConnectionTypeSignalingOverWebSocket,
-				NetherNetID: p2p.NetherNetID(addr.NetworkID),
-			})
+			if l.conf.Signaling == nil {
+				l.conf.Log.Debug("NetherNet listener has no JSON-RPC signaling to advertise", slog.Any("address", addr))
+				break
+			}
+			connection, err := p2p.NewJSONRPCConnection(l.conf.Signaling)
+			if err != nil {
+				l.conf.Log.Error("error advertising JSON-RPC signaling", internal.ErrAttr(err))
+				break
+			}
+			status.SupportedConnections = append(status.SupportedConnections, connection)
 		case *net.UDPAddr:
 			if status.TransportLayer == 0 {
 				status.TransportLayer = p2p.TransportLayerRakNet
