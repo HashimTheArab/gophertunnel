@@ -3,9 +3,11 @@ package realms
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"testing"
 
+	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
@@ -14,6 +16,7 @@ import (
 func testNetworks() Networks {
 	return Networks{
 		RakNet:     minecraft.RakNet{ServerID: 7},
+		NetherNet:  minecraft.NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{AllowIdentitylessServer: true}},
 		HTTPClient: &http.Client{},
 		DialSignaling: func(_ context.Context, connectionType int) (minecraft.SignalingConn, error) {
 			return nil, &signalingError{connectionType}
@@ -27,8 +30,14 @@ type signalingError struct{ connectionType int }
 func (e *signalingError) Error() string { return "test signaling" }
 
 // route names how network dials: "raknet", "http", or the p2p connection type its signaling opens.
+// It fails the test when the caller's settings did not reach the network.
 func route(t *testing.T, n Networks, network minecraft.Network) string {
 	t.Helper()
+	sameNetherNet := func(got minecraft.NetherNet) {
+		if got.Log != n.NetherNet.Log || got.Dialer.AllowIdentitylessServer != n.NetherNet.Dialer.AllowIdentitylessServer {
+			t.Fatalf("NetherNet = %#v, want the caller's settings", got)
+		}
+	}
 	switch network := network.(type) {
 	case minecraft.RakNet:
 		if network.ServerID != n.RakNet.ServerID {
@@ -39,8 +48,10 @@ func route(t *testing.T, n Networks, network minecraft.Network) string {
 		if network.URL != "" || network.HTTPClient != n.HTTPClient {
 			t.Fatalf("NetherNetHTTP = %#v, want no URL and the caller's HTTP client", network)
 		}
+		sameNetherNet(network.NetherNet)
 		return "http"
 	case minecraft.NetherNet:
+		sameNetherNet(network)
 		var signaling *signalingError
 		if _, err := network.DialSignaling(t.Context(), "unused"); !errors.As(err, &signaling) {
 			t.Fatalf("DialSignaling error = %v, want the caller's", err)
@@ -57,76 +68,117 @@ func route(t *testing.T, n Networks, network minecraft.Network) string {
 	return ""
 }
 
-// TestNetworksNetwork pins each service's route per protocol: the services differ only on NETHERNET.
-func TestNetworksNetwork(t *testing.T) {
-	const (
-		hostPort = "play.example.com:19132"
-		id       = "550e8400-e29b-41d4-a716-446655440000"
-	)
+const (
+	testHostPort = "play.example.com:19132"
+	testID       = "550e8400-e29b-41d4-a716-446655440000"
+)
+
+// TestNetworksRealm pins that, as in vanilla, a realm is joined only over JSON-RPC signaling.
+func TestNetworksRealm(t *testing.T) {
+	tests := []struct {
+		name      string
+		protocol  NetworkProtocol
+		address   string
+		wantRoute string
+	}{
+		{name: "NETHERNET_JSONRPC", protocol: "NETHERNET_JSONRPC", address: testID, wantRoute: "jsonrpc"},
+		{name: "NETHERNET_JSONRPC padded ID", protocol: "NETHERNET_JSONRPC", address: " " + testID + " ", wantRoute: "jsonrpc"},
+		{name: "NETHERNET_JSONRPC without ID", protocol: "NETHERNET_JSONRPC", address: " "},
+		{name: "legacy NETHERNET", protocol: "NETHERNET", address: testID},
+		{name: "DEFAULT", protocol: "DEFAULT", address: testHostPort},
+		{name: "missing protocol", address: testHostPort},
+		{name: "unknown protocol", protocol: "QUIC", address: testHostPort},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			n := testNetworks()
+			network, address, err := n.Realm(test.protocol, test.address)
+			if test.wantRoute == "" {
+				if err == nil {
+					t.Fatalf("Realm() = %T, %q, want an error", network, address)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Realm(): %v", err)
+			}
+			if got := route(t, n, network); got != test.wantRoute || address != testID {
+				t.Fatalf("Realm() = %s to %q, want %s to %q", got, address, test.wantRoute, testID)
+			}
+		})
+	}
+}
+
+// TestNetworksExperience pins the route and address form each Gatherings protocol uses.
+func TestNetworksExperience(t *testing.T) {
 	tests := []struct {
 		name        string
-		service     Service
 		protocol    NetworkProtocol
 		hostPort    string
 		id          string
 		wantRoute   string
 		wantAddress string
 	}{
-		{name: "Realms DEFAULT", service: ServiceRealms, protocol: "DEFAULT", hostPort: hostPort, id: id, wantRoute: "raknet", wantAddress: hostPort},
-		{name: "Realms missing protocol", service: ServiceRealms, hostPort: hostPort, wantRoute: "raknet", wantAddress: hostPort},
-		{name: "Realms NETHERNET", service: ServiceRealms, protocol: "NETHERNET", hostPort: hostPort, id: id, wantRoute: "websocket", wantAddress: id},
-		{name: "Realms NETHERNET_JSONRPC", service: ServiceRealms, protocol: "NETHERNET_JSONRPC", hostPort: hostPort, id: id, wantRoute: "jsonrpc", wantAddress: id},
-		{name: "Gatherings Default", service: ServiceGatherings, protocol: "Default", hostPort: hostPort, id: id, wantRoute: "raknet", wantAddress: hostPort},
-		{name: "Gatherings missing protocol", service: ServiceGatherings, hostPort: hostPort, wantRoute: "raknet", wantAddress: hostPort},
-		{name: "Gatherings NetherNet", service: ServiceGatherings, protocol: "NetherNet", hostPort: hostPort, id: id, wantRoute: "http", wantAddress: hostPort},
-		{name: "Gatherings NetherNet_JsonRpc", service: ServiceGatherings, protocol: "NetherNet_JsonRpc", hostPort: hostPort, id: id, wantRoute: "jsonrpc", wantAddress: id},
-		{name: "DEFAULT without port", service: ServiceRealms, protocol: "DEFAULT", hostPort: "play.example.com"},
-		{name: "DEFAULT port zero", service: ServiceGatherings, protocol: "Default", hostPort: "play.example.com:0"},
-		{name: "DEFAULT blank host", service: ServiceGatherings, protocol: "Default", hostPort: "   :19132"},
-		{name: "HTTP NetherNet without host", service: ServiceGatherings, protocol: "NetherNet", hostPort: ":19132", id: id},
-		{name: "WebSocket NetherNet without ID", service: ServiceRealms, protocol: "NETHERNET", hostPort: hostPort, id: " "},
-		{name: "JSON-RPC without ID", service: ServiceGatherings, protocol: "NetherNet_JsonRpc", hostPort: hostPort},
-		{name: "unknown service", protocol: "NETHERNET", hostPort: hostPort, id: id},
-		{name: "unknown protocol", service: ServiceRealms, protocol: "QUIC", hostPort: hostPort, id: id},
+		{name: "Default", protocol: "Default", hostPort: testHostPort, id: testID, wantRoute: "raknet", wantAddress: testHostPort},
+		{name: "missing protocol", hostPort: testHostPort, wantRoute: "raknet", wantAddress: testHostPort},
+		{name: "NetherNet", protocol: "NetherNet", hostPort: testHostPort, id: testID, wantRoute: "http", wantAddress: testHostPort},
+		{name: "NetherNet_JsonRpc", protocol: "NetherNet_JsonRpc", hostPort: testHostPort, id: testID, wantRoute: "jsonrpc", wantAddress: testID},
+		{name: "NetherNet_JsonRpc padded ID", protocol: "NetherNet_JsonRpc", id: "\t" + testID + " ", wantRoute: "jsonrpc", wantAddress: testID},
+		{name: "Default without port", protocol: "Default", hostPort: "play.example.com"},
+		{name: "Default port zero", protocol: "Default", hostPort: "play.example.com:0"},
+		{name: "Default blank host", protocol: "Default", hostPort: "   :19132"},
+		{name: "NetherNet without host", protocol: "NetherNet", hostPort: ":19132", id: testID},
+		{name: "NetherNet_JsonRpc without ID", protocol: "NetherNet_JsonRpc", hostPort: testHostPort},
+		{name: "unknown protocol", protocol: "QUIC", hostPort: testHostPort, id: testID},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			n := testNetworks()
-			network, address, err := n.Network(test.service, test.protocol, test.hostPort, test.id)
+			network, address, err := n.Experience(test.protocol, test.hostPort, test.id)
 			if test.wantRoute == "" {
 				if err == nil {
-					t.Fatalf("Network() = %T, %q, want an error", network, address)
+					t.Fatalf("Experience() = %T, %q, want an error", network, address)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("Network(): %v", err)
+				t.Fatalf("Experience(): %v", err)
 			}
 			if got := route(t, n, network); got != test.wantRoute || address != test.wantAddress {
-				t.Fatalf("Network() = %s to %q, want %s to %q", got, address, test.wantRoute, test.wantAddress)
+				t.Fatalf("Experience() = %s to %q, want %s to %q", got, address, test.wantRoute, test.wantAddress)
 			}
 		})
 	}
 }
 
-// A NetherNet ID cannot be dialed without the caller's signaling.
-func TestNetworksNetworkRequiresDialSignaling(t *testing.T) {
-	if _, _, err := (Networks{}).Network(ServiceRealms, NetworkProtocolNetherNetJSONRPC, "", "550e8400-e29b-41d4-a716-446655440000"); err == nil {
-		t.Fatal("Network() without DialSignaling succeeded")
+// Signaled opens the signaling it was asked for and refuses what it cannot dial.
+func TestNetworksSignaled(t *testing.T) {
+	n := testNetworks()
+	for connectionType, want := range map[int]string{
+		p2p.ConnectionTypeSignalingOverJSONRPC:   "jsonrpc",
+		p2p.ConnectionTypeSignalingOverWebSocket: "websocket",
+	} {
+		network, address, err := n.Signaled(connectionType, testID)
+		if err != nil || address != testID || route(t, n, network) != want {
+			t.Fatalf("Signaled(%d) = %T, %q, %v; want %s to the ID", connectionType, network, address, err, want)
+		}
+	}
+	if _, _, err := n.Signaled(4, testID); err == nil {
+		t.Fatal("Signaled with LAN signaling succeeded")
+	}
+	if _, _, err := (Networks{}).Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, testID); err == nil {
+		t.Fatal("Signaled without DialSignaling succeeded")
 	}
 }
 
-// A Realms join response carries one address that is host:port or a NetherNet ID, per protocol.
+// A Realms join response carries the NetherNet ID in its one address field.
 func TestRealmAddressNetwork(t *testing.T) {
 	n := testNetworks()
-	for address, want := range map[RealmAddress]string{
-		{Address: "127.0.0.1:19132", NetworkProtocol: NetworkProtocolDefault}:                               "raknet",
-		{Address: "550e8400-e29b-41d4-a716-446655440000", NetworkProtocol: NetworkProtocolNetherNetJSONRPC}: "jsonrpc",
-		{Address: "12345678901234567890", NetworkProtocol: NetworkProtocolNetherNet}:                        "websocket",
-	} {
-		network, got, err := address.Network(n)
-		if err != nil || got != address.Address || route(t, n, network) != want {
-			t.Fatalf("%+v: Network() = %T, %q, %v; want %s to the address", address, network, got, err, want)
-		}
+	network, address, err := RealmAddress{Address: testID, NetworkProtocol: NetworkProtocolNetherNetJSONRPC}.Network(n)
+	if err != nil || address != testID || route(t, n, network) != "jsonrpc" {
+		t.Fatalf("Network() = %T, %q, %v; want JSON-RPC signaling to the ID", network, address, err)
+	}
+	if _, _, err := (RealmAddress{Address: "127.0.0.1:19132", NetworkProtocol: NetworkProtocolDefault}).Network(n); err == nil {
+		t.Fatal("Network() joined a DEFAULT realm over RakNet")
 	}
 }

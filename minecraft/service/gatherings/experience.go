@@ -137,9 +137,9 @@ type Address struct {
 }
 
 // Network returns the network and address to pass to [minecraft.Dialer.DialContextNetwork] for this
-// experience server, as [realms.Networks.Network] maps Gatherings protocols.
+// experience server, as [realms.Networks.Experience] maps them.
 func (a Address) Network(n realms.Networks) (minecraft.Network, string, error) {
-	return n.Network(realms.ServiceGatherings, a.NetworkProtocol, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), a.NetherNetID)
+	return n.Experience(a.NetworkProtocol, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), a.NetherNetID)
 }
 
 // DestinationInfo describes the destination selected by [Experience.Join].

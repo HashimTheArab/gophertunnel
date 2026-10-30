@@ -199,7 +199,7 @@ type RealmAddress struct {
 
 // Network returns the network and address to pass to minecraft.Dialer.DialContextNetwork for this realm.
 func (a RealmAddress) Network(n Networks) (minecraft.Network, string, error) {
-	return n.Network(ServiceRealms, a.NetworkProtocol, a.Address, a.Address)
+	return n.Realm(a.NetworkProtocol, a.Address)
 }
 
 // Address requests the address and protocol used to connect to this realm. The optional ping results are sent to

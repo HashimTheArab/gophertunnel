@@ -37,18 +37,15 @@ func (p NetworkProtocol) Valid() bool {
 	}
 }
 
-// Service is a service that assigns servers by NetworkProtocol.
-type Service uint8
-
-const (
-	ServiceRealms Service = iota + 1
-	ServiceGatherings
-)
-
-// Networks holds the caller's transports that RealmAddress.Network and gatherings.Address.Network
-// choose from.
+// Networks holds the caller's transports for dialing a server a join response names. Realms and
+// Gatherings read networkProtocol differently, as vanilla does:
+//
+//	protocol           Realm                         Experience
+//	NETHERNET_JSONRPC  JSON-RPC signaling to the ID  JSON-RPC signaling to the ID
+//	NETHERNET          error: legacy NetherNet       HTTP signaling to host:port, never RakNet
+//	DEFAULT, missing   error: no RakNet              RakNet to host:port
 type Networks struct {
-	// RakNet dials DEFAULT addresses.
+	// RakNet dials experiences over RakNet.
 	RakNet minecraft.RakNet
 	// NetherNet configures NetherNet dials; each address replaces its signaling with the one it needs.
 	NetherNet minecraft.NetherNet
@@ -59,28 +56,33 @@ type Networks struct {
 	DialSignaling func(ctx context.Context, connectionType int) (minecraft.SignalingConn, error)
 }
 
-// Network returns the network and address to pass to minecraft.Dialer.DialContextNetwork for a server
-// s assigned with protocol, missing meaning DEFAULT. Only the address form the protocol uses is read:
-//
-//	protocol           Realms                       Gatherings
-//	DEFAULT            RakNet to hostPort           RakNet to hostPort
-//	NETHERNET          WebSocket signaling to id    HTTP signaling to hostPort, never RakNet
-//	NETHERNET_JSONRPC  JSON-RPC signaling to id     JSON-RPC signaling to id
-//
-// A Gatherings NETHERNET assignment names no URL scheme, so the network asks HTTPS, then HTTP, as
-// minecraft.ProbeNetherNet does.
-func (n Networks) Network(s Service, protocol NetworkProtocol, hostPort, id string) (minecraft.Network, string, error) {
-	switch p := ParseNetworkProtocol(string(protocol)); {
-	case p == NetworkProtocolDefault || p == "":
-		return hostPortNetwork(n.RakNet, hostPort)
-	case p == NetworkProtocolNetherNet && s == ServiceRealms:
-		return n.signaled(p2p.ConnectionTypeSignalingOverWebSocket, id)
-	case p == NetworkProtocolNetherNet && s == ServiceGatherings:
-		return hostPortNetwork(minecraft.NetherNetHTTP{NetherNet: n.NetherNet, HTTPClient: n.HTTPClient}, hostPort)
-	case p == NetworkProtocolNetherNetJSONRPC:
-		return n.signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+// Realm returns the network and address to pass to minecraft.Dialer.DialContextNetwork for a realm
+// whose join response names protocol and address.
+func (n Networks) Realm(protocol NetworkProtocol, address string) (minecraft.Network, string, error) {
+	switch ParseNetworkProtocol(string(protocol)) {
+	case NetworkProtocolNetherNetJSONRPC:
+		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, address)
+	case NetworkProtocolNetherNet:
+		return nil, "", errors.New("realms: legacy NetherNet realms are no longer supported")
+	default:
+		return nil, "", fmt.Errorf("realms: RakNet is no longer supported in Realms (network protocol %q)", protocol)
 	}
-	return nil, "", fmt.Errorf("realms: unsupported network protocol %q for service %d", protocol, s)
+}
+
+// Experience returns the network and address to pass to minecraft.Dialer.DialContextNetwork for an
+// experience server, reading only the address form protocol uses. A NETHERNET assignment names no URL
+// scheme, so HTTPS is asked before HTTP, as minecraft.ProbeNetherNet does.
+func (n Networks) Experience(protocol NetworkProtocol, hostPort, id string) (minecraft.Network, string, error) {
+	switch ParseNetworkProtocol(string(protocol)) {
+	case NetworkProtocolDefault, "":
+		return hostPortNetwork(n.RakNet, hostPort)
+	case NetworkProtocolNetherNet:
+		return hostPortNetwork(minecraft.NetherNetHTTP{NetherNet: n.NetherNet, HTTPClient: n.HTTPClient}, hostPort)
+	case NetworkProtocolNetherNetJSONRPC:
+		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+	default:
+		return nil, "", fmt.Errorf("realms: unsupported experience network protocol %q", protocol)
+	}
 }
 
 // hostPortNetwork returns network with hostPort once it names both a host and a nonzero port.
@@ -92,9 +94,13 @@ func hostPortNetwork(network minecraft.Network, hostPort string) (minecraft.Netw
 	return network, hostPort, nil
 }
 
-// signaled returns NetherNet that reaches id through Xbox signaling of connectionType.
-func (n Networks) signaled(connectionType int, id string) (minecraft.Network, string, error) {
-	if strings.TrimSpace(id) == "" {
+// Signaled returns NetherNet that reaches the NetherNet ID id through Xbox signaling of
+// connectionType, p2p.ConnectionTypeSignalingOverJSONRPC or p2p.ConnectionTypeSignalingOverWebSocket.
+func (n Networks) Signaled(connectionType int, id string) (minecraft.Network, string, error) {
+	if connectionType != p2p.ConnectionTypeSignalingOverJSONRPC && connectionType != p2p.ConnectionTypeSignalingOverWebSocket {
+		return nil, "", fmt.Errorf("realms: unsupported signaling connection type %d", connectionType)
+	}
+	if id = strings.TrimSpace(id); id == "" {
 		return nil, "", errors.New("realms: server address has no NetherNet ID")
 	}
 	if n.DialSignaling == nil {
