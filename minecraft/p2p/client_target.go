@@ -13,7 +13,6 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
-	"github.com/sandertv/gophertunnel/minecraft/service/signaling/messaging"
 )
 
 // SignalingConn is a client-side NetherNet signaling connection with an owned lifetime.
@@ -28,10 +27,8 @@ type ClientSignalingOptions struct {
 	HTTPClient *http.Client
 	Log        *slog.Logger
 
-	// JSONRPCDial replaces the Player Messaging signaling dial in tests or custom clients.
+	// JSONRPCDial replaces the JSON-RPC signaling dial in tests or custom clients.
 	JSONRPCDial func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error)
-	// WebSocketDial replaces the direct WebSocket signaling dial in tests or custom clients.
-	WebSocketDial func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error)
 }
 
 // ClientTarget binds a joined friend-world session to its remote dial metadata and per-player login nonce.
@@ -105,21 +102,13 @@ func (t ClientTarget) Close() error {
 	return nil
 }
 
-// DialClientSignaling opens client-side signaling for a resolved NetherNet connection type.
+// DialClientSignaling opens client-side signaling for a resolved NetherNet connection type. Only
+// ConnectionTypeSignalingOverJSONRPC is supported.
 func DialClientSignaling(ctx context.Context, connectionType int, src service.TokenSource, opts ClientSignalingOptions) (SignalingConn, error) {
 	switch connectionType {
 	case ConnectionTypeSignalingOverJSONRPC:
 		if opts.JSONRPCDial != nil {
 			return opts.JSONRPCDial(ctx, src, opts)
-		}
-		conn, err := (messaging.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
-		if err != nil {
-			return nil, err
-		}
-		return conn, nil
-	case ConnectionTypeSignalingOverWebSocket:
-		if opts.WebSocketDial != nil {
-			return opts.WebSocketDial(ctx, src, opts)
 		}
 		conn, err := (signaling.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
 		if err != nil {
@@ -127,6 +116,6 @@ func DialClientSignaling(ctx context.Context, connectionType int, src service.To
 		}
 		return conn, nil
 	default:
-		return nil, fmt.Errorf("minecraft/p2p: unsupported client signaling connection type: %d", connectionType)
+		return nil, fmt.Errorf("minecraft/p2p: no supported signaling connection: unsupported connection type %d", connectionType)
 	}
 }

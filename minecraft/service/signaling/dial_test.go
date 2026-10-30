@@ -1,4 +1,4 @@
-package messaging
+package signaling
 
 import (
 	"bytes"
@@ -15,7 +15,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/service"
-	"github.com/sandertv/gophertunnel/minecraft/service/signaling"
 )
 
 func TestDialContextLogsServiceVersion(t *testing.T) {
@@ -40,7 +39,7 @@ func TestDialContextLogsServiceVersion(t *testing.T) {
 
 	var logs bytes.Buffer
 	conn, err := (Dialer{
-		Environment: staticConfigurationProvider{configuration: &signaling.Configuration{
+		Environment: staticConfigurationProvider{configuration: &Configuration{
 			ServiceURI:    serviceURI,
 			PingFrequency: time.Hour,
 		}},
@@ -52,7 +51,7 @@ func TestDialContextLogsServiceVersion(t *testing.T) {
 		},
 	}})
 	if err != nil {
-		t.Fatalf("dial messaging service: %v", err)
+		t.Fatalf("dial signaling service: %v", err)
 	}
 	defer conn.Close()
 
@@ -72,10 +71,10 @@ func TestDialContextLogsServiceVersion(t *testing.T) {
 }
 
 type staticConfigurationProvider struct {
-	configuration *signaling.Configuration
+	configuration *Configuration
 }
 
-func (p staticConfigurationProvider) Configuration(context.Context, *http.Client, service.TokenSource) (*signaling.Configuration, error) {
+func (p staticConfigurationProvider) Configuration(context.Context, *http.Client, service.TokenSource) (*Configuration, error) {
 	return p.configuration, nil
 }
 

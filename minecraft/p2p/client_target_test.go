@@ -3,9 +3,9 @@ package p2p
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/df-mc/go-nethernet"
@@ -67,49 +67,36 @@ func TestDialClientSignalingJSONRPCOwnsLocalNetworkIdentity(t *testing.T) {
 	}
 }
 
-func TestDialClientSignalingSelectsWebSocket(t *testing.T) {
+// A connection type other than JSON-RPC is refused before any signaling is dialed.
+func TestDialClientSignalingRejectsUnsupportedConnectionType(t *testing.T) {
 	t.Parallel()
 
-	called := false
-	want := newTestSignalingConn()
-	conn, err := DialClientSignaling(context.Background(), ConnectionTypeSignalingOverWebSocket, nil, ClientSignalingOptions{
-		WebSocketDial: func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error) {
-			called = true
-			return want, nil
+	conn, err := DialClientSignaling(context.Background(), 3, nil, ClientSignalingOptions{
+		JSONRPCDial: func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error) {
+			t.Fatal("JSON-RPC signaling dialed for connection type 3")
+			return nil, nil
 		},
 	})
-	if err != nil {
-		t.Fatalf("DialClientSignaling: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no supported signaling connection") {
+		t.Fatalf("DialClientSignaling(3) error = %v, want no supported signaling connection", err)
 	}
-	if !called {
-		t.Fatal("WebSocket client signaling dialer was not used")
-	}
-	if conn != want {
-		t.Fatal("DialClientSignaling returned a different signaling connection")
+	if conn != nil {
+		t.Fatalf("DialClientSignaling(3) connection = %#v, want nil", conn)
 	}
 }
 
 func TestDialClientSignalingReturnsNilConnectionOnBuiltInDialFailure(t *testing.T) {
 	t.Parallel()
 
-	for _, connectionType := range []int{
-		ConnectionTypeSignalingOverJSONRPC,
-		ConnectionTypeSignalingOverWebSocket,
-	} {
-		connectionType := connectionType
-		t.Run(fmt.Sprintf("connection_type_%d", connectionType), func(t *testing.T) {
-			t.Parallel()
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-			conn, err := DialClientSignaling(ctx, connectionType, nil, ClientSignalingOptions{})
-			if err == nil {
-				t.Fatal("DialClientSignaling returned nil error for canceled context")
-			}
-			if conn != nil {
-				t.Fatalf("DialClientSignaling connection = %#v, want nil after dial failure", conn)
-			}
-		})
+	conn, err := DialClientSignaling(ctx, ConnectionTypeSignalingOverJSONRPC, nil, ClientSignalingOptions{})
+	if err == nil {
+		t.Fatal("DialClientSignaling returned nil error for canceled context")
+	}
+	if conn != nil {
+		t.Fatalf("DialClientSignaling connection = %#v, want nil after dial failure", conn)
 	}
 }
 
