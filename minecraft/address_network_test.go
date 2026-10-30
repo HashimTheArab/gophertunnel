@@ -35,8 +35,10 @@ func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 		}
 	}
 	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
-	if got := probeBatches("::1", 0); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probeBatches for an IPv6 literal = %q, want %q", got, want)
+	for _, host := range []string{"::1", "[::1]"} {
+		if got := probeBatches(host, 0); !reflect.DeepEqual(got, want) {
+			t.Fatalf("probeBatches for IPv6 literal %q = %q, want %q", host, got, want)
+		}
 	}
 }
 
@@ -467,7 +469,9 @@ func TestUnreachableNetherNetDial(t *testing.T) {
 		errors.New("identityless answer SDP not allowed"):                       false,
 		errors.New("signal offer: POST http://example.com/v1/join: 500"):        false,
 		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):     true, // excluded by the caller
-		context.Canceled: false,
+		fmt.Errorf("verify server identity token: %w", identityError{refused}):  false,
+		identityError{context.DeadlineExceeded}:                                 false,
+		context.Canceled:                                                        false,
 	} {
 		if got := unreachable(err); got != want {
 			t.Errorf("unreachable(%v) = %v, want %v", err, got, want)

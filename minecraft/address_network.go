@@ -379,8 +379,10 @@ func probeBatches(host string, port uint16) [][]string {
 	}
 }
 
-// probeURL returns scheme://host:port, or scheme://host for port zero, bracketing an IPv6 literal.
+// probeURL returns scheme://host:port, or scheme://host for port zero, bracketing an IPv6 literal
+// whether or not host came bracketed.
 func probeURL(scheme, host string, port uint16) string {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
@@ -463,8 +465,24 @@ func (n httpNetherNet) transport() NetherNet {
 	if n.trust != nil {
 		transport.Dialer.AllowIdentitylessServer = false
 	}
+	if verify := transport.Dialer.VerifyServerToken; verify != nil {
+		transport.Dialer.VerifyServerToken = func(ctx context.Context, token, domain string) (*ecdsa.PublicKey, error) {
+			key, err := verify(ctx, token, domain)
+			if err != nil {
+				return nil, identityError{err}
+			}
+			return key, nil
+		}
+	}
 	return transport
 }
+
+// identityError is a failed server identity verification. It may wrap a network error or a
+// deadline, but never means the server was unreachable.
+type identityError struct{ error }
+
+// Unwrap ...
+func (e identityError) Unwrap() error { return e.error }
 
 func (n httpNetherNet) redialAfter() time.Duration {
 	if n.trustRedialAfter > 0 {
@@ -524,8 +542,12 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 }
 
 // unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
-// or a connection to the signaling endpoint failed. Rejections and server errors are not.
+// or a connection to the signaling endpoint failed. Rejections, identity verification failures
+// and server errors are not.
 func unreachable(err error) bool {
+	if _, ok := errors.AsType[identityError](err); ok {
+		return false
+	}
 	var opErr *net.OpError
 	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr)
 }
