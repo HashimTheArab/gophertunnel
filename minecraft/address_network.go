@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
 )
 
@@ -497,9 +498,9 @@ func (n NetherNetHTTP) transport() NetherNet {
 	if n.ServerTrust != nil {
 		transport.Dialer.AllowIdentitylessServer = false
 	}
-	if verify := transport.Dialer.VerifyServerToken; verify != nil {
-		transport.Dialer.VerifyServerToken = func(ctx context.Context, token, domain string) (*ecdsa.PublicKey, error) {
-			key, err := verify(ctx, token, domain)
+	if verify := transport.Dialer.VerifyServerIdentity; verify != nil {
+		transport.Dialer.VerifyServerIdentity = func(ctx context.Context, identity *nethernet.RemoteIdentity) (*ecdsa.PublicKey, error) {
+			key, err := verify(ctx, identity)
 			if err != nil {
 				return nil, identityError{err}
 			}
@@ -578,14 +579,14 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 }
 
 // unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
-// or a connection to the signaling endpoint failed. Rejections, identity verification failures
-// and server errors are not.
+// or connecting to the signaling endpoint failed. Rejections, identity verification failures,
+// server errors and errors on an established connection are not.
 func unreachable(err error) bool {
 	if _, ok := errors.AsType[identityError](err); ok {
 		return false
 	}
 	var opErr *net.OpError
-	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr)
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // DialContext dials the endpoint; address is used only to find one when URL is empty.
