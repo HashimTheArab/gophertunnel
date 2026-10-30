@@ -2,11 +2,8 @@ package room
 
 import "context"
 
-// Announcer announces the Status of a Listener to an external service. Implementations of Announcer
-// should define how to report the status using the provided Announce method.
-//
-// Example implementations might include XBLAnnouncer, which uses the Multiplayer Session Directory (MPSD)
-// of Xbox Live for announcing the Status.
+// Announcer publishes a world's Status to an external service, such as the Xbox Live Multiplayer
+// Session Directory (MPSD) through XBLAnnouncer.
 type Announcer interface {
 	// Announce sends the given Status to an external service for reporting.
 	// The [context.Context] may be used to control the deadline and cancellation
