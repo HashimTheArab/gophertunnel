@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
@@ -64,6 +65,28 @@ func TestAddressNetworkProbesIPv6Literal(t *testing.T) {
 	}
 	if host, port := splitServerAddress("[::1]"); host != "::1" || port != 0 {
 		t.Fatalf("splitServerAddress([::1]) = %q, %d; want ::1 without a port", host, port)
+	}
+}
+
+// Only failures release the next batch, so HTTP never starts behind an HTTPS answer.
+func TestProbeBatchReleasesOnlyOnFailure(t *testing.T) {
+	t.Parallel()
+	released := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	b := newProbeBatch(2)
+	b.fail(false)
+	if released(b.failed) || released(b.gameFailed) {
+		t.Fatal("next batch released while the game port has not failed")
+	}
+	b.fail(true)
+	if !released(b.failed) || !released(b.gameFailed) {
+		t.Fatal("next batch held after every request failed")
 	}
 }
 
@@ -512,6 +535,25 @@ func TestDialerNamesTheTransportOfAFailedAddressDial(t *testing.T) {
 				t.Fatalf("dial error names %T as %q, want RakNet = %v and the unwrapped text", transportErr.Network, err, test.rakNet)
 			}
 		})
+	}
+}
+
+// Wrapping a dial error names its transport without changing whether it is a net.Error.
+func TestTransportErrorKeepsNetErrorBehaviour(t *testing.T) {
+	t.Parallel()
+	timeout := &net.OpError{Op: "read", Net: "udp", Err: os.ErrDeadlineExceeded}
+	wrapped := wrapTransportError(RakNet{}, timeout)
+	if !os.IsTimeout(wrapped) {
+		t.Fatal("wrapped timeout no longer reports os.IsTimeout")
+	}
+	if netErr, ok := wrapped.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("wrapped timeout %T is not a timing-out net.Error", wrapped)
+	}
+	if transportErr, ok := errors.AsType[*TransportError](wrapped); !ok || !IsRakNet(transportErr.Network) || !errors.Is(wrapped, os.ErrDeadlineExceeded) {
+		t.Fatal("wrapped timeout does not name RakNet or lost its cause")
+	}
+	if _, ok := wrapTransportError(RakNet{}, errors.New("kicked")).(net.Error); ok {
+		t.Fatal("a wrapped non-network error became a net.Error")
 	}
 }
 

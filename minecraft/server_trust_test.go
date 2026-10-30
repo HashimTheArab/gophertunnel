@@ -324,6 +324,42 @@ func TestAddressNetworkFailedIdentityVerificationIsNotJoinedOverRakNet(t *testin
 	}
 }
 
+// deadlineTrust accepts every server, but only once the dial's deadline has passed.
+type deadlineTrust struct{}
+
+func (deadlineTrust) TrustServer(ctx context.Context, _ string, _ *ecdsa.PublicKey) (bool, error) {
+	<-ctx.Done()
+	return true, nil
+}
+
+// A server reached and trusted only after the dial ran out of time is probed again, not joined over
+// RakNet: the deadline passed during trust, not while connecting.
+func TestAddressNetworkTrustOutlastingTheDialIsNotJoinedOverRakNet(t *testing.T) {
+	address := trustListener(t, nil)
+	network := AddressNetwork{
+		ServerTrust:                 deadlineTrust{},
+		NetherNet:                   NetherNet{Log: slog.New(slog.DiscardHandler)},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+		trustRedialAfter:            time.Minute,
+	}
+	dialCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(dialCtx, address); !errors.Is(err, context.DeadlineExceeded) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want the deadline that passed during trust", err)
+	}
+	selected, err := network.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if IsRakNet(selected) {
+		t.Fatal("server reached before the deadline chosen for RakNet, want it probed again")
+	}
+}
+
 type slowTrust struct {
 	delay time.Duration
 	asked int

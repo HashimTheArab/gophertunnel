@@ -79,6 +79,30 @@ func (e *TransportError) Error() string { return e.Err.Error() }
 // Unwrap ...
 func (e *TransportError) Unwrap() error { return e.Err }
 
+// wrapTransportError wraps err in a *TransportError that stays a net.Error when err is one, so
+// os.IsTimeout and net.Error checks on the dial error keep working.
+func wrapTransportError(network Network, err error) error {
+	wrapped := &TransportError{Network: network, Err: err}
+	if _, ok := err.(net.Error); ok {
+		return transportNetError{wrapped}
+	}
+	return wrapped
+}
+
+// transportNetError is a TransportError whose Err is a net.Error.
+type transportNetError struct{ *TransportError }
+
+// Timeout ...
+func (e transportNetError) Timeout() bool { return e.Err.(net.Error).Timeout() }
+
+// Temporary ...
+func (e transportNetError) Temporary() bool {
+	return e.Err.(interface{ Temporary() bool }).Temporary()
+}
+
+// Unwrap ...
+func (e transportNetError) Unwrap() error { return e.TransportError }
+
 // Select returns the network to dial address with: RakNet, or NetherNet bound to the endpoint
 // that answered the probe. It fails only when ctx ends first.
 func (n AddressNetwork) Select(ctx context.Context, address string) (Network, error) {
@@ -282,8 +306,8 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 }
 
 // probeNetherNet returns the first endpoint to answer with a 2xx, cancelling the rest even if a
-// preferred one is about to answer. Each batch starts once the one before it has finished or
-// headStart has passed; its first endpoint, the game port, also starts once the one before fails.
+// preferred one is about to answer. Each batch starts once every request of the one before it has
+// failed or headStart has passed; its first endpoint, the game port, also once the one before fails.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -307,8 +331,10 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				} else {
 					err = probeEndpoint(ctx, client, endpoint)
 				}
-				batch.finish(j == 0, err)
 				results <- probeResult{endpoint, err}
+				if err != nil {
+					batch.fail(j == 0)
+				}
 			}()
 		}
 		before = batch
@@ -331,37 +357,39 @@ type probeResult struct {
 }
 
 // probeBatch tells the batch after it when to start.
+// A 2xx ends the whole probe, so only failures release the next batch.
 type probeBatch struct {
 	pending    atomic.Int32
-	finished   chan struct{} // closed once every request has finished
+	failed     chan struct{} // closed once every request has failed
 	gameFailed chan struct{} // closed once the request to the game port has failed
 }
 
 func newProbeBatch(size int) *probeBatch {
-	b := &probeBatch{finished: make(chan struct{}), gameFailed: make(chan struct{})}
+	b := &probeBatch{failed: make(chan struct{}), gameFailed: make(chan struct{})}
 	b.pending.Store(int32(size))
 	return b
 }
 
-// finish records one finished request; game reports whether it went to the game port.
-func (b *probeBatch) finish(game bool, err error) {
-	if game && err != nil {
+// fail records one failed request, after its result was sent; game reports whether it went to the
+// game port.
+func (b *probeBatch) fail(game bool) {
+	if game {
 		close(b.gameFailed)
 	}
 	if b.pending.Add(-1) == 0 {
-		close(b.finished)
+		close(b.failed)
 	}
 }
 
-// wait blocks until the next batch may start: once this one has finished, at startBy, or, for the
-// game port, once the game port here has failed.
+// wait blocks until the next batch may start: once every request here has failed, at startBy, or,
+// for the game port, once the game port here has failed.
 func (b *probeBatch) wait(ctx context.Context, startBy time.Time, game bool) {
 	var gameFailed <-chan struct{}
 	if game {
 		gameFailed = b.gameFailed
 	}
 	select {
-	case <-b.finished:
+	case <-b.failed:
 	case <-gameFailed:
 	case <-time.After(time.Until(startBy)):
 	case <-ctx.Done():
@@ -529,10 +557,12 @@ func (n NetherNetHTTP) redialAfter() time.Duration {
 
 // dial resolves the endpoint, runs a NetherNet dial to it and asks ServerTrust about the key the
 // server proved it holds. A decision slow enough that the server may have dropped the idle
-// connection is followed by a redial, which does not ask again about keys already trusted.
+// connection is followed by a redial, which does not ask again about keys already trusted. Only a
+// dial that never connected can answer RakNet; one that failed later reached the server.
 func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t NetherNet, endpoint string) (net.Conn, error)) (conn net.Conn, err error) {
+	connected := false
 	defer func() {
-		if n.rakNetAfterFailure && unreachable(err) && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
+		if n.rakNetAfterFailure && !connected && unreachable(err) && !errors.Is(ctx.Err(), context.Canceled) {
 			n.choice.rakNetAfter(err)
 			return
 		}
@@ -548,6 +578,7 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 		if err != nil || n.ServerTrust == nil {
 			return conn, err
 		}
+		connected = true
 		holder, ok := conn.(interface{ PublicKey() *ecdsa.PublicKey })
 		key := (*ecdsa.PublicKey)(nil)
 		if ok {
