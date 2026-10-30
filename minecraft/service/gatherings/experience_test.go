@@ -13,7 +13,7 @@ import (
 
 // networks returns Networks whose JSON-RPC route opens signaling that fails with errSignaling.
 func networks() realms.Networks {
-	return realms.Networks{DialSignaling: func(context.Context, int) (minecraft.SignalingConn, error) { return nil, errSignaling }}
+	return realms.Networks{DialSignaling: func(context.Context) (minecraft.SignalingConn, error) { return nil, errSignaling }}
 }
 
 var errSignaling = errors.New("test signaling")

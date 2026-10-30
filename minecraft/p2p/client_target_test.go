@@ -3,15 +3,12 @@ package p2p
 import (
 	"context"
 	"errors"
-	"io"
-	"net"
-	"strings"
+	"net/http"
+	"sync/atomic"
 	"testing"
 
-	"github.com/df-mc/go-nethernet"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
-	"github.com/sandertv/gophertunnel/minecraft/service"
 )
 
 func TestClientTargetFromSessionPreservesJSONRPCDestinationAndNonce(t *testing.T) {
@@ -34,9 +31,6 @@ func TestClientTargetFromSessionPreservesJSONRPCDestinationAndNonce(t *testing.T
 	if got := target.DialAddress(); got != playerMessagingID.String() {
 		t.Fatalf("DialAddress = %q, want Player Messaging ID %q", got, playerMessagingID)
 	}
-	if got := target.ConnectionType(); got != ConnectionTypeSignalingOverJSONRPC {
-		t.Fatalf("ConnectionType = %d, want %d", got, ConnectionTypeSignalingOverJSONRPC)
-	}
 
 	data := login.ClientData{Nonce: "stale"}
 	target.ApplyClientData(&data)
@@ -45,60 +39,31 @@ func TestClientTargetFromSessionPreservesJSONRPCDestinationAndNonce(t *testing.T
 	}
 }
 
-func TestDialClientSignalingJSONRPCOwnsLocalNetworkIdentity(t *testing.T) {
+// Signaling setup requests go through the configured HTTP client, and a failed dial returns no connection.
+func TestDialClientSignalingUsesConfiguredHTTPClient(t *testing.T) {
 	t.Parallel()
 
-	called := false
-	want := newTestSignalingConn()
-	conn, err := DialClientSignaling(context.Background(), ConnectionTypeSignalingOverJSONRPC, nil, ClientSignalingOptions{
-		JSONRPCDial: func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error) {
-			called = true
-			return want, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("DialClientSignaling: %v", err)
-	}
-	if !called {
-		t.Fatal("JSON-RPC client signaling dialer was not used")
-	}
-	if conn != want {
-		t.Fatal("DialClientSignaling returned a different signaling connection")
-	}
-}
-
-// A connection type other than JSON-RPC is refused before any signaling is dialed.
-func TestDialClientSignalingRejectsUnsupportedConnectionType(t *testing.T) {
-	t.Parallel()
-
-	conn, err := DialClientSignaling(context.Background(), 3, nil, ClientSignalingOptions{
-		JSONRPCDial: func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error) {
-			t.Fatal("JSON-RPC signaling dialed for connection type 3")
-			return nil, nil
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "no supported signaling connection") {
-		t.Fatalf("DialClientSignaling(3) error = %v, want no supported signaling connection", err)
-	}
-	if conn != nil {
-		t.Fatalf("DialClientSignaling(3) connection = %#v, want nil", conn)
-	}
-}
-
-func TestDialClientSignalingReturnsNilConnectionOnBuiltInDialFailure(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	conn, err := DialClientSignaling(ctx, ConnectionTypeSignalingOverJSONRPC, nil, ClientSignalingOptions{})
+	var requests atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: http.NoBody, Request: r}, nil
+	})}
+	conn, err := DialClientSignaling(context.Background(), nil, ClientSignalingOptions{HTTPClient: client})
 	if err == nil {
-		t.Fatal("DialClientSignaling returned nil error for canceled context")
+		t.Fatal("DialClientSignaling succeeded against a failing service")
 	}
 	if conn != nil {
 		t.Fatalf("DialClientSignaling connection = %#v, want nil after dial failure", conn)
 	}
+	if requests.Load() == 0 {
+		t.Fatal("DialClientSignaling did not use the configured HTTP client")
+	}
 }
+
+// roundTripFunc is an http.RoundTripper backed by a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestClientTargetCloseIsIdempotentAcrossCopies(t *testing.T) {
 	t.Parallel()
@@ -178,36 +143,4 @@ func (s *testClientSession) Close() error {
 		return err
 	}
 	return nil
-}
-
-type testSignalingConn struct {
-	local net.Conn
-	peer  net.Conn
-}
-
-// newTestSignalingConn returns an in-memory signaling connection for dial-selection tests.
-func newTestSignalingConn() *testSignalingConn {
-	local, peer := net.Pipe()
-	return &testSignalingConn{local: local, peer: peer}
-}
-
-func (c *testSignalingConn) Signal(context.Context, *nethernet.Signal) error { return nil }
-
-func (c *testSignalingConn) Notify(n nethernet.Notifier) func() { return func() {} }
-
-func (c *testSignalingConn) Context() context.Context { return context.Background() }
-
-func (c *testSignalingConn) PongData([]byte) {}
-
-func (c *testSignalingConn) Accept() (net.Conn, error) { return nil, net.ErrClosed }
-
-func (c *testSignalingConn) Credentials(context.Context) (*nethernet.Credentials, error) {
-	return nil, io.EOF
-}
-
-func (c *testSignalingConn) NetworkID() string { return "local-client-network-id" }
-
-func (c *testSignalingConn) Close() error {
-	_ = c.peer.Close()
-	return c.local.Close()
 }

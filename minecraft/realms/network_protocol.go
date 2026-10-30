@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/sandertv/gophertunnel/minecraft"
-	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
 
 // NetworkProtocol is the protocol a Realms or Gatherings join response names for reaching the server.
@@ -43,10 +42,9 @@ type Networks struct {
 	NetherNet minecraft.NetherNet
 	// HTTPClient sends HTTP signaling requests; nil uses http.DefaultTransport.
 	HTTPClient *http.Client
-	// DialSignaling opens Xbox signaling of a p2p connection type for one dial, such as
-	// p2p.DialClientSignaling with the caller's token source. Without it, NetherNet IDs cannot be dialed.
-	// Signaled only asks it for p2p.ConnectionTypeSignalingOverJSONRPC.
-	DialSignaling func(ctx context.Context, connectionType int) (minecraft.SignalingConn, error)
+	// DialSignaling opens JSON-RPC signaling for one dial, such as p2p.DialClientSignaling with the
+	// caller's token source. Without it, NetherNet IDs cannot be dialed.
+	DialSignaling func(ctx context.Context) (minecraft.SignalingConn, error)
 }
 
 // Realm returns the network and address to pass to minecraft.Dialer.DialContextNetwork for a realm
@@ -56,7 +54,7 @@ func (n Networks) Realm(protocol NetworkProtocol, address string) (minecraft.Net
 	if err != nil {
 		return nil, "", err
 	}
-	return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+	return n.signaled(id)
 }
 
 // realmNetherNetID returns the NetherNet ID a realm whose join response names protocol and address is
@@ -85,7 +83,7 @@ func (n Networks) Experience(protocol NetworkProtocol, host string, port uint16,
 	case NetworkProtocolNetherNet:
 		return hostPortNetwork(minecraft.NetherNetHTTP{NetherNet: n.NetherNet, HTTPClient: n.HTTPClient}, host, port)
 	case NetworkProtocolNetherNetJSONRPC:
-		return n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, id)
+		return n.signaled(id)
 	default:
 		return nil, "", fmt.Errorf("realms: unsupported experience network protocol %q", protocol)
 	}
@@ -99,12 +97,8 @@ func hostPortNetwork(network minecraft.Network, host string, port uint16) (minec
 	return network, net.JoinHostPort(host, strconv.Itoa(int(port))), nil
 }
 
-// Signaled returns NetherNet that reaches the NetherNet ID id through Xbox signaling of connectionType,
-// which must be p2p.ConnectionTypeSignalingOverJSONRPC.
-func (n Networks) Signaled(connectionType int, id string) (minecraft.Network, string, error) {
-	if connectionType != p2p.ConnectionTypeSignalingOverJSONRPC {
-		return nil, "", fmt.Errorf("realms: unsupported signaling connection type %d", connectionType)
-	}
+// signaled returns NetherNet that reaches the NetherNet ID id through JSON-RPC signaling.
+func (n Networks) signaled(id string) (minecraft.Network, string, error) {
 	if id = strings.TrimSpace(id); id == "" {
 		return nil, "", errors.New("realms: server address has no NetherNet ID")
 	}
@@ -114,7 +108,7 @@ func (n Networks) Signaled(connectionType int, id string) (minecraft.Network, st
 	network := n.NetherNet
 	network.Signaling = nil
 	network.DialSignaling = func(ctx context.Context, _ string) (minecraft.SignalingConn, error) {
-		return n.DialSignaling(ctx, connectionType)
+		return n.DialSignaling(ctx)
 	}
 	return network, id, nil
 }
