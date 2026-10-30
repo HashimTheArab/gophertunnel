@@ -82,7 +82,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	if choice.entry.endpoint == "" {
 		return probedRakNet{RakNet: n.RakNet, choice: choice}, nil
 	}
-	return httpNetherNet{nethernet: n.NetherNet, url: choice.entry.endpoint, endpoint: explicitPort(choice.entry.endpoint), client: client, trust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice}, nil
+	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice}, nil
 }
 
 // probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport
@@ -165,8 +165,8 @@ func (p probeChoice) forgetAfter(err error) {
 
 // loginAddress returns the server address a vanilla client puts in its login after joining this
 // endpoint: the URL, with its port.
-func (n httpNetherNet) loginAddress() string {
-	return n.endpoint
+func (n NetherNetHTTP) loginAddress() string {
+	return explicitPort(n.URL)
 }
 
 // probedRakNet is the RakNet a probe chose; a failed dial forgets that choice.
@@ -335,16 +335,46 @@ func splitServerAddress(address string) (string, uint16) {
 	return host, uint16(port)
 }
 
-// httpNetherNet dials NetherNet through one server's HTTP signaling endpoint.
-type httpNetherNet struct {
-	nethernet NetherNet
-	url       string // the URL that answered the probe
-	endpoint  string // url with an explicit port, the dial address endpoint.Client expects
-	client    *http.Client
-	trust     ServerTrust
-	// trustRedialAfter overrides the package default in tests.
-	trustRedialAfter time.Duration
-	choice           probeChoice // forgotten when a dial fails
+// NetherNetHTTP is a Network that dials NetherNet through one server's HTTP signaling endpoint and
+// never falls back to RakNet. When URL is empty, the endpoint is the one ProbeNetherNet finds for
+// the dial address.
+type NetherNetHTTP struct {
+	// URL is the endpoint's base URL, such as https://play.example.com:19132. When set, the dial
+	// address is ignored and nothing is probed.
+	URL string
+	// NetherNet configures the dial; its Signaling and DialSignaling are replaced by the endpoint's.
+	NetherNet NetherNet
+	// HTTPClient sends the probe and signaling requests; nil uses http.DefaultTransport. Redirects
+	// are never followed.
+	HTTPClient *http.Client
+	// ServerTrust, when set, decides whether to join once the server has proved its identity;
+	// servers without an identity are then refused.
+	ServerTrust ServerTrust
+
+	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
+	choice           probeChoice   // the AddressNetwork answer to forget when a dial fails
+}
+
+// Select returns n with its endpoint resolved: URL when set, otherwise the endpoint ProbeNetherNet
+// finds for address. It fails when nothing answers.
+func (n NetherNetHTTP) Select(ctx context.Context, address string) (Network, error) {
+	return n.resolve(ctx, address)
+}
+
+func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHTTP, error) {
+	if n.URL != "" {
+		return n, nil
+	}
+	host, port := splitServerAddress(address)
+	found, err := ProbeNetherNet(ctx, n.HTTPClient, host, port)
+	if err != nil {
+		if ctx.Err() != nil {
+			return n, ctx.Err()
+		}
+		return n, fmt.Errorf("minecraft: no NetherNet HTTP signaling at %s: %w", address, err)
+	}
+	n.URL = found
+	return n, nil
 }
 
 // trustRedialAfter is how long a trust decision may keep a fresh connection idle before it is
@@ -352,34 +382,39 @@ type httpNetherNet struct {
 const trustRedialAfter = 5 * time.Second
 
 // transport returns NetherNet signaling through the endpoint, opening fresh signaling per dial.
-func (n httpNetherNet) transport() NetherNet {
-	transport := n.nethernet
+func (n NetherNetHTTP) transport() NetherNet {
+	transport := n.NetherNet
 	transport.Signaling = nil
+	client := probeHTTPClient(n.HTTPClient)
 	transport.DialSignaling = func(context.Context, string) (SignalingConn, error) {
-		return endpointSignaling{endpoint.ClientConfig{HTTPClient: n.client, Logger: n.nethernet.Log}.New()}, nil
+		return endpointSignaling{endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log}.New()}, nil
 	}
-	if n.trust != nil {
+	if n.ServerTrust != nil {
 		transport.Dialer.AllowIdentitylessServer = false
 	}
 	return transport
 }
 
-func (n httpNetherNet) redialAfter() time.Duration {
+func (n NetherNetHTTP) redialAfter() time.Duration {
 	if n.trustRedialAfter > 0 {
 		return n.trustRedialAfter
 	}
 	return trustRedialAfter
 }
 
-// dial runs a NetherNet dial and asks ServerTrust about the key the server proved it holds. A
-// decision slow enough that the server may have dropped the idle connection is followed by a
-// redial, which does not ask again about keys already trusted during this dial.
-func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (conn net.Conn, err error) {
+// dial resolves the endpoint, runs a NetherNet dial to it and asks ServerTrust about the key the
+// server proved it holds. A decision slow enough that the server may have dropped the idle
+// connection is followed by a redial, which does not ask again about keys already trusted.
+func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t NetherNet, endpoint string) (net.Conn, error)) (conn net.Conn, err error) {
 	defer func() { n.choice.forgetAfter(err) }()
+	if n, err = n.resolve(ctx, address); err != nil {
+		return nil, err
+	}
+	endpoint := explicitPort(n.URL)
 	var trusted []*ecdsa.PublicKey
 	for {
-		conn, err := dial(n.transport())
-		if err != nil || n.trust == nil {
+		conn, err := dial(n.transport(), endpoint)
+		if err != nil || n.ServerTrust == nil {
 			return conn, err
 		}
 		holder, ok := conn.(interface{ PublicKey() *ecdsa.PublicKey })
@@ -395,7 +430,7 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 			return conn, nil
 		}
 		start := time.Now()
-		ok, err = n.trust.TrustServer(ctx, n.url, key)
+		ok, err = n.ServerTrust.TrustServer(ctx, n.URL, key)
 		if err != nil || !ok {
 			_ = conn.Close()
 			if err != nil {
@@ -415,30 +450,32 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 	}
 }
 
-// DialContext ignores address: the endpoint already names the server.
-func (n httpNetherNet) DialContext(ctx context.Context, _ string) (net.Conn, error) {
-	return n.dial(ctx, func(t NetherNet) (net.Conn, error) { return t.DialContext(ctx, n.endpoint) })
+// DialContext dials the endpoint; address is used only to find one when URL is empty.
+func (n NetherNetHTTP) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	return n.dial(ctx, address, func(t NetherNet, endpoint string) (net.Conn, error) { return t.DialContext(ctx, endpoint) })
 }
 
 // DialContextIdentity ...
-func (n httpNetherNet) DialContextIdentity(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
-	return n.dial(ctx, func(t NetherNet) (net.Conn, error) { return t.DialContextIdentity(ctx, n.endpoint, token, key) })
+func (n NetherNetHTTP) DialContextIdentity(ctx context.Context, address, token string, key *ecdsa.PrivateKey) (net.Conn, error) {
+	return n.dial(ctx, address, func(t NetherNet, endpoint string) (net.Conn, error) {
+		return t.DialContextIdentity(ctx, endpoint, token, key)
+	})
 }
 
 // DialContextIdentityProvider ...
-func (n httpNetherNet) DialContextIdentityProvider(ctx context.Context, _ string, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
-	return n.dial(ctx, func(t NetherNet) (net.Conn, error) {
-		return t.DialContextIdentityProvider(ctx, n.endpoint, token, key, identityProvider)
+func (n NetherNetHTTP) DialContextIdentityProvider(ctx context.Context, address, token string, key *ecdsa.PrivateKey, identityProvider string) (net.Conn, error) {
+	return n.dial(ctx, address, func(t NetherNet, endpoint string) (net.Conn, error) {
+		return t.DialContextIdentityProvider(ctx, endpoint, token, key, identityProvider)
 	})
 }
 
 // PingContext ...
-func (httpNetherNet) PingContext(context.Context, string) ([]byte, error) {
+func (NetherNetHTTP) PingContext(context.Context, string) ([]byte, error) {
 	return nil, errors.New("minecraft: NetherNet HTTP signaling: ping not supported")
 }
 
 // Listen ...
-func (httpNetherNet) Listen(string) (NetworkListener, error) {
+func (NetherNetHTTP) Listen(string) (NetworkListener, error) {
 	return nil, errors.New("minecraft: NetherNet HTTP signaling: listen not supported")
 }
 

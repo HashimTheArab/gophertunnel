@@ -345,15 +345,15 @@ func TestAddressNetworkSelectsNetherNetWhenProbeAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	netherNet, ok := selected.(httpNetherNet)
+	netherNet, ok := selected.(NetherNetHTTP)
 	if !ok {
 		t.Fatalf("selected %T, want NetherNet over HTTP signaling", selected)
 	}
 	if IsRakNet(selected) {
 		t.Fatal("IsRakNet reports NetherNet as RakNet")
 	}
-	if netherNet.endpoint != server.URL {
-		t.Fatalf("endpoint = %q, want %q", netherNet.endpoint, server.URL)
+	if netherNet.URL != server.URL {
+		t.Fatalf("URL = %q, want %q", netherNet.URL, server.URL)
 	}
 	if _, ok := selected.(identityProviderDialer); !ok {
 		t.Fatal("selected NetherNet cannot present the login identity")
@@ -512,7 +512,7 @@ func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
+	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
 		t.Fatalf("Select = %#v, want the answer cached for the lower-cased host", selected)
 	}
 	if cache.lookup(probeKey{host: "play.example.com", port: 0}) != nil {
@@ -540,7 +540,7 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if n, ok := selected.(httpNetherNet); !ok || n.url != server.URL {
+	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
 		t.Fatalf("Select = %#v, want NetherNet at the cached %q", selected, server.URL)
 	}
 	mu.Lock()
@@ -612,5 +612,112 @@ func TestDialerSendsChosenEndpointAsServerAddress(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("no client joined over NetherNet")
+	}
+}
+
+// netherNetHTTPServer serves a NetherNet listener behind HTTP signaling and counts the GET
+// /v1/join requests probes send to it.
+func netherNetHTTPServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
+	t.Cleanup(func() { _ = signaling.Close() })
+	listener, err := (nethernet.ListenConfig{AllowAnonymous: true, DisableTrickleICE: true, Log: slog.New(slog.DiscardHandler)}).Listen(signaling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	probes := new(atomic.Int32)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			probes.Add(1)
+		}
+		signaling.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server, probes
+}
+
+var openNetherNet = NetherNet{Dialer: nethernet.Dialer{AllowIdentitylessServer: true}, Log: slog.New(slog.DiscardHandler)}
+
+// A set URL is dialed as is: nothing is probed and the dial address is ignored.
+func TestNetherNetHTTPDialsItsURLWithoutProbing(t *testing.T) {
+	t.Parallel()
+	server, probes := netherNetHTTPServer(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	network := NetherNetHTTP{URL: server.URL, NetherNet: openNetherNet}
+	if selected, err := network.Select(ctx, "unused:1"); err != nil || selected.(NetherNetHTTP).URL != server.URL {
+		t.Fatalf("Select = %#v, %v; want the network unchanged", selected, err)
+	}
+	conn, err := network.DialContext(ctx, closedTCPAddress(t))
+	if err != nil {
+		t.Fatalf("DialContext: %v", err)
+	}
+	_ = conn.Close()
+	if _, ok := conn.(*nethernet.Conn); !ok {
+		t.Fatalf("dialed %T, want a NetherNet connection", conn)
+	}
+	if n := probes.Load(); n != 0 {
+		t.Fatalf("sent %d probe requests, want none", n)
+	}
+}
+
+// Without a URL the dial address is probed for the endpoint, which is then dialed.
+func TestNetherNetHTTPProbesTheAddressWithoutURL(t *testing.T) {
+	t.Parallel()
+	server, probes := netherNetHTTPServer(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	network := NetherNetHTTP{NetherNet: openNetherNet}
+	selected, err := network.Select(ctx, server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL || n.loginAddress() != server.URL {
+		t.Fatalf("Select = %#v, want the probed %q", selected, server.URL)
+	}
+	conn, err := network.DialContext(ctx, server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("DialContext: %v", err)
+	}
+	_ = conn.Close()
+	if probes.Load() == 0 {
+		t.Fatal("dial without a URL sent no probe")
+	}
+}
+
+// When nothing answers the probe the dial fails, even with RakNet on the port.
+func TestNetherNetHTTPNeverFallsBackToRakNet(t *testing.T) {
+	t.Parallel()
+	rakNet, err := (RakNet{}).Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen RakNet: %v", err)
+	}
+	t.Cleanup(func() { _ = rakNet.Close() })
+	go func() {
+		if conn, err := rakNet.Accept(); err == nil {
+			t.Error("dial fell back to RakNet")
+			_ = conn.Close()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	conn, err := (NetherNetHTTP{NetherNet: openNetherNet}).DialContext(ctx, rakNet.Addr().String())
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("dial succeeded with %T, want no NetherNet endpoint", conn)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("dial waited for its deadline: %v", err)
 	}
 }
