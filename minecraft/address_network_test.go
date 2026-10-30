@@ -992,12 +992,14 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	_, err := (Dialer{}).DialContextNetwork(ctx, NetherNetHTTP{NetherNet: openNetherNet}, closedTCPAddress(t))
-	transportErr, ok := errors.AsType[*TransportError](err)
-	if !ok {
-		t.Fatalf("dial error = %v, want a TransportError", err)
-	}
-	if _, ok := transportErr.Network.(NetherNetHTTP); !ok || IsRakNet(transportErr.Network) {
-		t.Fatalf("failed transport = %T, want NetherNetHTTP", transportErr.Network)
+	for _, network := range []Network{NetherNetHTTP{NetherNet: openNetherNet}, &NetherNetHTTP{NetherNet: openNetherNet}} {
+		_, err := (Dialer{}).DialContextNetwork(ctx, network, closedTCPAddress(t))
+		transportErr, ok := errors.AsType[*TransportError](err)
+		if !ok {
+			t.Fatalf("%T: dial error = %v, want a TransportError", network, err)
+		}
+		if _, ok := transportErr.Network.(NetherNetHTTP); !ok || IsRakNet(transportErr.Network) {
+			t.Fatalf("%T: failed transport = %T, want NetherNetHTTP", network, transportErr.Network)
+		}
 	}
 }

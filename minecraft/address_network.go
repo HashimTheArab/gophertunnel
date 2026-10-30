@@ -466,6 +466,9 @@ func (n NetherNetHTTP) Select(ctx context.Context, address string) (Network, err
 	return n.resolve(ctx, address)
 }
 
+// fixedTransport names n as the transport of a Dialer dial whose Select found no endpoint.
+func (n NetherNetHTTP) fixedTransport() Network { return n }
+
 // resolve returns n with URL set, probing address for it when it is empty.
 func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHTTP, error) {
 	if n.URL != "" {
