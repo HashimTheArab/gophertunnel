@@ -63,6 +63,9 @@ func (conf ListenConfig) Wrap(n minecraft.NetworkListener) *Listener {
 	if conf.AnnounceTimeout <= 0 {
 		conf.AnnounceTimeout = DefaultAnnounceTimeout
 	}
+	if _, ok := n.Addr().(*nethernet.Addr); ok && conf.Signaling == nil && !conf.DisableServerStatusOverride {
+		conf.Log.Warn("NetherNet listener has no ListenConfig.Signaling, so it advertises no connection and cannot be joined")
+	}
 
 	return &Listener{
 		conf: conf,
@@ -116,7 +119,6 @@ func (l *Listener) ServerStatus(server minecraft.ServerStatus) {
 				status.TransportLayer = p2p.TransportLayerNetherNet
 			}
 			if l.conf.Signaling == nil {
-				l.conf.Log.Debug("NetherNet listener has no JSON-RPC signaling to advertise", slog.Any("address", addr))
 				break
 			}
 			connection, err := p2p.NewJSONRPCConnection(l.conf.Signaling)

@@ -1,10 +1,13 @@
 package room
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,7 +77,8 @@ func TestListenerCloseCancelsAnnounce(t *testing.T) {
 	}
 }
 
-// A NetherNet listener advertises the JSON-RPC signaling it was given, and nothing without it.
+// A NetherNet listener advertises the JSON-RPC signaling it was given, and warns that it advertises
+// nothing without it.
 func TestListenerServerStatusAdvertisesJSONRPCSignaling(t *testing.T) {
 	t.Parallel()
 
@@ -91,11 +95,16 @@ func TestListenerServerStatusAdvertisesJSONRPCSignaling(t *testing.T) {
 		"without signaling": {},
 	} {
 		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
 			announcer := &recordingAnnouncer{}
 			l := ListenConfig{
 				Announcer: announcer,
 				Signaling: test.signaling,
+				Log:       slog.New(slog.NewTextHandler(&logs, nil)),
 			}.Wrap(fakeNetworkListener{addr: &nethernet.Addr{NetworkID: signaling.networkID}})
+			if warned := strings.Contains(logs.String(), "advertises no connection"); warned != (test.signaling == nil) {
+				t.Fatalf("missing-signaling warning = %v, want %v", warned, test.signaling == nil)
+			}
 
 			l.ServerStatus(minecraft.ServerStatus{})
 			if got := announcer.status.SupportedConnections; !slices.Equal(got, test.want) {
