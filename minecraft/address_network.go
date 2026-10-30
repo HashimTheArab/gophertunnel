@@ -498,10 +498,12 @@ func (n httpNetherNet) redialAfter() time.Duration {
 
 // dial runs a NetherNet dial and asks ServerTrust about the key the server proved it holds. A
 // decision slow enough that the server may have dropped the idle connection is followed by a
-// redial, which does not ask again about keys already trusted during this dial.
+// redial, which does not ask again about keys already trusted during this dial. Only a dial that
+// never connected can answer RakNet; one that failed later, during or after trust, reached the server.
 func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (conn net.Conn, err error) {
+	connected := false
 	defer func() {
-		if n.rakNetAfterFailure && unreachable(err) && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
+		if n.rakNetAfterFailure && !connected && unreachable(err) && !errors.Is(ctx.Err(), context.Canceled) {
 			n.choice.rakNetAfter(err)
 			return
 		}
@@ -513,6 +515,7 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 		if err != nil || n.trust == nil {
 			return conn, err
 		}
+		connected = true
 		holder, ok := conn.(interface{ PublicKey() *ecdsa.PublicKey })
 		key := (*ecdsa.PublicKey)(nil)
 		if ok {
