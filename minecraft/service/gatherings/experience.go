@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/df-mc/go-playfab/v2/catalog"
 	"github.com/google/uuid"
@@ -160,14 +161,14 @@ func (a Address) DialAddress() (Transport, string, error) {
 	case realms.NetworkProtocolNetherNet:
 		transport = TransportNetherNet
 	case realms.NetworkProtocolNetherNetJSONRPC:
-		if a.NetherNetID == "" {
+		if strings.TrimSpace(a.NetherNetID) == "" {
 			return 0, "", errors.New("service/gatherings: NetherNet_JsonRpc experience address has no NetherNet ID")
 		}
 		return TransportNetherNetJSONRPC, a.NetherNetID, nil
 	default:
 		return 0, "", fmt.Errorf("service/gatherings: unsupported experience network protocol %q", a.NetworkProtocol)
 	}
-	if a.IPv4Address == "" || a.Port == 0 {
+	if strings.TrimSpace(a.IPv4Address) == "" || a.Port == 0 {
 		return 0, "", errors.New("service/gatherings: experience address has no host or port")
 	}
 	return transport, net.JoinHostPort(a.IPv4Address, strconv.Itoa(int(a.Port))), nil

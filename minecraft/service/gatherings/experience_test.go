@@ -23,15 +23,18 @@ func TestAddressDialAddress(t *testing.T) {
 		{name: "Default ignores ID", address: Address{NetworkProtocol: NetworkProtocolDefault, NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportRakNet, want: "play.example.com:19132"},
 		{name: "Default ID only", address: Address{NetworkProtocol: NetworkProtocolDefault, NetherNetID: id}, wantErr: true},
 		{name: "Default missing port", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "play.example.com"}, wantErr: true},
+		{name: "Default whitespace host", address: Address{NetworkProtocol: NetworkProtocolDefault, IPv4Address: "   ", Port: 19132}, wantErr: true},
 		{name: "NetherNet", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNet, want: "play.example.com:19132"},
 		{name: "NetherNet ignores ID", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789", IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNet, want: "play.example.com:19132"},
 		{name: "NetherNet ID only", address: Address{NetworkProtocol: "NetherNet", NetherNetID: "123456789"}, wantErr: true},
 		{name: "NetherNet missing host", address: Address{NetworkProtocol: "NetherNet", Port: 19132}, wantErr: true},
 		{name: "NetherNet missing port", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "play.example.com"}, wantErr: true},
+		{name: "NetherNet whitespace host", address: Address{NetworkProtocol: "NetherNet", IPv4Address: "   ", Port: 19132}, wantErr: true},
 		{name: "NetherNet_JsonRpc", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id}, wantTransport: TransportNetherNetJSONRPC, want: id},
 		{name: "NetherNet_JsonRpc any case", address: Address{NetworkProtocol: "NETHERNET_JSONRPC", NetherNetID: id}, wantTransport: TransportNetherNetJSONRPC, want: id},
 		{name: "NetherNet_JsonRpc ignores host", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: id, IPv4Address: "play.example.com", Port: 19132}, wantTransport: TransportNetherNetJSONRPC, want: id},
 		{name: "NetherNet_JsonRpc host only", address: Address{NetworkProtocol: "NetherNet_JsonRpc", IPv4Address: "play.example.com", Port: 19132}, wantErr: true},
+		{name: "NetherNet_JsonRpc whitespace ID", address: Address{NetworkProtocol: "NetherNet_JsonRpc", NetherNetID: "   "}, wantErr: true},
 		{name: "unsupported", address: Address{NetworkProtocol: "QUIC", IPv4Address: "127.0.0.1", Port: 19132}, wantErr: true},
 	}
 
