@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"sync"
@@ -385,31 +386,41 @@ func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
 	}
 }
 
-// With RakNetAfterNetherNetFailure a failed NetherNet dial makes the next Select join over RakNet
-// without probing, unless the caller cancelled the dial.
+// With RakNetAfterNetherNetFailure only a NetherNet dial that never reached the server makes the next
+// Select join over RakNet without probing; a server error or a cancelled dial is probed again.
 func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 	t.Parallel()
-	for name, cancelled := range map[string]bool{"signaling fails": false, "dial cancelled": true} {
+	hang := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}
+	for name, test := range map[string]struct {
+		offer      http.HandlerFunc // answers the signaling offer
+		timeout    time.Duration    // bounds the dial when set
+		cancel     bool             // the caller cancels once the offer arrives
+		wantRakNet bool
+	}{
+		"dial times out": {offer: hang, timeout: 300 * time.Millisecond, wantRakNet: true},
+		"server error": {offer: func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "no session", http.StatusInternalServerError)
+		}},
+		"dial cancelled": {offer: hang, cancel: true},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var probes atomic.Int32
-			signaled := make(chan struct{}, 1)
+			offered := make(chan struct{}, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
 					probes.Add(1)
 					_, _ = io.WriteString(w, "OK")
 					return
 				}
-				if cancelled {
-					_, _ = io.Copy(io.Discard, r.Body)
-					select {
-					case signaled <- struct{}{}:
-					default:
-					}
-					<-r.Context().Done()
-					return
+				select {
+				case offered <- struct{}{}:
+				default:
 				}
-				http.Error(w, "no session", http.StatusInternalServerError)
+				test.offer(w, r)
 			}))
 			t.Cleanup(server.Close)
 			network := AddressNetwork{Probes: &ProbeCache{}, RakNetAfterNetherNetFailure: true, NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler)}}
@@ -419,9 +430,13 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 			defer cancel()
 			dialCtx, cancelDial := context.WithCancel(ctx)
 			defer cancelDial()
-			if cancelled {
+			if test.timeout > 0 {
+				dialCtx, cancelDial = context.WithTimeout(ctx, test.timeout)
+				defer cancelDial()
+			}
+			if test.cancel {
 				go func() {
-					<-signaled
+					<-offered
 					cancelDial()
 				}()
 			}
@@ -435,10 +450,28 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 				t.Fatalf("Select after failed dial: %v", err)
 			}
 			_, rakNet := selected.(probedRakNet)
-			if reprobed := probes.Load() != before; rakNet == cancelled || reprobed != cancelled {
-				t.Fatalf("Select chose %T and probed again = %v, want RakNet without a probe only after a failure", selected, reprobed)
+			if reprobed := probes.Load() != before; rakNet != test.wantRakNet || reprobed == test.wantRakNet {
+				t.Fatalf("Select chose %T and probed again = %v, want RakNet without a probe = %v", selected, reprobed, test.wantRakNet)
 			}
 		})
+	}
+}
+
+// Only a deadline or a failed connection counts as never reaching the server.
+func TestUnreachableNetherNetDial(t *testing.T) {
+	t.Parallel()
+	refused := &url.Error{Op: "Post", URL: "http://example.com/v1/join", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	for err, want := range map[error]bool{
+		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded): true,
+		fmt.Errorf("signal offer: %w", refused):                                 true,
+		errors.New("identityless answer SDP not allowed"):                       false,
+		errors.New("signal offer: POST http://example.com/v1/join: 500"):        false,
+		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):     true, // excluded by the caller
+		context.Canceled: false,
+	} {
+		if got := unreachable(err); got != want {
+			t.Errorf("unreachable(%v) = %v, want %v", err, got, want)
+		}
 	}
 }
 

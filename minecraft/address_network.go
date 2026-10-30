@@ -39,9 +39,10 @@ type AddressNetwork struct {
 	// Probes, when set, reuses probe answers. Answers can depend on HTTPClient, so share a cache
 	// only between networks whose clients reach servers the same way. When nil, every dial probes.
 	Probes *ProbeCache
-	// RakNetAfterNetherNetFailure makes a failed NetherNet dial store a RakNet answer in Probes, so
-	// later dials join over RakNet until it expires or fails too. Vanilla probes again instead.
-	// A cancelled dial or a server refused by ServerTrust is probed again either way.
+	// RakNetAfterNetherNetFailure makes a NetherNet dial that never reached the server, by timing
+	// out or failing to connect to signaling, store a RakNet answer in Probes until it expires or
+	// fails too. Any other failure, such as a refused identity or a server error, is probed again,
+	// as vanilla probes again after every failure.
 	RakNetAfterNetherNetFailure bool
 
 	probeHeadStart   time.Duration // overrides httpProbeHeadStart in tests
@@ -477,7 +478,7 @@ func (n httpNetherNet) redialAfter() time.Duration {
 // redial, which does not ask again about keys already trusted during this dial.
 func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn, error)) (conn net.Conn, err error) {
 	defer func() {
-		if n.rakNetAfterFailure && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
+		if n.rakNetAfterFailure && unreachable(err) && !errors.Is(err, ErrServerNotTrusted) && !errors.Is(ctx.Err(), context.Canceled) {
 			n.choice.rakNetAfter(err)
 			return
 		}
@@ -520,6 +521,13 @@ func (n httpNetherNet) dial(ctx context.Context, dial func(NetherNet) (net.Conn,
 		trusted = append(trusted, key)
 		_ = conn.Close()
 	}
+}
+
+// unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
+// or a connection to the signaling endpoint failed. Rejections and server errors are not.
+func unreachable(err error) bool {
+	var opErr *net.OpError
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr)
 }
 
 // DialContext ignores address: the endpoint already names the server.
