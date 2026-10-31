@@ -329,6 +329,17 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	// the way vanilla does once it has chosen.
 	loginAddress := address
 	if s, ok := network.(transportSelector); ok {
+		// Report this dial's client to a probe that sends it, as the vanilla client does, unless the
+		// consumer set its own.
+		if filler, ok := s.(interface {
+			withProbeClientInfo(ProbeClientInfo) transportSelector
+		}); ok {
+			s = filler.withProbeClientInfo(ProbeClientInfo{
+				Version:  d.Protocol.Ver(),
+				Protocol: d.Protocol.ID(),
+				Platform: int(d.ClientData.DeviceOS),
+			})
+		}
 		if network, err = s.Select(ctx, address); err != nil {
 			if fixed, ok := s.(interface{ fixedTransport() Network }); ok {
 				return nil, &TransportError{Network: fixed.fixedTransport(), Err: err}
