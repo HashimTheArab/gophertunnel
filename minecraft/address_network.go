@@ -19,7 +19,6 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
-	"github.com/pion/ice/v4"
 )
 
 // AddressNetwork is a Network for a server named by host:port. Like the vanilla client joining
@@ -590,17 +589,19 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 	}
 }
 
-// unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
-// ICE never connected, or connecting to the signaling endpoint failed. Rejections, identity
-// verification failures, server errors and errors on an established connection are not.
+// unreachable reports whether a failed NetherNet dial never reached the server: no answer arrived,
+// ICE never connected, the dial deadline passed, or the signaling endpoint could not be dialed.
+// Rejections, identity verification failures, server errors and errors on an established connection
+// are not.
 func unreachable(err error) bool {
 	if _, ok := errors.AsType[identityError](err); ok {
 		return false
 	}
-	// pion reports ICE that failed before the deadline as cancelled: go-nethernet stops the transport.
+	// go-nethernet names its WebRTC-level reachability failures with sentinels; the signaling
+	// endpoint refusing the connection surfaces as a dial OpError from the HTTP transport.
 	var opErr *net.OpError
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ice.ErrCanceledByCaller) ||
-		errors.As(err, &opErr) && opErr.Op == "dial"
+	return errors.Is(err, nethernet.ErrICEConnectFailed) || errors.Is(err, nethernet.ErrNoAnswer) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // DialContext dials the endpoint; address is used only to find one when URL is empty.

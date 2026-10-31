@@ -22,7 +22,6 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
-	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -485,19 +484,25 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 	}
 }
 
-// Only a deadline or a failed connection counts as never reaching the server.
+// Only a sentinel reachability failure, a deadline, or a failed signaling connection counts as
+// never reaching the server.
 func TestUnreachableNetherNetDial(t *testing.T) {
 	t.Parallel()
 	refused := &url.Error{Op: "Post", URL: "http://example.com/v1/join", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
 	for err, want := range map[error]bool{
-		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded):   true,
-		fmt.Errorf("signal offer: %w", refused):                                   true,
-		errors.New("identityless answer SDP not allowed"):                         false,
-		errors.New("signal offer: POST http://example.com/v1/join: 500"):          false,
-		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):       true, // excluded by the caller
-		fmt.Errorf("verify server identity token: %w", identityError{refused}):    false,
-		identityError{context.DeadlineExceeded}:                                   false,
-		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}: false,
+		nethernet.ErrICEConnectFailed:                                              true,
+		fmt.Errorf("start transports: %w", nethernet.ErrICEConnectFailed):          true,
+		nethernet.ErrNoAnswer:                                                      true,
+		fmt.Errorf("signal offer: %w", nethernet.ErrNoAnswer):                      true,
+		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded):    true,
+		fmt.Errorf("signal offer: %w", refused):                                    true,
+		errors.New("identityless answer SDP not allowed"):                          false,
+		errors.New("signal offer: POST http://example.com/v1/join: 500"):           false,
+		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):        true, // excluded by the caller
+		fmt.Errorf("verify server identity token: %w", identityError{refused}):     false,
+		identityError{context.DeadlineExceeded}:                                    false,
+		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}:  false,
+		errors.New("nethernet: remote peer notified connection failure (code: 7)"): false,
 		context.Canceled: false,
 	} {
 		if got := unreachable(err); got != want {
@@ -572,7 +577,7 @@ func TestAddressNetworkRakNetAfterICEFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if conn, err := network.DialContext(ctx, address); !errors.Is(err, ice.ErrCanceledByCaller) {
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, nethernet.ErrICEConnectFailed) {
 		if conn != nil {
 			_ = conn.Close()
 		}
@@ -628,6 +633,62 @@ func iceUnreachableServer(t *testing.T, probes *atomic.Int32) string {
 		_, _ = io.WriteString(w, strings.Join(lines, "\r\n"))
 	}))
 	t.Cleanup(server.Close)
+	return server.Listener.Addr().String()
+}
+
+// A NetherNet dial that never gets an answer within the negotiation timeout makes the next Select
+// join over RakNet without probing, exactly like an ICE path that never connects.
+func TestAddressNetworkRakNetAfterNoAnswer(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	address := noAnswerServer(t, &probes)
+	network := AddressNetwork{
+		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
+			NegotiationTimeout:      200 * time.Millisecond,
+			AllowIdentitylessServer: true,
+		}},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, nethernet.ErrNoAnswer) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want no answer within the negotiation timeout", err)
+	}
+	before := probes.Load()
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !IsRakNet(selected) || probes.Load() != before {
+		t.Fatalf("Select chose %T after probing %d more times, want RakNet without a probe", selected, probes.Load()-before)
+	}
+}
+
+// noAnswerServer returns the address of a server that answers the join probe and accepts the offer
+// POST but never answers it, so a dial waits out its negotiation timeout.
+func noAnswerServer(t *testing.T, probes *atomic.Int32) string {
+	t.Helper()
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			probes.Add(1)
+			_, _ = io.WriteString(w, "OK")
+			return
+		}
+		// Accept the offer but never answer, so the dialer waits out its negotiation timeout. The
+		// handler releases when the dialer gives up or the test ends, so the server can close.
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	// Cleanup runs last-in-first-out: release the handler before the server waits on it.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(done) })
 	return server.Listener.Addr().String()
 }
 
