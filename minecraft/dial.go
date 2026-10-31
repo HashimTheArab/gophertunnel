@@ -330,12 +330,16 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	loginAddress := address
 	if s, ok := network.(transportSelector); ok {
 		// Report this dial's client to a probe that sends it, as the vanilla client does, unless the
-		// consumer set its own.
+		// consumer set its own. Version and platform mirror the login's own defaults.
 		if filler, ok := s.(interface {
 			withProbeClientInfo(ProbeClientInfo) transportSelector
 		}); ok {
+			version := d.ClientData.GameVersion
+			if version == "" {
+				version = d.Protocol.Ver()
+			}
 			s = filler.withProbeClientInfo(ProbeClientInfo{
-				Version:  d.Protocol.Ver(),
+				Version:  version,
 				Protocol: d.Protocol.ID(),
 				Platform: int(loginDeviceOS(d.ClientData.DeviceOS)),
 			})

@@ -104,7 +104,7 @@ func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 	t.Cleanup(ok.Close)
 
 	start := time.Now()
-	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, ProbeClientInfo{}, "")
+	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != ok.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, ok.URL)
 	}
@@ -132,7 +132,7 @@ func TestProbeNetherNetDoesNotWaitForSilentHTTPS(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), test.batches, test.headStart, netherNetProbeTimeout, ProbeClientInfo{}, "")
+			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), test.batches, test.headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 			elapsed := time.Since(start)
 			if err != nil || endpoint != game.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, game.URL)
@@ -158,7 +158,7 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	refused443, gameHTTP := "https://"+closedTCPAddress(t), "http://"+closedTCPAddress(t)
 
 	batches := [][]string{{secure.URL, refused443}, {gameHTTP, web.URL}}
-	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, ProbeClientInfo{}, "")
+	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != secure.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, secure.URL)
 	}
@@ -198,7 +198,7 @@ func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
 			}))
 			t.Cleanup(plain.Close)
 
-			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, ProbeClientInfo{}, "")
+			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, endpoint.ClientConfig{}.New())
 			want := plain.URL
 			if test.wantHTTPS {
 				want = secure.URL
@@ -285,7 +285,7 @@ func TestProbeNetherNetGivesUpAtTimeout(t *testing.T) {
 	host, port := serverHostPort(t, server.Listener.Addr())
 
 	start := time.Now()
-	_, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, ProbeClientInfo{}, "")
+	_, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, endpoint.ClientConfig{}.New())
 	if err == nil {
 		t.Fatal("probe answered a server that never responds")
 	}
@@ -307,7 +307,7 @@ func TestProbeNetherNetRejectsStalledBody(t *testing.T) {
 			<-r.Context().Done()
 		}))
 		host, port := serverHostPort(t, server.Listener.Addr())
-		if endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, ProbeClientInfo{}, ""); err == nil {
+		if endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, endpoint.ClientConfig{}.New()); err == nil {
 			t.Errorf("stalled body after %d bytes answered at %q", sent, endpoint)
 		}
 		server.Close()
@@ -1124,16 +1124,16 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 
 // The join probe carries the vanilla query parameters in their key order when the client info sets a
 // protocol, and stays a bare GET otherwise.
+// The probe GET carries the query go-nethernet builds from the dial's client info, and stays a bare
+// GET when there is none.
 func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
 		info      ProbeClientInfo
-		networkID string
 		wantQuery string
 	}{
-		"client info":            {ProbeClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}, "9876543210", "version=1.26.60&protocol=2225&platform=1&id=9876543210"},
-		"zero info stays bare":   {ProbeClientInfo{}, "9876543210", ""},
-		"no protocol stays bare": {ProbeClientInfo{Version: "1.26.60", Platform: 1}, "9876543210", ""},
+		"client info":          {ProbeClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}, "version=1.26.60&protocol=2225&platform=1&id=9876543210"},
+		"zero info stays bare": {ProbeClientInfo{}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1146,9 +1146,10 @@ func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, test.info, test.networkID)
-			if err != nil || endpoint != server.URL {
-				t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, server.URL)
+			probe := endpoint.ClientConfig{NetworkID: "9876543210", ClientInfo: test.info.clientInfo()}.New()
+			found, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, probe)
+			if err != nil || found != server.URL {
+				t.Fatalf("probeNetherNet = %q, %v; want %q", found, err, server.URL)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -1241,16 +1242,18 @@ func TestAddressNetworkProbeIDReachesOfferPost(t *testing.T) {
 	}
 }
 
-// A Dialer joining by address reports its protocol and device on the probe, as the vanilla client does.
+// A Dialer joining by address reports on the probe the same version and platform its login sends: a
+// set GameVersion over Protocol.Ver(), and the login's DeviceOS default over platform=0.
 func TestDialerFillsProbeClientInfo(t *testing.T) {
 	t.Parallel()
-	// An unset DeviceOS must report the same platform the login defaults to, not platform=0.
 	for name, test := range map[string]struct {
+		gameVersion  string
 		deviceOS     protocol.DeviceOS
+		wantVersion  string
 		wantPlatform protocol.DeviceOS
 	}{
-		"explicit device":            {protocol.DeviceIOS, protocol.DeviceIOS},
-		"unset is the login default": {0, protocol.DeviceAndroid},
+		"login defaults":  {"", 0, DefaultProtocol.Ver(), protocol.DeviceAndroid},
+		"explicit values": {"1.99.0", protocol.DeviceIOS, "1.99.0", protocol.DeviceIOS},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1268,7 +1271,7 @@ func TestDialerFillsProbeClientInfo(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			d := Dialer{Protocol: DefaultProtocol, ClientData: login.ClientData{DeviceOS: test.deviceOS}}
+			d := Dialer{Protocol: DefaultProtocol, ClientData: login.ClientData{GameVersion: test.gameVersion, DeviceOS: test.deviceOS}}
 			go func() {
 				if conn, err := d.DialContextNetwork(ctx, AddressNetwork{}, server.Listener.Addr().String()); err == nil {
 					_ = conn.Close()
@@ -1278,7 +1281,7 @@ func TestDialerFillsProbeClientInfo(t *testing.T) {
 			case q := <-got:
 				cancel()
 				want := url.Values{
-					"version":  {DefaultProtocol.Ver()},
+					"version":  {test.wantVersion},
 					"protocol": {strconv.Itoa(int(DefaultProtocol.ID()))},
 					"platform": {strconv.Itoa(int(test.wantPlatform))},
 				}
