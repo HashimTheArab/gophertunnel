@@ -57,8 +57,8 @@ func ExampleClient() {
 		panic(fmt.Sprintf("error joining experience: %s", err))
 	}
 	network, target, err := address.Network(realms.Networks{
-		DialSignaling: func(ctx context.Context, connectionType int) (minecraft.SignalingConn, error) {
-			return p2p.DialClientSignaling(ctx, connectionType, src, p2p.ClientSignalingOptions{})
+		DialSignaling: func(ctx context.Context) (minecraft.SignalingConn, error) {
+			return p2p.DialClientSignaling(ctx, src, p2p.ClientSignalingOptions{})
 		},
 	})
 	if err != nil {

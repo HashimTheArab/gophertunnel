@@ -2,22 +2,20 @@ package minecraft
 
 import (
 	"os"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
-// renameNoReplace atomically renames oldpath to newpath, failing with ERROR_ALREADY_EXISTS if
-// newpath exists: unlike os.Rename, MoveFile never replaces its target.
-func renameNoReplace(oldpath, newpath string) error {
-	from, err := syscall.UTF16PtrFromString(oldpath)
-	if err != nil {
-		return err
-	}
-	to, err := syscall.UTF16PtrFromString(newpath)
-	if err != nil {
-		return err
-	}
-	if err := syscall.MoveFile(from, to); err != nil {
-		return &os.LinkError{Op: "movefile", Old: oldpath, New: newpath, Err: err}
-	}
-	return nil
+// lockFile blocks until it holds an exclusive lock on the first byte of f. The lock is released by
+// unlockFile, or by Windows once f is closed or the process dies.
+func lockFile(f *os.File) error {
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, new(windows.Overlapped))
 }
+
+// unlockFile releases the lock taken by lockFile.
+func unlockFile(f *os.File) error {
+	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, new(windows.Overlapped))
+}
+
+// syncDir does nothing: Windows cannot flush a directory, and NTFS journals renames.
+func syncDir(string) error { return nil }

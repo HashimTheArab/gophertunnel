@@ -69,6 +69,7 @@ type transportSelector interface {
 
 // TransportError is a failed Dialer dial on a network that picks its transport per address, such
 // as AddressNetwork. Network is the transport picked, which IsRakNet tells apart from NetherNet.
+// A net.Error cause, such as a timeout, is found through Unwrap with errors.As.
 type TransportError struct {
 	Network Network
 	Err     error
@@ -79,30 +80,6 @@ func (e *TransportError) Error() string { return e.Err.Error() }
 
 // Unwrap ...
 func (e *TransportError) Unwrap() error { return e.Err }
-
-// wrapTransportError wraps err in a *TransportError that stays a net.Error when err is one, so
-// os.IsTimeout and net.Error checks on the dial error keep working.
-func wrapTransportError(network Network, err error) error {
-	wrapped := &TransportError{Network: network, Err: err}
-	if _, ok := err.(net.Error); ok {
-		return transportNetError{wrapped}
-	}
-	return wrapped
-}
-
-// transportNetError is a TransportError whose Err is a net.Error.
-type transportNetError struct{ *TransportError }
-
-// Timeout ...
-func (e transportNetError) Timeout() bool { return e.Err.(net.Error).Timeout() }
-
-// Temporary ...
-func (e transportNetError) Temporary() bool {
-	return e.Err.(interface{ Temporary() bool }).Temporary()
-}
-
-// Unwrap ...
-func (e transportNetError) Unwrap() error { return e.TransportError }
 
 // Select returns the network to dial address with: RakNet, or NetherNet bound to the endpoint
 // that answered the probe. It fails only when ctx ends first.

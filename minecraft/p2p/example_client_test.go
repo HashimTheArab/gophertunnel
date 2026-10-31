@@ -75,7 +75,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(fmt.Sprintf("error preparing client target: %s", err))
 	}
-	s, err := DialClientSignaling(context.TODO(), target.ConnectionType(), src, ClientSignalingOptions{})
+	s, err := DialClientSignaling(context.TODO(), src, ClientSignalingOptions{})
 	if err != nil {
 		panic(fmt.Sprintf("error dialing client signaling: %s", err))
 	}

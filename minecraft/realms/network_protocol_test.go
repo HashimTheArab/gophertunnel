@@ -9,7 +9,6 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft"
-	"github.com/sandertv/gophertunnel/minecraft/p2p"
 )
 
 // testNetworks returns Networks whose dials can be told apart by route.
@@ -18,18 +17,16 @@ func testNetworks() Networks {
 		RakNet:     minecraft.RakNet{ServerID: 7},
 		NetherNet:  minecraft.NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{AllowIdentitylessServer: true}},
 		HTTPClient: &http.Client{},
-		DialSignaling: func(_ context.Context, connectionType int) (minecraft.SignalingConn, error) {
-			return nil, &signalingError{connectionType}
+		DialSignaling: func(context.Context) (minecraft.SignalingConn, error) {
+			return nil, errTestSignaling
 		},
 	}
 }
 
-// signalingError records the connection type a dial asked DialSignaling for.
-type signalingError struct{ connectionType int }
+// errTestSignaling is returned by the DialSignaling of testNetworks.
+var errTestSignaling = errors.New("test signaling")
 
-func (e *signalingError) Error() string { return "test signaling" }
-
-// route names how network dials: "raknet", "http", or the p2p connection type its signaling opens.
+// route names how network dials: "raknet", "http", or "jsonrpc" when it opens the caller's signaling.
 // It fails the test when the caller's settings did not reach the network.
 func route(t *testing.T, n Networks, network minecraft.Network) string {
 	t.Helper()
@@ -52,14 +49,10 @@ func route(t *testing.T, n Networks, network minecraft.Network) string {
 		return "http"
 	case minecraft.NetherNet:
 		sameNetherNet(network)
-		var signaling *signalingError
-		if _, err := network.DialSignaling(t.Context(), "unused"); !errors.As(err, &signaling) {
+		if _, err := network.DialSignaling(t.Context(), "unused"); !errors.Is(err, errTestSignaling) {
 			t.Fatalf("DialSignaling error = %v, want the caller's", err)
 		}
-		if signaling.connectionType == p2p.ConnectionTypeSignalingOverJSONRPC {
-			return "jsonrpc"
-		}
-		t.Fatalf("signaling opened connection type %d", signaling.connectionType)
+		return "jsonrpc"
 	}
 	t.Fatalf("network %T", network)
 	return ""
@@ -150,20 +143,15 @@ func TestNetworksExperience(t *testing.T) {
 	}
 }
 
-// Signaled opens JSON-RPC signaling and refuses every other connection type.
+// A NetherNet ID is dialed through the caller's JSON-RPC signaling, which it cannot do without.
 func TestNetworksSignaled(t *testing.T) {
 	n := testNetworks()
-	network, address, err := n.Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, testID)
+	network, address, err := n.signaled(testID)
 	if err != nil || address != testID || route(t, n, network) != "jsonrpc" {
-		t.Fatalf("Signaled(JSON-RPC) = %T, %q, %v; want jsonrpc to the ID", network, address, err)
+		t.Fatalf("signaled = %T, %q, %v; want jsonrpc to the ID", network, address, err)
 	}
-	for _, connectionType := range []int{3, p2p.ConnectionTypeSignalingOverLAN} {
-		if _, _, err := n.Signaled(connectionType, testID); err == nil {
-			t.Fatalf("Signaled with connection type %d succeeded", connectionType)
-		}
-	}
-	if _, _, err := (Networks{}).Signaled(p2p.ConnectionTypeSignalingOverJSONRPC, testID); err == nil {
-		t.Fatal("Signaled without DialSignaling succeeded")
+	if _, _, err := (Networks{}).signaled(testID); err == nil {
+		t.Fatal("signaled without DialSignaling succeeded")
 	}
 }
 

@@ -26,9 +26,6 @@ type SignalingConn interface {
 type ClientSignalingOptions struct {
 	HTTPClient *http.Client
 	Log        *slog.Logger
-
-	// JSONRPCDial replaces the JSON-RPC signaling dial in tests or custom clients.
-	JSONRPCDial func(context.Context, service.TokenSource, ClientSignalingOptions) (SignalingConn, error)
 }
 
 // ClientTarget binds a joined friend-world session to its remote dial metadata and per-player login nonce.
@@ -67,14 +64,9 @@ func ClientTargetFromSession(s ClientSession) (ClientTarget, error) {
 	return ClientTarget{lease: &clientTargetLease{session: s}, connection: connection, nonce: nonce}, nil
 }
 
-// DialAddress returns the remote address used by the selected connection type.
+// DialAddress returns the host's Player Messaging ID, which JSON-RPC signaling reaches it by.
 func (t ClientTarget) DialAddress() string {
 	return t.connection.Address()
-}
-
-// ConnectionType returns the host-advertised signaling connection type.
-func (t ClientTarget) ConnectionType() int {
-	return t.connection.Type
 }
 
 // ApplyClientData applies the host-issued nonce required for the joined player's Minecraft login.
@@ -102,20 +94,12 @@ func (t ClientTarget) Close() error {
 	return nil
 }
 
-// DialClientSignaling opens client-side signaling for a resolved NetherNet connection type. Only
-// ConnectionTypeSignalingOverJSONRPC is supported.
-func DialClientSignaling(ctx context.Context, connectionType int, src service.TokenSource, opts ClientSignalingOptions) (SignalingConn, error) {
-	switch connectionType {
-	case ConnectionTypeSignalingOverJSONRPC:
-		if opts.JSONRPCDial != nil {
-			return opts.JSONRPCDial(ctx, src, opts)
-		}
-		conn, err := (signaling.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
-		if err != nil {
-			return nil, err
-		}
-		return conn, nil
-	default:
-		return nil, fmt.Errorf("minecraft/p2p: no supported signaling connection: unsupported connection type %d", connectionType)
+// DialClientSignaling opens client-side JSON-RPC signaling, the only signaling vanilla clients join
+// NetherNet worlds and Realms through.
+func DialClientSignaling(ctx context.Context, src service.TokenSource, opts ClientSignalingOptions) (SignalingConn, error) {
+	conn, err := (signaling.Dialer{HTTPClient: opts.HTTPClient, Log: opts.Log}).DialContext(ctx, src)
+	if err != nil {
+		return nil, err
 	}
+	return conn, nil
 }
