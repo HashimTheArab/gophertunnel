@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
@@ -301,8 +302,13 @@ func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 }
 
 // readNetherNetKey parses the key at path, returning an error matching fs.ErrNotExist if there is none.
+// An empty file counts as none: earlier versions left one when they died between claiming path and
+// saving their key there.
 func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	b, err := os.ReadFile(path)
+	if err == nil && len(b) == 0 {
+		err = &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +328,7 @@ func createNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(path)
+	removeStaleNetherNetKeyTemps(path)
 	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
 	if err != nil {
 		return nil, err
@@ -344,6 +351,30 @@ func createNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+// removeStaleNetherNetKeyTemps deletes the temporary key files that creators killed mid-write left next
+// to path, so their private keys do not linger. The caller holds the key lock, so no live creator owns
+// them. Only os.CreateTemp names from this scheme and the earlier ".nethernet-key-*" one are removed.
+func removeStaleNetherNetKeyTemps(path string) {
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		for _, prefix := range []string{filepath.Base(path) + ".tmp", ".nethernet-key-"} {
+			if digits, ok := strings.CutPrefix(name, prefix); ok && entry.Type().IsRegular() && isDecimal(digits) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		}
+	}
+}
+
+// isDecimal reports whether s is a non-empty run of decimal digits, as os.CreateTemp fills in for "*".
+func isDecimal(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 // parseNetherNetKey parses a P-384 key from the SEC 1 or PKCS #8 PEM contents b of the file at path.

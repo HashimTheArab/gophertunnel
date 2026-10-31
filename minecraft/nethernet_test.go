@@ -397,7 +397,6 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 	}
 	full := encodeNetherNetTestKey(t)
 	for name, contents := range map[string][]byte{
-		"empty":     {},
 		"not PEM":   []byte("not a key"),
 		"P-256":     pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
 		"RSA type":  pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
@@ -420,6 +419,51 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 				t.Fatal("invalid key file was overwritten")
 			}
 		})
+	}
+}
+
+// An empty key file, left by a creator that died after claiming the path, is replaced by a saved key.
+func TestNetherNetServerKeyReplacesEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty key file: %v", err)
+	}
+	key, err := loadOrCreateNetherNetKey(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !key.Equal(readNetherNetTestKey(t, path)) {
+		t.Fatal("returned key is not the saved one")
+	}
+}
+
+// Temporary key files a crashed creator left are removed when a key is created; other files stay.
+func TestNetherNetServerKeyRemovesStaleTemps(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	stale := []string{"nethernet.pem.tmp123", ".nethernet-key-456"}
+	kept := []string{"nethernet.pem.tmpx", ".nethernet-key-", "other.pem.tmp789", "notes.txt"}
+	for _, name := range append(stale, kept...) {
+		if err := os.WriteFile(filepath.Join(dir, name), encodeNetherNetTestKey(t), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if _, err := loadOrCreateNetherNetKey(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, name := range stale {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stale temp %s was kept: %v", name, err)
+		}
+	}
+	for _, name := range kept {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("unrelated file %s was removed: %v", name, err)
+		}
 	}
 }
 
@@ -553,7 +597,7 @@ func TestNetherNetServerKeyNeverReplacesExistingKey(t *testing.T) {
 	}
 }
 
-// A creator killed mid-write leaves no key at path, and its lock dies with it.
+// A creator killed mid-write leaves no key at path, its lock dies with it, and its partial file is removed.
 func TestNetherNetServerKeyCrashLeavesNoPartialKey(t *testing.T) {
 	t.Parallel()
 
@@ -577,6 +621,10 @@ func TestNetherNetServerKeyCrashLeavesNoPartialKey(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("crashed creator left a file at the key path: %v", err)
 	}
+	partial, err := filepath.Glob(path + ".tmp*")
+	if err != nil || len(partial) != 1 {
+		t.Fatalf("crashed creator left %v (%v), want one partial temp file", partial, err)
+	}
 	done := make(chan error, 1)
 	go func() {
 		key, err := loadOrCreateNetherNetKey(path)
@@ -592,6 +640,9 @@ func TestNetherNetServerKeyCrashLeavesNoPartialKey(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("load after crash is still waiting for the dead creator's lock")
+	}
+	if _, err := os.Stat(partial[0]); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("partial key from the crashed creator was kept: %v", err)
 	}
 }
 
@@ -628,9 +679,13 @@ func TestNetherNetServerKeyHelperProcess(t *testing.T) {
 		if err == nil {
 			err = lockFile(lock)
 		}
+		var tmp *os.File
+		if err == nil {
+			tmp, err = os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+		}
 		if err == nil {
 			full := encodeNetherNetTestKey(t)
-			err = os.WriteFile(path+".tmp-crashed", full[:len(full)/2], 0o600)
+			_, err = tmp.Write(full[:len(full)/2])
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
