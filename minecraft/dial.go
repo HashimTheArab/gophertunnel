@@ -337,7 +337,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			s = filler.withProbeClientInfo(ProbeClientInfo{
 				Version:  d.Protocol.Ver(),
 				Protocol: d.Protocol.ID(),
-				Platform: int(d.ClientData.DeviceOS),
+				Platform: int(loginDeviceOS(d.ClientData.DeviceOS)),
 			})
 		}
 		if network, err = s.Select(ctx, address); err != nil {
@@ -560,6 +560,15 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
+// loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or the default a
+// login applies when it is unset. The probe reports this so it matches the platform the login sends.
+func loginDeviceOS(os protocol.DeviceOS) protocol.DeviceOS {
+	if os == 0 {
+		return protocol.DeviceAndroid
+	}
+	return os
+}
+
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
@@ -569,9 +578,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username
 	}
-	if d.DeviceOS == 0 {
-		d.DeviceOS = protocol.DeviceAndroid
-	}
+	d.DeviceOS = loginDeviceOS(d.DeviceOS)
 	if d.DeviceOS == protocol.DeviceAndroid && d.PlatformType == login.PlatformTypeDesktop {
 		d.PlatformType = login.PlatformTypeMobile
 		d.MarkClaims("PlatformType")
@@ -638,9 +645,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	if data.DeviceOS == 0 {
-		data.DeviceOS = protocol.DeviceAndroid
-	}
+	data.DeviceOS = loginDeviceOS(data.DeviceOS)
 	if data.DefaultInputMode == 0 {
 		data.DefaultInputMode = packet.InputModeTouch
 	}

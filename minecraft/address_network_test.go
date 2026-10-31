@@ -1244,43 +1244,55 @@ func TestAddressNetworkProbeIDReachesOfferPost(t *testing.T) {
 // A Dialer joining by address reports its protocol and device on the probe, as the vanilla client does.
 func TestDialerFillsProbeClientInfo(t *testing.T) {
 	t.Parallel()
-	got := make(chan url.Values, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			select {
-			case got <- r.URL.Query():
-			default:
-			}
-		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(server.Close)
+	// An unset DeviceOS must report the same platform the login defaults to, not platform=0.
+	for name, test := range map[string]struct {
+		deviceOS     protocol.DeviceOS
+		wantPlatform protocol.DeviceOS
+	}{
+		"explicit device":            {protocol.DeviceIOS, protocol.DeviceIOS},
+		"unset is the login default": {0, protocol.DeviceAndroid},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := make(chan url.Values, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					select {
+					case got <- r.URL.Query():
+					default:
+					}
+				}
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(server.Close)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	d := Dialer{Protocol: DefaultProtocol, ClientData: login.ClientData{DeviceOS: protocol.DeviceIOS}}
-	go func() {
-		if conn, err := d.DialContextNetwork(ctx, AddressNetwork{}, server.Listener.Addr().String()); err == nil {
-			_ = conn.Close()
-		}
-	}()
-	select {
-	case q := <-got:
-		cancel()
-		want := url.Values{
-			"version":  {DefaultProtocol.Ver()},
-			"protocol": {strconv.Itoa(int(DefaultProtocol.ID()))},
-			"platform": {strconv.Itoa(int(protocol.DeviceIOS))},
-		}
-		for key, value := range want {
-			if q.Get(key) != value[0] {
-				t.Fatalf("probe %s = %q, want %q", key, q.Get(key), value[0])
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			d := Dialer{Protocol: DefaultProtocol, ClientData: login.ClientData{DeviceOS: test.deviceOS}}
+			go func() {
+				if conn, err := d.DialContextNetwork(ctx, AddressNetwork{}, server.Listener.Addr().String()); err == nil {
+					_ = conn.Close()
+				}
+			}()
+			select {
+			case q := <-got:
+				cancel()
+				want := url.Values{
+					"version":  {DefaultProtocol.Ver()},
+					"protocol": {strconv.Itoa(int(DefaultProtocol.ID()))},
+					"platform": {strconv.Itoa(int(test.wantPlatform))},
+				}
+				for key, value := range want {
+					if q.Get(key) != value[0] {
+						t.Fatalf("probe %s = %q, want %q", key, q.Get(key), value[0])
+					}
+				}
+				if q.Get("id") == "" {
+					t.Fatal("probe carried no id")
+				}
+			case <-ctx.Done():
+				t.Fatal("the Dialer sent no probe")
 			}
-		}
-		if q.Get("id") == "" {
-			t.Fatal("probe carried no id")
-		}
-	case <-ctx.Done():
-		t.Fatal("the Dialer sent no probe")
+		})
 	}
 }
