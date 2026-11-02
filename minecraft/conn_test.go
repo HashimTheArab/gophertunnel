@@ -1247,6 +1247,7 @@ type drainingTransport struct {
 	closingOnce sync.Once
 	abortOnce   sync.Once
 	aborts      atomic.Int32
+	closes      atomic.Int32
 }
 
 func newDrainingTransport(t *testing.T, c net.Conn) *drainingTransport {
@@ -1257,6 +1258,7 @@ func newDrainingTransport(t *testing.T, c net.Conn) *drainingTransport {
 }
 
 func (c *drainingTransport) Close() error {
+	c.closes.Add(1)
 	c.closingOnce.Do(func() { close(c.closing) })
 	<-c.aborted
 	return c.Conn.Close()
@@ -1288,6 +1290,9 @@ func TestAbortDoesNotWaitForTransportDrain(t *testing.T) {
 	}
 	if got := transport.aborts.Load(); got != 1 {
 		t.Fatalf("transport Abort calls = %d, want 1", got)
+	}
+	if got := transport.closes.Load(); got != 0 {
+		t.Fatalf("transport Close calls after Abort = %d, want 0", got)
 	}
 }
 

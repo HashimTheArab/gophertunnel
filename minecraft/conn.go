@@ -3005,7 +3005,7 @@ func (conn *Conn) close(cause error) error {
 			if recovered := recover(); recovered != nil {
 				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
 			}
-			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause))
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
@@ -3026,18 +3026,18 @@ func (conn *Conn) abort(cause error) error {
 	// Abort one of those before release, so this also ends a Close already waiting inside release.
 	if c, ok := conn.conn.(interface{ Abort() error }); ok {
 		conn.cancel(cause)
-		return errors.Join(c.Abort(), conn.release(cause))
+		return errors.Join(c.Abort(), conn.release(cause, false))
 	}
-	return conn.release(cause)
+	return conn.release(cause, true)
 }
 
-// release cancels the Conn context, drops packets held by the send delay and closes the transport,
-// once.
-func (conn *Conn) release(cause error) error {
+// release cancels the Conn context, drops packets held by the send delay and, if closeTransport is
+// set, closes the transport, once.
+func (conn *Conn) release(cause error, closeTransport bool) error {
 	conn.abortOnce.Do(func() {
 		conn.cancel(cause)
 		conn.delay.drop()
-		if conn.conn != nil {
+		if closeTransport && conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
 	})
