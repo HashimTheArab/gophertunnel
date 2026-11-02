@@ -619,20 +619,28 @@ type dirPackReader struct {
 	base string
 }
 
-// find attempts to find a file in a zip reader. If found, it returns an Open()ed reader of the file that may
-// be used to read data from the file.
+// find opens the regular file named fileName nearest the archive root, so a pack's root manifest.json wins
+// over same-named files inside its folders, such as textures/entity/manifest.json, wherever they appear in
+// the archive. Among equally deep matches the first in archive order is used.
 func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
+	var match *zip.File
+	matchDepth := 0
 	for _, f := range r.File {
-		if filepath.Base(f.Name) != fileName {
+		if f.FileInfo().IsDir() || path.Base(f.Name) != fileName {
 			continue
 		}
-		fileReader, err := f.Open()
-		if err != nil {
-			return nil, "", fmt.Errorf("open zip file %v: %w", f.Name, err)
+		if depth := strings.Count(path.Clean(f.Name), "/"); match == nil || depth < matchDepth {
+			match, matchDepth = f, depth
 		}
-		return fileReader, f.Name, nil
 	}
-	return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
+	if match == nil {
+		return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
+	}
+	fileReader, err := match.Open()
+	if err != nil {
+		return nil, "", fmt.Errorf("open zip file %v: %w", match.Name, err)
+	}
+	return fileReader, match.Name, nil
 }
 
 func (r dirPackReader) find(fileName string) (io.ReadCloser, string, error) {
