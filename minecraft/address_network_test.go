@@ -1242,12 +1242,70 @@ func TestAddressNetworkPingSkipsProbeForRakNetAnswer(t *testing.T) {
 // An endpoint that answers without a status, on a server with no RakNet listener, is no answer.
 func TestAddressNetworkPingFailsWithoutStatus(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	for _, body := range []string{"", "{}", "null"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(server.Close)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		pong, err := (AddressNetwork{}).PingContext(ctx, server.Listener.Addr().String())
+		cancel()
+		if err == nil {
+			t.Fatalf("PingContext with status body %q = %q, want an error for an empty status", body, pong)
+		}
+	}
+}
+
+// An empty status does not beat the RakNet answer of the same server.
+func TestAddressNetworkPingPrefersRakNetOverEmptyStatus(t *testing.T) {
+	t.Parallel()
+	const want = "MCPE;Both;2225;1.26.60;1;20;1;level;Survival;0;19132;19133;"
+	address := rakNetPongServer(t, want)
+	tcp, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Skipf("TCP port of the RakNet listener is taken: %v", err)
+	}
+	server := &httptest.Server{Listener: tcp, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "{}")
+	})}}
+	server.Start()
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	if pong, err := (AddressNetwork{}).PingContext(ctx, server.Listener.Addr().String()); err == nil {
-		t.Fatalf("PingContext = %q, want an error for an empty status", pong)
+	pong, err := (AddressNetwork{}).PingContext(ctx, address)
+	if err != nil || string(pong) != want {
+		t.Fatalf("PingContext = %q, %v; want the RakNet pong %q", pong, err, want)
+	}
+}
+
+// Cancelling a ping without a deadline ends it, although a RakNet ping waits only for deadlines.
+func TestAddressNetworkPingStopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	tcp, err := net.Listen("tcp", conn.LocalAddr().String())
+	if err != nil {
+		t.Skipf("TCP port of the silent UDP socket is taken: %v", err)
+	}
+	t.Cleanup(func() { _ = tcp.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := (AddressNetwork{}).PingContext(ctx, conn.LocalAddr().String())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PingContext = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("PingContext kept waiting after its context was cancelled")
 	}
 }

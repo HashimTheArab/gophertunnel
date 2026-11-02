@@ -304,11 +304,16 @@ func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte
 	}()
 	var errs []error
 	for range 2 {
-		a := <-answers
-		if a.err == nil {
-			return a.pong, nil
+		// RakNet honours only ctx's deadline, so a cancellation without one must end the wait here.
+		select {
+		case a := <-answers:
+			if a.err == nil {
+				return a.pong, nil
+			}
+			errs = append(errs, a.err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		errs = append(errs, a.err)
 	}
 	return nil, errors.Join(errs...)
 }
@@ -328,6 +333,10 @@ func (n AddressNetwork) pingNetherNet(ctx context.Context, address string) ([]by
 	var status endpoint.Status
 	if err := json.Unmarshal(body, &status); err != nil {
 		return nil, fmt.Errorf("%s: read status: %w", choice.entry.endpoint, err)
+	}
+	// A body such as {} or null decodes to nothing; it must not beat a RakNet answer.
+	if status == (endpoint.Status{}) {
+		return nil, fmt.Errorf("%s: read status: empty status", choice.entry.endpoint)
 	}
 	return status.RakNet(), nil
 }
