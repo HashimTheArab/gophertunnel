@@ -1309,3 +1309,34 @@ func TestAddressNetworkPingStopsWhenCancelled(t *testing.T) {
 		t.Fatal("PingContext kept waiting after its context was cancelled")
 	}
 }
+
+// A remembered RakNet answer that a failed ping went by is dropped, so a server that serves only
+// NetherNet is found by the next ping instead of staying offline until the answer expires.
+func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"NetherNet only","protocol":2225,"version":"1.26.60","level":"2","players":1,"maxPlayers":10,"gameType":0}`)
+	}))
+	t.Cleanup(server.Close)
+	address := server.Listener.Addr().String()
+	host, port := splitServerAddress(address)
+	probes := &ProbeCache{}
+	probes.store(probeKey{host: host, port: port}, "")
+	network := AddressNetwork{Probes: probes}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	// The refused RakNet ping may drop the answer before or after the NetherNet side reads it, so
+	// the first ping may already find the endpoint.
+	_, _ = network.PingContext(ctx, address)
+	if entry := probes.lookup(probeKey{host: host, port: port}); entry != nil && entry.endpoint == "" {
+		t.Fatal("RakNet answer still remembered after a failed RakNet ping, want it dropped")
+	}
+	pong, err := network.PingContext(ctx, address)
+	if err != nil {
+		t.Fatalf("second PingContext: %v", err)
+	}
+	if got, err := ParsePongAdvertisement(pong); err != nil || got.MOTD != "NetherNet only" {
+		t.Fatalf("second PingContext advertised %+v, %v; want the endpoint's status", got, err)
+	}
+}

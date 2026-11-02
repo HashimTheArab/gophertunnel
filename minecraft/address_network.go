@@ -103,10 +103,8 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choice probeChoice, body []byte, answered bool, err error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
-	// Vanilla keys its probe cache by the lower-cased host and the port exactly as given.
-	choice = probeChoice{cache: n.Probes, key: probeKey{host: strings.ToLower(host), port: port}}
-	choice.entry = n.Probes.lookup(choice.key)
-	if choice.entry != nil && choice.entry.endpoint == "" {
+	choice = rememberedChoice(n.Probes, host, port)
+	if choice.rakNet() {
 		return choice, nil, false, nil
 	}
 	batches := probeBatches(host, port)
@@ -127,6 +125,14 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choic
 		choice.entry = n.Probes.store(choice.key, found)
 	}
 	return choice, body, true, nil
+}
+
+// rememberedChoice returns the answer cache remembers for host and port, with a nil entry when it
+// has none. Vanilla keys its probe cache by the lower-cased host and the port exactly as given.
+func rememberedChoice(cache *ProbeCache, host string, port uint16) probeChoice {
+	choice := probeChoice{cache: cache, key: probeKey{host: strings.ToLower(host), port: port}}
+	choice.entry = cache.lookup(choice.key)
+	return choice
 }
 
 // probe runs probeNetherNet with the package timings unless a test overrides them.
@@ -197,6 +203,11 @@ type probeChoice struct {
 	cache *ProbeCache
 	key   probeKey
 	entry *probeEntry
+}
+
+// rakNet reports whether the answer is a remembered RakNet answer.
+func (p probeChoice) rakNet() bool {
+	return p.entry != nil && p.entry.endpoint == ""
 }
 
 // forgetAfter drops the answer after any failed dial, so the next Select probes again. An answer
@@ -285,7 +296,8 @@ func (n AddressNetwork) DialContextIdentityProvider(ctx context.Context, address
 // RakNet. Both are asked at once and the first answer is returned, so a server that drops TCP
 // still answers over RakNet before ctx ends. A NetherNet answer is the endpoint's status in the
 // format of [endpoint.Status.RakNet], so its server ID is random and its ports are 19132. Probe
-// answers are shared with Select through Probes.
+// answers are shared with Select through Probes, and like a failed dial, a failed RakNet ping drops
+// the remembered RakNet answer it went by, so the next ping probes again.
 func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -294,8 +306,13 @@ func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte
 		err  error
 	}
 	answers := make(chan answer, 2)
+	host, port := splitServerAddress(address)
+	remembered := rememberedChoice(n.Probes, host, port)
 	go func() {
 		pong, err := n.RakNet.PingContext(ctx, address)
+		if remembered.rakNet() {
+			remembered.forgetAfter(err)
+		}
 		answers <- answer{pong, err}
 	}()
 	go func() {
