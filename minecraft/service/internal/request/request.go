@@ -68,27 +68,28 @@ func Raw(ctx context.Context, client *http.Client, src service.TokenSource, meth
 			return nil, nil, fmt.Errorf("encode request body: %w", err)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(encoded))
-	if err != nil {
-		return nil, nil, fmt.Errorf("make request: %w", err)
-	}
-	if body == nil {
-		req.Body, req.GetBody, req.ContentLength = nil, nil, 0
-	} else {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", internal.UserAgent)
-	for name, values := range opts.Header {
-		req.Header[name] = values
-	}
-	token, err := src.ServiceToken(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("request service token: %w", err)
-	}
-	token.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, client, req, opts.Retry)
+	resp, err := authclient.Call(ctx, client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(encoded))
+		if err != nil {
+			return nil, fmt.Errorf("make request: %w", err)
+		}
+		if body == nil {
+			req.Body, req.GetBody, req.ContentLength = nil, nil, 0
+		} else {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", internal.UserAgent)
+		for name, values := range opts.Header {
+			req.Header[name] = values
+		}
+		token, err := src.ServiceToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("request service token: %w", err)
+		}
+		token.SetAuthHeader(req)
+		return req, nil
+	}, authclient.CallOptions{Retry: opts.Retry})
 	if err != nil {
 		return nil, nil, err
 	}

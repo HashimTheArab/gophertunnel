@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal/request"
 )
@@ -116,15 +117,17 @@ func (c *Client) Batch(ctx context.Context, xuids []string, statistics []Request
 	if err != nil {
 		return nil, fmt.Errorf("encode statistics request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("x-xbl-contract-version", "1")
-	req.Header.Set("Accept-Language", c.Language)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := c.client.Do(req)
+	resp, err := authclient.Call(ctx, c.client, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("x-xbl-contract-version", "1")
+		req.Header.Set("Accept-Language", c.Language)
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		req.Header.Set("User-Agent", userAgent)
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return nil, err
 	}

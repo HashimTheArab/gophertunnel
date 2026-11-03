@@ -1675,3 +1675,282 @@ func TestConn_AcceptPacketHeader(t *testing.T) {
 		})
 	}
 }
+
+func TestReadBatchRawKeepsBytesAndDecodesOnlySelected(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+
+	text := &packet.Text{TextType: packet.TextTypeRaw, Message: "hi", XUID: "1"}
+	var frames [][]byte
+	for _, pk := range []packet.Packet{&packet.Unknown{PacketID: 777, Payload: []byte{1, 2, 3}}, text, &packet.Transfer{Address: "a.test", Port: 1}} {
+		frame, err := encodePacket(pk)
+		if err != nil {
+			t.Fatalf("encode %T: %v", pk, err)
+		}
+		frames = append(frames, frame)
+	}
+	malformed := append(bytes.Clone(frames[1]), 0xff)
+	for _, frame := range [][]byte{frames[0], malformed, frames[1], frames[2]} {
+		borrowed := bytes.Clone(frame)
+		if err := conn.receive(borrowed); err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+		clear(borrowed)
+	}
+	conn.flushBatch()
+
+	packets, err := conn.ReadBatchRaw(func(id uint32) bool { return id == packet.IDText })
+	if err != nil {
+		t.Fatalf("ReadBatchRaw: %v", err)
+	}
+	// A selected packet that fails to decode is still returned as received, with its decode error, so the
+	// caller decides whether to pass it on. Every packet keeps its order and bytes.
+	want := [][]byte{frames[0], malformed, frames[1], frames[2]}
+	if len(packets) != len(want) {
+		t.Fatalf("ReadBatchRaw returned %d packets, want %d", len(packets), len(want))
+	}
+	for i, raw := range packets {
+		if !bytes.Equal(raw.Data, want[i]) {
+			t.Fatalf("packet %d bytes = %x, want %x", i, raw.Data, want[i])
+		}
+		if wantDecoded := raw.ID == packet.IDText && i != 1; (raw.Decoded != nil) != wantDecoded {
+			t.Fatalf("packet %d (ID %d) decoded = %v", i, raw.ID, raw.Decoded)
+		}
+		if (raw.DecodeErr != nil) != (i == 1) {
+			t.Fatalf("packet %d decode error = %v", i, raw.DecodeErr)
+		}
+	}
+	if got, ok := packets[2].Decoded[0].(*packet.Text); !ok || got.Message != text.Message || got.XUID != text.XUID {
+		t.Fatalf("decoded Text = %#v", packets[2].Decoded)
+	}
+}
+
+// A selected packet whose decode closes the connection ends the batch there, as ReadBatch does.
+func TestReadBatchRawStopsWhenDecodeClosesTheConnection(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	conn.pool = conn.proto.Packets(false)
+	conn.batchReading = true
+	conn.loggedIn = true
+	conn.disconnectOnInvalidPacket = true
+
+	var frames [][]byte
+	for _, pk := range []packet.Packet{&packet.SetTime{Time: 1}, &packet.Text{TextType: packet.TextTypeRaw, Message: "hi"}, &packet.SetTime{Time: 2}} {
+		frame, err := encodePacket(pk)
+		if err != nil {
+			t.Fatalf("encode %T: %v", pk, err)
+		}
+		frames = append(frames, frame)
+	}
+	frames[1] = append(frames[1], 0xff)
+	for _, frame := range frames {
+		if err := conn.receive(bytes.Clone(frame)); err != nil {
+			t.Fatalf("receive: %v", err)
+		}
+	}
+	conn.flushBatch()
+
+	packets, err := conn.ReadBatchRaw(func(id uint32) bool { return id == packet.IDText })
+	if err != nil {
+		t.Fatalf("ReadBatchRaw: %v", err)
+	}
+	if len(packets) != 1 || !bytes.Equal(packets[0].Data, frames[0]) {
+		t.Fatalf("ReadBatchRaw returned %d packets, want only the one before the invalid packet", len(packets))
+	}
+	if conn.ctx.Err() == nil {
+		t.Fatal("invalid packet did not close the connection")
+	}
+}
+
+// A zero-value Conn rejects raw writes like decoded writes instead of panicking.
+func TestWritePacketRawOnZeroConnIsClosed(t *testing.T) {
+	if err := new(Conn).WritePacketRaw([]byte{1}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("WritePacketRaw error = %v, want %v", err, net.ErrClosed)
+	}
+	if n, err := new(Conn).Write([]byte{1}); n != 0 || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Write = %d, %v, want 0, %v", n, err, net.ErrClosed)
+	}
+}
+
+func TestReadBatchRawRequiresBatchReading(t *testing.T) {
+	client, serverConn := net.Pipe()
+	defer client.Close()
+	defer serverConn.Close()
+
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Close()
+	if _, err := conn.ReadBatchRaw(nil); !errors.Is(err, errBatchReadingDisabled) {
+		t.Fatalf("ReadBatchRaw error = %v, want %v", err, errBatchReadingDisabled)
+	}
+}
+
+func TestWritePacketRawJoinsTheBufferedBatchUnchanged(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	// Subclient bits survive: the raw header is never re-encoded.
+	raw := []byte{0xe2, 0x9c, 0x01, 9, 8, 7}
+	registry, err := encodePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}})
+	if err != nil {
+		t.Fatalf("encode registry: %v", err)
+	}
+	before, err := encodePacket(&packet.SetTime{Time: 1})
+	if err != nil {
+		t.Fatalf("encode SetTime: %v", err)
+	}
+	batch := make(chan [][]byte, 1)
+	go func() {
+		packets, _ := packet.NewDecoder(peer).Decode()
+		batch <- packets
+	}()
+	if err := conn.WritePacket(&packet.SetTime{Time: 1}); err != nil {
+		t.Fatalf("WritePacket: %v", err)
+	}
+	if err := conn.WritePacketRaw(raw); err != nil {
+		t.Fatalf("WritePacketRaw: %v", err)
+	}
+	// Write takes the same path but copies, as io.Writer must not retain its argument.
+	written := bytes.Clone(registry)
+	if n, err := conn.Write(written); n != len(written) || err != nil {
+		t.Fatalf("Write = %d, %v, want %d, nil", n, err, len(written))
+	}
+	clear(written)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := <-batch
+	if len(got) != 3 || !bytes.Equal(got[0], before) || !bytes.Equal(got[1], raw) || !bytes.Equal(got[2], registry) {
+		t.Fatalf("wire batch = %x, want [%x %x %x]", got, before, raw, registry)
+	}
+	if id := conn.shieldID.Load(); id != 355 {
+		t.Fatalf("shield ID after raw ItemRegistry = %d, want 355", id)
+	}
+	_ = conn.Close()
+	if err := conn.WritePacketRaw(raw); err == nil {
+		t.Fatal("WritePacketRaw after Close returned no error")
+	}
+	if n, err := conn.Write(raw); n != 0 || err == nil {
+		t.Fatalf("Write after Close = %d, %v, want 0 and an error", n, err)
+	}
+}
+
+// A raw write waiting for sendMu while the connection aborts is rejected, not observed or buffered.
+func TestWritePacketRawRejectsAbortWhileWaiting(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	var observed atomic.Bool
+	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) { observed.Store(true) }
+
+	// The only shutdown check runs after taking sendMu, so the write cannot pass it before the abort.
+	conn.sendMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- conn.WritePacketRaw([]byte{0x09, 1}) }()
+	_ = conn.Abort()
+	conn.sendMu.Unlock()
+
+	if err := <-done; err == nil {
+		t.Fatal("WritePacketRaw returned no error after the connection aborted")
+	}
+	if observed.Load() {
+		t.Fatal("WritePacketRaw observed a packet after the connection aborted")
+	}
+	if n := len(conn.bufferedSend); n != 0 {
+		t.Fatalf("WritePacketRaw buffered %d packets after the connection aborted", n)
+	}
+}
+
+// A raw ItemRegistry sets the shield ID in the same sendMu hold that queues it, so the ID follows queue order.
+func TestWritePacketRawShieldFollowsQueueOrder(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	defer conn.Abort()
+	var want int32
+	conn.packetFunc = func(packet.Header, []byte, net.Addr, net.Addr) {
+		if conn.sendMu.TryLock() {
+			conn.sendMu.Unlock()
+			t.Error("raw write observed outside sendMu")
+		}
+		if got := conn.shieldID.Load(); got != want {
+			t.Errorf("shield ID while observing = %d, want %d", got, want)
+		}
+	}
+	for _, id := range []int16{355, 356} {
+		frame, err := encodePacket(&packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: id}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = int32(id)
+		queued := len(conn.bufferedSend)
+		if err := conn.WritePacketRaw(frame); err != nil {
+			t.Fatalf("WritePacketRaw: %v", err)
+		}
+		if len(conn.bufferedSend) != queued+1 || !bytes.Equal(conn.bufferedSend[queued], frame) {
+			t.Fatalf("registry %d not queued last", id)
+		}
+		if got := conn.shieldID.Load(); got != want {
+			t.Fatalf("shield ID = %d, want %d", got, want)
+		}
+	}
+}
+
+// prefixedItemRegistry is an ItemRegistry whose wire layout differs from the latest protocol's.
+type prefixedItemRegistry struct{ packet.ItemRegistry }
+
+// Marshal writes the extra prefix before the registry payload.
+func (pk *prefixedItemRegistry) Marshal(io protocol.IO) {
+	var prefix uint8
+	io.Uint8(&prefix)
+	pk.ItemRegistry.Marshal(io)
+}
+
+// prefixedRegistryProtocol registers prefixedItemRegistry as its server ItemRegistry.
+type prefixedRegistryProtocol struct{ Protocol }
+
+// Packets replaces the server registry codec with the prefixed test codec.
+func (p prefixedRegistryProtocol) Packets(listener bool) packet.Pool {
+	pool := p.Protocol.Packets(listener)
+	if !listener {
+		pool[packet.IDItemRegistry] = func() packet.Packet { return &prefixedItemRegistry{} }
+	}
+	return pool
+}
+
+// ConvertToLatest unwraps the test registry into its latest-protocol form.
+func (p prefixedRegistryProtocol) ConvertToLatest(pk packet.Packet, conn *Conn) []packet.Packet {
+	if registry, ok := pk.(*prefixedItemRegistry); ok {
+		return []packet.Packet{&registry.ItemRegistry}
+	}
+	return p.Protocol.ConvertToLatest(pk, conn)
+}
+
+// A raw ItemRegistry is read with the active protocol's layout, not the latest one.
+func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), prefixedRegistryProtocol{DefaultProtocol}, -1, false)
+	defer conn.Abort()
+	frame, err := encodePacket(&prefixedItemRegistry{packet.ItemRegistry{Items: []protocol.ItemEntry{{Name: "minecraft:shield", RuntimeID: 355}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WritePacketRaw(frame); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.shieldID.Load(); got != 355 {
+		t.Fatalf("shield ID after an active-protocol registry = %d, want 355", got)
+	}
+}

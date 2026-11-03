@@ -402,7 +402,8 @@ type Conn struct {
 
 	// packetFunc is an optional function passed to a Dial() call. If set, each packet read from and written
 	// to this connection will call this function.
-	packetFunc func(header packet.Header, payload []byte, src, dst net.Addr)
+	packetFunc     func(header packet.Header, payload []byte, src, dst net.Addr)
+	packetObserver compiledPacketObserver
 	// acceptPacketHeader optionally filters incoming packets before internal handling.
 	acceptPacketHeader func(packet.Header) bool
 
@@ -751,17 +752,9 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		}
 		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
 			buf.Reset()
-			conn.hdr.PacketID = converted.ID()
-			_ = conn.hdr.Write(buf)
-			l := buf.Len()
-
-			w := conn.proto.NewWriter(buf, conn.shieldID.Load())
-			if translation := conn.actorIDs.Load(); translation != nil {
-				w = translation.WrapWriter(w)
-			}
-			converted.Marshal(w)
-			if conn.packetFunc != nil {
-				conn.packetFunc(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+			l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
+			if conn.observes(conn.hdr.PacketID) {
+				conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
 			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
 		}
@@ -770,6 +763,52 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 				*observers = append(*observers, packetCompletion{after: len(*dst), sent: sent})
 			}
 		}
+	}
+}
+
+// WritePacketRaw buffers one encoded packet, header and payload as RawPacket.Data holds it, for the next
+// flush, which compresses and encrypts it with the rest of the batch. It bypasses protocol conversion and
+// actor ID translation, and raw packets are not passed to the WriteObserver. The Conn takes ownership of
+// data.
+func (conn *Conn) WritePacketRaw(data []byte) error {
+	if conn.ctx == nil {
+		return net.ErrClosed
+	}
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if conn.ctx.Err() != nil {
+		// Checked under sendMu, as queuePackets does, so shutdown while waiting for it is also caught.
+		return conn.closeErr("write raw packet")
+	}
+	// Observe under sendMu, as WritePacket does, so the shield ID follows the order packets are queued in.
+	conn.observeRawWrite(data)
+	conn.bufferedSend = append(conn.bufferedSend, data)
+	return nil
+}
+
+// observeRawWrite runs the write-side observation encodePacketsTo performs for a decoded packet.
+func (conn *Conn) observeRawWrite(data []byte) {
+	id := rawPacketID(data)
+	observed := conn.observes(id)
+	if !observed && id != packet.IDItemRegistry {
+		return
+	}
+	buf := bytes.NewBuffer(data)
+	var header packet.Header
+	if header.Read(buf) != nil {
+		return
+	}
+	if header.PacketID == packet.IDItemRegistry {
+		registryData := &packetData{h: &header, payload: bytes.NewBuffer(buf.Bytes())}
+		pks, _ := registryData.decodeWith(conn.proto, conn.proto.Packets(false), conn.shieldID.Load(), conn.readerLimits, nil, conn)
+		for _, pk := range pks {
+			if registry, ok := pk.(*packet.ItemRegistry); ok {
+				conn.observeShield(registry.Items)
+			}
+		}
+	}
+	if observed {
+		conn.observe(header, buf.Bytes(), conn.LocalAddr(), conn.RemoteAddr())
 	}
 }
 
@@ -836,26 +875,10 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		return nil, conn.wrap(errBatchReadingDisabled, "read packets")
 	}
 	for {
-		batch, ok := conn.takeBatch()
-		if !ok {
-			// Prefer batches already queued over reporting a closed connection or an expired deadline,
-			// so that packets received before a disconnect are still delivered. A batch is flushed
-			// before the context is cancelled, so once either fires a queued batch is already visible
-			// and a final queue check drains it ahead of the error.
-			select {
-			case <-conn.batchReady:
-				continue
-			case <-conn.ctx.Done():
-				if batch, ok = conn.takeBatch(); !ok {
-					return nil, conn.closeErr("read packets")
-				}
-			case <-conn.readDeadline:
-				if batch, ok = conn.takeBatch(); !ok {
-					return nil, conn.wrap(context.DeadlineExceeded, "read packets")
-				}
-			}
+		batch, err := conn.nextBatch("read packets")
+		if err != nil {
+			return nil, err
 		}
-
 		packets := make([]packet.Packet, 0, len(batch))
 		for _, data := range batch {
 			pks, err := data.decode(conn)
@@ -872,6 +895,65 @@ func (conn *Conn) ReadBatch() ([]packet.Packet, error) {
 		}
 		if len(packets) != 0 {
 			return packets, nil
+		}
+	}
+}
+
+// ReadBatchRaw reads one network batch like ReadBatch, but leaves each packet encoded unless decode
+// reports true for its ID. A selected packet that fails to decode is returned with DecodeErr set, unless
+// the failure closed the connection: then, as with ReadBatch, it and the packets after it are dropped.
+// Unselected packets are never decoded, so the invalid and unknown packet disconnect policies don't apply
+// to them. Raw packets bypass protocol conversion and actor ID translation, so relaying them to another
+// Conn is only valid when both share a protocol. A nil decode selects no packets.
+func (conn *Conn) ReadBatchRaw(decode func(id uint32) bool) ([]RawPacket, error) {
+	if !conn.batchReading {
+		return nil, conn.wrap(errBatchReadingDisabled, "read raw packets")
+	}
+	for {
+		batch, err := conn.nextBatch("read raw packets")
+		if err != nil {
+			return nil, err
+		}
+		packets := make([]RawPacket, 0, len(batch))
+		for _, data := range batch {
+			raw := RawPacket{ID: data.h.PacketID, Data: data.full}
+			if decode != nil && decode(raw.ID) {
+				raw.Decoded, raw.DecodeErr = data.decode(conn)
+				if raw.DecodeErr != nil {
+					conn.log.Error("read raw packets: " + raw.DecodeErr.Error())
+					if conn.ctx.Err() != nil {
+						break
+					}
+				}
+			}
+			packets = append(packets, raw)
+		}
+		if len(packets) != 0 {
+			return packets, nil
+		}
+	}
+}
+
+// nextBatch blocks until a network batch is queued. Batches queued before a close or an expired deadline
+// are still returned: a batch is flushed before the context is cancelled, so a final queue check drains it
+// ahead of the error.
+func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
+	for {
+		if batch, ok := conn.takeBatch(); ok {
+			return batch, nil
+		}
+		select {
+		case <-conn.batchReady:
+		case <-conn.ctx.Done():
+			if batch, ok := conn.takeBatch(); ok {
+				return batch, nil
+			}
+			return nil, conn.closeErr(op)
+		case <-conn.readDeadline:
+			if batch, ok := conn.takeBatch(); ok {
+				return batch, nil
+			}
+			return nil, conn.wrap(context.DeadlineExceeded, op)
 		}
 	}
 }
@@ -983,13 +1065,12 @@ func (conn *Conn) ConfigureResourcePackStack(stack ResourcePackStackSnapshot, te
 	return nil
 }
 
-// Write writes a slice of serialised packet data to the Conn. The data is buffered until the next 20th of a
-// tick, after which it is flushed to the connection. Write returns the amount of bytes written n.
+// Write buffers a copy of b, one encoded packet, through WritePacketRaw. It copies b because io.Writer
+// forbids retaining it; use WritePacketRaw to hand over ownership instead.
 func (conn *Conn) Write(b []byte) (n int, err error) {
-	conn.sendMu.Lock()
-	defer conn.sendMu.Unlock()
-
-	conn.bufferedSend = append(conn.bufferedSend, b)
+	if err := conn.WritePacketRaw(bytes.Clone(b)); err != nil {
+		return 0, err
+	}
 	return len(b), nil
 }
 
@@ -1146,7 +1227,7 @@ func (conn *Conn) SetDeadline(t time.Time) error {
 // SetReadDeadline sets the read deadline of the Conn to the time passed. The time must be after time.Now().
 // Passing an empty time.Time to the method (time.Time{}) results in the read deadline being cleared.
 func (conn *Conn) SetReadDeadline(t time.Time) error {
-	if t.Equal(time.Time{}) {
+	if t.IsZero() {
 		conn.readDeadline = make(chan time.Time)
 	} else if t.Before(time.Now()) {
 		panic(fmt.Errorf("error setting read deadline: time passed is before time.Now()"))
@@ -1445,11 +1526,20 @@ func (conn *Conn) observeItems(items []protocol.ItemEntry) {
 
 // observeShield records the runtime ID used when reading and writing shield item stacks.
 func (conn *Conn) observeShield(items []protocol.ItemEntry) {
+	if id, ok := ShieldRuntimeID(items); ok {
+		conn.shieldID.Store(id)
+	}
+}
+
+// ShieldRuntimeID returns the runtime ID an item registry assigns to the shield, which protocol readers
+// and writers need to encode shield item stacks. ok is false when the registry has no shield.
+func ShieldRuntimeID(items []protocol.ItemEntry) (id int32, ok bool) {
 	for _, item := range items {
 		if item.Name == "minecraft:shield" {
-			conn.shieldID.Store(int32(item.RuntimeID))
+			id, ok = int32(item.RuntimeID), true
 		}
 	}
+	return id, ok
 }
 
 // handlePassthroughCacheNegotiation sends the configured cache capability after login succeeds without consuming the
@@ -1739,7 +1829,12 @@ func (conn *Conn) handleLogin(pk *packet.Login) error {
 		_ = conn.WritePacket(&packet.Disconnect{Message: text.Colourf("<red>You must be logged in with XBOX Live to join.</red>")})
 		return fmt.Errorf("client was not authenticated to XBOX Live")
 	}
-	if pkc, ok := conn.conn.(publicKeyConn); ok {
+	if v, ok := conn.conn.(publicKeyVerifierConn); ok {
+		if err := v.VerifyPublicKey(authResult.PublicKey); err != nil {
+			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
+			return fmt.Errorf("verify identity public key: %w", err)
+		}
+	} else if pkc, ok := conn.conn.(publicKeyConn); ok {
 		if pub := pkc.PublicKey(); pub != nil && !authResult.PublicKey.Equal(pub) {
 			_ = conn.WritePacket(&packet.Disconnect{Reason: packet.DisconnectReasonNotAuthenticated})
 			return fmt.Errorf("identity public key mismatch: %s != %s", login.MarshalPublicKey(authResult.PublicKey), login.MarshalPublicKey(pub))
@@ -1841,6 +1936,15 @@ type publicKeyConn interface {
 	// When non-nil, it must be compared against [login.AuthResult.PublicKey]
 	// to prevent login packet replay attacks.
 	PublicKey() *ecdsa.PublicKey
+}
+
+// publicKeyVerifierConn is implemented by underlying [net.Conn] of the Conn that bind the
+// connection to an identity without exposing its public key. It takes precedence over
+// publicKeyConn.
+type publicKeyVerifierConn interface {
+	// VerifyPublicKey returns an error if the validated [login.AuthResult.PublicKey]
+	// does not match the identity the connection was established for.
+	VerifyPublicKey(pub *ecdsa.PublicKey) error
 }
 
 // handleClientToServerHandshake handles an incoming ClientToServerHandshake packet.
@@ -2097,7 +2201,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
 		conn.packQueue.downloadingPacks[id] = &downloadingPack{
 			size:       pack.Size,
-			buf:        bytes.NewBuffer(make([]byte, 0, min(pack.Size, maxResourcePackPrealloc))),
+			buf:        new(bytes.Buffer), // Payload storage grows only as chunks arrive.
 			contentKey: pack.ContentKey,
 			cacheKey:   cacheKey,
 		}
@@ -2751,9 +2855,7 @@ func (conn *Conn) handleLoginSuccess() error {
 			return fmt.Errorf("send ClientCacheStatus: %w", err)
 		}
 	}
-	if conn.handoff != HandoffAfterLogin {
-		conn.expect(packet.IDResourcePacksInfo)
-	}
+	// ResourcePacksInfo is already expected, and may even have been handled if the server sent it first.
 	return conn.Flush()
 }
 

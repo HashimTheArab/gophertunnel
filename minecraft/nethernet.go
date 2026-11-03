@@ -3,13 +3,23 @@ package minecraft
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
+	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -25,10 +35,10 @@ type SignalingConn interface {
 type DialSignalingFunc func(ctx context.Context, address string) (SignalingConn, error)
 
 // NetherNet is an implementation of a NetherNet network, a WebRTC-based transport layer protocol.
-// Signaling or DialSignaling must be provided before dialing; listening requires Signaling.
 type NetherNet struct {
 	// Signaling is the interface used to exchange connection details with the remote peers.
-	// It is used for listening and for dialing when DialSignaling is nil.
+	// When nil, dials without DialSignaling and pings use a new [endpoint.Client], and Listen serves an
+	// [endpoint.Handler] on its address. A Client cannot listen and a Handler cannot dial or ping.
 	Signaling nethernet.Signaling
 	// DialSignaling optionally opens a fresh signaling connection for each outbound dial.
 	// NetherNet owns the returned signaling connection: it closes it when the resulting
@@ -57,14 +67,26 @@ type NetherNet struct {
 // as a net.Conn.
 var _ packet.TransportCapabilities = (*nethernet.Conn)(nil)
 
-// DialContext ...
+// DialContext establishes a connection with the remote NetherNet network using the address.
 func (n NetherNet) DialContext(ctx context.Context, address string) (net.Conn, error) {
 	return n.dialContext(ctx, address, nil)
 }
 
-// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity].
+// DialContextIdentity establishes a connection with a preconfigured [nethernet.Dialer.Identity]. When
+// token is empty and none is preconfigured, it presents an identity self-signed by privateKey, as the
+// vanilla client does offline.
 // Call [NetherNet.DialContextIdentityProvider] when the identity has not already been configured.
 func (n NetherNet) DialContextIdentity(ctx context.Context, address, token string, privateKey *ecdsa.PrivateKey) (net.Conn, error) {
+	if token == "" {
+		if n.Dialer.Identity != nil {
+			return n.dialContext(ctx, address, nil)
+		}
+		identity, err := nethernet.SelfSignedIdentity(privateKey, offlineIdentityDomain)
+		if err != nil {
+			return nil, fmt.Errorf("minecraft: NetherNet.DialContextIdentity: self-sign identity: %w", err)
+		}
+		return n.dialContext(ctx, address, identity)
+	}
 	if n.Dialer.Identity == nil || n.Dialer.Identity.Domain == "" {
 		return nil, errors.New("minecraft: NetherNet.DialContextIdentity: identity provider is empty")
 	}
@@ -74,6 +96,9 @@ func (n NetherNet) DialContextIdentity(ctx context.Context, address, token strin
 		Domain:     n.Dialer.Identity.Domain,
 	})
 }
+
+// offlineIdentityDomain is the issuer the vanilla client puts on its self-signed identity when offline.
+const offlineIdentityDomain = "https://authorization.franchise.minecraft-services.net/"
 
 // DialContextIdentityProvider establishes a connection with the remote NetherNet peer using the
 // JWT token issued by identityProvider and the private key bound to the Minecraft connection.
@@ -103,7 +128,7 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 		signaling, owned = conn, conn
 	}
 	if signaling == nil {
-		return nil, errors.New("minecraft: NetherNet.DialContext: Signaling is nil")
+		signaling = endpoint.NewClient()
 	}
 	if n.Dialer.Log == nil && n.Log != nil {
 		n.Dialer.Log = n.Log
@@ -153,18 +178,234 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 	return conn, nil
 }
 
-// PingContext ...
-func (n NetherNet) PingContext(context.Context, string) ([]byte, error) {
+// PingContext sends a ping to the specified address if the [NetherNet.Signaling]
+// supports sending a ping request to the remote server. Otherwise, it returns an error.
+// If [NetherNet.Signaling] is nil, [endpoint.Client] will be created and used instead.
+// The address must be an HTTP/HTTPS URL with a port.
+func (n NetherNet) PingContext(ctx context.Context, address string) ([]byte, error) {
+	if n.Signaling == nil {
+		n.Signaling = endpoint.NewClient()
+	}
+	if p, ok := n.Signaling.(pinger); ok {
+		return p.PingContext(ctx, address)
+	}
 	return nil, errors.New("minecraft: NetherNet.PingContext: not supported")
 }
 
-// Listen ...
-func (n NetherNet) Listen(string) (NetworkListener, error) {
+// Ensure that the default Signaling Client implementation used by NetherNet satisfies
+// the pinger interface.
+var _ pinger = (*endpoint.Client)(nil)
+
+// pinger is implemented by [nethernet.Signaling] that support sending
+// ping requests to remote servers.
+type pinger interface {
+	PingContext(ctx context.Context, address string) ([]byte, error)
+}
+
+// Listen creates a NetherNet listener using the [NetherNet.Signaling] implementation.
+// If [NetherNet.Signaling] is nil, an HTTP server will be started at the specified address.
+// Unlike [PingContext] and [DialContext], the address should be formatted as 'ip:port'.
+func (n NetherNet) Listen(address string) (_ NetworkListener, err error) {
+	var closeFunc func() error
 	if n.Signaling == nil {
-		return nil, errors.New("minecraft: NetherNet.Listen: Signaling is nil")
+		server, err := endpoint.Serve(address)
+		if err != nil {
+			return nil, fmt.Errorf("serve HTTP: %w", err)
+		}
+		n.Signaling = server
+		closeFunc = server.Close
 	}
 	if n.ListenConfig.Log == nil && n.Log != nil {
 		n.ListenConfig.Log = n.Log
 	}
-	return n.ListenConfig.Listen(n.Signaling)
+	l, err := n.ListenConfig.Listen(n.Signaling)
+	if err != nil {
+		if closeFunc != nil {
+			if err2 := closeFunc(); err2 != nil {
+				err = errors.Join(err, fmt.Errorf("close HTTP server: %w", err2))
+			}
+		}
+		return nil, err
+	}
+	return netherNetListener{NetworkListener: l, close: closeFunc}, nil
+}
+
+// netherNetListener implements [NetworkListener] with additional handling
+// to close the HTTP server together with the underlying NetworkListener.
+type netherNetListener struct {
+	NetworkListener
+	// close is a function for closing the HTTP server used to listen.
+	// It is only set if the caller did not specify [NetherNet.Signaling]
+	// when calling [NetherNet.Listen].
+	close func() error
+}
+
+// Close closes the underlying NetworkListener along with the HTTP server.
+func (n netherNetListener) Close() (err error) {
+	if err2 := n.NetworkListener.Close(); err2 != nil {
+		err = errors.Join(err, err2)
+	}
+	if n.close != nil {
+		if err2 := n.close(); err2 != nil {
+			err = errors.Join(err, fmt.Errorf("close HTTP server: %w", err2))
+		}
+	}
+	return err
+}
+
+// init registers the NetherNet network.
+func init() {
+	RegisterNetwork("nethernet", func(l *slog.Logger) Network {
+		return NetherNet{Log: l}
+	})
+}
+
+// NetherNetServerIdentity returns a nethernet.ListenConfig.IssueServerIdentity backed by the P-384
+// key saved at path, creating it on first use. Clients trust plain-HTTP servers on first use by key,
+// so a key that survives restarts is only ever confirmed once.
+func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Identity, error), error) {
+	key, err := loadOrCreateNetherNetKey(path)
+	if err != nil {
+		return nil, fmt.Errorf("minecraft: NetherNet server key: %w", err)
+	}
+	return func(context.Context) (*nethernet.Identity, error) {
+		// "self" is the domain Bedrock Dedicated Server presents.
+		return nethernet.ServerIdentity(key, "self")
+	}, nil
+}
+
+// loadOrCreateNetherNetKey reads the PEM key at path, or generates and saves one when none exists.
+// Creators serialize on an exclusive lock on path+".lock", so concurrent first starts agree on one key.
+// A file at path that is not a P-384 key is an error, never replaced.
+func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	// A key only ever appears at path whole, so an existing one is read without the lock.
+	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
+		return key, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := lockFile(lock); err != nil {
+		return nil, fmt.Errorf("lock %s: %w", lock.Name(), err)
+	}
+	defer unlockFile(lock)
+	// Another creator may have saved a key while this one waited for the lock.
+	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
+		return key, err
+	}
+	return createNetherNetKey(path)
+}
+
+// readNetherNetKey parses the key at path, returning an error matching fs.ErrNotExist if there is none.
+// An empty file counts as none: earlier versions left one when they died between claiming path and
+// saving their key there.
+func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	b, err := os.ReadFile(path)
+	if err == nil && len(b) == 0 {
+		err = &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseNetherNetKey(path, b)
+}
+
+// createNetherNetKey generates a key and saves it at path. The caller holds the key lock and has seen
+// no file at path. The key is written and synced to a temporary file first, then renamed into place,
+// so a crash never leaves a partial key at path.
+func createNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(path)
+	removeStaleNetherNetKeyTemps(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return nil, err
+	}
+	err = pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return nil, err
+	}
+	if err := syncDir(dir); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// removeStaleNetherNetKeyTemps deletes the temporary key files that creators killed mid-write left next
+// to path, so their private keys do not linger. The caller holds the key lock, so no live creator owns
+// them. Only os.CreateTemp names from this scheme and the earlier ".nethernet-key-*" one are removed.
+func removeStaleNetherNetKeyTemps(path string) {
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		for _, prefix := range []string{filepath.Base(path) + ".tmp", ".nethernet-key-"} {
+			if digits, ok := strings.CutPrefix(name, prefix); ok && entry.Type().IsRegular() && isDecimal(digits) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		}
+	}
+}
+
+// isDecimal reports whether s is a non-empty run of decimal digits, as os.CreateTemp fills in for "*".
+func isDecimal(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// parseNetherNetKey parses a P-384 key from the SEC 1 or PKCS #8 PEM contents b of the file at path.
+func parseNetherNetKey(path string, b []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(b)
+	if block == nil {
+		return nil, fmt.Errorf("%s: no PEM block", path)
+	}
+	var (
+		key *ecdsa.PrivateKey
+		err error
+	)
+	switch block.Type {
+	case "EC PRIVATE KEY":
+		key, err = x509.ParseECPrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		var parsed any
+		if parsed, err = x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+			var ok bool
+			if key, ok = parsed.(*ecdsa.PrivateKey); !ok {
+				err = fmt.Errorf("%s: %T is not an ECDSA key", path, parsed)
+			}
+		}
+	default:
+		err = fmt.Errorf("%s: unexpected PEM block %q", path, block.Type)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if key.Curve != elliptic.P384() {
+		return nil, fmt.Errorf("%s: key is not P-384", path)
+	}
+	return key, nil
 }

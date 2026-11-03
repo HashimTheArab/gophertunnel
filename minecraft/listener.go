@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// errListenerDeliveryClosed stops a connection's read loop when the listener closes before the connection
+// could be delivered to Accept.
 var errListenerDeliveryClosed = errors.New("listener closed before connection delivery")
 
 // ListenConfig holds settings that may be edited to change behaviour of a Listener.
@@ -161,7 +164,10 @@ type ListenConfig struct {
 	// packet. The function is called with the header of the packet and its raw payload, the address from which the
 	// packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
-	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// PacketObserver observes selected IDs before PacketFunc. Its interests are copied at listen time.
+	// Unlike PacketFunc, it does not require incoming payload copies for unrelated packets.
+	PacketObserver PacketObserver
+	// AcceptPacketHeader filters incoming packets after packet observers run and before body decoding
 	// or internal handling, including login and disconnect handling. Returning false silently drops only
 	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
 	// it must not block and may run concurrently for different connections. The header is passed
@@ -193,8 +199,9 @@ type ListenConfig struct {
 // login sequence of connecting clients and provides the implements the net.Listener interface to provide a
 // consistent API.
 type Listener struct {
-	cfg      ListenConfig
-	listener NetworkListener
+	cfg            ListenConfig
+	packetObserver compiledPacketObserver
+	listener       NetworkListener
 
 	packs   []*resource.Pack
 	packsMu sync.RWMutex
@@ -283,6 +290,10 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 	if cfg.Handoff != HandoffNone && cfg.Handoff != HandoffAfterLogin {
 		return nil, fmt.Errorf("listen: Handoff %d does not apply to a Listener", cfg.Handoff)
 	}
+	packetObserver, err := cfg.PacketObserver.compile()
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	if cfg.CompressionThreshold == 0 {
 		cfg.CompressionThreshold = 256
 	} else if cfg.CompressionThreshold < 0 {
@@ -311,14 +322,15 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		return nil, fmt.Errorf("generating ECDSA key: %w", err)
 	}
 	listener := &Listener{
-		cfg:      cfg,
-		listener: netListener,
-		group:    cfg.ListenerGroup,
-		packs:    slices.Clone(cfg.ResourcePacks),
-		incoming: make(chan *Conn),
-		close:    make(chan struct{}),
-		key:      key,
-		verifier: verifier,
+		cfg:            cfg,
+		packetObserver: packetObserver,
+		listener:       netListener,
+		group:          cfg.ListenerGroup,
+		packs:          slices.Clone(cfg.ResourcePacks),
+		incoming:       make(chan *Conn),
+		close:          make(chan struct{}),
+		key:            key,
+		verifier:       verifier,
 	}
 
 	// Actually start listening.
@@ -467,8 +479,10 @@ func (listener *Listener) PlayerCount() int {
 // method, it will directly call the method after updating its pong data.
 func (listener *Listener) updatePongData() {
 	var port uint16
-	if addr, ok := listener.Addr().(*net.UDPAddr); ok {
-		port = uint16(addr.Port)
+	if a, ok := listener.Addr().(interface {
+		AddrPort() netip.AddrPort
+	}); ok {
+		port = a.AddrPort().Port()
 	}
 
 	// Use configured ports for LAN discovery, or fall back to actual port
@@ -482,6 +496,8 @@ func (listener *Listener) updatePongData() {
 	}
 
 	s := listener.status()
+	// The field after the game mode is a separate flag: clients drop pongs of ten or more fields unless it
+	// is exactly 1.
 	listener.listener.PongData(fmt.Appendf(nil, "MCPE;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;%v;",
 		s.ServerName, protocol.CurrentProtocol, protocol.CurrentVersion, s.PlayerCount, s.MaxPlayers,
 		listener.listener.ID(), s.ServerSubName, gameTypeName(s.GameType), 1, ipv4Port, ipv6Port, "0", "0",
@@ -531,7 +547,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 
 	conn := newConn(netConn, listener.key, listener.cfg.ErrorLog, proto{}, listener.cfg.FlushRate, true)
 	conn.disableEncryption = conn.disableEncryption || listener.cfg.DisablePacketEncryption
-	conn.acceptedProto = append(listener.cfg.AcceptedProtocols, proto{})
+	conn.acceptedProto = append(slices.Clone(listener.cfg.AcceptedProtocols), proto{})
 	conn.protocolMismatchMessage = listener.cfg.ProtocolMismatchMessage
 	conn.acceptNewerProtocols = listener.cfg.AcceptNewerProtocols
 	conn.compression = listener.cfg.Compression
@@ -542,6 +558,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	conn.allow = listener.cfg.Allow
 
 	conn.packetFunc = listener.cfg.PacketFunc
+	conn.packetObserver = listener.packetObserver
 	conn.acceptPacketHeader = listener.cfg.AcceptPacketHeader
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired

@@ -201,7 +201,11 @@ func TestClientUsesTheSuppliedXSTSSource(t *testing.T) {
 
 // The pending invite count is a bare integer body; anything else is an error, never zero.
 func TestClientPendingInviteCount(t *testing.T) {
-	for body, want := range map[string]int{"3": 3, " 0\n": 0} {
+	for _, tc := range []struct {
+		body string
+		want int
+	}{{"3", 3}, {" 0\n", 0}} {
+		body, want := tc.body, tc.want
 		c := &Client{requestFunc: func(_ context.Context, method, path string, _ []byte) ([]byte, int, error) {
 			if method != http.MethodGet || path != "/invites/count/pending" {
 				t.Fatalf("request = %s %s", method, path)

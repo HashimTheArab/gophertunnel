@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -239,7 +240,8 @@ type ClientData struct {
 	// 3 - High, less than ~8GB of memory
 	// 4 - Super High, more than ~8GB of memory
 	MemoryTier int
-	// PlatformType is the type of platform the client is running.
+	// PlatformType is the client's platform category, distinct from DeviceOS. Known values are
+	// PlatformTypeDesktop and PlatformTypeMobile.
 	PlatformType int
 	// GraphicsMode is the graphics mode the client is running.
 	GraphicsMode int
@@ -342,6 +344,11 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		return nil, err
 	}
+	// Classic skins may explicitly send an empty ProfileHash. PocketMine requires the
+	// claim even then, so omitempty must not erase a value supplied by the client.
+	if slices.Contains(data.ClaimOrder, "ProfileHash") {
+		fields["ProfileHash"], _ = json.Marshal(data.ProfileHash)
+	}
 	for name, value := range data.ExtraData {
 		fields[name] = value
 	}
@@ -393,6 +400,30 @@ func (data ClientData) MarshalJSON() ([]byte, error) {
 	}
 	buf.WriteByte('}')
 	return buf.Bytes(), nil
+}
+
+// MarkClaims records claims set after decoding as present, at their vanilla position, so MarshalJSON
+// writes them. It preserves the claim order of shallow copies. A ClientData constructed
+// programmatically already writes every claim.
+func (data *ClientData) MarkClaims(names ...string) {
+	if data.ClaimOrder == nil {
+		return
+	}
+	data.ClaimOrder = slices.Clone(data.ClaimOrder)
+	for _, name := range names {
+		if slices.Contains(data.ClaimOrder, name) {
+			continue
+		}
+		rank := slices.Index(clientDataClaimOrder, name)
+		at := len(data.ClaimOrder)
+		for index, present := range data.ClaimOrder {
+			if other := slices.Index(clientDataClaimOrder, present); rank >= 0 && other > rank {
+				at = index
+				break
+			}
+		}
+		data.ClaimOrder = slices.Insert(data.ClaimOrder, at, name)
+	}
 }
 
 // UnmarshalJSON decodes ClientData while retaining unknown claims and the original claim order.
@@ -530,6 +561,39 @@ type SkinAnimation struct {
 // dots.
 var checkVersion = regexp.MustCompile("[0-9.]").MatchString
 
+// SplitServerAddress returns the host and port a client joined with, from a ServerAddress in either the
+// 'host:port' form or the URL form of NetherNet joins. ok is false when it names no host or port, as for
+// a client that joined from LAN discovery over NetherNet.
+func SplitServerAddress(address string) (host string, port uint16, ok bool) {
+	if strings.Contains(address, "://") {
+		u, err := parseURLServerAddress(address)
+		if err != nil {
+			return "", 0, false
+		}
+		address = u.Host
+	}
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return "", 0, false
+	}
+	p, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || p == 0 {
+		return "", 0, false
+	}
+	return host, uint16(p), true
+}
+
+// parseURLServerAddress parses the URL form of a ServerAddress, dropping the repeated port older
+// clients append after it.
+func parseURLServerAddress(address string) (*url.URL, error) {
+	if ind := strings.LastIndex(address, ":"); ind > 0 {
+		if u, err := url.Parse(address[:ind]); err == nil && u.Port() != "" && u.Port() == address[ind+1:] {
+			address = address[:ind]
+		}
+	}
+	return url.Parse(address)
+}
+
 // Validate validates the client data. It returns an error if any of the fields checked did not carry a valid
 // value.
 func (data ClientData) Validate() error {
@@ -552,14 +616,15 @@ func (data ClientData) Validate() error {
 		return fmt.Errorf("SelfSignedID must be parseable as a valid UUID, but got %v", data.SelfSignedID)
 	}
 	if strings.Contains(data.ServerAddress, "://") {
-		// The server address for NetherNet connections has the following format:
+		// The server address for NetherNet connections has one of the following formats, the second being
+		// sent by 1.26.60 clients:
 		// https://<host>:<port>:<port>
-		ind := strings.LastIndex(data.ServerAddress, ":")
-		u, err := url.Parse(data.ServerAddress[:ind])
+		// https://<host>:<port>
+		u, err := parseURLServerAddress(data.ServerAddress)
 		if err != nil {
 			return fmt.Errorf("ServerAddress must be a URL, but got %v", data.ServerAddress)
 		}
-		if u.Host == "" || u.Port() == "" || u.Port() != data.ServerAddress[ind+1:] ||
+		if _, _, err := net.SplitHostPort(u.Host); err != nil || u.Hostname() == "" ||
 			(u.Scheme != "https" && u.Scheme != "http") {
 			return fmt.Errorf("ServerAddress is invalid: %v", data.ServerAddress)
 		}

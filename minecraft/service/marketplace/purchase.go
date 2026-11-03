@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
@@ -133,7 +134,9 @@ func (c *Client) PurchaseVirtual(ctx context.Context, p Purchase) (PurchaseResul
 	// Redirects can replay the purchase body or turn the response into an unrelated GET.
 	client := *c.entitlements.http
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
+	resp, err := authclient.Call(ctx, &client, func(context.Context) (*http.Request, error) {
+		return req, nil
+	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
 	if err != nil {
 		return PurchaseResult{Outcome: PurchaseUnknown, CorrelationID: tags.CorrelationID}, nil
 	}

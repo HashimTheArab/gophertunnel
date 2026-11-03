@@ -106,3 +106,14 @@ func (snapshot ResourcePackStackSnapshot) ExperimentsPreviouslyToggled() bool {
 func (snapshot ResourcePackStackSnapshot) IncludeEditorPacks() bool {
 	return snapshot.stack.IncludeEditorPacks
 }
+
+// IsBuiltinResourcePack reports whether the client ships the pack, so a ResourcePackStack may select it
+// without offering it for download. Identities match exactly, as the stack sends them.
+func IsBuiltinResourcePack(uuid, version string) bool {
+	for _, exempted := range exemptedPacks {
+		if exempted.uuid == uuid && exempted.version == version {
+			return true
+		}
+	}
+	return false
+}

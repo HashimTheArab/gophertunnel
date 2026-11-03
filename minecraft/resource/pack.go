@@ -289,6 +289,7 @@ func (pack *Pack) Size() int {
 }
 
 // Len returns the total size in bytes of the archive of the resource pack.
+//
 // Deprecated: Use Size instead. Kept for backwards compatibility with older integrations.
 func (pack *Pack) Len() int {
 	return pack.Size()
