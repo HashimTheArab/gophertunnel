@@ -95,11 +95,10 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice, rakNetAfterFailure: n.RakNetAfterNetherNetFailure}, nil
 }
 
-// resolveProbe returns the probe answer for address that Select dials by: the one Probes remembers,
-// or a fresh probe, which it stores. answered reports whether a NetherNet endpoint answered just
-// now, with body; a remembered RakNet answer is not probed again. Vanilla still asks a remembered
-// endpoint before every join and joins over RakNet if it no longer answers, keeping the answer.
-// It fails only when ctx ends first.
+// resolveProbe returns the probe answer Select dials by: the one Probes remembers, or a fresh probe
+// it stores. A remembered RakNet answer is reused as-is; a remembered NetherNet endpoint is asked
+// again and falls back to RakNet if it no longer answers. answered reports whether an endpoint
+// answered just now, with its body. It fails only when ctx ends first.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choice probeChoice, body []byte, answered bool, err error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
@@ -291,13 +290,10 @@ func (n AddressNetwork) DialContextIdentityProvider(ctx context.Context, address
 	return network.DialContext(ctx, address)
 }
 
-// PingContext returns the server's status as RakNet pong data, as the vanilla server list shows a
-// server named by host:port: from the NetherNet HTTP signaling endpoint a probe finds, or over
-// RakNet. Both are asked at once and the first answer is returned, so a server that drops TCP
-// still answers over RakNet before ctx ends. A NetherNet answer is the endpoint's status in the
-// format of [endpoint.Status.RakNet], so its server ID is random and its ports are 19132. Probe
-// answers are shared with Select through Probes, and like a failed dial, a failed RakNet ping drops
-// the remembered RakNet answer it went by, so the next ping probes again.
+// PingContext returns the server's status as RakNet pong data, from the NetherNet HTTP signaling
+// endpoint a probe finds or over RakNet, whichever answers first. A NetherNet answer is the
+// endpoint's status via [endpoint.Status.RakNet] (random server ID, ports 19132). Probe answers are
+// shared with Select through Probes, and a failed RakNet ping drops its remembered answer.
 func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -321,16 +317,11 @@ func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte
 	}()
 	var errs []error
 	for range 2 {
-		// RakNet honours only ctx's deadline, so a cancellation without one must end the wait here.
-		select {
-		case a := <-answers:
-			if a.err == nil {
-				return a.pong, nil
-			}
-			errs = append(errs, a.err)
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		a := <-answers
+		if a.err == nil {
+			return a.pong, nil
 		}
+		errs = append(errs, a.err)
 	}
 	return nil, errors.Join(errs...)
 }
@@ -373,8 +364,9 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 }
 
 // probeNetherNet returns the first endpoint to answer with a 2xx and the start of its body,
-// cancelling the rest even if a preferred one is about to answer. Each batch starts once every request of the one before it has
-// failed or headStart has passed; its first endpoint, the game port, also once the one before fails.
+// cancelling the rest even if a preferred one is about to answer. Each batch starts once every
+// request of the one before it has failed or headStart has passed; its first endpoint, the game
+// port, also once the one before fails.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
