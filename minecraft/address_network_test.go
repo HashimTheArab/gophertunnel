@@ -94,21 +94,56 @@ func TestProbeBatchReleasesOnlyOnFailure(t *testing.T) {
 	}
 }
 
-// The first endpoint of a batch to answer wins without waiting for one that never responds.
-func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
+// Within a batch, a preferred endpoint that took the request is waited for even when a later one
+// answers first, as vanilla asks them in order; one whose handshake never completes is not.
+func TestProbeNetherNetWaitsForAPreferredEndpointThatTookTheRequest(t *testing.T) {
 	t.Parallel()
-	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-	t.Cleanup(hang.Close)
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	t.Cleanup(ok.Close)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(300 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(slow.Close)
+	quick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(quick.Close)
+	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{slow.URL, quick.URL}}, time.Minute, time.Minute)
+	if err != nil || endpoint != slow.URL {
+		t.Fatalf("probeNetherNet = %q, %v; want the preferred %q", endpoint, err, slow.URL)
+	}
 
 	start := time.Now()
-	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute)
-	if err != nil || endpoint != ok.URL {
-		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, ok.URL)
+	silent := "https://" + silentTCPAddress(t)
+	endpoint, _, err = probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{silent, quick.URL}}, time.Minute, time.Minute)
+	if err != nil || endpoint != quick.URL {
+		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, quick.URL)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("probeNetherNet waited %v for the endpoint that never answers", elapsed)
+	if elapsed := time.Since(start); elapsed > probeSendGrace+time.Second {
+		t.Fatalf("probeNetherNet waited %v for an endpoint whose handshake never completes", elapsed)
+	}
+}
+
+// For an address without a port, HTTPS signaling on the game port that answers after the head
+// start still wins over a website on port 80 that answers every path, as vanilla asks HTTP only
+// once HTTPS has failed.
+func TestProbeNetherNetKeepsSlowHTTPSAheadOfAWebsite(t *testing.T) {
+	t.Parallel()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(700 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(secure.Close)
+	web := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(web.Close)
+	refused443, gameHTTP := "https://"+closedTCPAddress(t), "http://"+closedTCPAddress(t)
+
+	batches := [][]string{{secure.URL, refused443}, {gameHTTP, web.URL}}
+	// HTTP starts after the head start, once HTTPS has sent its request and before it answers.
+	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, 200*time.Millisecond, 5*time.Second)
+	if err != nil || endpoint != secure.URL {
+		t.Fatalf("probeNetherNet = %q, %v; want the HTTPS game port %q", endpoint, err, secure.URL)
 	}
 }
 
@@ -166,9 +201,9 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	}
 }
 
-// HTTPS wins whenever its 2xx arrives first, and HTTP whenever its own does: a later answer is
-// discarded, even over HTTPS.
-func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
+// HTTPS that took the request wins whenever it answers, even after HTTP has; HTTP wins only once
+// HTTPS has failed.
+func TestProbeNetherNetPrefersHTTPSThatTookTheRequest(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
 		httpsDelay time.Duration
@@ -177,9 +212,9 @@ func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
 		wantHTTPS  bool
 		httpAsked  bool
 	}{
-		"https before the head start":       {headStart: time.Minute, httpStatus: http.StatusOK, wantHTTPS: true},
-		"https after http fails":            {httpsDelay: 200 * time.Millisecond, headStart: 10 * time.Millisecond, httpStatus: http.StatusNotFound, wantHTTPS: true, httpAsked: true},
-		"http answers first after the head": {httpsDelay: time.Minute, headStart: 10 * time.Millisecond, httpStatus: http.StatusOK, httpAsked: true},
+		"https before the head start": {headStart: time.Minute, httpStatus: http.StatusOK, wantHTTPS: true},
+		"https after http fails":      {httpsDelay: 200 * time.Millisecond, headStart: 10 * time.Millisecond, httpStatus: http.StatusNotFound, wantHTTPS: true, httpAsked: true},
+		"https after http answers":    {httpsDelay: 200 * time.Millisecond, headStart: 10 * time.Millisecond, httpStatus: http.StatusOK, wantHTTPS: true, httpAsked: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -288,7 +323,7 @@ func TestProbeNetherNetGivesUpAtTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("probe answered a server that never responds")
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	if elapsed := time.Since(start); elapsed > probeSendGrace+time.Second {
 		t.Fatalf("probe took %v, want it bounded by its timeout", elapsed)
 	}
 }

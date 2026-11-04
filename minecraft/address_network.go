@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"slices"
 	"strconv"
@@ -363,10 +364,13 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 	return found, err
 }
 
-// probeNetherNet returns the first endpoint to answer with a 2xx and the start of its body,
-// cancelling the rest even if a preferred one is about to answer. Each batch starts once every
-// request of the one before it has failed or headStart has passed; its first endpoint, the game
-// port, also once the one before fails.
+// probeNetherNet returns the endpoint vanilla would choose among those that answer with a 2xx, and
+// the start of its body, cancelling the rest. Each batch starts once every request of the one
+// before it has failed or headStart has passed; its first endpoint, the game port, also once the
+// one before fails. Answers are taken in vanilla's order: a 2xx wins only once every earlier
+// endpoint has failed or has gone probeSendGrace without sending its request, so a preferred
+// endpoint that accepted the request is waited for, while one whose port never completes a
+// handshake cannot hold the probe.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -375,23 +379,30 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		total += len(endpoints)
 	}
 	results := make(chan probeResult, total)
+	sent := make([]atomic.Bool, total)     // whether each endpoint's request was written
+	started := make([]atomic.Int64, total) // when each endpoint's request began, in Unix nanoseconds
 	var before *probeBatch
+	index := 0
 	for i, endpoints := range batches {
 		batch, previous := newProbeBatch(len(endpoints)), before
 		startBy := time.Now().Add(time.Duration(i) * headStart)
 		for j, endpoint := range endpoints {
+			order := index
+			index++
 			go func() {
 				if previous != nil {
 					previous.wait(ctx, startBy, j == 0)
 				}
+				started[order].Store(time.Now().UnixNano())
 				var body []byte
 				err := ctx.Err()
 				if err != nil {
 					err = fmt.Errorf("%s: %w", endpoint, err)
 				} else {
-					body, err = probeEndpoint(ctx, client, endpoint)
+					trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent[order].Store(true) }}
+					body, err = probeEndpoint(httptrace.WithClientTrace(ctx, trace), client, endpoint)
 				}
-				results <- probeResult{endpoint, body, err}
+				results <- probeResult{order, endpoint, body, err}
 				if err != nil {
 					batch.fail(j == 0)
 				}
@@ -399,19 +410,72 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		}
 		before = batch
 	}
+	answers := make([]*probeResult, total) // nil while pending
 	var errs []error
-	for range total {
-		if r := <-results; r.err != nil {
-			errs = append(errs, r.err)
-		} else {
-			return r.endpoint, r.body, nil
+	for received := 0; received < total; {
+		chosen, recheck := preferredAnswer(answers, sent, started, time.Now())
+		if chosen != nil {
+			return chosen.endpoint, chosen.body, nil
 		}
+		var wake <-chan time.Time
+		if recheck > 0 {
+			wake = time.After(recheck)
+		}
+		select {
+		case r := <-results:
+			received++
+			answers[r.order] = &r
+			if r.err != nil {
+				errs = append(errs, r.err)
+			}
+		case <-wake:
+		}
+	}
+	if chosen, _ := preferredAnswer(answers, sent, started, time.Now()); chosen != nil {
+		return chosen.endpoint, chosen.body, nil
 	}
 	return "", nil, fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
 }
 
-// probeResult is one endpoint's answer; err is nil for a 2xx.
+// probeSendGrace is how long a pending endpoint keeps a later answer waiting before it has sent its
+// request. A working server completes its handshake well within it; a port that drops the
+// connection never does, and must not hold the probe until the timeout.
+const probeSendGrace = time.Second
+
+// preferredAnswer returns the first 2xx in vanilla's order that no earlier endpoint can still
+// beat, or nil and how long until an earlier endpoint's grace runs out (zero when none blocks on
+// time). An earlier pending endpoint can beat it once it has sent its request, or while it is
+// within probeSendGrace of starting.
+func preferredAnswer(answers []*probeResult, sent []atomic.Bool, started []atomic.Int64, now time.Time) (*probeResult, time.Duration) {
+	var recheck time.Duration
+	for order, answer := range answers {
+		switch {
+		case answer != nil && answer.err == nil:
+			if recheck > 0 {
+				return nil, recheck
+			}
+			return answer, 0
+		case answer != nil:
+			continue
+		case sent[order].Load():
+			return nil, 0
+		}
+		// Pending without a request: it blocks until probeSendGrace after it started, counted from
+		// now if it has not started yet.
+		begun := now
+		if nanos := started[order].Load(); nanos != 0 {
+			begun = time.Unix(0, nanos)
+		}
+		if left := begun.Add(probeSendGrace).Sub(now); left > 0 {
+			recheck = max(recheck, left)
+		}
+	}
+	return nil, 0
+}
+
+// probeResult is one endpoint's answer, by its place in vanilla's order; err is nil for a 2xx.
 type probeResult struct {
+	order    int
 	endpoint string
 	body     []byte
 	err      error
