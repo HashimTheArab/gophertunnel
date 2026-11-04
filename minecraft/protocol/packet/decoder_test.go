@@ -268,9 +268,12 @@ func TestDecoderKeepsDecompressionLimitFatal(t *testing.T) {
 	for _, compression := range []Compression{FlateCompression, SnappyCompression} {
 		var batch bytes.Buffer
 		encoder := NewEncoder(&batch)
-		encoder.EnableCompression(compression, 0)
+		encoder.EnableCompression(compression, 1)
 		if err := encoder.Encode([][]byte{bytes.Repeat([]byte{1}, 4096)}); err != nil {
 			t.Fatal(err)
+		}
+		if batch.Bytes()[1] != byte(compression.EncodeCompression()) {
+			t.Fatal("size-limit fixture must be compressed")
 		}
 		decoder := NewDecoder(bytes.NewReader(batch.Bytes()))
 		decoder.EnableCompression(compression, 1024)

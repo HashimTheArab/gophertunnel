@@ -192,3 +192,97 @@ func (w *batchWrites) Write(b []byte) (int, error) {
 	*w = append(*w, bytes.Clone(b))
 	return len(b), nil
 }
+
+// TestEncoderLeavesNonShrinkingBatchesUncompressed checks the negotiated header and payload.
+func TestEncoderLeavesNonShrinkingBatchesUncompressed(t *testing.T) {
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	for _, tc := range []struct {
+		name        string
+		compression Compression
+	}{
+		{name: "flate", compression: FlateCompression},
+		{name: "snappy", compression: SnappyCompression},
+		{name: "same size", compression: sameSizeCompression{FlateCompression}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			enc := NewEncoder(&out)
+			enc.EnableCompression(tc.compression, 1)
+			var stats BatchEncodeStats
+			enc.SetBatchEncodeObserver(func(s BatchEncodeStats) { stats = s })
+			if err := enc.Encode([][]byte{payload}); err != nil {
+				t.Fatal(err)
+			}
+			wire := out.Bytes()
+			if len(wire) < 2 || wire[1] != byte(NopCompression.EncodeCompression()) {
+				t.Fatalf("compression marker = %x, want uncompressed", wire[:min(2, len(wire))])
+			}
+			if stats.Compressed || stats.BelowThreshold || stats.CompressionID != CompressionAlgorithmNone {
+				t.Fatalf("unexpected compression decision: %+v", stats)
+			}
+			if stats.OutputLen != stats.UncompressedLen+1 {
+				t.Fatalf("output length %d, want %d", stats.OutputLen, stats.UncompressedLen+1)
+			}
+			dec := NewDecoder(bytes.NewReader(wire))
+			dec.EnableCompression(tc.compression, 0)
+			packets, err := dec.Decode()
+			if err != nil || len(packets) != 1 || !bytes.Equal(packets[0], payload) {
+				t.Fatalf("decoded payload differs: count=%d error=%v", len(packets), err)
+			}
+		})
+	}
+}
+
+// sameSizeCompression exercises the equality boundary without a codec-specific size coincidence.
+type sameSizeCompression struct{ Compression }
+
+// Compress returns an equally sized payload so the encoder must choose the original batch.
+func (sameSizeCompression) Compress(data []byte) ([]byte, error) {
+	return bytes.Clone(data), nil
+}
+
+// TestEncoderEncryptsAnUncompressedFallback keeps the original payload through encryption.
+func TestEncoderEncryptsAnUncompressedFallback(t *testing.T) {
+	payload := make([]byte, 256)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	var out bytes.Buffer
+	enc := NewEncoder(&out)
+	enc.EnableCompression(FlateCompression, 1)
+	key := [32]byte{1}
+	enc.EnableEncryption(key)
+	if err := enc.Encode([][]byte{payload}); err != nil {
+		t.Fatal(err)
+	}
+	dec := NewDecoder(bytes.NewReader(out.Bytes()))
+	dec.EnableCompression(FlateCompression, 0)
+	dec.EnableEncryption(key)
+	packets, err := dec.Decode()
+	if err != nil || len(packets) != 1 || !bytes.Equal(packets[0], payload) {
+		t.Fatalf("encrypted fallback payload differs: count=%d error=%v", len(packets), err)
+	}
+}
+
+// TestEncoderZeroCompressionThresholdSendsUncompressed covers a disabled negotiated threshold.
+func TestEncoderZeroCompressionThresholdSendsUncompressed(t *testing.T) {
+	for _, compression := range []Compression{FlateCompression, SnappyCompression} {
+		var out bytes.Buffer
+		enc := NewEncoder(&out)
+		enc.EnableCompression(compression, 0)
+		var stats BatchEncodeStats
+		enc.SetBatchEncodeObserver(func(s BatchEncodeStats) { stats = s })
+		if err := enc.Encode([][]byte{bytes.Repeat([]byte{7}, 2048)}); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.Bytes()[1]; got != byte(NopCompression.EncodeCompression()) {
+			t.Errorf("compression %d marker = %02x, want uncompressed", compression.EncodeCompression(), got)
+		}
+		if stats.Compressed || stats.BelowThreshold || stats.CompressionID != CompressionAlgorithmNone {
+			t.Errorf("disabled threshold reported compression: %+v", stats)
+		}
+	}
+}
