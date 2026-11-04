@@ -185,3 +185,44 @@ func TestPack_HasResourceFileBelowManifestRoot(t *testing.T) {
 		})
 	}
 }
+
+// TestReadBytesPrefersRootManifest reads the pack's own manifest when an asset folder holding a file of
+// the same name comes earlier in the archive, as in a Marketplace pack with
+// textures/entity/aquatic_mobs/manifest.json.
+func TestReadBytesPrefersRootManifest(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"", "MyPack/"} {
+		t.Run(prefix, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			zw := zip.NewWriter(buf)
+			for _, entry := range []struct{ name, data string }{
+				{prefix + "textures/", ""},
+				{prefix + "textures/entity/aquatic_mobs/manifest.json", `{"frames": []}`},
+				{prefix + "manifest.json", testManifest},
+				{prefix + "texts/manifest.json", `{}`},
+			} {
+				w, err := zw.Create(entry.name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := w.Write([]byte(entry.data)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			pack, err := ReadBytes(buf.Bytes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := pack.UUID().String(), "0b5b8f8e-5c5e-4c43-8f3e-0d2f6f5a1b01"; got != want {
+				t.Fatalf("UUID = %s, want %s", got, want)
+			}
+			if got := pack.Version(); got != "1.0.0" {
+				t.Fatalf("Version = %s, want 1.0.0", got)
+			}
+		})
+	}
+}
