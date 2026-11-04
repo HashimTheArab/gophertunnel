@@ -44,7 +44,8 @@ type AddressNetwork struct {
 // netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
 const netherNetProbeTimeout = 6 * time.Second
 
-// defaultServerPort is the port vanilla probes when a server address has none.
+// defaultServerPort is the game port vanilla probes, besides the scheme's own, when a server
+// address has no port.
 const defaultServerPort = 19132
 
 // transportSelector is a Network that chooses the transport to dial an address with.
@@ -229,7 +230,7 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 // ProbeNetherNet returns the base URL of the NetherNet HTTP signaling endpoint a server answers
 // on, probing as the vanilla client does: the HTTPS candidates together, then the HTTP ones once
 // all HTTPS requests have finished, within six seconds in total. A candidate answers when
-// GET {url}/v1/join returns a 2xx status. Port 19132 or zero also tries the scheme's default port.
+// GET {url}/v1/join returns a 2xx status. Port zero also tries 19132 and the scheme's default port.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
 	return probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), netherNetProbeTimeout)
 }
@@ -275,10 +276,12 @@ func probeBatch(ctx context.Context, client *http.Client, endpoints []string) (s
 	return "", errors.Join(errs...)
 }
 
-// probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch. Hosts are
-// formatted unbracketed as vanilla formats them, so an IPv6 literal never answers.
+// probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch. Only an
+// address without a port also asks the scheme's own port, so an explicit port, 19132 included,
+// never reaches a website on 443 or 80 that answers every path. Hosts are formatted unbracketed as
+// vanilla formats them, so an IPv6 literal never answers.
 func probeBatches(host string, port uint16) [][]string {
-	if port != 0 && port != defaultServerPort {
+	if port != 0 {
 		return [][]string{
 			{fmt.Sprintf("https://%s:%d", host, port)},
 			{fmt.Sprintf("http://%s:%d", host, port)},
