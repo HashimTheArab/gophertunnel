@@ -1458,7 +1458,7 @@ func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[chunkPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(chunkPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("chunk pack was not queued for chunk download")
 	}
 	if len(conn.resourcePacks) != 1 {
@@ -1540,7 +1540,7 @@ func TestHandleResourcePacksInfoFallsBackWhenURLExceedsAdvertisedSize(t *testing
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[urlPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(urlPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("oversized URL pack was not queued for chunk download fallback")
 	}
 	if len(conn.resourcePacks) != 0 {
@@ -1582,7 +1582,7 @@ func TestHandleResourcePacksInfoFallsBackWhenURLPackIdentityMismatch(t *testing.
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[advertisedPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(advertisedPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("mismatched URL pack was not queued for chunk download fallback")
 	}
 	if len(conn.resourcePacks) != 0 {
