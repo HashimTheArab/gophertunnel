@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"reflect"
@@ -1435,5 +1436,41 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	}
 	if got, err := ParsePongAdvertisement(pong); err != nil || got.MOTD != "NetherNet only" {
 		t.Fatalf("second PingContext advertised %+v, %v; want the endpoint's status", got, err)
+	}
+}
+
+// An answer held behind a preferred endpoint that took the request is dropped when the probe ends
+// first, by the caller's cancellation or the probe's own timeout, rather than chosen because the
+// endpoint holding it back then fails.
+func TestProbeNetherNetDropsHeldAnswersWhenTheProbeEnds(t *testing.T) {
+	t.Parallel()
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(stalled.Close)
+	quick := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(quick.Close)
+	batches := [][]string{{stalled.URL, quick.URL}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	if endpoint, _, err := probeNetherNet(ctx, probeHTTPClient(nil), batches, time.Minute, time.Minute); err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled probe = %q, %v; want context.Canceled", endpoint, err)
+	}
+	if endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), batches, time.Minute, 300*time.Millisecond); err == nil {
+		t.Fatalf("timed-out probe chose %q", endpoint)
+	}
+}
+
+// Only a request written successfully counts as sent; after a failed write the transport may retry
+// on a connection that has yet to send, which must not suspend the grace.
+func TestProbeSendTraceIgnoresFailedWrites(t *testing.T) {
+	t.Parallel()
+	var sent atomic.Bool
+	markSent(&sent)(httptrace.WroteRequestInfo{Err: io.ErrClosedPipe})
+	if sent.Load() {
+		t.Fatal("a failed write counted as sent")
+	}
+	markSent(&sent)(httptrace.WroteRequestInfo{})
+	if !sent.Load() {
+		t.Fatal("a written request did not count as sent")
 	}
 }

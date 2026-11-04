@@ -399,7 +399,7 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				if err != nil {
 					err = fmt.Errorf("%s: %w", endpoint, err)
 				} else {
-					trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { sent[order].Store(true) }}
+					trace := &httptrace.ClientTrace{WroteRequest: markSent(&sent[order])}
 					body, err = probeEndpoint(httptrace.WithClientTrace(ctx, trace), client, endpoint)
 				}
 				results <- probeResult{order, endpoint, body, err}
@@ -414,8 +414,12 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 	var errs []error
 	for received := 0; received < total; {
 		chosen, recheck := preferredAnswer(answers, sent, started, time.Now())
-		if chosen != nil {
+		if chosen != nil && ctx.Err() == nil {
 			return chosen.endpoint, chosen.body, nil
+		}
+		if chosen != nil {
+			// The earlier endpoints holding it back failed only because the probe ended.
+			break
 		}
 		var wake <-chan time.Time
 		if recheck > 0 {
@@ -431,10 +435,23 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		case <-wake:
 		}
 	}
-	if chosen, _ := preferredAnswer(answers, sent, started, time.Now()); chosen != nil {
+	if chosen, _ := preferredAnswer(answers, sent, started, time.Now()); chosen != nil && ctx.Err() == nil {
 		return chosen.endpoint, chosen.body, nil
 	}
+	if err := context.Cause(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	return "", nil, fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
+}
+
+// markSent returns a trace callback recording that a request was written. A failed write leaves
+// sent unset: the transport may retry on another connection, which has yet to send.
+func markSent(sent *atomic.Bool) func(httptrace.WroteRequestInfo) {
+	return func(info httptrace.WroteRequestInfo) {
+		if info.Err == nil {
+			sent.Store(true)
+		}
+	}
 }
 
 // probeSendGrace is how long a pending endpoint keeps a later answer waiting before it has sent its
