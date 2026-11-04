@@ -20,7 +20,6 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
-	"github.com/pion/ice/v4"
 )
 
 // AddressNetwork is a Network for a server named by host:port. Like the vanilla client joining
@@ -60,7 +59,8 @@ const netherNetProbeTimeout = 6 * time.Second
 // Vanilla waits for every HTTPS request, so a dropped 443 hides HTTP until the timeout.
 const httpProbeHeadStart = time.Second
 
-// defaultServerPort is the port vanilla probes when a server address has none.
+// defaultServerPort is the game port vanilla probes, besides the scheme's own, when a server
+// address has no port.
 const defaultServerPort = 19132
 
 // transportSelector is a Network that chooses the transport to dial an address with.
@@ -95,11 +95,10 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice, rakNetAfterFailure: n.RakNetAfterNetherNetFailure}, nil
 }
 
-// resolveProbe returns the probe answer for address that Select dials by: the one Probes remembers,
-// or a fresh probe, which it stores. answered reports whether a NetherNet endpoint answered just
-// now, with body; a remembered RakNet answer is not probed again. Vanilla still asks a remembered
-// endpoint before every join and joins over RakNet if it no longer answers, keeping the answer.
-// It fails only when ctx ends first.
+// resolveProbe returns the probe answer Select dials by: the one Probes remembers, or a fresh probe
+// it stores. A remembered RakNet answer is reused as-is; a remembered NetherNet endpoint is asked
+// again and falls back to RakNet if it no longer answers. answered reports whether an endpoint
+// answered just now, with its body. It fails only when ctx ends first.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choice probeChoice, body []byte, answered bool, err error) {
 	client := probeHTTPClient(n.HTTPClient)
 	host, port := splitServerAddress(address)
@@ -291,13 +290,10 @@ func (n AddressNetwork) DialContextIdentityProvider(ctx context.Context, address
 	return network.DialContext(ctx, address)
 }
 
-// PingContext returns the server's status as RakNet pong data, as the vanilla server list shows a
-// server named by host:port: from the NetherNet HTTP signaling endpoint a probe finds, or over
-// RakNet. Both are asked at once and the first answer is returned, so a server that drops TCP
-// still answers over RakNet before ctx ends. A NetherNet answer is the endpoint's status in the
-// format of [endpoint.Status.RakNet], so its server ID is random and its ports are 19132. Probe
-// answers are shared with Select through Probes, and like a failed dial, a failed RakNet ping drops
-// the remembered RakNet answer it went by, so the next ping probes again.
+// PingContext returns the server's status as RakNet pong data, from the NetherNet HTTP signaling
+// endpoint a probe finds or over RakNet, whichever answers first. A NetherNet answer is the
+// endpoint's status via [endpoint.Status.RakNet] (random server ID, ports 19132). Probe answers are
+// shared with Select through Probes, and a failed RakNet ping drops its remembered answer.
 func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -321,16 +317,11 @@ func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte
 	}()
 	var errs []error
 	for range 2 {
-		// RakNet honours only ctx's deadline, so a cancellation without one must end the wait here.
-		select {
-		case a := <-answers:
-			if a.err == nil {
-				return a.pong, nil
-			}
-			errs = append(errs, a.err)
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		a := <-answers
+		if a.err == nil {
+			return a.pong, nil
 		}
+		errs = append(errs, a.err)
 	}
 	return nil, errors.Join(errs...)
 }
@@ -364,8 +355,8 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the first NetherNet HTTP signaling endpoint that answers
-// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port 19132 or
-// zero, the schemes' default ports too. Unlike vanilla, HTTP is asked after a one-second head
+// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
+// port 19132 and the schemes' default ports. Unlike vanilla, HTTP is asked after a one-second head
 // start at the latest, and on the game port as soon as HTTPS there fails.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
 	found, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout)
@@ -373,8 +364,9 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 }
 
 // probeNetherNet returns the first endpoint to answer with a 2xx and the start of its body,
-// cancelling the rest even if a preferred one is about to answer. Each batch starts once every request of the one before it has
-// failed or headStart has passed; its first endpoint, the game port, also once the one before fails.
+// cancelling the rest even if a preferred one is about to answer. Each batch starts once every
+// request of the one before it has failed or headStart has passed; its first endpoint, the game
+// port, also once the one before fails.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -466,9 +458,11 @@ func (b *probeBatch) wait(ctx context.Context, startBy time.Time, game bool) {
 }
 
 // probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch, each with
-// the game port first. Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
+// the game port first. Only an address without a port also asks the scheme's own port, so an
+// explicit port, 19132 included, never reaches a website on 443 or 80 that answers every path.
+// Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
 func probeBatches(host string, port uint16) [][]string {
-	if port != 0 && port != defaultServerPort {
+	if port != 0 {
 		return [][]string{{probeURL("https", host, port)}, {probeURL("http", host, port)}}
 	}
 	return [][]string{
@@ -689,17 +683,19 @@ func (n NetherNetHTTP) dial(ctx context.Context, address string, dial func(t Net
 	}
 }
 
-// unreachable reports whether a failed NetherNet dial never reached the server: it ran out of time,
-// ICE never connected, or connecting to the signaling endpoint failed. Rejections, identity
-// verification failures, server errors and errors on an established connection are not.
+// unreachable reports whether a failed NetherNet dial never reached the server: no answer arrived,
+// ICE never connected, the dial deadline passed, or the signaling endpoint could not be dialed.
+// Rejections, identity verification failures, server errors and errors on an established connection
+// are not.
 func unreachable(err error) bool {
 	if _, ok := errors.AsType[identityError](err); ok {
 		return false
 	}
-	// pion reports ICE that failed before the deadline as cancelled: go-nethernet stops the transport.
+	// go-nethernet names its WebRTC-level reachability failures with sentinels; the signaling
+	// endpoint refusing the connection surfaces as a dial OpError from the HTTP transport.
 	var opErr *net.OpError
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ice.ErrCanceledByCaller) ||
-		errors.As(err, &opErr) && opErr.Op == "dial"
+	return errors.Is(err, nethernet.ErrICEConnectFailed) || errors.Is(err, nethernet.ErrNoAnswer) ||
+		errors.Is(err, context.DeadlineExceeded) || errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // DialContext dials the endpoint; address is used only to find one when URL is empty.
