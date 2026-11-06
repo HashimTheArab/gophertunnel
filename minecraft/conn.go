@@ -2728,6 +2728,7 @@ func StartGameFromGameData(data GameData) *packet.StartGame {
 		WorldGameMode:                data.WorldGameMode,
 		Hardcore:                     data.Hardcore,
 		XBLBroadcastMode:             data.XBLBroadcastMode,
+		PlatformBroadcastMode:        data.XBLBroadcastMode,
 		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
 		PlayerPermissions:            data.PlayerPermissions,
 		ChatRestrictionLevel:         data.ChatRestrictionLevel,
