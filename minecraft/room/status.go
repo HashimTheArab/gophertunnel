@@ -34,10 +34,6 @@ const (
 	WorldTypeCreative = "Creative"
 )
 
-const (
-	ConnectionTypeUPNP = 6
-)
-
 type StatusProvider interface {
 	RoomStatus() Status
 }

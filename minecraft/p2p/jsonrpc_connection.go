@@ -7,7 +7,7 @@ import (
 )
 
 // JSONRPCSignaling provides the identifiers required to advertise a JSON-RPC
-// signaling connection. Implementations include messaging.Conn.
+// signaling connection. Implementations include signaling.Conn.
 type JSONRPCSignaling interface {
 	NetworkID() string
 	PlayerMessagingID() uuid.UUID
