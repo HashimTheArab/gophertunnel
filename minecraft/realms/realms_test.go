@@ -226,6 +226,29 @@ func TestClientPendingInviteCount(t *testing.T) {
 	}
 }
 
+// Leaving deletes the player's invitation to that Realm and never sends a request for an invalid id.
+func TestClientLeaveRealm(t *testing.T) {
+	var requests []string
+	c := &Client{requestFunc: func(_ context.Context, method, path string, body []byte) ([]byte, int, error) {
+		if body != nil {
+			t.Fatalf("request body = %q, want none", body)
+		}
+		requests = append(requests, method+" "+path)
+		return nil, http.StatusNoContent, nil
+	}}
+	if err := c.LeaveRealm(context.Background(), 42); err != nil {
+		t.Fatalf("LeaveRealm: %v", err)
+	}
+	for _, id := range []int{0, -1} {
+		if err := c.LeaveRealm(context.Background(), id); err == nil {
+			t.Fatalf("LeaveRealm(%d) accepted an invalid id", id)
+		}
+	}
+	if !reflect.DeepEqual(requests, []string{"DELETE /invites/42"}) {
+		t.Fatalf("requests = %v", requests)
+	}
+}
+
 type fixedXSTS struct{}
 
 func (fixedXSTS) Token() (*oauth2.Token, error) { return nil, errors.New("unused") }
