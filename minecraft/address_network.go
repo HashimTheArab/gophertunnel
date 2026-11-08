@@ -355,8 +355,8 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 	return nil, errors.New("minecraft: AddressNetwork.Listen: not supported")
 }
 
-// ProbeNetherNet returns the base URL of the first NetherNet HTTP signaling endpoint that answers
-// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
+// ProbeNetherNet returns the base URL of the NetherNet HTTP signaling endpoint vanilla would choose
+// among those that answer GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
 // port 19132 and the schemes' default ports. Unlike vanilla, HTTP is asked after a one-second head
 // start at the latest, and on the game port as soon as HTTPS there fails.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
@@ -379,8 +379,8 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		total += len(endpoints)
 	}
 	results := make(chan probeResult, total)
-	sent := make([]atomic.Bool, total)     // whether each endpoint's request was written
-	started := make([]atomic.Int64, total) // when each endpoint's request began, in Unix nanoseconds
+	attempts := make([]probeAttempt, total) // in vanilla's order
+	base := time.Now()                      // attempts time their start from base, on the monotonic clock
 	var before *probeBatch
 	index := 0
 	for i, endpoints := range batches {
@@ -393,14 +393,13 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				if previous != nil {
 					previous.wait(ctx, startBy, j == 0)
 				}
-				started[order].Store(time.Now().UnixNano())
+				attempts[order].start(base)
 				var body []byte
 				err := ctx.Err()
 				if err != nil {
 					err = fmt.Errorf("%s: %w", endpoint, err)
 				} else {
-					trace := &httptrace.ClientTrace{WroteRequest: markSent(&sent[order])}
-					body, err = probeEndpoint(httptrace.WithClientTrace(ctx, trace), client, endpoint)
+					body, err = probeEndpoint(httptrace.WithClientTrace(ctx, attempts[order].trace()), client, endpoint)
 				}
 				results <- probeResult{order, endpoint, body, err}
 				if err != nil {
@@ -412,13 +411,13 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 	}
 	answers := make([]*probeResult, total) // nil while pending
 	var errs []error
-	for received := 0; received < total; {
-		chosen, recheck := preferredAnswer(answers, sent, started, time.Now())
+	for received := 0; ; {
+		chosen, recheck := preferredAnswer(answers, attempts, base, time.Now())
 		if chosen != nil && ctx.Err() == nil {
 			return chosen.endpoint, chosen.body, nil
 		}
-		if chosen != nil {
-			// The earlier endpoints holding it back failed only because the probe ended.
+		if chosen != nil || received == total {
+			// Every endpoint answered, or the probe ended with an answer still held back.
 			break
 		}
 		var wake <-chan time.Time
@@ -435,22 +434,31 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		case <-wake:
 		}
 	}
-	if chosen, _ := preferredAnswer(answers, sent, started, time.Now()); chosen != nil && ctx.Err() == nil {
-		return chosen.endpoint, chosen.body, nil
-	}
 	if err := context.Cause(ctx); err != nil {
 		errs = append(errs, err)
 	}
 	return "", nil, fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
 }
 
-// markSent returns a trace callback recording that a request was written. A failed write leaves
-// sent unset: the transport may retry on another connection, which has yet to send.
-func markSent(sent *atomic.Bool) func(httptrace.WroteRequestInfo) {
-	return func(info httptrace.WroteRequestInfo) {
-		if info.Err == nil {
-			sent.Store(true)
-		}
+// probeAttempt is one endpoint's request, as preferredAnswer sees it while it is pending.
+type probeAttempt struct {
+	sent    atomic.Bool  // the request was written on the connection now in use
+	started atomic.Int64 // since base when the request began, plus one; zero before
+}
+
+// start records that the request began.
+func (a *probeAttempt) start(base time.Time) { a.started.Store(int64(time.Since(base)) + 1) }
+
+// trace marks the request sent once it is written. Each connection the transport tries, including
+// a retry after the server closed a reused one, starts unsent.
+func (a *probeAttempt) trace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GetConn: func(string) { a.sent.Store(false) },
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				a.sent.Store(true)
+			}
+		},
 	}
 }
 
@@ -459,11 +467,10 @@ func markSent(sent *atomic.Bool) func(httptrace.WroteRequestInfo) {
 // connection never does, and must not hold the probe until the timeout.
 const probeSendGrace = time.Second
 
-// preferredAnswer returns the first 2xx in vanilla's order that no earlier endpoint can still
-// beat, or nil and how long until an earlier endpoint's grace runs out (zero when none blocks on
-// time). An earlier pending endpoint can beat it once it has sent its request, or while it is
-// within probeSendGrace of starting.
-func preferredAnswer(answers []*probeResult, sent []atomic.Bool, started []atomic.Int64, now time.Time) (*probeResult, time.Duration) {
+// preferredAnswer returns the first 2xx in vanilla's order that no earlier endpoint can still beat,
+// or nil and how long until an earlier endpoint's grace runs out (zero when none blocks on time).
+// A pending endpoint can beat it once it has sent its request, or within probeSendGrace of starting.
+func preferredAnswer(answers []*probeResult, attempts []probeAttempt, base, now time.Time) (*probeResult, time.Duration) {
 	var recheck time.Duration
 	for order, answer := range answers {
 		switch {
@@ -474,14 +481,14 @@ func preferredAnswer(answers []*probeResult, sent []atomic.Bool, started []atomi
 			return answer, 0
 		case answer != nil:
 			continue
-		case sent[order].Load():
+		case attempts[order].sent.Load():
 			return nil, 0
 		}
 		// Pending without a request: it blocks until probeSendGrace after it started, counted from
 		// now if it has not started yet.
 		begun := now
-		if nanos := started[order].Load(); nanos != 0 {
-			begun = time.Unix(0, nanos)
+		if started := attempts[order].started.Load(); started != 0 {
+			begun = base.Add(time.Duration(started - 1))
 		}
 		if left := begun.Add(probeSendGrace).Sub(now); left > 0 {
 			recheck = max(recheck, left)
@@ -498,8 +505,7 @@ type probeResult struct {
 	err      error
 }
 
-// probeBatch tells the batch after it when to start.
-// A 2xx ends the whole probe, so only failures release the next batch.
+// probeBatch tells the batch after it when to start. Only failures release the next batch.
 type probeBatch struct {
 	pending    atomic.Int32
 	failed     chan struct{} // closed once every request has failed

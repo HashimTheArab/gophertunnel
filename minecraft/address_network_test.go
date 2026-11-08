@@ -95,8 +95,7 @@ func TestProbeBatchReleasesOnlyOnFailure(t *testing.T) {
 	}
 }
 
-// Within a batch, a preferred endpoint that took the request is waited for even when a later one
-// answers first, as vanilla asks them in order; one whose handshake never completes is not.
+// A preferred endpoint that took the request is waited for; one whose handshake never completes is not.
 func TestProbeNetherNetWaitsForAPreferredEndpointThatTookTheRequest(t *testing.T) {
 	t.Parallel()
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,9 +123,7 @@ func TestProbeNetherNetWaitsForAPreferredEndpointThatTookTheRequest(t *testing.T
 	}
 }
 
-// For an address without a port, HTTPS signaling on the game port that answers after the head
-// start still wins over a website on port 80 that answers every path, as vanilla asks HTTP only
-// once HTTPS has failed.
+// HTTPS on the game port that answers after the head start still beats a website on port 80.
 func TestProbeNetherNetKeepsSlowHTTPSAheadOfAWebsite(t *testing.T) {
 	t.Parallel()
 	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,8 +199,7 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	}
 }
 
-// HTTPS that took the request wins whenever it answers, even after HTTP has; HTTP wins only once
-// HTTPS has failed.
+// HTTPS that took the request wins even when HTTP answers first; HTTP wins once HTTPS fails.
 func TestProbeNetherNetPrefersHTTPSThatTookTheRequest(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
@@ -1439,9 +1435,7 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	}
 }
 
-// An answer held behind a preferred endpoint that took the request is dropped when the probe ends
-// first, by the caller's cancellation or the probe's own timeout, rather than chosen because the
-// endpoint holding it back then fails.
+// An answer held behind a preferred endpoint is dropped when the probe is cancelled or times out first.
 func TestProbeNetherNetDropsHeldAnswersWhenTheProbeEnds(t *testing.T) {
 	t.Parallel()
 	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
@@ -1460,17 +1454,22 @@ func TestProbeNetherNetDropsHeldAnswersWhenTheProbeEnds(t *testing.T) {
 	}
 }
 
-// Only a request written successfully counts as sent; after a failed write the transport may retry
-// on a connection that has yet to send, which must not suspend the grace.
-func TestProbeSendTraceIgnoresFailedWrites(t *testing.T) {
+// Only a written request counts as sent, and a retry on a new connection starts unsent again.
+func TestProbeAttemptTraceTracksTheCurrentConnection(t *testing.T) {
 	t.Parallel()
-	var sent atomic.Bool
-	markSent(&sent)(httptrace.WroteRequestInfo{Err: io.ErrClosedPipe})
-	if sent.Load() {
+	var attempt probeAttempt
+	trace := attempt.trace()
+	trace.GetConn("host:443")
+	trace.WroteRequest(httptrace.WroteRequestInfo{Err: io.ErrClosedPipe})
+	if attempt.sent.Load() {
 		t.Fatal("a failed write counted as sent")
 	}
-	markSent(&sent)(httptrace.WroteRequestInfo{})
-	if !sent.Load() {
+	trace.WroteRequest(httptrace.WroteRequestInfo{})
+	if !attempt.sent.Load() {
 		t.Fatal("a written request did not count as sent")
+	}
+	trace.GetConn("host:443")
+	if attempt.sent.Load() {
+		t.Fatal("a retry on a new connection kept the earlier connection's sent request")
 	}
 }
