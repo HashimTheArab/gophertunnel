@@ -58,7 +58,7 @@ func resourcePackDownloadID(id, version string) string {
 // version passed. An ID without a version, or with an empty one, matches on its UUID alone.
 func matchesDownloadID(name, id, version string) bool {
 	nameUUID, nameVersion, _ := strings.Cut(name, "_")
-	return nameUUID == id && (nameVersion == "" || nameVersion == version)
+	return resource.CanonicalUUID(nameUUID) == id && (nameVersion == "" || resource.SameVersion(nameVersion, version))
 }
 
 // lookupTransfer returns the key and transfer in transfers that a pack ID received from the server names.

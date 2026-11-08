@@ -30,17 +30,16 @@ import (
 
 func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
-	// Any port but 19132 is the only port asked.
-	want := [][]string{{"https://example.com:19133"}, {"http://example.com:19133"}}
-	if got := probeBatches("example.com", 19133); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probeBatches with port 19133 = %q, want %q", got, want)
-	}
-	// No port, or 19132, also asks the schemes' default ports.
-	want = [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
-	for _, port := range []uint16{0, 19132} {
+	// An explicit port, the default one included, is the only port asked.
+	for _, port := range []uint16{19132, 19133} {
+		want := [][]string{{"https://example.com:" + strconv.Itoa(int(port))}, {"http://example.com:" + strconv.Itoa(int(port))}}
 		if got := probeBatches("example.com", port); !reflect.DeepEqual(got, want) {
 			t.Fatalf("probeBatches with port %d = %q, want %q", port, got, want)
 		}
+	}
+	want := [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
+	if got := probeBatches("example.com", 0); !reflect.DeepEqual(got, want) {
+		t.Fatalf("probeBatches without a port = %q, want %q", got, want)
 	}
 	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
 	for _, host := range []string{"::1", "[::1]"} {

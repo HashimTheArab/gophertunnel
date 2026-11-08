@@ -41,6 +41,11 @@ type exemptedResourcePack struct {
 	version string
 }
 
+// matches reports whether a server-named pack is this one by parsed UUID and numeric version.
+func (pack exemptedResourcePack) matches(id, version string) bool {
+	return resource.CanonicalUUID(pack.uuid) == resource.CanonicalUUID(id) && resource.SameVersion(pack.version, version)
+}
+
 const batchQueueRetainedCapacity = 8
 
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
@@ -1783,25 +1788,40 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
+	conn.enableCompression(conn.compression, conn.compressionThreshold)
 	return nil
 }
 
-// handleNetworkSettings handles an incoming NetworkSettings packet, enabling compression for future packets.
+// handleNetworkSettings handles an incoming NetworkSettings packet, configuring compression for future packets.
 func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
-	alg, ok := packet.CompressionByID(pk.CompressionAlgorithm)
-	if !ok {
-		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+	var alg packet.Compression = packet.NopCompression
+	if pk.CompressionAlgorithm != packet.CompressionAlgorithmNone {
+		var ok bool
+		alg, ok = packet.CompressionByID(pk.CompressionAlgorithm)
+		if !ok {
+			conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+		}
 	}
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
+	conn.enableCompression(alg, int(pk.CompressionThreshold))
 	conn.readyToLogin = true
 	return nil
+}
+
+// enableCompression applies the negotiated envelope mode and batch size limit without resetting encryption.
+func (conn *Conn) enableCompression(compression packet.Compression, threshold int) {
+	disabled := compression.EncodeCompression() == packet.CompressionAlgorithmNone
+	conn.encMu.Lock()
+	if disabled {
+		conn.enc.DisableCompression()
+	} else {
+		conn.enc.EnableCompression(compression, threshold)
+	}
+	conn.encMu.Unlock()
+	// Apply the configured size limit even when compression framing is disabled.
+	conn.dec.EnableCompression(compression, conn.maxDecompressedLen)
+	if disabled {
+		conn.dec.DisableCompression()
+	}
 }
 
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
@@ -2025,7 +2045,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 				DownloadURL: pack.DownloadURL(),
 			}
 			for _, entry := range resourcePackStackEntries {
-				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+				if entry.pack != nil && pack.SameIdentity(entry.UUID(), entry.Version()) {
 					texturePack.SubPackName = entry.SubPackName()
 					break
 				}
@@ -2185,7 +2205,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
 				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
 			})
-			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+			if err == nil && (newPack.UUID() != pack.UUID || !resource.SameVersion(newPack.Version(), pack.Version)) {
 				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
 			}
 			if err != nil {
@@ -2289,7 +2309,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	for _, stackPack := range pk.TexturePacks {
 		var matched *resource.Pack
 		for _, downloaded := range conn.resourcePacks {
-			if downloaded.UUID().String() == stackPack.UUID && downloaded.Version() == stackPack.Version {
+			if downloaded.SameIdentity(stackPack.UUID, stackPack.Version) {
 				matched = downloaded
 				break
 			}
@@ -2299,14 +2319,14 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 		}
 		available := false
 		for _, exempted := range exemptedPacks {
-			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+			if exempted.matches(stackPack.UUID, stackPack.Version) {
 				available = true
 				break
 			}
 		}
 		if !available {
 			for _, ignored := range conn.ignoredResourcePacks {
-				if ignored.uuid == stackPack.UUID && ignored.version == stackPack.Version {
+				if ignored.matches(stackPack.UUID, stackPack.Version) {
 					available = true
 					break
 				}
