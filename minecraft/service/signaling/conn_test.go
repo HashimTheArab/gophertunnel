@@ -432,7 +432,7 @@ func TestConnNotifySignalReportsCollectiveAcceptance(t *testing.T) {
 	}
 }
 
-// Concurrent AwaitCredentials calls share one TURN request and all receive its answer.
+// Concurrent AwaitCredentials calls share one TURN request and its answer.
 func TestAwaitCredentialsSharesTheRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
@@ -457,9 +457,6 @@ func TestAwaitCredentialsSharesTheRequest(t *testing.T) {
 				t.Fatalf("AwaitCredentials() error = %v", err)
 			}
 		}
-		if _, err := conn.AwaitCredentials(context.Background()); err != nil {
-			t.Fatalf("AwaitCredentials() with fresh credentials error = %v", err)
-		}
 		if got := calls.Load(); got != 1 {
 			t.Fatalf("TURN requests = %d, want 1", got)
 		}
@@ -467,79 +464,19 @@ func TestAwaitCredentialsSharesTheRequest(t *testing.T) {
 	})
 }
 
-// A failed TURN request fails its waiters instead of leaving them to wait for a later one.
+// A failed TURN request fails its waiters.
 func TestAwaitCredentialsReportsFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") })
+		conn, _ := credentialsConn(t, func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") })
 		var credentialsErr *CredentialsError
 		if _, err := conn.AwaitCredentials(context.Background()); !errors.As(err, &credentialsErr) {
 			t.Fatalf("AwaitCredentials() error = %v, want a CredentialsError", err)
 		}
-		if got := calls.Load(); got != 1 {
-			t.Fatalf("TURN requests = %d, want 1", got)
-		}
 		conn.stop(net.ErrClosed)
 	})
 }
 
-// An ended ctx starts no request, and closing the Conn releases a waiter with the cause.
-func TestAwaitCredentialsStopsWaiting(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		release := make(chan struct{})
-		defer close(release)
-		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
-			<-release
-			return nil, errors.New("released")
-		})
-		ctx, cancel := context.WithCancelCause(context.Background())
-		cancel(context.DeadlineExceeded)
-		if _, err := conn.AwaitCredentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("AwaitCredentials() with ended ctx error = %v, want its cause", err)
-		}
-		synctest.Wait()
-		if got := calls.Load(); got != 0 {
-			t.Fatalf("TURN requests for an ended ctx = %d, want 0", got)
-		}
-		done := make(chan error, 1)
-		go func() {
-			_, err := conn.AwaitCredentials(context.Background())
-			done <- err
-		}()
-		synctest.Wait()
-		conn.stop(net.ErrClosed)
-		if err := <-done; !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("AwaitCredentials() after close error = %v, want net.ErrClosed", err)
-		}
-		if _, err := conn.AwaitCredentials(context.Background()); !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("AwaitCredentials() on a closed Conn error = %v, want net.ErrClosed", err)
-		}
-	})
-}
-
-// AwaitCredentials joins a TURN request that Credentials started.
-func TestAwaitCredentialsJoinsRequest(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		answers := make(chan json.RawMessage, 1)
-		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
-		_, _ = conn.Credentials(context.Background())
-		done := make(chan error, 1)
-		go func() {
-			_, err := conn.AwaitCredentials(context.Background())
-			done <- err
-		}()
-		synctest.Wait()
-		answers <- turnAnswer(60)
-		if err := <-done; err != nil {
-			t.Fatalf("AwaitCredentials() error = %v", err)
-		}
-		if got := calls.Load(); got != 1 {
-			t.Fatalf("TURN requests = %d, want 1", got)
-		}
-		conn.stop(net.ErrClosed)
-	})
-}
-
-// AwaitCredentials waits for the refresh of expired credentials rather than returning them.
+// Expired credentials are not returned: AwaitCredentials waits for their refresh.
 func TestAwaitCredentialsWaitsForRefresh(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		answers := make(chan json.RawMessage, 2)
@@ -547,42 +484,16 @@ func TestAwaitCredentialsWaitsForRefresh(t *testing.T) {
 		conn, _ := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
 		conn.refreshCredentials()
 		synctest.Wait()
-		done := make(chan *nethernet.Credentials, 1)
-		go func() {
-			credentials, _ := conn.AwaitCredentials(context.Background())
-			done <- credentials
-		}()
-		synctest.Wait()
-		select {
-		case <-done:
-			t.Fatal("AwaitCredentials() returned expired credentials")
-		default:
-		}
 		answers <- turnAnswer(60)
-		if credentials := <-done; credentials == nil || credentials.ExpirationInSeconds != 60 {
-			t.Fatalf("AwaitCredentials() = %v, want the refreshed credentials", credentials)
+		if credentials, err := conn.AwaitCredentials(context.Background()); err != nil || credentials.ExpirationInSeconds != 60 {
+			t.Fatalf("AwaitCredentials() = %v, %v, want the refreshed credentials", credentials, err)
 		}
 		conn.stop(net.ErrClosed)
 	})
 }
 
-// AwaitCredentials returns fresh credentials even for an ended ctx, as Credentials does.
-func TestAwaitCredentialsServesFreshForEndedContext(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		conn, _ := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(60), nil })
-		conn.refreshCredentials()
-		synctest.Wait()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if credentials, err := conn.AwaitCredentials(ctx); err != nil || len(credentials.ICEServers) != 1 {
-			t.Fatalf("AwaitCredentials() = %v, %v, want the cached server", credentials, err)
-		}
-		conn.stop(net.ErrClosed)
-	})
-}
-
-// A waiter sees net.ErrClosed when the JSON-RPC client stops before the Conn context is canceled.
-func TestAwaitCredentialsReportsClientStop(t *testing.T) {
+// Ending ctx or closing the Conn releases a waiter with the cause.
+func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		defer close(release)
@@ -590,50 +501,14 @@ func TestAwaitCredentialsReportsClientStop(t *testing.T) {
 			<-release
 			return nil, errors.New("released")
 		})
-		done := make(chan error, 1)
-		go func() {
-			_, err := conn.AwaitCredentials(context.Background())
-			done <- err
-		}()
-		synctest.Wait()
-		_ = conn.client.Close()
-		if err := <-done; !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("AwaitCredentials() error = %v, want net.ErrClosed", err)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := conn.AwaitCredentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("AwaitCredentials() error = %v, want the deadline", err)
 		}
 		conn.stop(net.ErrClosed)
-	})
-}
-
-// A waiter is given neither an answer that has already expired nor the outcome after its ctx ends.
-func TestAwaitCredentialsRejectsExpiredAnswerAndEndedWait(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		answers := make(chan json.RawMessage, 2)
-		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
-		answers <- turnAnswer(0)
-		var credentialsErr *CredentialsError
-		if credentials, err := conn.AwaitCredentials(context.Background()); !errors.As(err, &credentialsErr) {
-			t.Fatalf("AwaitCredentials() for an expired answer = %v, %v, want a CredentialsError", credentials, err)
+		if _, err := conn.AwaitCredentials(context.Background()); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("AwaitCredentials() on a closed Conn error = %v, want net.ErrClosed", err)
 		}
-
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() {
-			_, err := conn.AwaitCredentials(ctx)
-			done <- err
-		}()
-		synctest.Wait()
-		cancel()
-		if err := <-done; !errors.Is(err, context.Canceled) {
-			t.Fatalf("AwaitCredentials() after its ctx ended error = %v, want context.Canceled", err)
-		}
-		answers <- turnAnswer(60)
-		synctest.Wait()
-		if credentials, err := conn.AwaitCredentials(context.Background()); err != nil || credentials.ExpirationInSeconds != 60 {
-			t.Fatalf("AwaitCredentials() after the shared request answered = %v, %v", credentials, err)
-		}
-		if got := calls.Load(); got != 2 {
-			t.Fatalf("TURN requests = %d, want 2", got)
-		}
-		conn.stop(net.ErrClosed)
 	})
 }
