@@ -516,11 +516,10 @@ func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 	})
 }
 
-// AwaitCredentials joins a request Credentials started, and returns expired credentials while their
-// refresh is in flight, as Credentials does.
-func TestAwaitCredentialsJoinsAndServesOldOnes(t *testing.T) {
+// AwaitCredentials joins a TURN request that Credentials started.
+func TestAwaitCredentialsJoinsRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		answers := make(chan json.RawMessage, 2)
+		answers := make(chan json.RawMessage, 1)
 		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
 		_, _ = conn.Credentials(context.Background())
 		done := make(chan error, 1)
@@ -529,19 +528,55 @@ func TestAwaitCredentialsJoinsAndServesOldOnes(t *testing.T) {
 			done <- err
 		}()
 		synctest.Wait()
-		answers <- turnAnswer(-1)
+		answers <- turnAnswer(60)
 		if err := <-done; err != nil {
 			t.Fatalf("AwaitCredentials() error = %v", err)
 		}
-		if credentials, err := conn.AwaitCredentials(context.Background()); err != nil || len(credentials.ICEServers) != 1 {
-			t.Fatalf("AwaitCredentials() with expired credentials = %v, %v, want the old server", credentials, err)
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests = %d, want 1", got)
 		}
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// AwaitCredentials waits for the refresh of expired credentials rather than returning them.
+func TestAwaitCredentialsWaitsForRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		answers := make(chan json.RawMessage, 2)
+		answers <- turnAnswer(-1)
+		conn, _ := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
+		conn.refreshCredentials()
 		synctest.Wait()
-		if got := calls.Load(); got != 2 {
-			t.Fatalf("TURN requests = %d, want one joined request and one refresh", got)
+		done := make(chan *nethernet.Credentials, 1)
+		go func() {
+			credentials, _ := conn.AwaitCredentials(context.Background())
+			done <- credentials
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("AwaitCredentials() returned expired credentials")
+		default:
 		}
 		answers <- turnAnswer(60)
+		if credentials := <-done; credentials == nil || credentials.ExpirationInSeconds != 60 {
+			t.Fatalf("AwaitCredentials() = %v, want the refreshed credentials", credentials)
+		}
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// AwaitCredentials returns fresh credentials even for an ended ctx, as Credentials does.
+func TestAwaitCredentialsServesFreshForEndedContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn, _ := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(60), nil })
+		conn.refreshCredentials()
 		synctest.Wait()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if credentials, err := conn.AwaitCredentials(ctx); err != nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("AwaitCredentials() = %v, %v, want the cached server", credentials, err)
+		}
 		conn.stop(net.ErrClosed)
 	})
 }
