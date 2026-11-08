@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -130,8 +131,7 @@ func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
 	})
 }
 
-// A JSON-RPC client stopping mid-request is a closing Conn, reported as a CredentialsError, not a
-// TURN failure answered with no servers.
+// A client stopping mid-request is a CredentialsError carrying the close cause, not "no servers".
 func TestCredentialsClientStopIsAnError(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
@@ -142,16 +142,17 @@ func TestCredentialsClientStopIsAnError(t *testing.T) {
 	})
 	go func() {
 		<-started
+		// jrpc2 fails the pending call first, then its stop hook closes the Conn with the cause.
 		_ = conn.client.Close()
+		conn.stop(fmt.Errorf("jrpc2 client stopped: %w", io.EOF))
 	}()
 	credentials, err := conn.Credentials(context.Background())
-	if _, ok := errors.AsType[*CredentialsError](err); !ok {
-		t.Fatalf("Credentials() = %v, %v, want a CredentialsError", credentials, err)
+	if _, ok := errors.AsType[*CredentialsError](err); !ok || !errors.Is(err, io.EOF) {
+		t.Fatalf("Credentials() = %v, %v, want a CredentialsError wrapping io.EOF", credentials, err)
 	}
 }
 
-// An unanswered TURN request fails after the client's 60 second JSON-RPC timeout, yielding no
-// relay servers, and the next call requests again.
+// An unanswered TURN request yields no servers after the client's 60s timeout; the next call asks again.
 func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})

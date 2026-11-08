@@ -137,7 +137,7 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
 	select {
 	case <-conn.ctx.Done():
-		return nil, context.Cause(conn.ctx)
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(conn.ctx)}
 	default:
 	}
 
@@ -165,6 +165,10 @@ type credentialsRequest struct {
 	credentials *nethernet.Credentials
 	err         error
 }
+
+// closeCauseWait bounds how long a request ended by a stopping client waits for the Conn's close
+// cause.
+const closeCauseWait = time.Second
 
 // credentialsRequestTimeout is how long the Bedrock client waits for a JSON-RPC response before
 // failing the request.
@@ -203,8 +207,16 @@ func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	now := time.Now()
 
 	// jrpc2 fails pending calls before its stop hook closes conn.ctx, so a stopped client also
-	// means the Conn is closing rather than that TURN is unavailable.
+	// means the Conn is closing rather than that TURN is unavailable. The hook follows at once; its
+	// cause, such as EOF, says why better than the cancelled call does.
 	closing := err != nil && (conn.ctx.Err() != nil || conn.client.IsStopped())
+	if closing {
+		select {
+		case <-conn.ctx.Done():
+			err = context.Cause(conn.ctx)
+		case <-time.After(closeCauseWait):
+		}
+	}
 	if err != nil && !closing {
 		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers",
 			slog.Any("error", &CredentialsError{Method: MethodSignalingCredentials, Err: err}))
@@ -220,10 +232,7 @@ func (conn *Conn) requestCredentials(request *credentialsRequest) {
 		request.credentials = credentials
 		conn.credentials = credentials
 		conn.credentialsExpiry = now.Add(time.Duration(credentials.ExpirationInSeconds) * time.Second)
-		if conn.credentialsRefresh != nil {
-			conn.credentialsRefresh.Stop()
-			conn.credentialsRefresh = nil
-		}
+		conn.stopCredentialsRefreshLocked()
 		// A non-positive expiry is already due, so the next Credentials call requests again.
 		if wait := conn.credentialsExpiry.Sub(now); wait > 0 && conn.ctx.Err() == nil {
 			conn.credentialsRefresh = time.AfterFunc(wait, conn.refreshCredentials)
@@ -276,11 +285,16 @@ func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
 	conn.credentialsMu.Lock()
+	conn.stopCredentialsRefreshLocked()
+	conn.credentialsMu.Unlock()
+}
+
+// stopCredentialsRefreshLocked cancels the scheduled refresh, if any. credentialsMu must be held.
+func (conn *Conn) stopCredentialsRefreshLocked() {
 	if conn.credentialsRefresh != nil {
 		conn.credentialsRefresh.Stop()
 		conn.credentialsRefresh = nil
 	}
-	conn.credentialsMu.Unlock()
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
