@@ -371,3 +371,25 @@ func TestResourcePackOfferMatchesNumericVersion(t *testing.T) {
 		t.Fatal("cache key with a short version does not match its pack")
 	}
 }
+
+// A served pack is found for a request naming its UUID in another case or its version in a short form.
+func TestResourcePackQueueRequestMatchesNumericIdentity(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	for request, found := range map[string]bool{
+		id.String() + "_1.0.0":              true,
+		id.String() + "_1.0":                true,
+		strings.ToUpper(id.String()) + "_1": true,
+		id.String():                         true,
+		id.String() + "_1.0.1":              false,
+		uuid.NewString() + "_1.0.0":         false,
+	} {
+		queue := &resourcePackQueue{packs: []*resource.Pack{pack}}
+		if err := queue.Request([]string{request}); (err == nil) != found {
+			t.Fatalf("request %q: err = %v, want found %t", request, err, found)
+		}
+	}
+}

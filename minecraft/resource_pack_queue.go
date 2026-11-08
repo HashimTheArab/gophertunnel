@@ -55,7 +55,7 @@ func (queue *resourcePackQueue) Request(packs []string) error {
 		uuid, version, hasVersion := strings.Cut(requestedPackID, "_")
 		found := false
 		for _, pack := range queue.packs {
-			if uuid == pack.UUID().String() && (!hasVersion || version == "" || version == pack.Version()) {
+			if resource.CanonicalUUID(uuid) == pack.UUID().String() && (!hasVersion || version == "" || resource.SameVersion(version, pack.Version())) {
 				queue.packsToDownload[pack.UUID().String()] = pack
 				found = true
 				break
