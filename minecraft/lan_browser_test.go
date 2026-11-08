@@ -75,6 +75,20 @@ func TestLANBrowserRakNetEntries(t *testing.T) {
 	}
 }
 
+// A host that switches to Editor Mode leaves the list, and an out-of-range port is refused.
+func TestLANBrowserForgetsEditorHostAndChecksPort(t *testing.T) {
+	b := &LANBrowser{}
+	addr := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 19132}
+	b.recordRakNet(LANWorld{LevelName: "a", Address: addr}, 1, time.Now())
+	b.forgetRakNet(addr, 1)
+	if len(b.rakNet) != 0 {
+		t.Fatalf("entries = %+v, want the editor host dropped", b.rakNet)
+	}
+	if _, err := (LANBrowserConfig{RakNetPort: 70000}).Browse(); err == nil {
+		t.Fatal("Browse accepted RakNet port 70000")
+	}
+}
+
 // A pong matching one entry by GUID and another by address leaves one entry, not two with one address.
 func TestLANBrowserRakNetEntriesStayUnique(t *testing.T) {
 	b := &LANBrowser{}

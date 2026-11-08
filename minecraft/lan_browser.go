@@ -3,6 +3,7 @@ package minecraft
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"slices"
@@ -94,6 +95,9 @@ func (conf LANBrowserConfig) Browse() (*LANBrowser, error) {
 	}
 	if conf.RakNetPort == 0 {
 		conf.RakNetPort = defaultRakNetLANPort
+	}
+	if conf.RakNetPort < 0 || conf.RakNetPort > 0xffff {
+		return nil, fmt.Errorf("minecraft: LAN browser RakNet port %d out of range", conf.RakNetPort)
 	}
 	listener, err := discovery.ListenConfig{Log: conf.Log, BroadcastAddress: conf.NetherNetAddress}.Listen(":0")
 	if err != nil {
@@ -214,7 +218,12 @@ func (b *LANBrowser) readPongs() {
 			continue
 		}
 		world, editor, ok := parseLANPong(pong.Data, addr)
-		if !ok || editor {
+		if !ok {
+			continue
+		}
+		if editor {
+			// A listed host that switched to Editor Mode leaves the list at once.
+			b.forgetRakNet(world.Address, pong.ServerGUID)
 			continue
 		}
 		b.recordRakNet(world, pong.ServerGUID, time.Now())
@@ -241,6 +250,15 @@ func (b *LANBrowser) recordRakNet(world LANWorld, guid int64, now time.Time) {
 		kept = append(kept, entry)
 	}
 	b.rakNet = kept
+}
+
+// forgetRakNet drops every entry with the address or GUID.
+func (b *LANBrowser) forgetRakNet(addr *net.UDPAddr, guid int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rakNet = slices.DeleteFunc(b.rakNet, func(e rakNetLANWorld) bool {
+		return e.world.Address.String() == addr.String() || e.guid == guid
+	})
 }
 
 // pruneLocked drops RakNet worlds silent for longer than their lifetime. b.mu must be held.
