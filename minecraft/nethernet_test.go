@@ -8,8 +8,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -391,10 +395,12 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal P-256 key: %v", err)
 	}
+	full := encodeNetherNetTestKey(t)
 	for name, contents := range map[string][]byte{
-		"not PEM":  []byte("not a key"),
-		"P-256":    pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
-		"RSA type": pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
+		"not PEM":   []byte("not a key"),
+		"P-256":     pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}),
+		"RSA type":  pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}),
+		"truncated": full[:len(full)/2],
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -414,6 +420,312 @@ func TestNetherNetServerIdentityRejectsInvalidKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An empty key file, left by a creator that died after claiming the path, is replaced by a saved key.
+func TestNetherNetServerKeyReplacesEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty key file: %v", err)
+	}
+	key, err := loadOrCreateNetherNetKey(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !key.Equal(readNetherNetTestKey(t, path)) {
+		t.Fatal("returned key is not the saved one")
+	}
+}
+
+// Temporary key files a crashed creator left are removed when a key is created; other files stay.
+func TestNetherNetServerKeyRemovesStaleTemps(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	stale := []string{"nethernet.pem.tmp123", ".nethernet-key-456"}
+	kept := []string{"nethernet.pem.tmpx", ".nethernet-key-", "other.pem.tmp789", "notes.txt"}
+	for _, name := range append(stale, kept...) {
+		if err := os.WriteFile(filepath.Join(dir, name), encodeNetherNetTestKey(t), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if _, err := loadOrCreateNetherNetKey(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, name := range stale {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("stale temp %s was kept: %v", name, err)
+		}
+	}
+	for _, name := range kept {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("unrelated file %s was removed: %v", name, err)
+		}
+	}
+}
+
+// Concurrent first starts in one process all use the one key that reached disk.
+func TestNetherNetServerKeyConcurrentCreatorsAgree(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	keys := make([]*ecdsa.PrivateKey, 16)
+	var wg sync.WaitGroup
+	for i := range keys {
+		wg.Go(func() {
+			key, err := loadOrCreateNetherNetKey(path)
+			if err != nil {
+				t.Errorf("creator %d: %v", i, err)
+			}
+			keys[i] = key
+		})
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	saved := readNetherNetTestKey(t, path)
+	for i, key := range keys {
+		if !key.Equal(saved) {
+			t.Fatalf("creator %d uses a key that is not the saved one", i)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read key dir: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if len(names) != 2 || names[0] != "nethernet.pem" || names[1] != "nethernet.pem.lock" {
+		t.Fatalf("key dir holds %v, want only the key and its lock", names)
+	}
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+			t.Fatalf("%s mode = %v, want 0600", name, perm)
+		}
+	}
+}
+
+// Concurrent first starts in separate processes all use the one key that reached disk.
+func TestNetherNetServerKeyProcessesAgree(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	outputs := make([][]byte, 4)
+	var wg sync.WaitGroup
+	for i := range outputs {
+		wg.Go(func() {
+			out, err := netherNetKeyHelper(t, "create", path).Output()
+			if err != nil {
+				t.Errorf("creator process %d: %v", i, err)
+			}
+			outputs[i] = out
+		})
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved key: %v", err)
+	}
+	for i, out := range outputs {
+		if string(out) != string(saved) {
+			t.Fatalf("creator process %d uses a key that is not the saved one", i)
+		}
+	}
+}
+
+// A creator that waited for the lock adopts the key saved meanwhile instead of replacing it.
+func TestNetherNetServerKeyNeverReplacesExistingKey(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nethernet.pem")
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("open lock: %v", err)
+	}
+	defer lock.Close()
+	if err := lockFile(lock); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	type result struct {
+		key *ecdsa.PrivateKey
+		err error
+	}
+	waited := make(chan result, 1)
+	go func() {
+		key, err := loadOrCreateNetherNetKey(path)
+		waited <- result{key, err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	existing := encodeNetherNetTestKey(t)
+	if err := os.WriteFile(filepath.Join(dir, "saved"), existing, 0o600); err != nil {
+		t.Fatalf("write existing key: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, "saved"), path); err != nil {
+		t.Fatalf("save existing key: %v", err)
+	}
+	if err := unlockFile(lock); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	r := <-waited
+	if r.err != nil {
+		t.Fatalf("load: %v", r.err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if string(after) != string(existing) {
+		t.Fatal("existing key was replaced")
+	}
+	if string(encodeNetherNetTestPrivateKey(t, r.key)) != string(existing) {
+		t.Fatal("creator does not use the existing key")
+	}
+}
+
+// A creator killed mid-write leaves no key at path, its lock dies with it, and its partial file is removed.
+func TestNetherNetServerKeyCrashLeavesNoPartialKey(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "nethernet.pem")
+	crashed := netherNetKeyHelper(t, "crash", path)
+	stdout, err := crashed.StdoutPipe()
+	if err != nil {
+		t.Fatalf("pipe crashing creator: %v", err)
+	}
+	if err := crashed.Start(); err != nil {
+		t.Fatalf("start crashing creator: %v", err)
+	}
+	if _, err := io.ReadFull(stdout, make([]byte, 1)); err != nil {
+		_ = crashed.Process.Kill()
+		t.Fatalf("crashing creator never started writing: %v", err)
+	}
+	if err := crashed.Process.Kill(); err != nil {
+		t.Fatalf("kill creator: %v", err)
+	}
+	_ = crashed.Wait()
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("crashed creator left a file at the key path: %v", err)
+	}
+	partial, err := filepath.Glob(path + ".tmp*")
+	if err != nil || len(partial) != 1 {
+		t.Fatalf("crashed creator left %v (%v), want one partial temp file", partial, err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		key, err := loadOrCreateNetherNetKey(path)
+		if err == nil && !key.Equal(readNetherNetTestKey(t, path)) {
+			err = errors.New("returned key is not the saved one")
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("load after crash: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("load after crash is still waiting for the dead creator's lock")
+	}
+	if _, err := os.Stat(partial[0]); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("partial key from the crashed creator was kept: %v", err)
+	}
+}
+
+// netherNetKeyHelperEnv names the key path a helper process works on; the mode is its own variable.
+const netherNetKeyHelperEnv, netherNetKeyHelperModeEnv = "GOPHERTUNNEL_NETHERNET_KEY_HELPER", "GOPHERTUNNEL_NETHERNET_KEY_HELPER_MODE"
+
+// netherNetKeyHelper returns a command running TestNetherNetServerKeyHelperProcess in mode on path.
+func netherNetKeyHelper(t *testing.T, mode, path string) *exec.Cmd {
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestNetherNetServerKeyHelperProcess$")
+	cmd.Env = append(os.Environ(), netherNetKeyHelperEnv+"="+path, netherNetKeyHelperModeEnv+"="+mode)
+	cmd.Stderr = os.Stderr
+	return cmd
+}
+
+// TestNetherNetServerKeyHelperProcess is the child process of the multi-process key tests. In create
+// mode it prints the key it loads; in crash mode it takes the lock, writes part of a key the way a
+// creator does, reports it on stdout and waits to be killed.
+func TestNetherNetServerKeyHelperProcess(t *testing.T) {
+	path := os.Getenv(netherNetKeyHelperEnv)
+	if path == "" {
+		t.Skip("run only as a helper process")
+	}
+	switch os.Getenv(netherNetKeyHelperModeEnv) {
+	case "create":
+		key, err := loadOrCreateNetherNetKey(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.Write(encodeNetherNetTestPrivateKey(t, key))
+		os.Exit(0)
+	case "crash":
+		lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+		if err == nil {
+			err = lockFile(lock)
+		}
+		var tmp *os.File
+		if err == nil {
+			tmp, err = os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+		}
+		if err == nil {
+			full := encodeNetherNetTestKey(t)
+			_, err = tmp.Write(full[:len(full)/2])
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.Write([]byte{1})
+		select {}
+	}
+	os.Exit(2)
+}
+
+// readNetherNetTestKey parses the key saved at path.
+func readNetherNetTestKey(t *testing.T, path string) *ecdsa.PrivateKey {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved key: %v", err)
+	}
+	key, err := parseNetherNetKey(path, b)
+	if err != nil {
+		t.Fatalf("parse saved key: %v", err)
+	}
+	return key
+}
+
+// encodeNetherNetTestKey returns a fresh P-384 key as SEC 1 PEM.
+func encodeNetherNetTestKey(t *testing.T) []byte {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return encodeNetherNetTestPrivateKey(t, key)
+}
+
+// encodeNetherNetTestPrivateKey returns key as SEC 1 PEM.
+func encodeNetherNetTestPrivateKey(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
 }
 
 // An offline dial still presents an identity signed by the connection key, since servers match it against the login.

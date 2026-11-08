@@ -39,6 +39,29 @@ type SubChunkEntry struct {
 	BlobHash Optional[uint64]
 }
 
+// SkyStart returns a conservative first block Y above the column's render
+// surface. Heights below this band are clamped to its bottom; heights above it,
+// missing maps and copied maps cannot establish an upper bound independently.
+// subChunkY is absolute, and x/z are coordinates within the column.
+func (x SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (int32, bool) {
+	if blockX >= 16 || blockZ >= 16 || (x.Result != SubChunkResultSuccess && x.Result != SubChunkResultSuccessAllAir) {
+		return 0, false
+	}
+	base := subChunkY * 16
+	switch x.RenderHeightMapType {
+	case HeightMapDataTooLow:
+		return base, true
+	case HeightMapDataHasData:
+		if heights, ok := x.RenderHeightMapData.Value(); ok {
+			y := heights[blockZ][blockX]
+			if y >= -1 && y < 16 {
+				return base + int32(y) + 1, true
+			}
+		}
+	}
+	return 0, false
+}
+
 // Marshal encodes/decodes a SubChunkEntry.
 func (x *SubChunkEntry) Marshal(r IO) {
 	Single(r, &x.Offset)

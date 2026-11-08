@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
@@ -273,12 +274,51 @@ func NetherNetServerIdentity(path string) (func(context.Context) (*nethernet.Ide
 	}, nil
 }
 
-// loadOrCreateNetherNetKey reads the PEM key at path, or generates and saves one when the file does
-// not exist. A file that exists but cannot be read as a P-384 key is an error, never replaced.
+// loadOrCreateNetherNetKey reads the PEM key at path, or generates and saves one when none exists.
+// Creators serialize on an exclusive lock on path+".lock", so concurrent first starts agree on one key.
+// A file at path that is not a P-384 key is an error, never replaced.
 func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	// A key only ever appears at path whole, so an existing one is read without the lock.
 	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
 		return key, err
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := lockFile(lock); err != nil {
+		return nil, fmt.Errorf("lock %s: %w", lock.Name(), err)
+	}
+	defer unlockFile(lock)
+	// Another creator may have saved a key while this one waited for the lock.
+	if key, err := readNetherNetKey(path); !errors.Is(err, fs.ErrNotExist) {
+		return key, err
+	}
+	return createNetherNetKey(path)
+}
+
+// readNetherNetKey parses the key at path, returning an error matching fs.ErrNotExist if there is none.
+// An empty file counts as none: earlier versions left one when they died between claiming path and
+// saving their key there.
+func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
+	b, err := os.ReadFile(path)
+	if err == nil && len(b) == 0 {
+		err = &fs.PathError{Op: "read", Path: path, Err: fs.ErrNotExist}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return parseNetherNetKey(path, b)
+}
+
+// createNetherNetKey generates a key and saves it at path. The caller holds the key lock and has seen
+// no file at path. The key is written and synced to a temporary file first, then renamed into place,
+// so a crash never leaves a partial key at path.
+func createNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -287,47 +327,66 @@ func loadOrCreateNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	// Write a complete, synced file first and link it into place, so a crash never leaves a partial
-	// key behind and a concurrent first start never reads one.
-	f, err := os.CreateTemp(filepath.Dir(path), ".nethernet-key-*")
+	dir := filepath.Dir(path)
+	removeStaleNetherNetKeyTemps(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(f.Name())
-	if err := pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der}); err != nil {
-		_ = f.Close()
+	err = pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
 		return nil, err
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Link(f.Name(), path); errors.Is(err, fs.ErrExist) {
-		// Another process created the key first; use that one.
-		return readNetherNetKey(path)
-	} else if err != nil {
+	if err := syncDir(dir); err != nil {
 		return nil, err
 	}
 	return key, nil
 }
 
-// readNetherNetKey parses a P-384 key from a SEC 1 or PKCS #8 PEM file.
-func readNetherNetKey(path string) (*ecdsa.PrivateKey, error) {
-	b, err := os.ReadFile(path)
+// removeStaleNetherNetKeyTemps deletes the temporary key files that creators killed mid-write left next
+// to path, so their private keys do not linger. The caller holds the key lock, so no live creator owns
+// them. Only os.CreateTemp names from this scheme and the earlier ".nethernet-key-*" one are removed.
+func removeStaleNetherNetKeyTemps(path string) {
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return
 	}
+	for _, entry := range entries {
+		name := entry.Name()
+		for _, prefix := range []string{filepath.Base(path) + ".tmp", ".nethernet-key-"} {
+			if digits, ok := strings.CutPrefix(name, prefix); ok && entry.Type().IsRegular() && isDecimal(digits) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		}
+	}
+}
+
+// isDecimal reports whether s is a non-empty run of decimal digits, as os.CreateTemp fills in for "*".
+func isDecimal(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// parseNetherNetKey parses a P-384 key from the SEC 1 or PKCS #8 PEM contents b of the file at path.
+func parseNetherNetKey(path string, b []byte) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode(b)
 	if block == nil {
 		return nil, fmt.Errorf("%s: no PEM block", path)
 	}
-	var key *ecdsa.PrivateKey
+	var (
+		key *ecdsa.PrivateKey
+		err error
+	)
 	switch block.Type {
 	case "EC PRIVATE KEY":
 		key, err = x509.ParseECPrivateKey(block.Bytes)
