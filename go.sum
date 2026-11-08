@@ -1,3 +1,5 @@
+github.com/andreburgaud/crypt2go v1.8.0 h1:J73vGTb1P6XL69SSuumbKs0DWn3ulbl9L92ZXBjw6pc=
+github.com/andreburgaud/crypt2go v1.8.0/go.mod h1:L5nfShQ91W78hOWhUH2tlGRPO+POAPJAF5fKOLB9SXg=
 github.com/cenkalti/backoff/v7 v7.0.0 h1:ZP+QAaaOnVUHo+ufFpZ835hbT3x2fy+h2lecVEosZ6A=
 github.com/cenkalti/backoff/v7 v7.0.0/go.mod h1:qcKBGwsu4hpxHtQ8tWYsQ+ifzx2+sS+Xx/3jfe30lI8=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
@@ -10,8 +12,6 @@ github.com/creachadair/jrpc2 v1.3.5 h1:onJko+1u6xoiRph3xwWmfNISR91teCRhbJwSyS9Sv
 github.com/creachadair/jrpc2 v1.3.5/go.mod h1:YXDmS53AavsiytbAwskrczJPcVHvKC9GoyWzwfSQXoE=
 github.com/creachadair/mds v0.26.1 h1:CQG8f4cueHX/c20q5Sy/Ubk8Bvy+aRzVgbpxVieMBAs=
 github.com/creachadair/mds v0.26.1/go.mod h1:dMBTCSy3iS3dwh4Rb1zxeZz2d7K8+N24GCTsayWtQRI=
-github.com/df-mc/go-nethernet v1.0.27-0.20261029102919-56197fc153b0 h1:p1Ga916N8dZd2+6yGv33ErNjMp6zvG6bZqJIavvrTYc=
-github.com/df-mc/go-nethernet v1.0.27-0.20261029102919-56197fc153b0/go.mod h1:mAr8SKYJE76IwMZjqgtAQuMJbkzR0W+DS8MIV6CekZg=
 github.com/df-mc/go-playfab/v2 v2.0.3 h1:7L46Zp1Ca17Mmw7Zd5m4kGDDr8XhzGbaEv9SN2GIYdk=
 github.com/df-mc/go-playfab/v2 v2.0.3/go.mod h1:CS3FV3tJlohvGQiX0IJiaYKOVNfy0p778B84oEVyxlw=
 github.com/df-mc/go-xsapi/v2 v2.0.4-0.20261012072832-90ce120e31cd h1:iS5VPtV1uZrMByC0npMMgTp3fHi/xPqTPOAurXCiF+Q=
@@ -26,8 +26,10 @@ github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/hashimthearab/go-raknet v1.15.1-0.20260908193618-2049463566ca h1:C1HGBjObux+PjxQlbfGZ+hj67WSFwnfh+5ath5UH9vo=
-github.com/hashimthearab/go-raknet v1.15.1-0.20260908193618-2049463566ca/go.mod h1:/yysjwfCXm2+2OY8mBazLzcxJ3irnylKCyG3FLgUPVU=
+github.com/hashimthearab/go-nethernet v0.0.0-20261106225539-0ca813d9022f h1:wGBZ9/S7VRyf805qs9Tr0UgBeQ1NOPjn6tlT7DBGBxM=
+github.com/hashimthearab/go-nethernet v0.0.0-20261106225539-0ca813d9022f/go.mod h1:zTbB9UO72aWCHgbu1MM0iCO0IQVd8f7Nck3l5DAHeVQ=
+github.com/hashimthearab/go-raknet v1.15.1-0.20261108113906-d4f2a990a702 h1:iXA/TjdMo+4vx3mLNQEOoXsR02id74k6aavfpSbWLX0=
+github.com/hashimthearab/go-raknet v1.15.1-0.20261108113906-d4f2a990a702/go.mod h1:/yysjwfCXm2+2OY8mBazLzcxJ3irnylKCyG3FLgUPVU=
 github.com/klauspost/compress v1.18.1 h1:bcSGx7UbpBqMChDtsF28Lw6v/G94LPrrbMbdC3JH2co=
 github.com/klauspost/compress v1.18.1/go.mod h1:ZQFFVG+MdnR0P+l6wpXgIL4NTtwiKIdBnrBd8Nrxr+0=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=

@@ -1238,6 +1238,93 @@ func TestAbortUnblocksCloseStuckFlushing(t *testing.T) {
 	}
 }
 
+// drainingTransport models a transport whose Close waits for the peer to acknowledge written data
+// until Abort ends that wait, like NetherNet.
+type drainingTransport struct {
+	net.Conn
+	closing     chan struct{}
+	aborted     chan struct{}
+	closingOnce sync.Once
+	abortOnce   sync.Once
+	aborts      atomic.Int32
+	closes      atomic.Int32
+}
+
+func newDrainingTransport(t *testing.T, c net.Conn) *drainingTransport {
+	transport := &drainingTransport{Conn: c, closing: make(chan struct{}), aborted: make(chan struct{})}
+	// Ends a wait the code under test left behind, so a regression fails the test instead of hanging it.
+	t.Cleanup(func() { transport.abortOnce.Do(func() { close(transport.aborted) }) })
+	return transport
+}
+
+func (c *drainingTransport) Close() error {
+	c.closes.Add(1)
+	c.closingOnce.Do(func() { close(c.closing) })
+	<-c.aborted
+	return c.Conn.Close()
+}
+
+func (c *drainingTransport) Abort() error {
+	c.aborts.Add(1)
+	c.abortOnce.Do(func() { close(c.aborted) })
+	return c.Conn.Close()
+}
+
+// TestAbortDoesNotWaitForTransportDrain covers a transport whose Close waits for the peer: Abort
+// must use the transport's Abort instead.
+func TestAbortDoesNotWaitForTransportDrain(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	transport := newDrainingTransport(t, client)
+	conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	done := make(chan error, 1)
+	go func() { done <- conn.Abort() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Abort: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Abort waited for the transport to drain")
+	}
+	if got := transport.aborts.Load(); got != 1 {
+		t.Fatalf("transport Abort calls = %d, want 1", got)
+	}
+	if got := transport.closes.Load(); got != 0 {
+		t.Fatalf("transport Close calls after Abort = %d, want 0", got)
+	}
+}
+
+// TestAbortEndsCloseWaitingForTransportDrain covers Close waiting for the peer to acknowledge what was
+// written: it must use the transport's Close, and Abort must end that wait.
+func TestAbortEndsCloseWaitingForTransportDrain(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	transport := newDrainingTransport(t, client)
+	conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case <-transport.closing:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not close the transport")
+	}
+	if got := transport.aborts.Load(); got != 0 {
+		t.Fatalf("Close called transport Abort %d times, want 0", got)
+	}
+	abortDone := make(chan error, 1)
+	go func() { abortDone <- conn.Abort() }()
+	for _, done := range []chan error{abortDone, closeDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Abort did not end Close waiting for the transport")
+		}
+	}
+}
+
 func TestAbortUnblocksInFlightWritesWithoutPanic(t *testing.T) {
 	operations := []struct {
 		name    string
@@ -1458,7 +1545,7 @@ func TestHandleResourcePacksInfoCountsURLDownloadedPacks(t *testing.T) {
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[chunkPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(chunkPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("chunk pack was not queued for chunk download")
 	}
 	if len(conn.resourcePacks) != 1 {
@@ -1540,7 +1627,7 @@ func TestHandleResourcePacksInfoFallsBackWhenURLExceedsAdvertisedSize(t *testing
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[urlPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(urlPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("oversized URL pack was not queued for chunk download fallback")
 	}
 	if len(conn.resourcePacks) != 0 {
@@ -1582,7 +1669,7 @@ func TestHandleResourcePacksInfoFallsBackWhenURLPackIdentityMismatch(t *testing.
 	if conn.packQueue.packAmount != 1 {
 		t.Fatalf("packAmount = %d, want 1", conn.packQueue.packAmount)
 	}
-	if _, ok := conn.packQueue.downloadingPacks[advertisedPackID.String()]; !ok {
+	if _, ok := conn.packQueue.downloadingPacks[resourcePackDownloadID(advertisedPackID.String(), "1.0.0")]; !ok {
 		t.Fatalf("mismatched URL pack was not queued for chunk download fallback")
 	}
 	if len(conn.resourcePacks) != 0 {

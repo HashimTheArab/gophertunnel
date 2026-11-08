@@ -41,6 +41,11 @@ type exemptedResourcePack struct {
 	version string
 }
 
+// matches reports whether a server-named pack is this one by parsed UUID and numeric version.
+func (pack exemptedResourcePack) matches(id, version string) bool {
+	return resource.CanonicalUUID(pack.uuid) == resource.CanonicalUUID(id) && resource.SameVersion(pack.version, version)
+}
+
 const batchQueueRetainedCapacity = 8
 
 // exemptedPacks is a list of all resource packs that do not need to be downloaded, but may always be applied
@@ -1783,25 +1788,40 @@ func (conn *Conn) handleRequestNetworkSettings(pk *packet.RequestNetworkSettings
 		return fmt.Errorf("send NetworkSettings: %w", err)
 	}
 	_ = conn.Flush()
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(conn.compression, conn.compressionThreshold)
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(conn.compression, conn.maxDecompressedLen)
+	conn.enableCompression(conn.compression, conn.compressionThreshold)
 	return nil
 }
 
-// handleNetworkSettings handles an incoming NetworkSettings packet, enabling compression for future packets.
+// handleNetworkSettings handles an incoming NetworkSettings packet, configuring compression for future packets.
 func (conn *Conn) handleNetworkSettings(pk *packet.NetworkSettings) error {
-	alg, ok := packet.CompressionByID(pk.CompressionAlgorithm)
-	if !ok {
-		conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+	var alg packet.Compression = packet.NopCompression
+	if pk.CompressionAlgorithm != packet.CompressionAlgorithmNone {
+		var ok bool
+		alg, ok = packet.CompressionByID(pk.CompressionAlgorithm)
+		if !ok {
+			conn.log.Warn("unknown compression algorithm", "algorithm", pk.CompressionAlgorithm)
+		}
 	}
-	conn.encMu.Lock()
-	conn.enc.EnableCompression(alg, int(pk.CompressionThreshold))
-	conn.encMu.Unlock()
-	conn.dec.EnableCompression(alg, conn.maxDecompressedLen)
+	conn.enableCompression(alg, int(pk.CompressionThreshold))
 	conn.readyToLogin = true
 	return nil
+}
+
+// enableCompression applies the negotiated envelope mode and batch size limit without resetting encryption.
+func (conn *Conn) enableCompression(compression packet.Compression, threshold int) {
+	disabled := compression.EncodeCompression() == packet.CompressionAlgorithmNone
+	conn.encMu.Lock()
+	if disabled {
+		conn.enc.DisableCompression()
+	} else {
+		conn.enc.EnableCompression(compression, threshold)
+	}
+	conn.encMu.Unlock()
+	// Apply the configured size limit even when compression framing is disabled.
+	conn.dec.EnableCompression(compression, conn.maxDecompressedLen)
+	if disabled {
+		conn.dec.DisableCompression()
+	}
 }
 
 // handleLogin handles an incoming login packet. It verifies and decodes the login request found in the packet
@@ -2025,7 +2045,7 @@ func (conn *Conn) handleClientToServerHandshake() error {
 				DownloadURL: pack.DownloadURL(),
 			}
 			for _, entry := range resourcePackStackEntries {
-				if entry.pack != nil && entry.UUID() == pack.UUID().String() && entry.Version() == pack.Version() {
+				if entry.pack != nil && pack.SameIdentity(entry.UUID(), entry.Version()) {
 					texturePack.SubPackName = entry.SubPackName()
 					break
 				}
@@ -2140,8 +2160,11 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	for index, pack := range pk.TexturePacks {
 		id := pack.UUID.String()
-		if _, ok := conn.packQueue.downloadingPacks[id]; ok {
-			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID)
+		// Like the vanilla client, the transfer is keyed by UUID and parsed version: a server may require
+		// one pack UUID at several versions, and "1.0" is requested as "1.0.0".
+		downloadID := resourcePackDownloadID(id, resource.CanonicalVersion(pack.Version))
+		if _, ok := conn.packQueue.downloadingPacks[downloadID]; ok {
+			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID, "version", pack.Version)
 			conn.packQueue.packAmount--
 			continue
 		}
@@ -2181,7 +2204,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			newPack, err := resource.ReadURLWithProgress(conn.ctx, conn.packHTTPClient(), pack.DownloadURL, pack.Size, func(n int) {
 				conn.reportResourcePack(event.with(ResourcePackReceived, uint64(n), nil))
 			})
-			if err == nil && (newPack.UUID() != pack.UUID || newPack.Version() != pack.Version) {
+			if err == nil && (newPack.UUID() != pack.UUID || !resource.SameVersion(newPack.Version(), pack.Version)) {
 				err = fmt.Errorf("downloaded pack %v_%v does not match the advertised pack", newPack.UUID(), newPack.Version())
 			}
 			if err != nil {
@@ -2197,9 +2220,8 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			}
 		}
 
-		// This UUID_Version is a hack Mojang put in place.
-		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = &downloadingPack{
+		packsToDownload = append(packsToDownload, downloadID)
+		conn.packQueue.downloadingPacks[downloadID] = &downloadingPack{
 			size:       pack.Size,
 			buf:        new(bytes.Buffer), // Payload storage grows only as chunks arrive.
 			contentKey: pack.ContentKey,
@@ -2285,7 +2307,7 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 	for _, stackPack := range pk.TexturePacks {
 		var matched *resource.Pack
 		for _, downloaded := range conn.resourcePacks {
-			if downloaded.UUID().String() == stackPack.UUID && downloaded.Version() == stackPack.Version {
+			if downloaded.SameIdentity(stackPack.UUID, stackPack.Version) {
 				matched = downloaded
 				break
 			}
@@ -2295,14 +2317,14 @@ func (conn *Conn) handleResourcePackStack(pk *packet.ResourcePackStack) error {
 		}
 		available := false
 		for _, exempted := range exemptedPacks {
-			if exempted.uuid == stackPack.UUID && exempted.version == stackPack.Version {
+			if exempted.matches(stackPack.UUID, stackPack.Version) {
 				available = true
 				break
 			}
 		}
 		if !available {
 			for _, ignored := range conn.ignoredResourcePacks {
-				if ignored.uuid == stackPack.UUID && ignored.version == stackPack.Version {
+				if ignored.matches(stackPack.UUID, stackPack.Version) {
 					available = true
 					break
 				}
@@ -2441,10 +2463,14 @@ func (conn *Conn) nextResourcePackDownload() error {
 // handleResourcePackDataInfo handles a resource pack data info packet, which initiates the downloading of the
 // pack by the client.
 func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) error {
-	id := strings.Split(pk.UUID, "_")[0]
-
-	pack, ok := conn.packQueue.downloadingPacks[id]
-	if !ok {
+	// ResourcePackChunkRequest repeats the pack ID this packet names. The transfer stays tracked under the ID
+	// it was requested as, so ChunkData naming either spelling reaches it.
+	id := pk.UUID
+	key, pack, ok := lookupTransfer(conn.packQueue.downloadingPacks, id)
+	conn.packMu.Lock()
+	_, _, awaiting := lookupTransfer(conn.packQueue.awaitingPacks, id)
+	conn.packMu.Unlock()
+	if !ok || awaiting {
 		// We either already downloaded the pack or we got sent an invalid UUID, that did not match any pack
 		// sent in the ResourcePacksInfo packet.
 		return fmt.Errorf("handle ResourcePackDataInfo: unknown pack (UUID=%v)", id)
@@ -2460,12 +2486,12 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	if err != nil {
 		return fmt.Errorf("handle ResourcePackDataInfo: %w", err)
 	}
-	delete(conn.packQueue.downloadingPacks, id)
+	delete(conn.packQueue.downloadingPacks, key)
 	pack.chunkCount = window.ChunkCount()
 	pack.window = window
 	pack.newFrag = make(chan resourcePackChunk, window.Capacity())
 	conn.packMu.Lock()
-	conn.packQueue.awaitingPacks[id] = pack
+	conn.packQueue.awaitingPacks[key] = pack
 	conn.packMu.Unlock()
 	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
 	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
@@ -2535,7 +2561,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packMu.Lock()
-		delete(conn.packQueue.awaitingPacks, id)
+		delete(conn.packQueue.awaitingPacks, key)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -2563,9 +2589,8 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // handleResourcePackChunkData handles a resource pack chunk data packet, which holds a fragment of a resource
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
-	pk.UUID = strings.Split(pk.UUID, "_")[0]
 	conn.packMu.Lock()
-	pack, ok := conn.packQueue.awaitingPacks[pk.UUID]
+	_, pack, ok := lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
 	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
@@ -2590,9 +2615,8 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
 	chunkSize := uint64(conn.packQueue.chunkSize)
-	uuid, _, _ := strings.Cut(pk.UUID, "_")
-	if current.UUID().String() != uuid {
-		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
+	if !matchesDownloadID(pk.UUID, current.UUID().String(), current.Version()) {
+		return fmt.Errorf("expected pack %v, but got %v", resourcePackDownloadID(current.UUID().String(), current.Version()), pk.UUID)
 	}
 	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*chunkSize {
 		return fmt.Errorf("expected chunk index %v, but got %v", conn.packQueue.currentOffset/chunkSize, pk.ChunkIndex)
@@ -2960,7 +2984,7 @@ func (conn *Conn) close(cause error) error {
 			if recovered := recover(); recovered != nil {
 				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
 			}
-			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
@@ -2977,16 +3001,33 @@ func (conn *Conn) close(cause error) error {
 // another goroutine holds that write in progress. Callers giving up on a connection precisely because
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
+	// Closing some transports, such as NetherNet, waits for the peer to acknowledge what was written.
+	// Abort one of those before release, so this also ends a Close already waiting inside release.
+	if c, ok := conn.conn.(interface{ Abort() error }); ok {
+		conn.cancel(cause)
+		return errors.Join(c.Abort(), conn.release(cause, false))
+	}
+	return conn.release(cause, true)
+}
+
+// release cancels the Conn context, drops packets held by the send delay and, if closeTransport is
+// set, closes the transport, once.
+func (conn *Conn) release(cause error, closeTransport bool) error {
 	conn.abortOnce.Do(func() {
-		if conn.cancelFunc != nil {
-			conn.cancelFunc(cause)
-		}
+		conn.cancel(cause)
 		conn.delay.drop()
-		if conn.conn != nil {
+		if closeTransport && conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
 	})
 	return conn.abortErr
+}
+
+// cancel cancels the Conn context with cause. The first cause is kept.
+func (conn *Conn) cancel(cause error) {
+	if conn.cancelFunc != nil {
+		conn.cancelFunc(cause)
+	}
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed

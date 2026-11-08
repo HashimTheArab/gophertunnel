@@ -24,7 +24,7 @@ type ResourcePackCacheKey struct {
 
 // Matches reports whether pack has the UUID, version and size the key holds.
 func (key ResourcePackCacheKey) Matches(pack *resource.Pack) bool {
-	return pack.UUID() == key.UUID && pack.Version() == key.Version && uint64(pack.Size()) == key.Size
+	return pack.UUID() == key.UUID && resource.SameVersion(pack.Version(), key.Version) && uint64(pack.Size()) == key.Size
 }
 
 // ResourcePackCache allows a Dialer to reuse resource packs downloaded earlier. Cache failures are
@@ -45,9 +45,13 @@ type DirResourcePackCache struct {
 	Dir string
 }
 
-// Load returns the pack stored under key, or nil if no file exists for it.
+// Load returns the pack stored under key, or nil if no file exists for it. Entries stored before files were
+// named by numeric version are still found under the version text the server sent.
 func (cache DirResourcePackCache) Load(_ context.Context, key ResourcePackCacheKey) (*resource.Pack, error) {
-	pack, err := resource.ReadPath(cache.path(key))
+	pack, err := resource.ReadPath(cache.path(key, resource.CanonicalVersion(key.Version)))
+	if errors.Is(err, fs.ErrNotExist) && resource.CanonicalVersion(key.Version) != key.Version {
+		pack, err = resource.ReadPath(cache.path(key, key.Version))
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -71,10 +75,11 @@ func (cache DirResourcePackCache) Store(_ context.Context, key ResourcePackCache
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temp.Name(), cache.path(key))
+	return os.Rename(temp.Name(), cache.path(key, resource.CanonicalVersion(key.Version)))
 }
 
-// path returns the file a pack with key is stored at. The version is escaped as it comes from the server.
-func (cache DirResourcePackCache) path(key ResourcePackCacheKey) string {
-	return filepath.Join(cache.Dir, key.UUID.String()+"_"+url.PathEscape(key.Version)+".mcpack")
+// path returns the file a pack with key's UUID and the version passed is stored at. The version is escaped
+// as it may come from the server unparsed.
+func (cache DirResourcePackCache) path(key ResourcePackCacheKey, version string) string {
+	return filepath.Join(cache.Dir, key.UUID.String()+"_"+url.PathEscape(version)+".mcpack")
 }
