@@ -41,12 +41,15 @@ type Conn struct {
 
 	pending *pendingMap
 
-	// credentials is the last known credentials received from the server.
-	// This is cached until it expires to prevent excessive call.
+	// credentials is the last answer to a TURN request, nil before one or after a failed request.
 	credentials *nethernet.Credentials
 	// credentialsExpiry is the expiry of the credentials, estimated from [nethernet.Credentials.ExpirationInSeconds].
 	credentialsExpiry time.Time
-	// credentialsMu guards credentials and credentialsExpiry from concurrent read/write access.
+	// credentialsRequesting reports a TURN request in flight.
+	credentialsRequesting bool
+	// credentialsRefresh requests new credentials once credentialsExpiry passes.
+	credentialsRefresh *time.Timer
+	// credentialsMu guards credentials, credentialsExpiry, credentialsRequesting and credentialsRefresh.
 	credentialsMu sync.Mutex
 }
 
@@ -127,36 +130,89 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 	}
 }
 
-// Credentials blocks until [nethernet.Credentials] are received from the server or the [context.Context]
-// is done. It returns a [nethernet.Credentials] or an error if the Conn is closed or the [context.Context]
-// is canceled or exceeded a deadline.
-func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
+// Credentials returns the TURN credentials last received without waiting, as the Bedrock client
+// gathers with whatever relay servers it has: none before the first answer or after a failed
+// request, and the old ones during a refresh. Missing or expired credentials start a request.
+func (conn *Conn) Credentials(context.Context) (*nethernet.Credentials, error) {
+	select {
+	case <-conn.ctx.Done():
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(conn.ctx)}
+	default:
+	}
+
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
-	if conn.ctx != nil {
-		select {
-		case <-conn.ctx.Done():
-			return nil, context.Cause(conn.ctx)
-		default:
+	if conn.credentials == nil || !time.Now().Before(conn.credentialsExpiry) {
+		conn.startCredentialsRequestLocked()
+	}
+	if conn.credentials == nil {
+		return &nethernet.Credentials{}, nil
+	}
+	return conn.credentials, nil
+}
+
+// maxCredentialsLifetime caps ExpirationInSeconds, in seconds, so a huge value cannot overflow the expiry.
+const maxCredentialsLifetime = 7 * 24 * 60 * 60
+
+// credentialsRequestTimeout is how long the Bedrock client waits for a JSON-RPC response before
+// failing the request.
+const credentialsRequestTimeout = 60 * time.Second
+
+// refreshCredentials starts a TURN request unless one is in flight or the credentials have not
+// expired. The Conn calls it once connected and again when the received credentials expire.
+func (conn *Conn) refreshCredentials() {
+	conn.credentialsMu.Lock()
+	if conn.credentials == nil || !time.Now().Before(conn.credentialsExpiry) {
+		conn.startCredentialsRequestLocked()
+	}
+	conn.credentialsMu.Unlock()
+}
+
+// startCredentialsRequestLocked starts a TURN request unless one is in flight or the Conn is closed.
+// credentialsMu must be held.
+func (conn *Conn) startCredentialsRequestLocked() {
+	if !conn.credentialsRequesting && conn.ctx.Err() == nil {
+		conn.credentialsRequesting = true
+		go conn.requestCredentials()
+	}
+}
+
+// requestCredentials performs a TURN request. An answer is refreshed once its ExpirationInSeconds
+// passes; a failure clears the servers, as the Bedrock client does.
+func (conn *Conn) requestCredentials() {
+	ctx, cancel := context.WithTimeout(conn.ctx, credentialsRequestTimeout)
+	defer cancel()
+	var credentials *nethernet.Credentials
+	err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials)
+	if err == nil && credentials == nil {
+		err = errors.New("null result")
+	}
+	now := time.Now()
+
+	// jrpc2 fails pending calls before its stop hook closes conn.ctx, so a stopped client means the
+	// Conn is closing rather than that TURN is unavailable.
+	closing := err != nil && (conn.ctx.Err() != nil || conn.client.IsStopped())
+	if err != nil && !closing {
+		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers",
+			slog.Any("error", &CredentialsError{Method: MethodSignalingCredentials, Err: err}))
+	}
+
+	conn.credentialsMu.Lock()
+	defer conn.credentialsMu.Unlock()
+	conn.credentialsRequesting = false
+	switch {
+	case closing:
+	case err != nil:
+		conn.credentials = nil
+	default:
+		conn.credentials = credentials
+		conn.credentialsExpiry = now.Add(time.Duration(min(credentials.ExpirationInSeconds, maxCredentialsLifetime)) * time.Second)
+		conn.stopCredentialsRefreshLocked()
+		// A non-positive expiry is already due, so the next Credentials call requests again.
+		if wait := conn.credentialsExpiry.Sub(now); wait > 0 && conn.ctx.Err() == nil {
+			conn.credentialsRefresh = time.AfterFunc(wait, conn.refreshCredentials)
 		}
 	}
-
-	if conn.credentials != nil && time.Now().Before(conn.credentialsExpiry) {
-		return conn.credentials, nil
-	}
-
-	var credentials *nethernet.Credentials
-	if err := conn.client.CallResult(ctx, MethodSignalingCredentials, map[string]any{}, &credentials); err != nil {
-		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: err}
-	}
-	if credentials == nil || credentials.ExpirationInSeconds <= 0 {
-		return nil, fmt.Errorf("call %q: invalid credentials", MethodSignalingCredentials)
-	}
-
-	conn.credentials = credentials
-	conn.credentialsExpiry = time.Now().Add(time.Duration(credentials.ExpirationInSeconds) * time.Second)
-
-	return conn.credentials, nil
 }
 
 // PongData ...
@@ -200,6 +256,17 @@ func (conn *Conn) close(cause error) (err error) {
 func (conn *Conn) stop(cause error) {
 	conn.d.Log.Debug("closing connection", slog.Any("cause", cause))
 	conn.cancel(cause)
+	conn.credentialsMu.Lock()
+	conn.stopCredentialsRefreshLocked()
+	conn.credentialsMu.Unlock()
+}
+
+// stopCredentialsRefreshLocked cancels the scheduled refresh, if any. credentialsMu must be held.
+func (conn *Conn) stopCredentialsRefreshLocked() {
+	if conn.credentialsRefresh != nil {
+		conn.credentialsRefresh.Stop()
+		conn.credentialsRefresh = nil
+	}
 }
 
 // handleCallback handles an JSON-RPC request method called by the server.
@@ -390,8 +457,8 @@ func (conn *Conn) notifySignal(signal *nethernet.Signal) bool {
 	return accepted
 }
 
-// ping starts calling [MethodSystemPing] at 50 seconds interval.
-// On failure, it closes the Conn immediately with the cause.
+// ping sends [MethodSystemPing] as a notification at the given interval. Like the Bedrock client, it
+// never closes the Conn: a failed send is only logged, and the reader detects a broken connection.
 func (conn *Conn) ping(frequency time.Duration) {
 	if frequency <= 0 {
 		frequency = DefaultPingFrequency
@@ -404,13 +471,8 @@ func (conn *Conn) ping(frequency time.Duration) {
 		case <-conn.ctx.Done():
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(conn.ctx, time.Second*5)
-			_, err := conn.client.Call(ctx, MethodSystemPing, map[string]any{})
-			cancel()
-			if err != nil {
+			if err := conn.client.Notify(conn.ctx, MethodSystemPing, map[string]any{}); err != nil {
 				conn.d.Log.Error("error pinging", slog.Any("error", err))
-				_ = conn.close(fmt.Errorf("call %q: %w", MethodSystemPing, err))
-				return
 			}
 		}
 	}
