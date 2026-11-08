@@ -125,12 +125,8 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice, rakNetAfterFailure: n.RakNetAfterNetherNetFailure, probeClient: probeClient}, nil
 }
 
-// resolveProbe returns the probe answer Select dials by: the one Probes remembers, or a fresh probe
-// it stores. A remembered RakNet answer is reused as-is; a remembered NetherNet endpoint is asked
-// again and falls back to RakNet if it no longer answers, or is probed for afresh if it still answers
-// but no longer with the status it served. When an endpoint answered just now it
-// returns its body and the client that asked, whose network ID the offer must reuse so a server
-// can match the two, as vanilla does. It fails only when ctx ends first.
+// resolveProbe returns the answer Select dials by: the one Probes remembers, asked again first, or a
+// fresh probe it stores, with the body and the client whose network ID the offer must reuse.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choice probeChoice, body []byte, probeClient *endpoint.Client, err error) {
 	info := n.probeClientInfo()
 	host, port := splitServerAddress(address)
@@ -149,9 +145,8 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choic
 	case choice.entry == nil:
 	case err == nil && status && !choice.entry.status:
 		choice = choice.replace(&probeEntry{endpoint: found, status: true, expires: choice.entry.expires})
-	case choice.entry.status && (err == nil && !status || errors.Is(err, errNotStatus)):
-		// The remembered endpoint still answers but no longer with a status, as when a website replaced
-		// it, so look for one afresh.
+	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status:
+		// The remembered endpoint answers with less than it did, such as a website's page.
 		choice = choice.replace(nil)
 		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), probeClient)
 	}
@@ -437,11 +432,9 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 	return found, err
 }
 
-// probeNetherNet returns the endpoint whose 2xx answer wins, the start of its body, and whether the
-// body is a server status. A status wins at once, as vanilla's first 2xx does. A 2xx that sets no
-// status (errNoStatus) wins only once every URL has failed or the timeout passes; any other body
-// (errNotStatus), such as a website's page, is no answer. Each batch starts once every request of the one before
-// it has failed or headStart has passed. probe builds each request.
+// probeNetherNet returns the winning endpoint, the start of its body and whether that is a status. A
+// status wins at once, a 2xx with errNoStatus only once nothing better can answer, and errNotStatus
+// is no answer.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration, probe *endpoint.Client) (string, []byte, bool, error) {
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
