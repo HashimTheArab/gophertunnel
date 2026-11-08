@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -207,11 +208,34 @@ func TestDirResourcePackCache(t *testing.T) {
 	if !key.Matches(got) {
 		t.Fatalf("loaded pack does not match key: UUID=%v version=%v size=%v", got.UUID(), got.Version(), got.Size())
 	}
-	if key2 := (ResourcePackCacheKey{UUID: packID, Version: "../../evil", Size: 1}); filepath.Dir(cache.path(key2)) != filepath.Clean(cache.Dir) {
-		t.Fatalf("path escaped the cache dir: %v", cache.path(key2))
+	if short := (ResourcePackCacheKey{UUID: packID, Version: "1.0", Size: key.Size}); func() bool {
+		got, err := cache.Load(context.Background(), short)
+		return err != nil || got == nil
+	}() {
+		t.Fatal("pack stored as 1.0.0 was not found for 1.0")
+	}
+	if key2 := (ResourcePackCacheKey{UUID: packID, Version: "../../evil", Size: 1}); filepath.Dir(cache.path(key2, key2.Version)) != filepath.Clean(cache.Dir) {
+		t.Fatalf("path escaped the cache dir: %v", cache.path(key2, key2.Version))
 	}
 	leftovers, _ := filepath.Glob(cache.Dir + "/pack-*.tmp")
 	if len(leftovers) != 0 {
 		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+}
+
+// TestDirResourcePackCacheFindsLegacyEntry loads a file stored under the server's version text before files
+// were named by numeric version.
+func TestDirResourcePackCacheFindsLegacyEntry(t *testing.T) {
+	t.Parallel()
+
+	packID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	archive := testResourcePackArchive(t, packID)
+	cache := DirResourcePackCache{Dir: t.TempDir()}
+	key := ResourcePackCacheKey{UUID: packID, Version: "1.0", Size: uint64(len(archive))}
+	if err := os.WriteFile(cache.path(key, key.Version), archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cache.Load(context.Background(), key); err != nil || got == nil {
+		t.Fatalf("Load of legacy entry = %v, %v; want pack, nil", got, err)
 	}
 }
