@@ -552,6 +552,16 @@ func (c *Client) AcceptRealmInviteCode(ctx context.Context, code string) (Realm,
 	return realm, nil
 }
 
+// LeaveRealm removes the player from a Realm they were invited to, as the Bedrock client does when a
+// member chooses Leave Realm. The owner of a Realm cannot leave it.
+func (c *Client) LeaveRealm(ctx context.Context, realmID int) error {
+	if realmID <= 0 {
+		return fmt.Errorf("realms: invalid Realm id %d", realmID)
+	}
+	_, _, err := c.request(ctx, http.MethodDelete, fmt.Sprintf("/invites/%d", realmID), nil)
+	return err
+}
+
 // PendingInviteCount returns how many Realm invites await the player's answer.
 func (c *Client) PendingInviteCount(ctx context.Context) (int, error) {
 	body, _, err := c.requestGet(ctx, "/invites/count/pending")
