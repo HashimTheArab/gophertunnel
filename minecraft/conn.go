@@ -2160,8 +2160,11 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	for index, pack := range pk.TexturePacks {
 		id := pack.UUID.String()
-		if _, ok := conn.packQueue.downloadingPacks[id]; ok {
-			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID)
+		// Like the vanilla client, the transfer is keyed by UUID and parsed version: a server may require
+		// one pack UUID at several versions, and "1.0" is requested as "1.0.0".
+		downloadID := resourcePackDownloadID(id, resource.CanonicalVersion(pack.Version))
+		if _, ok := conn.packQueue.downloadingPacks[downloadID]; ok {
+			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID, "version", pack.Version)
 			conn.packQueue.packAmount--
 			continue
 		}
@@ -2217,9 +2220,8 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 			}
 		}
 
-		// This UUID_Version is a hack Mojang put in place.
-		packsToDownload = append(packsToDownload, id+"_"+pack.Version)
-		conn.packQueue.downloadingPacks[id] = &downloadingPack{
+		packsToDownload = append(packsToDownload, downloadID)
+		conn.packQueue.downloadingPacks[downloadID] = &downloadingPack{
 			size:       pack.Size,
 			buf:        new(bytes.Buffer), // Payload storage grows only as chunks arrive.
 			contentKey: pack.ContentKey,
@@ -2461,10 +2463,14 @@ func (conn *Conn) nextResourcePackDownload() error {
 // handleResourcePackDataInfo handles a resource pack data info packet, which initiates the downloading of the
 // pack by the client.
 func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) error {
-	id := strings.Split(pk.UUID, "_")[0]
-
-	pack, ok := conn.packQueue.downloadingPacks[id]
-	if !ok {
+	// ResourcePackChunkRequest repeats the pack ID this packet names. The transfer stays tracked under the ID
+	// it was requested as, so ChunkData naming either spelling reaches it.
+	id := pk.UUID
+	key, pack, ok := lookupTransfer(conn.packQueue.downloadingPacks, id)
+	conn.packMu.Lock()
+	_, _, awaiting := lookupTransfer(conn.packQueue.awaitingPacks, id)
+	conn.packMu.Unlock()
+	if !ok || awaiting {
 		// We either already downloaded the pack or we got sent an invalid UUID, that did not match any pack
 		// sent in the ResourcePacksInfo packet.
 		return fmt.Errorf("handle ResourcePackDataInfo: unknown pack (UUID=%v)", id)
@@ -2481,7 +2487,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	}
 
 	// Remove the resource pack from the downloading packs and add it to the awaiting packets.
-	delete(conn.packQueue.downloadingPacks, id)
+	delete(conn.packQueue.downloadingPacks, key)
 	pack.chunkSize = pk.DataChunkSize
 
 	// The client calculates the chunk count by itself: You could in theory send a chunk count of 0 even
@@ -2498,7 +2504,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
 	conn.packMu.Lock()
-	conn.packQueue.awaitingPacks[id] = pack
+	conn.packQueue.awaitingPacks[key] = pack
 	conn.packMu.Unlock()
 	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
 	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
@@ -2585,7 +2591,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packMu.Lock()
-		delete(conn.packQueue.awaitingPacks, id)
+		delete(conn.packQueue.awaitingPacks, key)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
@@ -2613,9 +2619,8 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // handleResourcePackChunkData handles a resource pack chunk data packet, which holds a fragment of a resource
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
-	pk.UUID = strings.Split(pk.UUID, "_")[0]
 	conn.packMu.Lock()
-	pack, ok := conn.packQueue.awaitingPacks[pk.UUID]
+	_, pack, ok := lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
 	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
@@ -2655,9 +2660,8 @@ func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) 
 func (conn *Conn) handleResourcePackChunkRequest(pk *packet.ResourcePackChunkRequest) error {
 	current := conn.packQueue.currentPack
 	chunkSize := uint64(conn.packQueue.chunkSize)
-	uuid, _, _ := strings.Cut(pk.UUID, "_")
-	if current.UUID().String() != uuid {
-		return fmt.Errorf("expected pack UUID %v, but got %v", current.UUID(), pk.UUID)
+	if !matchesDownloadID(pk.UUID, current.UUID().String(), current.Version()) {
+		return fmt.Errorf("expected pack %v, but got %v", resourcePackDownloadID(current.UUID().String(), current.Version()), pk.UUID)
 	}
 	if conn.packQueue.currentOffset != uint64(pk.ChunkIndex)*chunkSize {
 		return fmt.Errorf("expected chunk index %v, but got %v", conn.packQueue.currentOffset/chunkSize, pk.ChunkIndex)
