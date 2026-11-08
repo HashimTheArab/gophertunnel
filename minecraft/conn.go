@@ -2161,9 +2161,9 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 
 	for index, pack := range pk.TexturePacks {
 		id := pack.UUID.String()
-		// Like the vanilla client, the transfer is keyed by UUID and version: a server may require one
-		// pack UUID at several versions.
-		downloadID := resourcePackDownloadID(id, pack.Version)
+		// Like the vanilla client, the transfer is keyed by UUID and parsed version: a server may require
+		// one pack UUID at several versions, and "1.0" is requested as "1.0.0".
+		downloadID := resourcePackDownloadID(id, resource.CanonicalVersion(pack.Version))
 		if _, ok := conn.packQueue.downloadingPacks[downloadID]; ok {
 			conn.log.Warn("handle ResourcePacksInfo: duplicate texture pack", "UUID", pack.UUID, "version", pack.Version)
 			conn.packQueue.packAmount--
@@ -2465,12 +2465,12 @@ func (conn *Conn) nextResourcePackDownload() error {
 // handleResourcePackDataInfo handles a resource pack data info packet, which initiates the downloading of the
 // pack by the client.
 func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) error {
-	// The transfer is tracked under the pack ID this packet names, which ResourcePackChunkRequest and the
-	// server's ResourcePackChunkData repeat.
+	// ResourcePackChunkRequest repeats the pack ID this packet names. The transfer stays tracked under the ID
+	// it was requested as, so ChunkData naming either spelling reaches it.
 	id := pk.UUID
 	key, pack, ok := conn.packQueue.lookupTransfer(conn.packQueue.downloadingPacks, id)
 	conn.packMu.Lock()
-	_, awaiting := conn.packQueue.awaitingPacks[id]
+	_, _, awaiting := conn.packQueue.lookupTransfer(conn.packQueue.awaitingPacks, id)
 	conn.packMu.Unlock()
 	if !ok || awaiting {
 		// We either already downloaded the pack or we got sent an invalid UUID, that did not match any pack
@@ -2506,7 +2506,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	pack.newFrag = make(chan resourcePackChunk, window)
 	pack.requested = make(map[uint32]struct{})
 	conn.packMu.Lock()
-	conn.packQueue.awaitingPacks[id] = pack
+	conn.packQueue.awaitingPacks[key] = pack
 	conn.packMu.Unlock()
 	pack.event = ResourcePackEvent{Source: ResourcePackSourceChunks, UUID: pack.cacheKey.UUID, Version: pack.cacheKey.Version}
 	conn.reportResourcePack(pack.event.with(ResourcePackStarted, pack.size, nil))
@@ -2593,7 +2593,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 		}
 		newPack = newPack.WithContentKey(pack.contentKey)
 		conn.packMu.Lock()
-		delete(conn.packQueue.awaitingPacks, id)
+		delete(conn.packQueue.awaitingPacks, key)
 		conn.packQueue.packAmount--
 		// Finally we add the resource to the resource packs slice.
 		conn.resourcePacks = append(conn.resourcePacks, newPack)
