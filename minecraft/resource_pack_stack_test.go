@@ -307,3 +307,89 @@ func TestResourcePackSnapshotsCopyAllPacketReferences(t *testing.T) {
 		}
 	}
 }
+
+// Every exempted pack is built in, matched only by its exact identity.
+func TestIsBuiltinResourcePackMatchesTheExemptionList(t *testing.T) {
+	for _, exempted := range exemptedPacks {
+		if !IsBuiltinResourcePack(exempted.uuid, exempted.version) {
+			t.Fatalf("exempted pack %s_%s is not built in", exempted.uuid, exempted.version)
+		}
+		if IsBuiltinResourcePack(exempted.uuid, exempted.version+".1") {
+			t.Fatalf("another version of %s is built in", exempted.uuid)
+		}
+	}
+	if IsBuiltinResourcePack("00112233-4455-6677-8899-aabbccddeeff", "1.0.0") {
+		t.Fatal("a downloadable pack is built in")
+	}
+}
+
+// A required stack entry matches the downloaded pack by parsed UUID and numeric version, so a short or
+// uppercase form of the same identity is accepted and a different version is not.
+func TestHandleResourcePackStackMatchesNumericIdentity(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	for version, accepted := range map[string]bool{"1.0.0": true, "1.0": true, "1": true, "1.0.1": false, "2.0.0": false} {
+		conn := testConn()
+		conn.ctx = context.Background()
+		conn.resourcePacks = []*resource.Pack{pack}
+		err := conn.handleResourcePackStack(&packet.ResourcePackStack{
+			TexturePackRequired: true,
+			TexturePacks: []protocol.StackResourcePack{{
+				UUID: strings.ToUpper(id.String()), Version: version,
+			}},
+		})
+		if (err == nil) != accepted {
+			t.Fatalf("version %q: err = %v, want accepted %t", version, err, accepted)
+		}
+		if !accepted {
+			continue
+		}
+		snapshot, _ := conn.ResourcePackStack()
+		if entries := snapshot.Entries(); len(entries) != 1 || entries[0].Pack() == nil {
+			t.Fatalf("version %q: stack entry was not associated with the downloaded pack", version)
+		}
+	}
+}
+
+// An offer entry advertising a short version form is associated with the downloaded pack.
+func TestResourcePackOfferMatchesNumericVersion(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	offer := newResourcePackOfferSnapshot(&packet.ResourcePacksInfo{
+		TexturePacks: []protocol.TexturePackInfo{{UUID: id, Version: "1.0", Size: uint64(pack.Size())}},
+	}, []*resource.Pack{pack})
+	if entries := offer.TexturePacks(); len(entries) != 1 || entries[0].Pack() == nil {
+		t.Fatal("offer entry with a short version was not associated with the downloaded pack")
+	}
+	if !(ResourcePackCacheKey{UUID: id, Version: "1.0", Size: uint64(pack.Size())}).Matches(pack) {
+		t.Fatal("cache key with a short version does not match its pack")
+	}
+}
+
+// A served pack is found for a request naming its UUID in another case or its version in a short form.
+func TestResourcePackQueueRequestMatchesNumericIdentity(t *testing.T) {
+	id := uuid.MustParse("6f733b6b-33f7-46a1-a246-588f130f51c2")
+	pack, err := resource.ReadBytes(testResourcePackArchive(t, id))
+	if err != nil {
+		t.Fatalf("read pack: %v", err)
+	}
+	for request, found := range map[string]bool{
+		id.String() + "_1.0.0":              true,
+		id.String() + "_1.0":                true,
+		strings.ToUpper(id.String()) + "_1": true,
+		id.String():                         true,
+		id.String() + "_1.0.1":              false,
+		uuid.NewString() + "_1.0.0":         false,
+	} {
+		queue := &resourcePackQueue{packs: []*resource.Pack{pack}}
+		if err := queue.Request([]string{request}); (err == nil) != found {
+			t.Fatalf("request %q: err = %v, want found %t", request, err, found)
+		}
+	}
+}

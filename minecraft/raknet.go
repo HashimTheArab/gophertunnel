@@ -28,6 +28,15 @@ type RakNet struct {
 	UpstreamPacketListener raknet.UpstreamPacketListener
 }
 
+// IsRakNet reports whether network dials over RakNet, including AddressNetwork's RakNet choice.
+func IsRakNet(network Network) bool {
+	_, ok := network.(interface{ rakNet() })
+	return ok
+}
+
+// rakNet marks RakNet and the Networks embedding it for IsRakNet.
+func (RakNet) rakNet() {}
+
 // DialContext ...
 func (r RakNet) DialContext(ctx context.Context, address string) (net.Conn, error) {
 	return r.dialer().DialContext(ctx, address)

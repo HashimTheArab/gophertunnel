@@ -289,6 +289,7 @@ func (pack *Pack) Size() int {
 }
 
 // Len returns the total size in bytes of the archive of the resource pack.
+//
 // Deprecated: Use Size instead. Kept for backwards compatibility with older integrations.
 func (pack *Pack) Len() int {
 	return pack.Size()
@@ -623,21 +624,39 @@ type dirPackReader struct {
 	base string
 }
 
-// find attempts to find a file in a zip reader. If found, it returns an Open()ed reader of the file that may
-// be used to read data from the file.
+// find opens the regular file named fileName nearest the archive root, so a pack's root manifest.json wins
+// over same-named files inside its folders, such as textures/entity/manifest.json. Like vanilla, it fails
+// when several matches share the shallowest depth rather than guess between them.
 func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
+	var (
+		match     *zip.File
+		matchName string
+	)
+	matchDepth, ambiguous := 0, false
 	for _, f := range r.File {
 		name := resourceArchivePath(f.Name)
-		if path.Base(name) != fileName {
+		if !f.Mode().IsRegular() || path.Base(name) != fileName {
 			continue
 		}
-		fileReader, err := f.Open()
-		if err != nil {
-			return nil, "", fmt.Errorf("open zip file %v: %w", f.Name, err)
+		// Depth of the name as stored, with either separator, since manifestDir derives from it.
+		switch depth := strings.Count(name, "/"); {
+		case match == nil || depth < matchDepth:
+			match, matchName, matchDepth, ambiguous = f, name, depth, false
+		case depth == matchDepth:
+			ambiguous = true
 		}
-		return fileReader, name, nil
 	}
-	return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
+	if match == nil {
+		return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
+	}
+	if ambiguous {
+		return nil, "", fmt.Errorf("multiple '%v' found at the same directory level in zip", fileName)
+	}
+	fileReader, err := match.Open()
+	if err != nil {
+		return nil, "", fmt.Errorf("open zip file %v: %w", match.Name, err)
+	}
+	return fileReader, matchName, nil
 }
 
 func (r dirPackReader) find(fileName string) (io.ReadCloser, string, error) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/sandertv/gophertunnel/minecraft"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -194,6 +195,17 @@ type RealmAddress struct {
 		RegionName     string `json:"regionName"`
 		ServiceQuality int    `json:"serviceQuality"`
 	} `json:"sessionRegionData"`
+}
+
+// Network returns the network and address to pass to minecraft.Dialer.DialContextNetwork for this realm.
+func (a RealmAddress) Network(n Networks) (minecraft.Network, string, error) {
+	return n.Realm(a.NetworkProtocol, a.Address)
+}
+
+// NetherNetID returns the NetherNet ID to reach this realm at through JSON-RPC signaling, for a caller
+// that dials with its own NetherNet transport. It fails for the protocols Network rejects.
+func (a RealmAddress) NetherNetID() (string, error) {
+	return realmNetherNetID(a.NetworkProtocol, a.Address)
 }
 
 // Address requests the address and protocol used to connect to this realm. The optional ping results are sent to
@@ -416,24 +428,25 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 	if base == "" {
 		base = realmsBaseURL
 	}
-	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	req.Header.Set("Client-Version", clientVersion)
-	req.Header.Set("X-ClientPlatform", "Android")
-	req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
-	if requestBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	xbl, err := r.xboxToken(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	xbl.SetAuthHeader(req)
-
-	resp, err := authclient.SendRequestWithRetries(ctx, r.httpClient, req, retryOptions)
+	resp, err := authclient.Call(ctx, r.httpClient, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(requestBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("Client-Version", clientVersion)
+		req.Header.Set("X-ClientPlatform", "Android")
+		req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))
+		if requestBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		xbl, err := r.xboxToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		xbl.SetAuthHeader(req)
+		return req, nil
+	}, authclient.CallOptions{Retry: retryOptions})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -537,6 +550,16 @@ func (c *Client) AcceptRealmInviteCode(ctx context.Context, code string) (Realm,
 	}
 	realm.client = c
 	return realm, nil
+}
+
+// LeaveRealm removes the player from a Realm they were invited to, as the Bedrock client does when a
+// member chooses Leave Realm. The owner of a Realm cannot leave it.
+func (c *Client) LeaveRealm(ctx context.Context, realmID int) error {
+	if realmID <= 0 {
+		return fmt.Errorf("realms: invalid Realm id %d", realmID)
+	}
+	_, _, err := c.request(ctx, http.MethodDelete, fmt.Sprintf("/invites/%d", realmID), nil)
+	return err
 }
 
 // PendingInviteCount returns how many Realm invites await the player's answer.

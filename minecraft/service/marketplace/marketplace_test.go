@@ -298,6 +298,10 @@ func TestPurchaseIsSentAtMostOnce(t *testing.T) {
 	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); err != nil || result.Outcome != PurchaseUnknown {
 		t.Fatalf("unreachable service: result = %+v err = %v", result, err)
 	}
+	client, _ = newStore(t, func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) })
+	if result, err := client.PurchaseVirtual(context.Background(), Purchase{OfferID: "o1", Amount: 1}); err != nil || result.Outcome != PurchaseUnknown || result.CorrelationID == "" {
+		t.Fatalf("sent without an answer: result = %+v err = %v, want PurchaseUnknown", result, err)
+	}
 }
 
 // Redirects must neither replay a purchase nor turn a redirected read into a successful purchase.

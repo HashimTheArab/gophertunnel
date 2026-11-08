@@ -159,9 +159,7 @@ type Connection struct {
 	// HostPort is the port of the RakNet listener.
 	// It is typically empty for most sessions because RakNet is no longer supported.
 	HostPort uint16
-	// RakNetGUID is the GUID of a legacy RakNet listener. Direct WebSocket
-	// signaling also uses the RakNetGUID JSON property on the wire, but that
-	// compatibility detail is decoded into NetherNetID instead.
+	// RakNetGUID is the GUID of a legacy RakNet listener.
 	RakNetGUID string `json:"RakNetGUID,omitempty"`
 	// NetherNetID is the network ID of the NetherNet network for the host.
 	NetherNetID NetherNetID `json:"NetherNetId,omitempty"`
@@ -171,42 +169,6 @@ type Connection struct {
 	// WebRTC connection to the host.
 	// It is only populated when Type is [ConnectionTypeSignalingOverJSONRPC].
 	PlayerMessagingID uuid.UUID `json:"PmsgId,omitzero"`
-}
-
-type connectionAlias Connection
-
-// MarshalJSON encodes the discriminator-dependent connection shape used by
-// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
-// legacy RakNetGUID property, while JSON-RPC signaling uses NetherNetId and
-// PmsgId.
-func (c Connection) MarshalJSON() ([]byte, error) {
-	wire := connectionAlias(c)
-	switch c.Type {
-	case ConnectionTypeSignalingOverWebSocket:
-		wire.RakNetGUID = string(c.NetherNetID)
-		wire.NetherNetID = ""
-		wire.PlayerMessagingID = uuid.Nil
-	case ConnectionTypeSignalingOverJSONRPC:
-		wire.RakNetGUID = ""
-	}
-	return json.Marshal(wire)
-}
-
-// UnmarshalJSON decodes the discriminator-dependent connection shape used by
-// vanilla Bedrock. Direct WebSocket signaling stores its network ID in the
-// legacy RakNetGUID field, while JSON-RPC signaling uses NetherNetId and
-// PmsgId.
-func (c *Connection) UnmarshalJSON(b []byte) error {
-	var wire connectionAlias
-	if err := json.Unmarshal(b, &wire); err != nil {
-		return err
-	}
-	*c = Connection(wire)
-	if c.Type == ConnectionTypeSignalingOverWebSocket {
-		c.NetherNetID = NetherNetID(c.RakNetGUID)
-		c.RakNetGUID = ""
-	}
-	return nil
 }
 
 // NetherNetID is the NetherNet network ID advertised by a host. It is an opaque
@@ -281,42 +243,35 @@ func (c Connection) Validate() error {
 			return errors.New("minecraft/p2p: Connection.PlayerMessagingID is nil")
 		}
 		return nil
-	case ConnectionTypeSignalingOverWebSocket:
-		return c.NetherNetID.Validate()
 	default:
-		return fmt.Errorf("minecraft/p2p: invalid Connection.Type: %d", c.Type)
+		return fmt.Errorf("minecraft/p2p: unsupported Connection.Type: %d", c.Type)
 	}
 }
 
-// Connection returns the first supported NetherNet signaling connection
-// advertised by w. Non-NetherNet worlds are rejected because this package
-// currently implements only NetherNet peer-to-peer joins. Unsupported connection
-// entries are ignored so a future or auxiliary entry does not make an otherwise
-// joinable world unusable.
+// Connection returns the first valid JSON-RPC signaling connection advertised by w, the only
+// connection vanilla clients join a NetherNet world through. Other connection types are skipped.
 func (w World) Connection() (Connection, error) {
 	if w.TransportLayer != TransportLayerNetherNet {
 		return Connection{}, fmt.Errorf("invalid transport layer: %d", w.TransportLayer)
 	}
 	var err error
 	for _, c := range w.SupportedConnections {
+		if c.Type != ConnectionTypeSignalingOverJSONRPC {
+			continue
+		}
 		if err2 := c.Validate(); err2 != nil {
 			err = errors.Join(err, err2)
 			continue
 		}
 		return c, nil
 	}
-	if err == nil {
-		err = errors.New("minecraft/p2p: no supported signaling connection")
-	}
-	return Connection{}, err
+	return Connection{}, errors.Join(errors.New("minecraft/p2p: no supported signaling connection"), err)
 }
 
 // Address returns a string that can be used as the address when dialing a new Conn.
 // Caller should validate the Connection using [Connection.Validate] before calling this method.
 func (c Connection) Address() string {
 	switch c.Type {
-	case ConnectionTypeSignalingOverWebSocket:
-		return string(c.NetherNetID)
 	case ConnectionTypeSignalingOverJSONRPC:
 		return c.PlayerMessagingID.String()
 	default:
@@ -335,15 +290,9 @@ const (
 const (
 	// ConnectionTypeSignalingOverJSONRPC indicates that a JSON-RPC over
 	// WebSocket connection is used for the WebRTC signaling needed to
-	// establish a NetherNet connection.
-	// This is the connection type used by most sessions.
+	// establish a NetherNet connection. It is the only signaling connection
+	// vanilla clients join a NetherNet world through.
 	ConnectionTypeSignalingOverJSONRPC = 7
-	// ConnectionTypeSignalingOverWebSocket indicates that a WebSocket
-	// connection carrying plain JSON messages is used for the WebRTC
-	// signaling needed to establish a NetherNet connection.
-	// It is only used by the host when the 'mc-host-json-rpc' parameter
-	// is set to 'false' in [github.com/sandertv/gophertunnel/minecraft/service.Token.Configuration].
-	ConnectionTypeSignalingOverWebSocket = 3
 	// ConnectionTypeSignalingOverLAN indicates that LAN is used for the
 	// WebRTC signaling needed to establish a NetherNet connection.
 	// It is only valid in

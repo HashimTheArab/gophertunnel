@@ -13,10 +13,12 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
@@ -303,4 +305,54 @@ func TestTokenRemainingUsesTheRetainedServiceClock(t *testing.T) {
 	if remaining := token.Remaining(); remaining < 58*time.Minute || remaining > time.Hour || !token.Valid() {
 		t.Fatalf("Remaining() = %v, want about 59m on the service clock", remaining)
 	}
+}
+
+// stalledTokenSource models authentication that waits until its context expires.
+type stalledTokenSource struct{}
+
+// ServiceToken waits for cancellation without making an HTTP request.
+func (stalledTokenSource) ServiceToken(ctx context.Context) (*Token, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestMultiplayerTokenBoundsAuthentication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target, _ := url.Parse("https://service.test")
+		env := &AuthorizationEnvironment{ServiceURI: target}
+		started := time.Now()
+		_, err = env.MultiplayerToken(context.Background(), stalledTokenSource{}, &key.PublicKey)
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != authclient.DefaultCallTimeout {
+			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
+		}
+	})
+}
+
+// blockingTickets holds every session ticket request until release is closed.
+type blockingTickets struct{ release chan struct{} }
+
+func (b blockingTickets) SessionTicket(context.Context) (string, error) {
+	<-b.release
+	return "", errors.New("no playfab session in this test")
+}
+
+// A caller waiting for another caller's token fetch stops when its own context ends.
+func TestServiceTokenWaitHonoursContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tickets := blockingTickets{release: make(chan struct{})}
+		src := (&AuthorizationEnvironment{}).ResumeTokenSource(tickets, TokenConfig{}, nil)
+		go func() { _, _ = src.ServiceToken(context.Background()) }()
+		synctest.Wait()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		started := time.Now()
+		if _, err := src.ServiceToken(ctx); !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != time.Second {
+			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
+		}
+		close(tickets.release)
+	})
 }

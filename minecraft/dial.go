@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -16,10 +17,10 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
@@ -80,7 +81,10 @@ type Dialer struct {
 	// Login packet. The function is called with the header of the packet and its raw payload, the address
 	// from which the packet originated, and the destination address.
 	PacketFunc func(header packet.Header, payload []byte, src, dst net.Addr)
-	// AcceptPacketHeader filters incoming packets after PacketFunc observes them and before body decoding
+	// PacketObserver observes selected IDs before PacketFunc. Its interests are copied at dial time.
+	// Unlike PacketFunc, it does not require incoming payload copies for unrelated packets.
+	PacketObserver PacketObserver
+	// AcceptPacketHeader filters incoming packets after packet observers run and before body decoding
 	// or internal handling, including login and disconnect handling. Returning false silently drops only
 	// that packet. A nil function accepts all headers. It runs synchronously on the receive goroutine;
 	// it must not block. The header is passed by value and cannot be rewritten through this hook.
@@ -252,6 +256,10 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	if d.Handoff < HandoffNone || d.Handoff > HandoffAfterLogin {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("unknown Handoff %d", d.Handoff)}
 	}
+	packetObserver, err := d.PacketObserver.compile()
+	if err != nil {
+		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
+	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), cryptorand.Reader)
 	if err != nil {
@@ -319,8 +327,43 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		d.IdentityData = identityData
 	}
 
+	// A network that picks its transport per address picks it now, so the login can name the server
+	// the way vanilla does once it has chosen.
+	loginAddress := address
+	if s, ok := network.(transportSelector); ok {
+		// Report this dial's client to a probe that sends it, as the vanilla client does, unless the
+		// consumer set its own. Version and platform mirror the login's own defaults.
+		if filler, ok := s.(interface {
+			withProbeClientInfo(endpoint.ClientInfo) transportSelector
+		}); ok {
+			s = filler.withProbeClientInfo(endpoint.ClientInfo{
+				Version:  loginGameVersion(d.ClientData.GameVersion, d.Protocol),
+				Protocol: int(d.Protocol.ID()),
+				Platform: int(loginDeviceOS(d.ClientData.DeviceOS)),
+			})
+		}
+		if network, err = s.Select(ctx, address); err != nil {
+			if fixed, ok := s.(interface{ fixedTransport() Network }); ok {
+				return nil, &TransportError{Network: fixed.fixedTransport(), Err: err}
+			}
+			return nil, err
+		}
+		selected := network
+		defer func() {
+			if err != nil {
+				err = &TransportError{Network: selected, Err: err}
+			}
+		}()
+		if l, ok := network.(interface{ loginAddress() string }); ok {
+			loginAddress = l.loginAddress()
+		}
+	}
+
 	var netConn net.Conn
-	if token == "" {
+	if i, ok := network.(identityDialer); ok && token == "" {
+		// Offline dials still prove the connection key, which servers check against the login since 1.26.60.
+		netConn, err = i.DialContextIdentity(ctx, address, "", key)
+	} else if token == "" {
 		netConn, err = network.DialContext(ctx, address)
 	} else if i, ok := network.(identityProviderDialer); ok {
 		netConn, err = i.DialContextIdentityProvider(ctx, address, token, key, identityProvider)
@@ -353,6 +396,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.identityData = d.IdentityData
 	conn.clientData = d.ClientData
 	conn.packetFunc = d.PacketFunc
+	conn.packetObserver = packetObserver
 	conn.acceptPacketHeader = d.AcceptPacketHeader
 	conn.downloadResourcePack = d.DownloadResourcePack
 	conn.resourcePackDownload = d.ResourcePackDownload.normalized()
@@ -369,10 +413,8 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
-	if conn.clientData.GameVersion == "" {
-		conn.clientData.GameVersion = d.Protocol.Ver()
-	}
-	defaultClientData(address, conn.identityData.DisplayName, &conn.clientData)
+	conn.clientData.GameVersion = loginGameVersion(conn.clientData.GameVersion, d.Protocol)
+	defaultClientData(loginAddress, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
 	if token == "" {
@@ -518,30 +560,33 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
-// serverAddress returns the address in the form clients report it in their login request. For
-// networks addressed by a URL, such as NetherNet, clients repeat the port of the address after
-// it: 'https://<host>:<port>:<port>'.
-func serverAddress(address string) string {
-	if !strings.Contains(address, "://") {
-		return address
+// loginGameVersion returns the game version a login sends for this one: the value set, or the
+// protocol's version, or the current one.
+func loginGameVersion(version string, p Protocol) string {
+	return cmp.Or(version, p.Ver(), protocol.CurrentVersion)
+}
+
+// loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or Android.
+func loginDeviceOS(os protocol.DeviceOS) protocol.DeviceOS {
+	if os == 0 {
+		return protocol.DeviceAndroid
 	}
-	u, err := url.Parse(address)
-	if err != nil || u.Port() == "" {
-		return address
-	}
-	return address + ":" + u.Port()
+	return os
 }
 
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
-		d.ServerAddress = serverAddress(address)
+		// 1.26.60 clients send a URL-addressed server, such as NetherNet, as the URL itself.
+		d.ServerAddress = address
 	}
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username
 	}
-	if d.DeviceOS == 0 {
-		d.DeviceOS = protocol.DeviceAndroid
+	d.DeviceOS = loginDeviceOS(d.DeviceOS)
+	if d.DeviceOS == protocol.DeviceAndroid && d.PlatformType == login.PlatformTypeDesktop {
+		d.PlatformType = login.PlatformTypeMobile
+		d.MarkClaims("PlatformType")
 	}
 	if d.DefaultInputMode == 0 {
 		d.DefaultInputMode = packet.InputModeTouch
@@ -605,9 +650,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	if data.DeviceOS == 0 {
-		data.DeviceOS = protocol.DeviceAndroid
-	}
+	data.DeviceOS = loginDeviceOS(data.DeviceOS)
 	if data.DefaultInputMode == 0 {
 		data.DefaultInputMode = packet.InputModeTouch
 	}

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
@@ -61,4 +62,24 @@ func TestDoMapsErrorsAndHonoursSingleAttempt(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", calls.Load())
 	}
+}
+
+// stalledTokens models a token source that respects the bounded request context.
+type stalledTokens struct{}
+
+// ServiceToken waits for the request deadline without contacting a service.
+func (stalledTokens) ServiceToken(ctx context.Context) (*service.Token, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestRawBoundsAuthentication(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		target, _ := url.Parse("https://service.test")
+		started := time.Now()
+		_, _, err := Raw(context.Background(), nil, stalledTokens{}, http.MethodGet, target, nil, Options{})
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) != authclient.DefaultCallTimeout {
+			t.Fatalf("err = %v, elapsed = %v", err, time.Since(started))
+		}
+	})
 }

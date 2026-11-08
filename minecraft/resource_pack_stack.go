@@ -65,7 +65,7 @@ func (snapshot ResourcePackStackSnapshot) packet() *packet.ResourcePackStack {
 func (snapshot ResourcePackStackSnapshot) Entries() []ResourcePackStackEntry {
 	entries := make([]ResourcePackStackEntry, len(snapshot.stack.TexturePacks))
 	for i, info := range snapshot.stack.TexturePacks {
-		entries[i] = ResourcePackStackEntry{info: info, pack: snapshot.packs[resourcePackID{info.UUID, info.Version}]}
+		entries[i] = ResourcePackStackEntry{info: info, pack: snapshot.packs[newResourcePackID(info.UUID, info.Version)]}
 	}
 	return entries
 }
@@ -105,4 +105,15 @@ func (snapshot ResourcePackStackSnapshot) ExperimentsPreviouslyToggled() bool {
 // IncludeEditorPacks reports whether the server requested vanilla editor packs in the stack.
 func (snapshot ResourcePackStackSnapshot) IncludeEditorPacks() bool {
 	return snapshot.stack.IncludeEditorPacks
+}
+
+// IsBuiltinResourcePack reports whether the client ships the pack, so a ResourcePackStack may select it
+// without offering it for download. Identities match exactly, as the stack sends them.
+func IsBuiltinResourcePack(uuid, version string) bool {
+	for _, exempted := range exemptedPacks {
+		if exempted.matches(uuid, version) {
+			return true
+		}
+	}
+	return false
 }
