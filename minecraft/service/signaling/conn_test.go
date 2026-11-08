@@ -130,6 +130,26 @@ func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
 	})
 }
 
+// A JSON-RPC client stopping mid-request is a closing Conn, reported as a CredentialsError, not a
+// TURN failure answered with no servers.
+func TestCredentialsClientStopIsAnError(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
+		close(started)
+		<-release
+		return nil, errors.New("released")
+	})
+	go func() {
+		<-started
+		_ = conn.client.Close()
+	}()
+	credentials, err := conn.Credentials(context.Background())
+	if _, ok := errors.AsType[*CredentialsError](err); !ok {
+		t.Fatalf("Credentials() = %v, %v, want a CredentialsError", credentials, err)
+	}
+}
+
 // An unanswered TURN request fails after the client's 60 second JSON-RPC timeout, yielding no
 // relay servers, and the next call requests again.
 func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {

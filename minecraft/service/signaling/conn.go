@@ -131,10 +131,9 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 	}
 }
 
-// Credentials returns the TURN credentials last received from the server, waiting for the request
-// in flight if they are missing or expired. A failed, unanswered or undecodable request yields no
-// ICE servers, so connections still gather host candidates; only closure of the Conn or ctx
-// returns an error. Concurrent callers share one request, and each stops waiting when its ctx is done.
+// Credentials returns the TURN credentials last received, waiting for the shared request in flight
+// if they are missing or expired. A request the server fails, leaves unanswered for a minute or
+// answers undecodably yields no ICE servers; the Conn closing or ctx ending returns an error.
 func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, error) {
 	select {
 	case <-conn.ctx.Done():
@@ -151,13 +150,12 @@ func (conn *Conn) Credentials(ctx context.Context) (*nethernet.Credentials, erro
 	request := conn.startCredentialsRequestLocked()
 	conn.credentialsMu.Unlock()
 
+	// The Conn closing ends the request too, which then reports why as a CredentialsError.
 	select {
 	case <-request.done:
 		return request.credentials, request.err
 	case <-ctx.Done():
 		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(ctx)}
-	case <-conn.ctx.Done():
-		return nil, context.Cause(conn.ctx)
 	}
 }
 
@@ -204,13 +202,19 @@ func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	}
 	now := time.Now()
 
-	conn.credentialsMu.Lock()
-	switch {
-	case err != nil && conn.ctx.Err() != nil:
-		request.err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
-	case err != nil:
+	// jrpc2 fails pending calls before its stop hook closes conn.ctx, so a stopped client also
+	// means the Conn is closing rather than that TURN is unavailable.
+	closing := err != nil && (conn.ctx.Err() != nil || conn.client.IsStopped())
+	if err != nil && !closing {
 		conn.d.Log.Warn("TURN credentials unavailable, gathering without relay servers",
 			slog.Any("error", &CredentialsError{Method: MethodSignalingCredentials, Err: err}))
+	}
+
+	conn.credentialsMu.Lock()
+	switch {
+	case closing:
+		request.err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
+	case err != nil:
 		request.credentials = &nethernet.Credentials{}
 	default:
 		request.credentials = credentials
