@@ -19,9 +19,6 @@ import (
 type SignalingConn interface {
 	nethernet.Signaling
 	io.Closer
-	// AwaitCredentials waits for TURN credentials where Credentials would answer with none; see
-	// [signaling.Conn.AwaitCredentials].
-	AwaitCredentials(ctx context.Context) (*nethernet.Credentials, error)
 }
 
 // ClientSignalingOptions configures an outbound signaling connection. Local NetherNet identity is intentionally not
