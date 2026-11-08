@@ -566,8 +566,7 @@ func loginGameVersion(version string, p Protocol) string {
 	return cmp.Or(version, p.Ver(), protocol.CurrentVersion)
 }
 
-// loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or the default a
-// login applies when it is unset. The probe reports this so it matches the platform the login sends.
+// loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or Android.
 func loginDeviceOS(os protocol.DeviceOS) protocol.DeviceOS {
 	if os == 0 {
 		return protocol.DeviceAndroid

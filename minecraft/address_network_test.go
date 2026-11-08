@@ -1462,6 +1462,34 @@ func TestAddressNetworkWithProbeClientInfo(t *testing.T) {
 	}
 }
 
+// A Dialer reports its client on the probe a NetherNetHTTP with no URL sends.
+func TestDialerFillsNetherNetHTTPProbeClientInfo(t *testing.T) {
+	t.Parallel()
+	got := make(chan url.Values, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			select {
+			case got <- r.URL.Query():
+			default:
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	d := Dialer{Protocol: DefaultProtocol, ClientData: login.ClientData{GameVersion: "1.99.0", DeviceOS: protocol.DeviceIOS}}
+	go func() { _, _ = d.DialContextNetwork(ctx, NetherNetHTTP{}, server.Listener.Addr().String()) }()
+	select {
+	case q := <-got:
+		if q.Get("version") != "1.99.0" || q.Get("platform") != strconv.Itoa(int(protocol.DeviceIOS)) {
+			t.Fatalf("probe query = %v, want the Dialer's version and platform", q)
+		}
+	case <-ctx.Done():
+		t.Fatal("the Dialer sent no probe")
+	}
+}
+
 // Clients on one protocol share probe answers whatever their version or platform.
 func TestProbeCacheKeyIgnoresVersionAndPlatform(t *testing.T) {
 	t.Parallel()

@@ -60,7 +60,12 @@ type AddressNetwork struct {
 // probeClientInfo returns ProbeClientInfo with each unset field reporting DefaultProtocol on Android,
 // so the probe never carries the partial info servers refuse.
 func (n AddressNetwork) probeClientInfo() endpoint.ClientInfo {
-	return fillClientInfo(n.ProbeClientInfo, endpoint.ClientInfo{Version: DefaultProtocol.Ver(), Protocol: int(DefaultProtocol.ID()), Platform: int(protocol.DeviceAndroid)})
+	return fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())
+}
+
+// defaultProbeClientInfo is the info a probe reports when no dial supplies it.
+func defaultProbeClientInfo() endpoint.ClientInfo {
+	return endpoint.ClientInfo{Version: DefaultProtocol.Ver(), Protocol: int(DefaultProtocol.ID()), Platform: int(protocol.DeviceAndroid)}
 }
 
 // withProbeClientInfo returns n reporting info in the fields of ProbeClientInfo left unset.
@@ -169,8 +174,8 @@ func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches 
 // without failing dials on the old one is picked up again.
 const probeCacheTTL = 10 * time.Minute
 
-// ProbeCache holds AddressNetwork probe answers per host and port for ten minutes, or until a dial
-// through one fails. The zero value is ready to use.
+// ProbeCache holds AddressNetwork probe answers per host, port and reported protocol for ten
+// minutes, or until a dial through one fails. The zero value is ready to use.
 type ProbeCache struct {
 	mu      sync.Mutex
 	entries map[probeKey]*probeEntry
@@ -582,14 +587,22 @@ type NetherNetHTTP struct {
 	// servers without an identity are then refused.
 	ServerTrust ServerTrust
 
-	trustRedialAfter   time.Duration    // overrides trustRedialAfter in tests
-	choice             probeChoice      // the AddressNetwork answer to drop, or replace by RakNet, when a dial fails
-	rakNetAfterFailure bool             // a failed dial answers RakNet instead of forgetting the choice
-	probeClient        *endpoint.Client // the probe's client, reused for the offer so both carry one network ID
+	trustRedialAfter   time.Duration       // overrides trustRedialAfter in tests
+	choice             probeChoice         // the AddressNetwork answer to drop, or replace by RakNet, when a dial fails
+	rakNetAfterFailure bool                // a failed dial answers RakNet instead of forgetting the choice
+	probeClient        *endpoint.Client    // the probe's client, reused for the offer so both carry one network ID
+	probeInfo          endpoint.ClientInfo // the info a probe for an empty URL reports, filled by a Dialer
 }
 
-// Select returns n with its endpoint resolved: URL when set, otherwise the endpoint ProbeNetherNet
-// finds for address. It fails when nothing answers.
+// withProbeClientInfo returns n reporting info in the unset fields of the probe it sends when URL is
+// empty.
+func (n NetherNetHTTP) withProbeClientInfo(info endpoint.ClientInfo) transportSelector {
+	n.probeInfo = fillClientInfo(n.probeInfo, info)
+	return n
+}
+
+// Select returns n with its endpoint resolved: URL when set, otherwise the endpoint a probe of
+// address finds, as ProbeNetherNet would but reporting the client. It fails when nothing answers.
 func (n NetherNetHTTP) Select(ctx context.Context, address string) (Network, error) {
 	return n.resolve(ctx, address)
 }
@@ -605,7 +618,7 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	host, port := splitServerAddress(address)
 	// The offer reuses the probe's client, so its POST carries the network ID the GET announced.
 	client := probeHTTPClient(n.HTTPClient)
-	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: AddressNetwork{}.probeClientInfo()}.New()
+	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.probeInfo, defaultProbeClientInfo())}.New()
 	found, _, err := probeNetherNet(ctx, client, probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, n.probeClient)
 	if err != nil {
 		if ctx.Err() != nil {
