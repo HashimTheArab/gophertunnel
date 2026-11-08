@@ -2135,6 +2135,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		packAmount:       totalPacks,
 		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
+		requestedPacks:   make(map[string]struct{}),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
 
@@ -2201,6 +2202,7 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		}
 
 		packsToDownload = append(packsToDownload, downloadID)
+		conn.packQueue.requestedPacks[downloadID] = struct{}{}
 		conn.packQueue.downloadingPacks[downloadID] = &downloadingPack{
 			size:       pack.Size,
 			buf:        new(bytes.Buffer), // Payload storage grows only as chunks arrive.
@@ -2446,7 +2448,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	// The transfer is tracked under the pack ID this packet names, which ResourcePackChunkRequest and the
 	// server's ResourcePackChunkData repeat.
 	id := pk.UUID
-	key, pack, ok := lookupTransfer(conn.packQueue.downloadingPacks, id)
+	key, pack, ok := conn.packQueue.lookupTransfer(conn.packQueue.downloadingPacks, id)
 	conn.packMu.Lock()
 	_, awaiting := conn.packQueue.awaitingPacks[id]
 	conn.packMu.Unlock()
@@ -2600,7 +2602,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
 	conn.packMu.Lock()
-	_, pack, ok := lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
+	_, pack, ok := conn.packQueue.lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
 	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to

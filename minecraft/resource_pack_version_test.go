@@ -209,3 +209,80 @@ func testVersionedResourcePackArchive(t *testing.T, id uuid.UUID, version [3]int
 	}
 	return buf.Bytes()
 }
+
+// twoVersionOfferConn offers one UUID at 2.7.0 and 2.18.0 and returns the conn and each version's archive.
+func twoVersionOfferConn(t *testing.T) (*Conn, uuid.UUID, map[string][]byte) {
+	t.Helper()
+	id := uuid.New()
+	archives := map[string][]byte{
+		"2.7.0":  testVersionedResourcePackArchive(t, id, [3]int{2, 7, 0}),
+		"2.18.0": testVersionedResourcePackArchive(t, id, [3]int{2, 18, 0}),
+	}
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	t.Cleanup(func() { _ = conn.Abort() })
+	var offers []protocol.TexturePackInfo
+	for _, v := range []string{"2.7.0", "2.18.0"} {
+		offers = append(offers, protocol.TexturePackInfo{UUID: id, Version: v, Size: uint64(len(archives[v]))})
+	}
+	if err := conn.handleResourcePacksInfo(&packet.ResourcePacksInfo{TexturePackRequired: true, TexturePacks: offers}); err != nil {
+		t.Fatal(err)
+	}
+	return conn, id, archives
+}
+
+// startTransfer sends DataInfo for name and waits for its first chunk request.
+func startTransfer(t *testing.T, conn *Conn, name string, data []byte) *downloadingPack {
+	t.Helper()
+	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: name, DataChunkSize: uint32(len(data)), Size: uint64(len(data))}); err != nil {
+		t.Fatal(err)
+	}
+	conn.packMu.Lock()
+	pack := conn.packQueue.awaitingPacks[name]
+	conn.packMu.Unlock()
+	if !waitForResourcePackRequest(t, pack, 0) {
+		t.Fatal("no chunk request")
+	}
+	return pack
+}
+
+// TestDataInfoForFinishedVersionKeepsOtherVersionPending refuses a repeated DataInfo for a finished version
+// rather than letting it take over the other version's pending transfer.
+func TestDataInfoForFinishedVersionKeepsOtherVersionPending(t *testing.T) {
+	conn, id, archives := twoVersionOfferConn(t)
+	first, data := id.String()+"_2.7.0", archives["2.7.0"]
+	startTransfer(t, conn, first, data)
+	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{UUID: first, Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		conn.packMu.Lock()
+		_, inFlight := conn.packQueue.awaitingPacks[first]
+		conn.packMu.Unlock()
+		if !inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first transfer did not finish")
+		}
+	}
+	if err := conn.handleResourcePackDataInfo(&packet.ResourcePackDataInfo{UUID: first, DataChunkSize: uint32(len(data)), Size: uint64(len(data))}); err == nil {
+		t.Fatalf("DataInfo for finished %s was accepted", first)
+	}
+	if _, pending := conn.packQueue.downloadingPacks[id.String()+"_2.18.0"]; !pending {
+		t.Fatal("2.18.0 transfer was consumed by the repeated 2.7.0 DataInfo")
+	}
+}
+
+// TestChunkDataForUnstartedVersionIsNotMisrouted refuses chunk data naming a version that has not started
+// instead of writing it into another version's transfer.
+func TestChunkDataForUnstartedVersionIsNotMisrouted(t *testing.T) {
+	conn, id, archives := twoVersionOfferConn(t)
+	data := archives["2.7.0"]
+	startTransfer(t, conn, id.String()+"_2.7.0", data)
+	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{UUID: id.String() + "_2.18.0", Data: data}); err == nil {
+		t.Fatal("chunk data for the unstarted 2.18.0 transfer was written into the 2.7.0 transfer")
+	}
+}

@@ -21,6 +21,7 @@ type resourcePackQueue struct {
 	packAmount       int
 	downloadingPacks map[string]*downloadingPack
 	awaitingPacks    map[string]*downloadingPack
+	requestedPacks   map[string]struct{} // every "uuid_version" ID asked of the server
 	chunkSize        uint32
 }
 
@@ -62,10 +63,14 @@ func matchesDownloadID(name, id, version string) bool {
 
 // lookupTransfer returns the key and transfer in transfers that a pack ID received from the server names.
 // The full "uuid_version" ID is matched first. Servers that name a transfer by its UUID alone, or spell its
-// version differently, still reach it when it is the only transfer with that UUID.
-func lookupTransfer(transfers map[string]*downloadingPack, name string) (string, *downloadingPack, bool) {
+// version differently, still reach it when it is the only transfer with that UUID. An ID that names another
+// requested transfer exactly never falls back, so it cannot reach a different version's transfer.
+func (queue *resourcePackQueue) lookupTransfer(transfers map[string]*downloadingPack, name string) (string, *downloadingPack, bool) {
 	if pack, ok := transfers[name]; ok {
 		return name, pack, true
+	}
+	if _, ok := queue.requestedPacks[name]; ok {
+		return "", nil, false
 	}
 	nameUUID, _, _ := strings.Cut(name, "_")
 	var (
