@@ -147,7 +147,9 @@ func (b *LANBrowser) Worlds() []LANWorld {
 	b.mu.Lock()
 	b.pruneLocked(time.Now())
 	for _, entry := range b.rakNet {
-		worlds = append(worlds, entry.world)
+		world := entry.world
+		world.Address = &net.UDPAddr{IP: slices.Clone(world.Address.IP), Port: world.Address.Port, Zone: world.Address.Zone}
+		worlds = append(worlds, world)
 	}
 	b.mu.Unlock()
 
@@ -249,11 +251,15 @@ func (b *LANBrowser) pruneLocked(now time.Time) {
 }
 
 // parseLANPong reads a RakNet pong as vanilla's LAN list does: it must be an MCPE pong with at
-// least four fields, and the advertised IPv4 port replaces the source port when present. editor
+// least four fields and a valid field 9, and the advertised IPv4 port replaces the source port. editor
 // reports an Editor Mode world.
 func parseLANPong(data []byte, from *net.UDPAddr) (world LANWorld, editor, ok bool) {
 	fields := splitLANPong(string(data))
 	if len(fields) < 4 || fields[0] != "MCPE" || !isLANVersion(fields[3]) {
+		return LANWorld{}, false, false
+	}
+	// The client drops a pong of ten or more fields unless field 9 is exactly 1.
+	if len(fields) >= 10 && fields[9] != "1" {
 		return LANWorld{}, false, false
 	}
 	field := func(index int) string {

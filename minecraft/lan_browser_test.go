@@ -24,7 +24,7 @@ func TestParseLANPong(t *testing.T) {
 		t.Fatalf("address = %s, want the advertised port", world.Address)
 	}
 
-	for _, pong := range []string{"MCEE;Steve;924;1.26.60", "MCPE;Steve;924", "MCPE;Steve;924;1.26.60 beta"} {
+	for _, pong := range []string{"MCEE;Steve;924;1.26.60", "MCPE;Steve;924", "MCPE;Steve;924;1.26.60 beta", "MCPE;Steve;924;1.26.60;2;8;123;My World;Creative;0;19132;19133;0;"} {
 		if _, _, ok := parseLANPong([]byte(pong), from); ok {
 			t.Fatalf("parseLANPong(%q) accepted", pong)
 		}
