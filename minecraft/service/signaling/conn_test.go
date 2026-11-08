@@ -170,6 +170,8 @@ func TestCredentialsRefreshOnExpiry(t *testing.T) {
 		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(60), nil })
 		conn.refreshCredentials()
 		synctest.Wait()
+		conn.refreshCredentials() // a late timer finds fresh credentials and requests nothing
+		synctest.Wait()
 		time.Sleep(60*time.Second - time.Nanosecond)
 		synctest.Wait()
 		if got := calls.Load(); got != 1 {
