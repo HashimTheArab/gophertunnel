@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
@@ -329,6 +331,17 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	// the way vanilla does once it has chosen.
 	loginAddress := address
 	if s, ok := network.(transportSelector); ok {
+		// Report this dial's client to a probe that sends it, as the vanilla client does, unless the
+		// consumer set its own. Version and platform mirror the login's own defaults.
+		if filler, ok := s.(interface {
+			withProbeClientInfo(endpoint.ClientInfo) transportSelector
+		}); ok {
+			s = filler.withProbeClientInfo(endpoint.ClientInfo{
+				Version:  loginGameVersion(d.ClientData.GameVersion, d.Protocol),
+				Protocol: int(d.Protocol.ID()),
+				Platform: int(loginDeviceOS(d.ClientData.DeviceOS)),
+			})
+		}
 		if network, err = s.Select(ctx, address); err != nil {
 			if fixed, ok := s.(interface{ fixedTransport() Network }); ok {
 				return nil, &TransportError{Network: fixed.fixedTransport(), Err: err}
@@ -400,9 +413,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
-	if conn.clientData.GameVersion == "" {
-		conn.clientData.GameVersion = d.Protocol.Ver()
-	}
+	conn.clientData.GameVersion = loginGameVersion(conn.clientData.GameVersion, d.Protocol)
 	defaultClientData(loginAddress, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
@@ -549,6 +560,20 @@ func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
 }
 
+// loginGameVersion returns the game version a login sends for this one: the value set, or the
+// protocol's version, or the current one.
+func loginGameVersion(version string, p Protocol) string {
+	return cmp.Or(version, p.Ver(), protocol.CurrentVersion)
+}
+
+// loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or Android.
+func loginDeviceOS(os protocol.DeviceOS) protocol.DeviceOS {
+	if os == 0 {
+		return protocol.DeviceAndroid
+	}
+	return os
+}
+
 // defaultClientData edits the ClientData passed to have defaults set to all fields that were left unchanged.
 func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ServerAddress == "" {
@@ -558,9 +583,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 	if d.ThirdPartyName == "" {
 		d.ThirdPartyName = username
 	}
-	if d.DeviceOS == 0 {
-		d.DeviceOS = protocol.DeviceAndroid
-	}
+	d.DeviceOS = loginDeviceOS(d.DeviceOS)
 	if d.DeviceOS == protocol.DeviceAndroid && d.PlatformType == login.PlatformTypeDesktop {
 		d.PlatformType = login.PlatformTypeMobile
 		d.MarkClaims("PlatformType")
@@ -627,9 +650,7 @@ func defaultClientData(address, username string, d *login.ClientData) {
 
 // setAndroidData ensures the login.ClientData passed matches settings you would see on an Android device.
 func setAndroidData(data *login.ClientData) {
-	if data.DeviceOS == 0 {
-		data.DeviceOS = protocol.DeviceAndroid
-	}
+	data.DeviceOS = loginDeviceOS(data.DeviceOS)
 	if data.DefaultInputMode == 0 {
 		data.DefaultInputMode = packet.InputModeTouch
 	}
