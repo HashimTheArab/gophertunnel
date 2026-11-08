@@ -30,16 +30,17 @@ import (
 
 func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
-	// An explicit port, the default one included, is the only port asked.
-	for _, port := range []uint16{19132, 19133} {
-		want := [][]string{{"https://example.com:" + strconv.Itoa(int(port))}, {"http://example.com:" + strconv.Itoa(int(port))}}
+	// Any port but 19132 is the only port asked.
+	want := [][]string{{"https://example.com:19133"}, {"http://example.com:19133"}}
+	if got := probeBatches("example.com", 19133); !reflect.DeepEqual(got, want) {
+		t.Fatalf("probeBatches with port 19133 = %q, want %q", got, want)
+	}
+	// No port, or 19132, also asks the schemes' default ports.
+	want = [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
+	for _, port := range []uint16{0, 19132} {
 		if got := probeBatches("example.com", port); !reflect.DeepEqual(got, want) {
 			t.Fatalf("probeBatches with port %d = %q, want %q", port, got, want)
 		}
-	}
-	want := [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
-	if got := probeBatches("example.com", 0); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probeBatches without a port = %q, want %q", got, want)
 	}
 	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
 	for _, host := range []string{"::1", "[::1]"} {
@@ -101,11 +102,11 @@ func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 	t.Parallel()
 	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	t.Cleanup(hang.Close)
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answerStatus(w) }))
 	t.Cleanup(ok.Close)
 
 	start := time.Now()
-	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, endpoint.ClientConfig{}.New())
+	endpoint, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != ok.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, ok.URL)
 	}
@@ -118,7 +119,7 @@ func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 // the game port has failed.
 func TestProbeNetherNetAsksHTTPAfterTheHeadStart(t *testing.T) {
 	t.Parallel()
-	game := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	game := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answerStatus(w) }))
 	t.Cleanup(game.Close)
 	gameHTTPS := "https://" + game.Listener.Addr().String()
 	silentGame, silent443, silent80 := "https://"+silentTCPAddress(t), "https://"+silentTCPAddress(t), "http://"+silentTCPAddress(t)
@@ -131,7 +132,7 @@ func TestProbeNetherNetAsksHTTPAfterTheHeadStart(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			found, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), batches, headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
+			found, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), batches, headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 			elapsed := time.Since(start)
 			if err != nil || found != game.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", found, err, game.URL)
@@ -149,6 +150,7 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	t.Parallel()
 	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
+		answerStatus(w)
 	}))
 	t.Cleanup(secure.Close)
 	var webRequests atomic.Int32
@@ -157,7 +159,7 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	refused443, gameHTTP := "https://"+closedTCPAddress(t), "http://"+closedTCPAddress(t)
 
 	batches := [][]string{{secure.URL, refused443}, {gameHTTP, web.URL}}
-	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
+	endpoint, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != secure.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, secure.URL)
 	}
@@ -186,6 +188,7 @@ func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
 			secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				select {
 				case <-time.After(test.httpsDelay):
+					answerStatus(w)
 				case <-r.Context().Done():
 				}
 			}))
@@ -194,10 +197,11 @@ func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
 			plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				httpRequests.Add(1)
 				w.WriteHeader(test.httpStatus)
+				answerStatus(w)
 			}))
 			t.Cleanup(plain.Close)
 
-			endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, endpoint.ClientConfig{}.New())
+			endpoint, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, endpoint.ClientConfig{}.New())
 			want := plain.URL
 			if test.wantHTTPS {
 				want = secure.URL
@@ -284,7 +288,7 @@ func TestProbeNetherNetGivesUpAtTimeout(t *testing.T) {
 	host, port := serverHostPort(t, server.Listener.Addr())
 
 	start := time.Now()
-	_, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, endpoint.ClientConfig{}.New())
+	_, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, endpoint.ClientConfig{}.New())
 	if err == nil {
 		t.Fatal("probe answered a server that never responds")
 	}
@@ -306,7 +310,7 @@ func TestProbeNetherNetRejectsStalledBody(t *testing.T) {
 			<-r.Context().Done()
 		}))
 		host, port := serverHostPort(t, server.Listener.Addr())
-		if endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, endpoint.ClientConfig{}.New()); err == nil {
+		if endpoint, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, endpoint.ClientConfig{}.New()); err == nil {
 			t.Errorf("stalled body after %d bytes answered at %q", sent, endpoint)
 		}
 		server.Close()
@@ -950,7 +954,7 @@ func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(server.Close)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: "play.example.com", port: 19132, protocol: int(DefaultProtocol.ID())}, server.URL)
+	cache.store(probeKey{host: "play.example.com", port: 19132, protocol: int(DefaultProtocol.ID())}, server.URL, false)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), "Play.Example.COM:19132")
 	if err != nil {
@@ -978,7 +982,7 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, server.URL)
+	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, server.URL, false)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1000,7 +1004,7 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "http://"+closedTCPAddress(t))
+	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "http://"+closedTCPAddress(t), false)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1289,7 +1293,7 @@ func TestAddressNetworkPingSkipsProbeForRakNetAnswer(t *testing.T) {
 	t.Cleanup(server.Close)
 	host, port := splitServerAddress(address)
 	probes := &ProbeCache{}
-	probes.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "")
+	probes.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "", false)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
@@ -1383,7 +1387,7 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	address := server.Listener.Addr().String()
 	host, port := splitServerAddress(address)
 	probes := &ProbeCache{}
-	probes.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "")
+	probes.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "", false)
 	network := AddressNetwork{Probes: probes}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1425,7 +1429,7 @@ func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			probe := endpoint.ClientConfig{NetworkID: "9876543210", ClientInfo: test.info}.New()
-			found, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, probe)
+			found, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, probe)
 			if err != nil || found != server.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", found, err, server.URL)
 			}
@@ -1676,5 +1680,65 @@ func TestAddressNetworkPingReportsDefaultClientInfo(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("PingContext sent no status request")
+	}
+}
+
+// answerStatus writes a server status, as a NetherNet endpoint answers the probe.
+func answerStatus(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"name":"server","protocol":2232}`)) }
+
+// A website's 200 page on 443 does not win over a status the game port serves over HTTP later.
+func TestProbeNetherNetPassesOverAWebsite(t *testing.T) {
+	t.Parallel()
+	website := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<!doctype html><html></html>"))
+	}))
+	t.Cleanup(website.Close)
+	signaling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answerStatus(w) }))
+	t.Cleanup(signaling.Close)
+	tlsFails := "https://" + signaling.Listener.Addr().String()
+
+	batches := [][]string{{tlsFails, website.URL}, {signaling.URL, "http://" + closedTCPAddress(t)}}
+	found, _, status, err := probeNetherNet(t.Context(), probeHTTPClient(website.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
+	if err != nil || found != signaling.URL || !status {
+		t.Fatalf("probeNetherNet = %q, %v, %v; want the status at %q", found, status, err, signaling.URL)
+	}
+}
+
+// A 2xx without a status, as an endpoint with no status set answers, still wins once every other URL
+// has failed, the earliest in URL order first.
+func TestProbeNetherNetFallsBackToAnAnswerWithoutStatus(t *testing.T) {
+	t.Parallel()
+	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(empty.Close)
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html></html>")) }))
+	t.Cleanup(page.Close)
+
+	batches := [][]string{{"https://" + closedTCPAddress(t), empty.URL}, {page.URL}}
+	found, _, status, err := probeNetherNet(t.Context(), probeHTTPClient(nil), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
+	if err != nil || found != empty.URL || status {
+		t.Fatalf("probeNetherNet = %q, %v, %v; want %q without a status", found, status, err, empty.URL)
+	}
+}
+
+// A remembered endpoint that served a status and now answers without one no longer counts.
+func TestAddressNetworkDropsRememberedEndpointThatLostItsStatus(t *testing.T) {
+	t.Parallel()
+	var website atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if website.Load() {
+			_, _ = w.Write([]byte("<html></html>"))
+			return
+		}
+		answerStatus(w)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{Probes: new(ProbeCache)}
+	address := server.Listener.Addr().String()
+	if selected, err := network.Select(t.Context(), address); err != nil || IsRakNet(selected) {
+		t.Fatalf("first Select = %T, %v; want NetherNet", selected, err)
+	}
+	website.Store(true)
+	if selected, err := network.Select(t.Context(), address); err != nil || !IsRakNet(selected) {
+		t.Fatalf("Select after the status went away = %T, %v; want RakNet", selected, err)
 	}
 }
