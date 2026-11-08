@@ -91,6 +91,11 @@ func (decoder *Decoder) EnableCompression(_ Compression, maxDecompressedLen int)
 	decoder.maxDecompressedLen = maxDecompressedLen
 }
 
+// DisableCompression disables compression framing while retaining the batch size limit and encryption session.
+func (decoder *Decoder) DisableCompression() {
+	decoder.decompress = false
+}
+
 // DisableBatchPacketLimit disables the check that limits the number of packets allowed in a single packet
 // batch. This should typically be called for Decoders decoding from a server connection.
 func (decoder *Decoder) DisableBatchPacketLimit() {
