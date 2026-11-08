@@ -153,9 +153,9 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choic
 
 // rememberedChoice returns the answer cache remembers for host and port probed with info, with a
 // nil entry when it has none. Vanilla keys its probe cache by the lower-cased host and the port
-// exactly as given; info is part of the key because a server may answer only some clients.
+// exactly as given; the protocol is part of the key because a server may refuse outdated ones.
 func rememberedChoice(cache *ProbeCache, host string, port uint16, info endpoint.ClientInfo) probeChoice {
-	choice := probeChoice{cache: cache, key: probeKey{host: strings.ToLower(host), port: port, client: info}}
+	choice := probeChoice{cache: cache, key: probeKey{host: strings.ToLower(host), port: port, protocol: info.Protocol}}
 	choice.entry = cache.lookup(choice.key)
 	return choice
 }
@@ -177,9 +177,9 @@ type ProbeCache struct {
 }
 
 type probeKey struct {
-	host   string
-	port   uint16
-	client endpoint.ClientInfo // the info the probe reported
+	host     string
+	port     uint16
+	protocol int // the protocol the probe reported
 }
 
 // probeEntry is one probe answer: a NetherNet endpoint, or "" for RakNet.
@@ -605,7 +605,7 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	host, port := splitServerAddress(address)
 	// The offer reuses the probe's client, so its POST carries the network ID the GET announced.
 	client := probeHTTPClient(n.HTTPClient)
-	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log}.New()
+	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: AddressNetwork{}.probeClientInfo()}.New()
 	found, _, err := probeNetherNet(ctx, client, probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, n.probeClient)
 	if err != nil {
 		if ctx.Err() != nil {
