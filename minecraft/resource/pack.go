@@ -620,21 +620,28 @@ type dirPackReader struct {
 }
 
 // find opens the regular file named fileName nearest the archive root, so a pack's root manifest.json wins
-// over same-named files inside its folders, such as textures/entity/manifest.json, wherever they appear in
-// the archive. Among equally deep matches the first in archive order is used.
+// over same-named files inside its folders, such as textures/entity/manifest.json. Like vanilla, it fails
+// when several matches share the shallowest depth rather than guess between them.
 func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
 	var match *zip.File
-	matchDepth := 0
+	matchDepth, ambiguous := 0, false
 	for _, f := range r.File {
-		if f.FileInfo().IsDir() || path.Base(f.Name) != fileName {
+		if !f.Mode().IsRegular() || path.Base(f.Name) != fileName {
 			continue
 		}
-		if depth := strings.Count(path.Clean(f.Name), "/"); match == nil || depth < matchDepth {
-			match, matchDepth = f, depth
+		// Depth of the name as stored, since that is the entry opened and the root manifestDir derives from.
+		switch depth := strings.Count(f.Name, "/"); {
+		case match == nil || depth < matchDepth:
+			match, matchDepth, ambiguous = f, depth, false
+		case depth == matchDepth:
+			ambiguous = true
 		}
 	}
 	if match == nil {
 		return nil, "", fmt.Errorf("'%v' not found in zip", fileName)
+	}
+	if ambiguous {
+		return nil, "", fmt.Errorf("multiple '%v' found at the same directory level in zip", fileName)
 	}
 	fileReader, err := match.Open()
 	if err != nil {

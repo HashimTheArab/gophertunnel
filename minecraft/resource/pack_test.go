@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -224,5 +225,55 @@ func TestReadBytesPrefersRootManifest(t *testing.T) {
 				t.Fatalf("Version = %s, want 1.0.0", got)
 			}
 		})
+	}
+}
+
+// TestReadBytesRejectsAmbiguousManifest refuses equally shallow manifests instead of picking one by archive order.
+func TestReadBytesRejectsAmbiguousManifest(t *testing.T) {
+	t.Parallel()
+
+	data := packArchive(t, map[string]string{
+		"First/manifest.json":           testManifest,
+		"Second/manifest.json":          testManifest,
+		"Second/textures/manifest.json": `{}`,
+	})
+	if _, err := ReadBytes(data); err == nil || !strings.Contains(err.Error(), "same directory level") {
+		t.Fatalf("ReadBytes error = %v, want ambiguous manifest error", err)
+	}
+}
+
+// TestReadBytesSkipsNonRegularManifest ignores a symlinked manifest and ranks a dotted name by its stored depth.
+func TestReadBytesSkipsNonRegularManifest(t *testing.T) {
+	t.Parallel()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	for _, entry := range []struct {
+		name, data string
+		mode       fs.FileMode
+	}{
+		{"manifest.json", "MyPack/manifest.json", fs.ModeSymlink | 0o777},
+		{"misc/../manifest.json", `{}`, 0o644},
+		{"MyPack/manifest.json", testManifest, 0o644},
+	} {
+		h := &zip.FileHeader{Name: entry.name, Method: zip.Store}
+		h.SetMode(entry.mode)
+		w, err := zw.CreateHeader(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(entry.data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := ReadBytes(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pack.UUID().String(), "0b5b8f8e-5c5e-4c43-8f3e-0d2f6f5a1b01"; got != want {
+		t.Fatalf("UUID = %s, want %s", got, want)
 	}
 }
