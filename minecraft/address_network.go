@@ -88,8 +88,8 @@ const netherNetProbeTimeout = 6 * time.Second
 // in vanilla.
 const httpProbeHeadStart = 3 * time.Second
 
-// defaultServerPort is the game port vanilla probes, besides the scheme's own, when a server
-// address names no port or this one.
+// defaultServerPort is the game port probed, besides the scheme's own, when a server address names
+// no port.
 const defaultServerPort = 19132
 
 // transportSelector is a Network that chooses the transport to dial an address with.
@@ -389,8 +389,8 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the first NetherNet HTTP signaling endpoint that answers
-// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero or
-// 19132, port 19132 and the schemes' default ports. The GET carries no client info.
+// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
+// port 19132 and the schemes' default ports. The GET carries no client info.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
 	found, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 	return found, err
@@ -480,10 +480,11 @@ func (b *probeBatch) wait(ctx context.Context, startBy time.Time) {
 }
 
 // probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch, each with
-// the game port first. An address with no port or port 19132 also asks the scheme's own port.
-// Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
+// the game port first. Only an address without a port also asks the scheme's own port. Vanilla
+// asks it for port 19132 too, where a website answering every path with 200 wins the probe and the
+// join fails. Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
 func probeBatches(host string, port uint16) [][]string {
-	if port != 0 && port != defaultServerPort {
+	if port != 0 {
 		return [][]string{{probeURL("https", host, port)}, {probeURL("http", host, port)}}
 	}
 	return [][]string{
