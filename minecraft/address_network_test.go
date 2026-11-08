@@ -22,23 +22,24 @@ import (
 
 	"github.com/df-mc/go-nethernet"
 	"github.com/df-mc/go-nethernet/endpoint"
-	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
+	"github.com/sandertv/go-raknet"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
 )
 
 func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
-	want := [][]string{{"https://example.com:19133"}, {"http://example.com:19133"}}
-	if got := probeBatches("example.com", 19133); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probeBatches with port = %q, want %q", got, want)
-	}
-	want = [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
-	for _, port := range []uint16{0, 19132} {
+	// An explicit port, the default one included, is the only port asked.
+	for _, port := range []uint16{19132, 19133} {
+		want := [][]string{{"https://example.com:" + strconv.Itoa(int(port))}, {"http://example.com:" + strconv.Itoa(int(port))}}
 		if got := probeBatches("example.com", port); !reflect.DeepEqual(got, want) {
 			t.Fatalf("probeBatches with port %d = %q, want %q", port, got, want)
 		}
+	}
+	want := [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
+	if got := probeBatches("example.com", 0); !reflect.DeepEqual(got, want) {
+		t.Fatalf("probeBatches without a port = %q, want %q", got, want)
 	}
 	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
 	for _, host := range []string{"::1", "[::1]"} {
@@ -104,7 +105,7 @@ func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 	t.Cleanup(ok.Close)
 
 	start := time.Now()
-	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, endpoint.ClientConfig{}.New())
+	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{hang.URL, ok.URL}}, time.Minute, time.Minute, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != ok.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, ok.URL)
 	}
@@ -132,7 +133,7 @@ func TestProbeNetherNetDoesNotWaitForSilentHTTPS(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), test.batches, test.headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
+			endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), test.batches, test.headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 			elapsed := time.Since(start)
 			if err != nil || endpoint != game.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, game.URL)
@@ -158,7 +159,7 @@ func TestProbeNetherNetHoldsDefaultPortHTTPForTheHeadStart(t *testing.T) {
 	refused443, gameHTTP := "https://"+closedTCPAddress(t), "http://"+closedTCPAddress(t)
 
 	batches := [][]string{{secure.URL, refused443}, {gameHTTP, web.URL}}
-	endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
+	endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), batches, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New())
 	if err != nil || endpoint != secure.URL {
 		t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, secure.URL)
 	}
@@ -198,7 +199,7 @@ func TestProbeNetherNetFirstSuccessWins(t *testing.T) {
 			}))
 			t.Cleanup(plain.Close)
 
-			endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, endpoint.ClientConfig{}.New())
+			endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(secure.Client()), [][]string{{secure.URL}, {plain.URL}}, test.headStart, 5*time.Second, endpoint.ClientConfig{}.New())
 			want := plain.URL
 			if test.wantHTTPS {
 				want = secure.URL
@@ -285,7 +286,7 @@ func TestProbeNetherNetGivesUpAtTimeout(t *testing.T) {
 	host, port := serverHostPort(t, server.Listener.Addr())
 
 	start := time.Now()
-	_, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, endpoint.ClientConfig{}.New())
+	_, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 150*time.Millisecond, endpoint.ClientConfig{}.New())
 	if err == nil {
 		t.Fatal("probe answered a server that never responds")
 	}
@@ -307,7 +308,7 @@ func TestProbeNetherNetRejectsStalledBody(t *testing.T) {
 			<-r.Context().Done()
 		}))
 		host, port := serverHostPort(t, server.Listener.Addr())
-		if endpoint, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, endpoint.ClientConfig{}.New()); err == nil {
+		if endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), probeBatches(host, port), 50*time.Millisecond, 300*time.Millisecond, endpoint.ClientConfig{}.New()); err == nil {
 			t.Errorf("stalled body after %d bytes answered at %q", sent, endpoint)
 		}
 		server.Close()
@@ -487,19 +488,25 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 	}
 }
 
-// Only a deadline or a failed connection counts as never reaching the server.
+// Only a sentinel reachability failure, a deadline, or a failed signaling connection counts as
+// never reaching the server.
 func TestUnreachableNetherNetDial(t *testing.T) {
 	t.Parallel()
 	refused := &url.Error{Op: "Post", URL: "http://example.com/v1/join", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
 	for err, want := range map[error]bool{
-		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded):   true,
-		fmt.Errorf("signal offer: %w", refused):                                   true,
-		errors.New("identityless answer SDP not allowed"):                         false,
-		errors.New("signal offer: POST http://example.com/v1/join: 500"):          false,
-		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):       true, // excluded by the caller
-		fmt.Errorf("verify server identity token: %w", identityError{refused}):    false,
-		identityError{context.DeadlineExceeded}:                                   false,
-		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}: false,
+		nethernet.ErrICEConnectFailed:                                              true,
+		fmt.Errorf("start transports: %w", nethernet.ErrICEConnectFailed):          true,
+		nethernet.ErrNoAnswer:                                                      true,
+		fmt.Errorf("signal offer: %w", nethernet.ErrNoAnswer):                      true,
+		fmt.Errorf("start transports: start ICE: %w", context.DeadlineExceeded):    true,
+		fmt.Errorf("signal offer: %w", refused):                                    true,
+		errors.New("identityless answer SDP not allowed"):                          false,
+		errors.New("signal offer: POST http://example.com/v1/join: 500"):           false,
+		fmt.Errorf("%w: %w", ErrServerNotTrusted, context.DeadlineExceeded):        true, // excluded by the caller
+		fmt.Errorf("verify server identity token: %w", identityError{refused}):     false,
+		identityError{context.DeadlineExceeded}:                                    false,
+		&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset")}:  false,
+		errors.New("nethernet: remote peer notified connection failure (code: 7)"): false,
 		context.Canceled: false,
 	} {
 		if got := unreachable(err); got != want {
@@ -574,7 +581,7 @@ func TestAddressNetworkRakNetAfterICEFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if conn, err := network.DialContext(ctx, address); !errors.Is(err, ice.ErrCanceledByCaller) {
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, nethernet.ErrICEConnectFailed) {
 		if conn != nil {
 			_ = conn.Close()
 		}
@@ -630,6 +637,62 @@ func iceUnreachableServer(t *testing.T, probes *atomic.Int32) string {
 		_, _ = io.WriteString(w, strings.Join(lines, "\r\n"))
 	}))
 	t.Cleanup(server.Close)
+	return server.Listener.Addr().String()
+}
+
+// A NetherNet dial that never gets an answer within the negotiation timeout makes the next Select
+// join over RakNet without probing, exactly like an ICE path that never connects.
+func TestAddressNetworkRakNetAfterNoAnswer(t *testing.T) {
+	t.Parallel()
+	var probes atomic.Int32
+	address := noAnswerServer(t, &probes)
+	network := AddressNetwork{
+		NetherNet: NetherNet{Log: slog.New(slog.DiscardHandler), Dialer: nethernet.Dialer{
+			NegotiationTimeout:      200 * time.Millisecond,
+			AllowIdentitylessServer: true,
+		}},
+		Probes:                      &ProbeCache{},
+		RakNetAfterNetherNetFailure: true,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if conn, err := network.DialContext(ctx, address); !errors.Is(err, nethernet.ErrNoAnswer) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		t.Fatalf("dial error = %v, want no answer within the negotiation timeout", err)
+	}
+	before := probes.Load()
+	selected, err := network.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !IsRakNet(selected) || probes.Load() != before {
+		t.Fatalf("Select chose %T after probing %d more times, want RakNet without a probe", selected, probes.Load()-before)
+	}
+}
+
+// noAnswerServer returns the address of a server that answers the join probe and accepts the offer
+// POST but never answers it, so a dial waits out its negotiation timeout.
+func noAnswerServer(t *testing.T, probes *atomic.Int32) string {
+	t.Helper()
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			probes.Add(1)
+			_, _ = io.WriteString(w, "OK")
+			return
+		}
+		// Accept the offer but never answer, so the dialer waits out its negotiation timeout. The
+		// handler releases when the dialer gives up or the test ends, so the server can close.
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	// Cleanup runs last-in-first-out: release the handler before the server waits on it.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(done) })
 	return server.Listener.Addr().String()
 }
 
@@ -1122,18 +1185,236 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 	}
 }
 
-// The join probe carries the vanilla query parameters in their key order when the client info sets a
-// protocol, and stays a bare GET otherwise.
-// The probe GET carries the query go-nethernet builds from the dial's client info, and stays a bare
-// GET when there is none.
+// rakNetPongServer returns the address of a RakNet listener that answers pings with pong.
+func rakNetPongServer(t *testing.T, pong string) string {
+	t.Helper()
+	listener, err := raknet.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	listener.PongData([]byte(pong))
+	return listener.Addr().String()
+}
+
+// A server that only answers NetherNet HTTP signaling reports the status its endpoint serves, and
+// the probe answer is kept for the join.
+func TestAddressNetworkPingsNetherNetOnlyServer(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":0}`)
+	}))
+	t.Cleanup(server.Close)
+	probes := &ProbeCache{}
+	address := server.Listener.Addr().String()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	pong, err := AddressNetwork{Probes: probes}.PingContext(ctx, address)
+	if err != nil {
+		t.Fatalf("PingContext: %v", err)
+	}
+	got, err := ParsePongAdvertisement(pong)
+	if err != nil {
+		t.Fatalf("ParsePongAdvertisement(%q): %v", pong, err)
+	}
+	if got.MOTD != "Unstable world" || got.ProtocolVersion != 2225 || got.VersionName != "1.26.60" || got.PlayerCount != 4 || got.MaxPlayerCount != 50 {
+		t.Fatalf("PingContext advertised %+v, want the endpoint's status", got)
+	}
+	host, port := splitServerAddress(address)
+	if entry := probes.lookup(probeKey{host: host, port: port}); entry == nil || entry.endpoint != server.URL {
+		t.Fatalf("probe answer = %#v, want %q kept for the join", entry, server.URL)
+	}
+}
+
+// A server without NetherNet HTTP signaling answers over RakNet.
+func TestAddressNetworkPingsRakNetServer(t *testing.T) {
+	t.Parallel()
+	const want = "MCPE;RakNet only;2225;1.26.60;7;20;1;level;Survival;0;19132;19133;"
+	address := rakNetPongServer(t, want)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	pong, err := AddressNetwork{}.PingContext(ctx, address)
+	if err != nil {
+		t.Fatalf("PingContext: %v", err)
+	}
+	if string(pong) != want {
+		t.Fatalf("PingContext = %q, want the RakNet pong %q", pong, want)
+	}
+}
+
+// RakNet answers while the probe still waits on a server that accepts TCP and never responds.
+func TestAddressNetworkPingDoesNotWaitForTheProbe(t *testing.T) {
+	t.Parallel()
+	listener, err := raknet.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	listener.PongData([]byte("MCPE;Slow probe;2225;1.26.60;0;20;1;level;Survival;0;19132;19133;"))
+	tcp, err := net.Listen("tcp", listener.Addr().String())
+	if err != nil {
+		t.Skipf("TCP port of the RakNet listener is taken: %v", err)
+	}
+	t.Cleanup(func() { _ = tcp.Close() })
+	probes := &ProbeCache{}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := (AddressNetwork{Probes: probes}).PingContext(ctx, listener.Addr().String()); err != nil {
+		t.Fatalf("PingContext: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= netherNetProbeTimeout {
+		t.Fatalf("PingContext took %v, want the RakNet answer before the probe times out", elapsed)
+	}
+	host, port := splitServerAddress(listener.Addr().String())
+	if entry := probes.lookup(probeKey{host: host, port: port}); entry != nil {
+		t.Fatalf("probe answer = %#v, want none stored for a probe the RakNet answer cut short", entry)
+	}
+}
+
+// A remembered RakNet answer pings over RakNet without probing again.
+func TestAddressNetworkPingSkipsProbeForRakNetAnswer(t *testing.T) {
+	t.Parallel()
+	address := rakNetPongServer(t, "MCPE;Cached;2225;1.26.60;0;20;1;level;Survival;0;19132;19133;")
+	var requests atomic.Int32
+	tcp, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Skipf("TCP port of the RakNet listener is taken: %v", err)
+	}
+	server := &httptest.Server{Listener: tcp, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+	})}}
+	server.Start()
+	t.Cleanup(server.Close)
+	host, port := splitServerAddress(address)
+	probes := &ProbeCache{}
+	probes.store(probeKey{host: host, port: port}, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	if _, err := (AddressNetwork{Probes: probes}).PingContext(ctx, address); err != nil {
+		t.Fatalf("PingContext: %v", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("PingContext sent %d probe requests, want none for a remembered RakNet answer", got)
+	}
+}
+
+// An endpoint that answers without a status, on a server with no RakNet listener, is no answer.
+func TestAddressNetworkPingFailsWithoutStatus(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{"", "{}", "null"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(server.Close)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		pong, err := (AddressNetwork{}).PingContext(ctx, server.Listener.Addr().String())
+		cancel()
+		if err == nil {
+			t.Fatalf("PingContext with status body %q = %q, want an error for an empty status", body, pong)
+		}
+	}
+}
+
+// An empty status does not beat the RakNet answer of the same server.
+func TestAddressNetworkPingPrefersRakNetOverEmptyStatus(t *testing.T) {
+	t.Parallel()
+	const want = "MCPE;Both;2225;1.26.60;1;20;1;level;Survival;0;19132;19133;"
+	address := rakNetPongServer(t, want)
+	tcp, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Skipf("TCP port of the RakNet listener is taken: %v", err)
+	}
+	server := &httptest.Server{Listener: tcp, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "{}")
+	})}}
+	server.Start()
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	pong, err := (AddressNetwork{}).PingContext(ctx, address)
+	if err != nil || string(pong) != want {
+		t.Fatalf("PingContext = %q, %v; want the RakNet pong %q", pong, err, want)
+	}
+}
+
+// Cancelling a ping without a deadline ends it, although a RakNet ping waits only for deadlines.
+func TestAddressNetworkPingStopsWhenCancelled(t *testing.T) {
+	t.Parallel()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	tcp, err := net.Listen("tcp", conn.LocalAddr().String())
+	if err != nil {
+		t.Skipf("TCP port of the silent UDP socket is taken: %v", err)
+	}
+	t.Cleanup(func() { _ = tcp.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := (AddressNetwork{}).PingContext(ctx, conn.LocalAddr().String())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PingContext = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("PingContext kept waiting after its context was cancelled")
+	}
+}
+
+// A remembered RakNet answer that a failed ping went by is dropped, so a server that serves only
+// NetherNet is found by the next ping instead of staying offline until the answer expires.
+func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"NetherNet only","protocol":2225,"version":"1.26.60","level":"2","players":1,"maxPlayers":10,"gameType":0}`)
+	}))
+	t.Cleanup(server.Close)
+	address := server.Listener.Addr().String()
+	host, port := splitServerAddress(address)
+	probes := &ProbeCache{}
+	probes.store(probeKey{host: host, port: port}, "")
+	network := AddressNetwork{Probes: probes}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	// The refused RakNet ping may drop the answer before or after the NetherNet side reads it, so
+	// the first ping may already find the endpoint.
+	_, _ = network.PingContext(ctx, address)
+	if entry := probes.lookup(probeKey{host: host, port: port}); entry != nil && entry.endpoint == "" {
+		t.Fatal("RakNet answer still remembered after a failed RakNet ping, want it dropped")
+	}
+	pong, err := network.PingContext(ctx, address)
+	if err != nil {
+		t.Fatalf("second PingContext: %v", err)
+	}
+	if got, err := ParsePongAdvertisement(pong); err != nil || got.MOTD != "NetherNet only" {
+		t.Fatalf("second PingContext advertised %+v, %v; want the endpoint's status", got, err)
+	}
+}
+
+// The probe GET carries the vanilla query parameters in their key order, and stays a bare GET for a
+// client with no info.
 func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
-		info      ProbeClientInfo
+		info      endpoint.ClientInfo
 		wantQuery string
 	}{
-		"client info":          {ProbeClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}, "version=1.26.60&protocol=2225&platform=1&id=9876543210"},
-		"zero info stays bare": {ProbeClientInfo{}, ""},
+		"client info":          {endpoint.ClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}, "version=1.26.60&protocol=2225&platform=1&id=9876543210"},
+		"zero info stays bare": {endpoint.ClientInfo{}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1146,8 +1427,8 @@ func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			probe := endpoint.ClientConfig{NetworkID: "9876543210", ClientInfo: test.info.clientInfo()}.New()
-			found, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, probe)
+			probe := endpoint.ClientConfig{NetworkID: "9876543210", ClientInfo: test.info}.New()
+			found, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{server.URL}}, time.Minute, time.Minute, probe)
 			if err != nil || found != server.URL {
 				t.Fatalf("probeNetherNet = %q, %v; want %q", found, err, server.URL)
 			}
@@ -1297,5 +1578,42 @@ func TestDialerFillsProbeClientInfo(t *testing.T) {
 				t.Fatal("the Dialer sent no probe")
 			}
 		})
+	}
+}
+
+// An AddressNetwork with no ProbeClientInfo reports DefaultProtocol on Android, on the status ping as
+// on a join.
+func TestAddressNetworkPingReportsDefaultClientInfo(t *testing.T) {
+	t.Parallel()
+	got := make(chan url.Values, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case got <- r.URL.Query():
+		default:
+		}
+		_, _ = w.Write([]byte(`{"name":"world"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	go func() { _, _ = (AddressNetwork{}).PingContext(ctx, server.Listener.Addr().String()) }()
+	select {
+	case q := <-got:
+		want := map[string]string{
+			"version":  DefaultProtocol.Ver(),
+			"protocol": strconv.Itoa(int(DefaultProtocol.ID())),
+			"platform": strconv.Itoa(int(protocol.DeviceAndroid)),
+		}
+		for key, value := range want {
+			if q.Get(key) != value {
+				t.Fatalf("status ping %s = %q, want %q", key, q.Get(key), value)
+			}
+		}
+		if q.Get("id") == "" {
+			t.Fatal("status ping carried no id")
+		}
+	case <-ctx.Done():
+		t.Fatal("PingContext sent no status request")
 	}
 }

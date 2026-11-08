@@ -3005,7 +3005,7 @@ func (conn *Conn) close(cause error) error {
 			if recovered := recover(); recovered != nil {
 				conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, fmt.Errorf("panic flushing connection: %v", recovered))
 			}
-			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.abort(cause))
+			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
 		conn.gracefulCloseErr = conn.Flush()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
@@ -3022,16 +3022,33 @@ func (conn *Conn) close(cause error) error {
 // another goroutine holds that write in progress. Callers giving up on a connection precisely because
 // the peer stalled must not have that cleanup stall in turn, so they abort instead of Close.
 func (conn *Conn) abort(cause error) error {
+	// Closing some transports, such as NetherNet, waits for the peer to acknowledge what was written.
+	// Abort one of those before release, so this also ends a Close already waiting inside release.
+	if c, ok := conn.conn.(interface{ Abort() error }); ok {
+		conn.cancel(cause)
+		return errors.Join(c.Abort(), conn.release(cause, false))
+	}
+	return conn.release(cause, true)
+}
+
+// release cancels the Conn context, drops packets held by the send delay and, if closeTransport is
+// set, closes the transport, once.
+func (conn *Conn) release(cause error, closeTransport bool) error {
 	conn.abortOnce.Do(func() {
-		if conn.cancelFunc != nil {
-			conn.cancelFunc(cause)
-		}
+		conn.cancel(cause)
 		conn.delay.drop()
-		if conn.conn != nil {
+		if closeTransport && conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}
 	})
 	return conn.abortErr
+}
+
+// cancel cancels the Conn context with cause. The first cause is kept.
+func (conn *Conn) cancel(cause error) {
+	if conn.cancelFunc != nil {
+		conn.cancelFunc(cause)
+	}
 }
 
 // closeErr returns an adequate connection closed error for the op passed. If the connection was closed
