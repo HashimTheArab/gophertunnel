@@ -80,15 +80,16 @@ func fillClientInfo(info, fallback endpoint.ClientInfo) endpoint.ClientInfo {
 	return endpoint.ClientInfo{Version: cmp.Or(info.Version, fallback.Version), Protocol: cmp.Or(info.Protocol, fallback.Protocol), Platform: cmp.Or(info.Platform, fallback.Platform)}
 }
 
-// netherNetProbeTimeout bounds the whole probe, after which the vanilla client joins over RakNet.
+// netherNetProbeTimeout bounds the whole probe, after which the join goes over RakNet. Vanilla
+// waits up to a minute; a shorter bound keeps that fallback quick.
 const netherNetProbeTimeout = 6 * time.Second
 
-// httpProbeHeadStart is how long the HTTPS batch runs alone at most before HTTP is asked too.
-// Vanilla waits for every HTTPS request, so a dropped 443 hides HTTP until the timeout.
-const httpProbeHeadStart = time.Second
+// httpProbeHeadStart is how long the HTTPS batch runs alone at most before HTTP is asked too, as
+// in vanilla.
+const httpProbeHeadStart = 3 * time.Second
 
 // defaultServerPort is the game port vanilla probes, besides the scheme's own, when a server
-// address has no port.
+// address names no port or this one.
 const defaultServerPort = 19132
 
 // transportSelector is a Network that chooses the transport to dial an address with.
@@ -388,19 +389,17 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the first NetherNet HTTP signaling endpoint that answers
-// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
-// port 19132 and the schemes' default ports. Unlike vanilla, HTTP is asked after a one-second head
-// start at the latest, and on the game port as soon as HTTPS there fails. The GET carries no client
-// info.
+// GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero or
+// 19132, port 19132 and the schemes' default ports. The GET carries no client info.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
 	found, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 	return found, err
 }
 
 // probeNetherNet returns the first endpoint to answer with a 2xx and the start of its body,
-// cancelling the rest even if a preferred one is about to answer. Each batch starts once every
-// request of the one before it has failed or headStart has passed; its first endpoint, the game
-// port, also once the one before fails. probe builds each request.
+// cancelling the rest, as vanilla takes the first answer whichever URL gave it. Each batch starts
+// once every request of the one before it has failed or headStart has passed. probe builds each
+// request.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration, probe *endpoint.Client) (string, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -413,10 +412,10 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 	for i, endpoints := range batches {
 		batch, previous := newProbeBatch(len(endpoints)), before
 		startBy := time.Now().Add(time.Duration(i) * headStart)
-		for j, endpoint := range endpoints {
+		for _, endpoint := range endpoints {
 			go func() {
 				if previous != nil {
-					previous.wait(ctx, startBy, j == 0)
+					previous.wait(ctx, startBy)
 				}
 				var body []byte
 				err := ctx.Err()
@@ -427,7 +426,7 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				}
 				results <- probeResult{endpoint, body, err}
 				if err != nil {
-					batch.fail(j == 0)
+					batch.fail()
 				}
 			}()
 		}
@@ -454,49 +453,37 @@ type probeResult struct {
 // probeBatch tells the batch after it when to start.
 // A 2xx ends the whole probe, so only failures release the next batch.
 type probeBatch struct {
-	pending    atomic.Int32
-	failed     chan struct{} // closed once every request has failed
-	gameFailed chan struct{} // closed once the request to the game port has failed
+	pending atomic.Int32
+	failed  chan struct{} // closed once every request has failed
 }
 
 func newProbeBatch(size int) *probeBatch {
-	b := &probeBatch{failed: make(chan struct{}), gameFailed: make(chan struct{})}
+	b := &probeBatch{failed: make(chan struct{})}
 	b.pending.Store(int32(size))
 	return b
 }
 
-// fail records one failed request, after its result was sent; game reports whether it went to the
-// game port.
-func (b *probeBatch) fail(game bool) {
-	if game {
-		close(b.gameFailed)
-	}
+// fail records one failed request, after its result was sent.
+func (b *probeBatch) fail() {
 	if b.pending.Add(-1) == 0 {
 		close(b.failed)
 	}
 }
 
-// wait blocks until the next batch may start: once every request here has failed, at startBy, or,
-// for the game port, once the game port here has failed.
-func (b *probeBatch) wait(ctx context.Context, startBy time.Time, game bool) {
-	var gameFailed <-chan struct{}
-	if game {
-		gameFailed = b.gameFailed
-	}
+// wait blocks until the next batch may start: once every request here has failed, or at startBy.
+func (b *probeBatch) wait(ctx context.Context, startBy time.Time) {
 	select {
 	case <-b.failed:
-	case <-gameFailed:
 	case <-time.After(time.Until(startBy)):
 	case <-ctx.Done():
 	}
 }
 
 // probeBatches lists base URLs in vanilla's order: the HTTPS batch, then the HTTP batch, each with
-// the game port first. Only an address without a port also asks the scheme's own port, so an
-// explicit port, 19132 included, never reaches a website on 443 or 80 that answers every path.
+// the game port first. An address with no port or port 19132 also asks the scheme's own port.
 // Unlike vanilla, IPv6 literals are bracketed, so such a host can answer.
 func probeBatches(host string, port uint16) [][]string {
-	if port != 0 {
+	if port != 0 && port != defaultServerPort {
 		return [][]string{{probeURL("https", host, port)}, {probeURL("http", host, port)}}
 	}
 	return [][]string{

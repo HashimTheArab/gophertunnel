@@ -30,16 +30,17 @@ import (
 
 func TestProbeBatchesFollowVanillaOrder(t *testing.T) {
 	t.Parallel()
-	// An explicit port, the default one included, is the only port asked.
-	for _, port := range []uint16{19132, 19133} {
-		want := [][]string{{"https://example.com:" + strconv.Itoa(int(port))}, {"http://example.com:" + strconv.Itoa(int(port))}}
+	// Any port but 19132 is the only port asked.
+	want := [][]string{{"https://example.com:19133"}, {"http://example.com:19133"}}
+	if got := probeBatches("example.com", 19133); !reflect.DeepEqual(got, want) {
+		t.Fatalf("probeBatches with port 19133 = %q, want %q", got, want)
+	}
+	// No port, or 19132, also asks the schemes' default ports.
+	want = [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
+	for _, port := range []uint16{0, 19132} {
 		if got := probeBatches("example.com", port); !reflect.DeepEqual(got, want) {
 			t.Fatalf("probeBatches with port %d = %q, want %q", port, got, want)
 		}
-	}
-	want := [][]string{{"https://example.com:19132", "https://example.com"}, {"http://example.com:19132", "http://example.com"}}
-	if got := probeBatches("example.com", 0); !reflect.DeepEqual(got, want) {
-		t.Fatalf("probeBatches without a port = %q, want %q", got, want)
 	}
 	want = [][]string{{"https://[::1]:19132", "https://[::1]"}, {"http://[::1]:19132", "http://[::1]"}}
 	for _, host := range []string{"::1", "[::1]"} {
@@ -86,12 +87,12 @@ func TestProbeBatchReleasesOnlyOnFailure(t *testing.T) {
 		}
 	}
 	b := newProbeBatch(2)
-	b.fail(false)
-	if released(b.failed) || released(b.gameFailed) {
-		t.Fatal("next batch released while the game port has not failed")
+	b.fail()
+	if released(b.failed) {
+		t.Fatal("next batch released while a request is pending")
 	}
-	b.fail(true)
-	if !released(b.failed) || !released(b.gameFailed) {
+	b.fail()
+	if !released(b.failed) {
 		t.Fatal("next batch held after every request failed")
 	}
 }
@@ -114,32 +115,30 @@ func TestProbeNetherNetFirstAnswerWins(t *testing.T) {
 	}
 }
 
-// HTTP on the game port answers well before the timeout while HTTPS on 443 never does: at once
-// when HTTPS on the game port fails, otherwise after the head start.
-func TestProbeNetherNetDoesNotWaitForSilentHTTPS(t *testing.T) {
+// HTTP is asked after the head start while HTTPS never answers, and not before it when only HTTPS on
+// the game port has failed.
+func TestProbeNetherNetAsksHTTPAfterTheHeadStart(t *testing.T) {
 	t.Parallel()
 	game := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(game.Close)
 	gameHTTPS := "https://" + game.Listener.Addr().String()
 	silentGame, silent443, silent80 := "https://"+silentTCPAddress(t), "https://"+silentTCPAddress(t), "http://"+silentTCPAddress(t)
+	const headStart = 300 * time.Millisecond
 
-	for name, test := range map[string]struct {
-		batches   [][]string
-		headStart time.Duration
-	}{
-		"https fails on the game port": {[][]string{{gameHTTPS, silent443}, {game.URL, silent80}}, netherNetProbeTimeout},
-		"https never answers":          {[][]string{{silentGame, silent443}, {game.URL, silent80}}, httpProbeHeadStart},
+	for name, batches := range map[string][][]string{
+		"https fails on the game port": {{gameHTTPS, silent443}, {game.URL, silent80}},
+		"https never answers":          {{silentGame, silent443}, {game.URL, silent80}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			start := time.Now()
-			endpoint, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), test.batches, test.headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
+			found, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), batches, headStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 			elapsed := time.Since(start)
-			if err != nil || endpoint != game.URL {
-				t.Fatalf("probeNetherNet = %q, %v; want %q", endpoint, err, game.URL)
+			if err != nil || found != game.URL {
+				t.Fatalf("probeNetherNet = %q, %v; want %q", found, err, game.URL)
 			}
-			if elapsed > netherNetProbeTimeout/2 {
-				t.Fatalf("probeNetherNet took %v, want HTTP asked well before the %v timeout", elapsed, netherNetProbeTimeout)
+			if elapsed < headStart || elapsed > netherNetProbeTimeout/2 {
+				t.Fatalf("probeNetherNet took %v, want HTTP asked at the %v head start", elapsed, headStart)
 			}
 		})
 	}
