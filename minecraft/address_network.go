@@ -39,8 +39,9 @@ type AddressNetwork struct {
 	// identity; servers without an identity are then refused, as in vanilla. A decision slow enough
 	// for the server to drop the idle connection is followed by one silent redial.
 	ServerTrust ServerTrust
-	// Probes, when set, reuses probe answers. Answers can depend on HTTPClient, so share a cache
-	// only between networks whose clients reach servers the same way. When nil, every dial probes.
+	// Probes, when set, reuses probe answers, keyed by the reported protocol. Answers can depend on
+	// HTTPClient, so share a cache only between networks whose clients reach servers the same way.
+	// When nil, every dial probes.
 	Probes *ProbeCache
 	// RakNetAfterNetherNetFailure makes a NetherNet dial that never reached the server, by timing
 	// out or failing to connect to signaling, store a RakNet answer in Probes until it expires or

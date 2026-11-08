@@ -1405,8 +1405,7 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	}
 }
 
-// The probe GET carries the vanilla query parameters in their key order, and stays a bare GET for a
-// client with no info.
+// The probe GET carries the vanilla query in its key order, and stays bare for a client with no info.
 func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
@@ -1521,8 +1520,7 @@ func TestAddressNetworkProbeCacheKeysByClientInfo(t *testing.T) {
 	}
 }
 
-// The network ID the probe announces as its id is the one the NetherNet offer POSTs to, so a server
-// can match the two.
+// The network ID the probe announces as its id is the one the NetherNet offer POSTs to.
 func TestAddressNetworkProbeIDReachesOfferPost(t *testing.T) {
 	t.Parallel()
 	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
@@ -1590,8 +1588,7 @@ func TestAddressNetworkProbeIDReachesOfferPost(t *testing.T) {
 	}
 }
 
-// A Dialer joining by address reports on the probe the same version and platform its login sends: a
-// set GameVersion over Protocol.Ver(), and the login's DeviceOS default over platform=0.
+// A Dialer joining by address reports on the probe the same version and platform its login sends.
 func TestDialerFillsProbeClientInfo(t *testing.T) {
 	t.Parallel()
 	for name, test := range map[string]struct {
@@ -1648,8 +1645,7 @@ func TestDialerFillsProbeClientInfo(t *testing.T) {
 	}
 }
 
-// An AddressNetwork with no ProbeClientInfo reports DefaultProtocol on Android, on the status ping as
-// on a join.
+// An AddressNetwork with no ProbeClientInfo reports DefaultProtocol on Android on the status ping.
 func TestAddressNetworkPingReportsDefaultClientInfo(t *testing.T) {
 	t.Parallel()
 	got := make(chan url.Values, 1)
