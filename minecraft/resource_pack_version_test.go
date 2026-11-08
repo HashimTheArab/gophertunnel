@@ -239,7 +239,7 @@ func startTransfer(t *testing.T, conn *Conn, name string, data []byte) *download
 		t.Fatal(err)
 	}
 	conn.packMu.Lock()
-	_, pack, _ := conn.packQueue.lookupTransfer(conn.packQueue.awaitingPacks, name)
+	_, pack, _ := lookupTransfer(conn.packQueue.awaitingPacks, name)
 	conn.packMu.Unlock()
 	if pack == nil || !waitForResourcePackRequest(t, pack, 0) {
 		t.Fatal("no chunk request")
@@ -314,5 +314,26 @@ func TestResourcePacksInfoRequestsParsedVersion(t *testing.T) {
 	}
 	if got, want := sentPacksToDownload(t, conn), []string{id.String() + "_1.0.0"}; !slices.Equal(got, want) {
 		t.Fatalf("requested %v, want %v", got, want)
+	}
+}
+
+// TestShortVersionIDsReachTheirOwnTransfer resolves "1.0" to the 1.0.0 transfer while 2.0.0 is pending, and
+// never routes it into the 2.0.0 transfer.
+func TestShortVersionIDsReachTheirOwnTransfer(t *testing.T) {
+	conn, id, archives := versionOfferConn(t, [3]int{1, 0, 0}, [3]int{2, 0, 0})
+	short := id.String() + "_1.0"
+	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{UUID: short, Data: archives["1.0.0"]}); err == nil {
+		t.Fatal("chunk data for the unstarted 1.0.0 transfer was accepted")
+	}
+	startTransfer(t, conn, id.String()+"_2.0.0", archives["2.0.0"])
+	if err := conn.handleResourcePackChunkData(&packet.ResourcePackChunkData{UUID: short, Data: archives["1.0.0"]}); err == nil {
+		t.Fatal("chunk data naming 1.0 was routed into the 2.0.0 transfer")
+	}
+	startTransfer(t, conn, short, archives["1.0.0"])
+	conn.packMu.Lock()
+	_, started := conn.packQueue.awaitingPacks[id.String()+"_1.0.0"]
+	conn.packMu.Unlock()
+	if !started {
+		t.Fatal("DataInfo naming 1.0 did not start the 1.0.0 transfer")
 	}
 }

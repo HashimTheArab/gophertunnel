@@ -2155,7 +2155,6 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		packAmount:       totalPacks,
 		downloadingPacks: make(map[string]*downloadingPack),
 		awaitingPacks:    make(map[string]*downloadingPack),
-		requestedPacks:   make(map[string]struct{}),
 	}
 	packsToDownload := make([]string, 0, totalPacks)
 
@@ -2222,7 +2221,6 @@ func (conn *Conn) handleResourcePacksInfo(pk *packet.ResourcePacksInfo) error {
 		}
 
 		packsToDownload = append(packsToDownload, downloadID)
-		conn.packQueue.requestedPacks[downloadID] = struct{}{}
 		conn.packQueue.downloadingPacks[downloadID] = &downloadingPack{
 			size:       pack.Size,
 			buf:        new(bytes.Buffer), // Payload storage grows only as chunks arrive.
@@ -2468,9 +2466,9 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 	// ResourcePackChunkRequest repeats the pack ID this packet names. The transfer stays tracked under the ID
 	// it was requested as, so ChunkData naming either spelling reaches it.
 	id := pk.UUID
-	key, pack, ok := conn.packQueue.lookupTransfer(conn.packQueue.downloadingPacks, id)
+	key, pack, ok := lookupTransfer(conn.packQueue.downloadingPacks, id)
 	conn.packMu.Lock()
-	_, _, awaiting := conn.packQueue.lookupTransfer(conn.packQueue.awaitingPacks, id)
+	_, _, awaiting := lookupTransfer(conn.packQueue.awaitingPacks, id)
 	conn.packMu.Unlock()
 	if !ok || awaiting {
 		// We either already downloaded the pack or we got sent an invalid UUID, that did not match any pack
@@ -2622,7 +2620,7 @@ func (conn *Conn) handleResourcePackDataInfo(pk *packet.ResourcePackDataInfo) er
 // pack that is being downloaded.
 func (conn *Conn) handleResourcePackChunkData(pk *packet.ResourcePackChunkData) error {
 	conn.packMu.Lock()
-	_, pack, ok := conn.packQueue.lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
+	_, pack, ok := lookupTransfer(conn.packQueue.awaitingPacks, pk.UUID)
 	conn.packMu.Unlock()
 	if !ok {
 		// We haven't received a ResourcePackDataInfo packet from the server, so we can't use this data to
