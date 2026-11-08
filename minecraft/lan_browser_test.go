@@ -118,8 +118,7 @@ func TestLANBrowserFindsLoopbackRakNetWorld(t *testing.T) {
 	t.Fatal("loopback RakNet world not listed")
 }
 
-// NetherNet worlds come first, editor worlds are left out, and a world answering on both
-// transports is listed once for each.
+// NetherNet worlds come first, editor worlds are left out, and a world on both transports is listed twice.
 func TestLANBrowserListsNetherNetThenRakNet(t *testing.T) {
 	var hosts []*net.UDPAddr
 	for _, data := range []discovery.ServerData{
@@ -162,16 +161,25 @@ func TestLANBrowserListsNetherNetThenRakNet(t *testing.T) {
 			if !worlds[0].NetherNet || worlds[0].GameMode != "Creative" || worlds[1].NetherNet {
 				t.Fatalf("worlds = %+v, want the NetherNet world first", worlds)
 			}
-			for _, world := range browsers[1].Worlds() {
-				if world.NetherNet {
-					t.Fatalf("editor world listed: %+v", world)
-				}
-			}
-			return
+			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("worlds = %+v, want one NetherNet and one RakNet entry", browsers[0].Worlds())
+	if len(browsers[0].Worlds()) != 2 {
+		t.Fatalf("worlds = %+v, want one NetherNet and one RakNet entry", browsers[0].Worlds())
+	}
+	// Check the editor host only once its advertisement has arrived.
+	for len(browsers[1].NetherNet().Responses()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("editor host never answered")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, world := range browsers[1].Worlds() {
+		if world.NetherNet {
+			t.Fatalf("editor world listed: %+v", world)
+		}
+	}
 }
 
 // freeUDPAddr returns a loopback UDP address that was free a moment ago.

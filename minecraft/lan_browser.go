@@ -133,7 +133,7 @@ func (b *LANBrowser) Worlds() []LANWorld {
 			Protocol:       int(advertisement.Protocol),
 			PlayerCount:    int(advertisement.PlayerCount),
 			MaxPlayerCount: int(advertisement.MaxPlayerCount),
-			GameMode:       netherNetGameMode(advertisement.GameType),
+			GameMode:       gameTypeName(int(advertisement.GameType)),
 			Hardcore:       advertisement.Hardcore,
 			NetworkID:      id,
 			ServerData:     advertisement,
@@ -195,10 +195,17 @@ func (b *LANBrowser) readPongs() {
 	for {
 		pong, err := b.pinger.ReadPong()
 		if err != nil {
-			if !errors.Is(err, net.ErrClosed) {
-				b.conf.Log.Error("read LAN pongs; RakNet worlds will no longer be found", slog.Any("error", err))
+			if errors.Is(err, net.ErrClosed) {
+				return
 			}
-			return
+			// A network change can fail reads for a while; keep listening until the browser closes.
+			b.conf.Log.Debug("read LAN pong", slog.Any("error", err))
+			select {
+			case <-b.closed:
+				return
+			case <-time.After(lanPingInterval):
+			}
+			continue
 		}
 		addr, ok := pong.Addr.(*net.UDPAddr)
 		if !ok {
@@ -298,11 +305,6 @@ func splitLANPong(s string) []string {
 // isLANVersion reports whether a pong's version holds only digits and dots.
 func isLANVersion(version string) bool {
 	return strings.Trim(version, "0123456789.") == ""
-}
-
-// netherNetGameMode words a NetherNet advertisement's game type as a pong does.
-func netherNetGameMode(gameType int32) string {
-	return gameTypeName(int(gameType))
 }
 
 // rakNetLANTargets returns the addresses vanilla pings for IPv4 RakNet LAN worlds: loopback and
