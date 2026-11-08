@@ -75,6 +75,19 @@ func TestLANBrowserRakNetEntries(t *testing.T) {
 	}
 }
 
+// A pong matching one entry by GUID and another by address leaves one entry, not two with one address.
+func TestLANBrowserRakNetEntriesStayUnique(t *testing.T) {
+	b := &LANBrowser{}
+	now := time.Now()
+	x, y := &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 19132}, &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 19132}
+	b.recordRakNet(LANWorld{LevelName: "a", Address: x}, 1, now)
+	b.recordRakNet(LANWorld{LevelName: "b", Address: y}, 2, now)
+	b.recordRakNet(LANWorld{LevelName: "c", Address: y}, 1, now)
+	if len(b.rakNet) != 1 || b.rakNet[0].world.LevelName != "c" || b.rakNet[0].guid != 1 {
+		t.Fatalf("entries = %+v, want one entry for GUID 1 at %v", b.rakNet, y)
+	}
+}
+
 // A RakNet world on the local machine is found by pinging loopback.
 func TestLANBrowserFindsLoopbackRakNetWorld(t *testing.T) {
 	listener, err := raknet.Listen("127.0.0.1:0")

@@ -13,6 +13,7 @@ import (
 
 	"github.com/df-mc/go-nethernet/discovery"
 	"github.com/sandertv/go-raknet"
+	"github.com/wlynxg/anet"
 )
 
 // LANWorld is a world found on the local network by a LANBrowser.
@@ -115,14 +116,13 @@ func (b *LANBrowser) NetherNet() *discovery.Listener {
 	return b.nethernet
 }
 
-// Worlds lists the worlds found: NetherNet worlds, then RakNet worlds, as vanilla merges them. A
-// world answering on both transports is listed once for each. Worlds without a server or level
-// name and editor-mode worlds are left out.
+// Worlds lists the worlds found, NetherNet then RakNet as vanilla merges them, so a world on both
+// transports is listed twice. Unnamed and editor-mode worlds are left out.
 func (b *LANBrowser) Worlds() []LANWorld {
 	var worlds []LANWorld
 	for id, data := range b.nethernet.Responses() {
 		var advertisement discovery.ServerData
-		if err := advertisement.UnmarshalBinary(data); err != nil {
+		if err := advertisement.UnmarshalBinary(data); err != nil || advertisement.EditorWorld {
 			continue
 		}
 		worlds = append(worlds, LANWorld{
@@ -138,9 +138,6 @@ func (b *LANBrowser) Worlds() []LANWorld {
 			NetworkID:      id,
 			ServerData:     advertisement,
 		})
-		if advertisement.EditorWorld {
-			worlds = worlds[:len(worlds)-1]
-		}
 	}
 	// Responses arrive unordered; a stable order keeps rows from reshuffling between refreshes.
 	slices.SortFunc(worlds, func(a, b LANWorld) int {
@@ -198,6 +195,9 @@ func (b *LANBrowser) readPongs() {
 	for {
 		pong, err := b.pinger.ReadPong()
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				b.conf.Log.Error("read LAN pongs; RakNet worlds will no longer be found", slog.Any("error", err))
+			}
 			return
 		}
 		addr, ok := pong.Addr.(*net.UDPAddr)
@@ -212,17 +212,26 @@ func (b *LANBrowser) readPongs() {
 	}
 }
 
-// recordRakNet updates the entry with the same address or GUID in place, or appends a new one.
+// recordRakNet updates the first entry with the same address or GUID in place, dropping any other
+// such entry so no two share either, or appends a new one.
 func (b *LANBrowser) recordRakNet(world LANWorld, guid int64, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for i, entry := range b.rakNet {
-		if entry.world.Address.String() == world.Address.String() || entry.guid == guid {
-			b.rakNet[i] = rakNetLANWorld{world: world, guid: guid, seen: now}
-			return
+	entry, placed := rakNetLANWorld{world: world, guid: guid, seen: now}, false
+	kept := b.rakNet[:0]
+	for _, e := range b.rakNet {
+		if e.world.Address.String() == world.Address.String() || e.guid == guid {
+			if placed {
+				continue
+			}
+			e, placed = entry, true
 		}
+		kept = append(kept, e)
 	}
-	b.rakNet = append(b.rakNet, rakNetLANWorld{world: world, guid: guid, seen: now})
+	if !placed {
+		kept = append(kept, entry)
+	}
+	b.rakNet = kept
 }
 
 // pruneLocked drops RakNet worlds silent for longer than their lifetime. b.mu must be held.
@@ -300,7 +309,8 @@ func netherNetGameMode(gameType int32) string {
 // the directed broadcast address of every IPv4 interface that is up.
 func rakNetLANTargets(port int) []*net.UDPAddr {
 	targets := []*net.UDPAddr{{IP: net.IPv4(127, 0, 0, 1), Port: port}}
-	interfaces, err := net.Interfaces()
+	// anet lists interfaces on Android 11 and later too, where net.Interfaces is refused.
+	interfaces, err := anet.Interfaces()
 	if err != nil {
 		return targets
 	}
@@ -308,7 +318,7 @@ func rakNetLANTargets(port int) []*net.UDPAddr {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagBroadcast == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, err := iface.Addrs()
+		addrs, err := anet.InterfaceAddrsByInterface(&iface)
 		if err != nil {
 			continue
 		}
