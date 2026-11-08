@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -62,7 +61,7 @@ func turnAnswer(seconds int) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{"ExpirationInSeconds":%d,"TurnAuthServers":[{"Username":"u","Password":"p","Urls":["turn:a"]}]}`, seconds))
 }
 
-// A failed or undecodable TURN answer yields no ICE servers instead of failing the dial.
+// A failed or undecodable TURN answer leaves no ICE servers, and the next call requests again.
 func TestCredentialsFailureYieldsNoServers(t *testing.T) {
 	for name, handle := range map[string]func() (json.RawMessage, error){
 		"call error":    func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") },
@@ -71,89 +70,74 @@ func TestCredentialsFailureYieldsNoServers(t *testing.T) {
 		"not an object": func() (json.RawMessage, error) { return json.RawMessage(`[]`), nil },
 	} {
 		t.Run(name, func(t *testing.T) {
-			conn, _ := credentialsConn(t, handle)
-			credentials, err := conn.Credentials(context.Background())
-			if err != nil {
-				t.Fatalf("Credentials() error = %v, want nil", err)
-			}
-			if len(credentials.ICEServers) != 0 {
-				t.Fatalf("Credentials() servers = %v, want none", credentials.ICEServers)
-			}
-		})
-	}
-}
-
-// Any expiry is accepted; a non-positive one is already due, so the next call requests again.
-func TestCredentialsAcceptNonPositiveExpiry(t *testing.T) {
-	for _, seconds := range []int{0, -1} {
-		t.Run(fmt.Sprint(seconds), func(t *testing.T) {
-			conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return turnAnswer(seconds), nil })
-			for range 2 {
-				credentials, err := conn.Credentials(context.Background())
-				if err != nil || len(credentials.ICEServers) != 1 {
-					t.Fatalf("Credentials() = %v, %v, want one server", credentials, err)
+			synctest.Test(t, func(t *testing.T) {
+				conn, calls := credentialsConn(t, handle)
+				for want := int32(1); want <= 2; want++ {
+					credentials, err := conn.Credentials(context.Background())
+					if err != nil || len(credentials.ICEServers) != 0 {
+						t.Fatalf("Credentials() = %v, %v, want no servers and no error", credentials, err)
+					}
+					synctest.Wait()
+					if got := calls.Load(); got != want {
+						t.Fatalf("TURN requests = %d, want %d", got, want)
+					}
 				}
-			}
-			if got := calls.Load(); got != 2 {
-				t.Fatalf("TURN requests = %d, want 2", got)
-			}
+				conn.stop(net.ErrClosed)
+			})
 		})
 	}
 }
 
-// A caller whose ctx ends stops waiting without cancelling the request another caller shares.
-func TestCredentialsWaitHonoursCallerContext(t *testing.T) {
+// Credentials never waits: it answers at once with what it has, and calls share one request.
+func TestCredentialsDoNotWaitForTheRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
 			<-release
 			return turnAnswer(60), nil
 		})
-		conn.refreshCredentials()
-		shared := make(chan *nethernet.Credentials)
-		go func() {
-			credentials, _ := conn.Credentials(context.Background())
-			shared <- credentials
-		}()
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if _, err := conn.Credentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Credentials() error = %v, want context deadline exceeded", err)
+		for range 3 {
+			credentials, err := conn.Credentials(context.Background())
+			if err != nil || len(credentials.ICEServers) != 0 {
+				t.Fatalf("Credentials() before the answer = %v, %v, want no servers", credentials, err)
+			}
+		}
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests = %d, want 1 shared request", got)
 		}
 		close(release)
-		if credentials := <-shared; credentials == nil || len(credentials.ICEServers) != 1 {
-			t.Fatalf("shared Credentials() = %v, want one server", credentials)
+		synctest.Wait()
+		if credentials, err := conn.Credentials(context.Background()); err != nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("Credentials() after the answer = %v, %v, want one server", credentials, err)
 		}
-		if got := calls.Load(); got != 1 {
-			t.Fatalf("TURN requests = %d, want 1", got)
-		}
+		conn.stop(net.ErrClosed)
 	})
 }
 
-// A client stopping mid-request is a CredentialsError carrying the close cause, not "no servers".
-func TestCredentialsClientStopIsAnError(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	defer close(release)
-	conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
-		close(started)
-		<-release
-		return nil, errors.New("released")
+// Expired credentials are still returned while the refresh they start is in flight.
+func TestCredentialsServeOldOnesDuringRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		answers := make(chan json.RawMessage, 2)
+		answers <- turnAnswer(-1)
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
+		conn.refreshCredentials()
+		synctest.Wait()
+		if credentials, err := conn.Credentials(context.Background()); err != nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("Credentials() during refresh = %v, %v, want the old server", credentials, err)
+		}
+		synctest.Wait()
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("TURN requests = %d, want a refresh of the expired credentials", got)
+		}
+		answers <- turnAnswer(60)
+		synctest.Wait()
+		conn.stop(net.ErrClosed)
 	})
-	go func() {
-		<-started
-		// jrpc2 fails the pending call first, then its stop hook closes the Conn with the cause.
-		_ = conn.client.Close()
-		conn.stop(fmt.Errorf("jrpc2 client stopped: %w", io.EOF))
-	}()
-	credentials, err := conn.Credentials(context.Background())
-	if _, ok := errors.AsType[*CredentialsError](err); !ok || !errors.Is(err, io.EOF) {
-		t.Fatalf("Credentials() = %v, %v, want a CredentialsError wrapping io.EOF", credentials, err)
-	}
 }
 
-// An unanswered TURN request yields no servers after the client's 60s timeout; the next call asks again.
-func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {
+// An unanswered TURN request fails after the client's 60s timeout, and the next call asks again.
+func TestCredentialsUnansweredRequestTimesOut(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		defer close(release)
@@ -161,20 +145,22 @@ func TestCredentialsUnansweredRequestFallsBack(t *testing.T) {
 			<-release
 			return nil, errors.New("released")
 		})
-		for want := int32(1); want <= 2; want++ {
-			start := time.Now()
-			credentials, err := conn.Credentials(context.Background())
-			if err != nil || len(credentials.ICEServers) != 0 {
-				t.Fatalf("Credentials() = %v, %v, want no servers and no error", credentials, err)
-			}
-			if waited := time.Since(start); waited != 60*time.Second {
-				t.Fatalf("unanswered request failed after %v, want 60s", waited)
-			}
-			synctest.Wait()
-			if got := calls.Load(); got != want {
-				t.Fatalf("TURN requests = %d, want %d", got, want)
-			}
+		_, _ = conn.Credentials(context.Background())
+		time.Sleep(60*time.Second - time.Nanosecond)
+		synctest.Wait()
+		_, _ = conn.Credentials(context.Background())
+		synctest.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests before the timeout = %d, want 1", got)
 		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		_, _ = conn.Credentials(context.Background())
+		synctest.Wait()
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("TURN requests after the timeout = %d, want 2", got)
+		}
+		conn.stop(net.ErrClosed)
 	})
 }
 
