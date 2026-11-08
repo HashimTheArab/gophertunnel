@@ -431,3 +431,83 @@ func TestConnNotifySignalReportsCollectiveAcceptance(t *testing.T) {
 		t.Fatalf("notifier calls = (%d, %d), want (2, 1)", reject.calls, accept.calls)
 	}
 }
+
+// Concurrent AwaitCredentials calls share one TURN request and all receive its answer.
+func TestAwaitCredentialsSharesTheRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return turnAnswer(60), nil
+		})
+		results := make(chan error, 3)
+		for range 3 {
+			go func() {
+				credentials, err := conn.AwaitCredentials(context.Background())
+				if err == nil && len(credentials.ICEServers) != 1 {
+					err = fmt.Errorf("got %d servers, want 1", len(credentials.ICEServers))
+				}
+				results <- err
+			}()
+		}
+		synctest.Wait()
+		close(release)
+		for range 3 {
+			if err := <-results; err != nil {
+				t.Fatalf("AwaitCredentials() error = %v", err)
+			}
+		}
+		if _, err := conn.AwaitCredentials(context.Background()); err != nil {
+			t.Fatalf("AwaitCredentials() with fresh credentials error = %v", err)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests = %d, want 1", got)
+		}
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// A failed TURN request fails its waiters instead of leaving them to wait for a later one.
+func TestAwaitCredentialsReportsFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return nil, errors.New("turn unavailable") })
+		var credentialsErr *CredentialsError
+		if _, err := conn.AwaitCredentials(context.Background()); !errors.As(err, &credentialsErr) {
+			t.Fatalf("AwaitCredentials() error = %v, want a CredentialsError", err)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("TURN requests = %d, want 1", got)
+		}
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// Closing the Conn or ending ctx releases a waiter with the cause.
+func TestAwaitCredentialsStopsWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return nil, errors.New("released")
+		})
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(context.DeadlineExceeded)
+		if _, err := conn.AwaitCredentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("AwaitCredentials() with ended ctx error = %v, want its cause", err)
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := conn.AwaitCredentials(context.Background())
+			done <- err
+		}()
+		synctest.Wait()
+		conn.stop(net.ErrClosed)
+		if err := <-done; !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("AwaitCredentials() after close error = %v, want net.ErrClosed", err)
+		}
+		if _, err := conn.AwaitCredentials(context.Background()); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("AwaitCredentials() on a closed Conn error = %v, want net.ErrClosed", err)
+		}
+	})
+}

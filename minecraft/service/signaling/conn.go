@@ -45,11 +45,11 @@ type Conn struct {
 	credentials *nethernet.Credentials
 	// credentialsExpiry is the expiry of the credentials, estimated from [nethernet.Credentials.ExpirationInSeconds].
 	credentialsExpiry time.Time
-	// credentialsRequesting reports a TURN request in flight.
-	credentialsRequesting bool
+	// credentialsRequest is the TURN request in flight, if any.
+	credentialsRequest *credentialsRequest
 	// credentialsRefresh requests new credentials once credentialsExpiry passes.
 	credentialsRefresh *time.Timer
-	// credentialsMu guards credentials, credentialsExpiry, credentialsRequesting and credentialsRefresh.
+	// credentialsMu guards credentials, credentialsExpiry, credentialsRequest and credentialsRefresh.
 	credentialsMu sync.Mutex
 }
 
@@ -168,18 +168,53 @@ func (conn *Conn) refreshCredentials() {
 	conn.credentialsMu.Unlock()
 }
 
-// startCredentialsRequestLocked starts a TURN request unless one is in flight or the Conn is closed.
-// credentialsMu must be held.
-func (conn *Conn) startCredentialsRequestLocked() {
-	if !conn.credentialsRequesting && conn.ctx.Err() == nil {
-		conn.credentialsRequesting = true
-		go conn.requestCredentials()
+// AwaitCredentials returns the unexpired TURN credentials last received, or else waits for the TURN
+// request in flight, starting one if needed, and returns its answer. It suits callers that cannot
+// connect without relay servers; a failed request, the Conn closing or ctx ending is a CredentialsError.
+func (conn *Conn) AwaitCredentials(ctx context.Context) (*nethernet.Credentials, error) {
+	conn.credentialsMu.Lock()
+	if conn.ctx.Err() != nil {
+		conn.credentialsMu.Unlock()
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(conn.ctx)}
+	}
+	if conn.credentials != nil && time.Now().Before(conn.credentialsExpiry) {
+		credentials := conn.credentials
+		conn.credentialsMu.Unlock()
+		return credentials, nil
+	}
+	request := conn.startCredentialsRequestLocked()
+	conn.credentialsMu.Unlock()
+	if request == nil {
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(conn.ctx)}
+	}
+	select {
+	case <-request.done:
+		return request.credentials, request.err
+	case <-ctx.Done():
+		return nil, &CredentialsError{Method: MethodSignalingCredentials, Err: context.Cause(ctx)}
 	}
 }
 
-// requestCredentials performs a TURN request. An answer is refreshed once its ExpirationInSeconds
-// passes; a failure clears the servers, as the Bedrock client does.
-func (conn *Conn) requestCredentials() {
+// credentialsRequest is one TURN request, whose result every AwaitCredentials caller shares.
+type credentialsRequest struct {
+	done        chan struct{} // closed once credentials or err is set
+	credentials *nethernet.Credentials
+	err         error
+}
+
+// startCredentialsRequestLocked returns the TURN request in flight, starting one if there is none and
+// the Conn is open. credentialsMu must be held.
+func (conn *Conn) startCredentialsRequestLocked() *credentialsRequest {
+	if conn.credentialsRequest == nil && conn.ctx.Err() == nil {
+		conn.credentialsRequest = &credentialsRequest{done: make(chan struct{})}
+		go conn.requestCredentials(conn.credentialsRequest)
+	}
+	return conn.credentialsRequest
+}
+
+// requestCredentials performs request. An answer is refreshed once its ExpirationInSeconds passes; a
+// failure clears the servers, as the Bedrock client does.
+func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	ctx, cancel := context.WithTimeout(conn.ctx, credentialsRequestTimeout)
 	defer cancel()
 	var credentials *nethernet.Credentials
@@ -199,12 +234,20 @@ func (conn *Conn) requestCredentials() {
 
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
-	conn.credentialsRequesting = false
+	conn.credentialsRequest = nil
+	defer close(request.done)
+	if closing && conn.ctx.Err() != nil {
+		err = context.Cause(conn.ctx)
+	}
+	if err != nil {
+		request.err = &CredentialsError{Method: MethodSignalingCredentials, Err: err}
+	}
 	switch {
 	case closing:
 	case err != nil:
 		conn.credentials = nil
 	default:
+		request.credentials = credentials
 		conn.credentials = credentials
 		conn.credentialsExpiry = now.Add(time.Duration(min(credentials.ExpirationInSeconds, maxCredentialsLifetime)) * time.Second)
 		conn.stopCredentialsRefreshLocked()
