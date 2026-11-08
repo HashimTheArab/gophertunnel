@@ -58,7 +58,7 @@ func TestAddressNetworkProbesIPv6Literal(t *testing.T) {
 		t.Skipf("no IPv6 loopback: %v", err)
 	}
 	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "OK")
+		answerStatus(w)
 	})}}
 	server.Start()
 	t.Cleanup(server.Close)
@@ -224,7 +224,7 @@ func TestProbeNetherNetPrefersHTTPS(t *testing.T) {
 		mu.Lock()
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		mu.Unlock()
-		_, _ = io.WriteString(w, "OK")
+		answerStatus(w)
 	}))
 	t.Cleanup(server.Close)
 	host, port := serverHostPort(t, server.Listener.Addr())
@@ -247,7 +247,7 @@ func TestProbeNetherNetPrefersHTTPS(t *testing.T) {
 func TestProbeNetherNetFallsBackToHTTP(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "OK")
+		answerStatus(w)
 	}))
 	t.Cleanup(server.Close)
 	host, port := serverHostPort(t, server.Listener.Addr())
@@ -392,7 +392,7 @@ func TestAddressNetworkReprobesAfterFailedDial(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			probes.Add(1)
-			_, _ = io.WriteString(w, "OK")
+			answerStatus(w)
 			return
 		}
 		http.Error(w, "no session", http.StatusInternalServerError)
@@ -446,7 +446,7 @@ func TestAddressNetworkRakNetAfterNetherNetFailure(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
 					probes.Add(1)
-					_, _ = io.WriteString(w, "OK")
+					answerStatus(w)
 					return
 				}
 				select {
@@ -522,7 +522,7 @@ func TestDialerNamesTheTransportOfAFailedAddressDial(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, "OK")
+			answerStatus(w)
 			return
 		}
 		http.Error(w, "no session", http.StatusInternalServerError)
@@ -682,7 +682,7 @@ func noAnswerServer(t *testing.T, probes *atomic.Int32) string {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			probes.Add(1)
-			_, _ = io.WriteString(w, "OK")
+			answerStatus(w)
 			return
 		}
 		// Accept the offer but never answer, so the dialer waits out its negotiation timeout. The
@@ -774,7 +774,7 @@ func TestAddressNetworkFailedDialKeepsNewerAnswer(t *testing.T) {
 func TestAddressNetworkSelectsNetherNetWhenProbeAnswers(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "OK")
+		answerStatus(w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -886,7 +886,7 @@ func TestAddressNetworkDoesNotFallBackAfterNetherNetFails(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, "OK")
+			answerStatus(w)
 			return
 		}
 		http.Error(w, "no session", http.StatusInternalServerError)
@@ -1704,8 +1704,7 @@ func TestProbeNetherNetPassesOverAWebsite(t *testing.T) {
 	}
 }
 
-// A 2xx without a status, as an endpoint with no status set answers, still wins once every other URL
-// has failed, the earliest in URL order first.
+// An empty 2xx, as an endpoint with no status set answers, wins once every other URL has failed.
 func TestProbeNetherNetFallsBackToAnAnswerWithoutStatus(t *testing.T) {
 	t.Parallel()
 	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -1740,5 +1739,41 @@ func TestAddressNetworkDropsRememberedEndpointThatLostItsStatus(t *testing.T) {
 	website.Store(true)
 	if selected, err := network.Select(t.Context(), address); err != nil || !IsRakNet(selected) {
 		t.Fatalf("Select after the status went away = %T, %v; want RakNet", selected, err)
+	}
+}
+
+// A website's page is no answer, so a RakNet server whose domain serves one is still joined over RakNet.
+func TestProbeNetherNetIgnoresAWebsite(t *testing.T) {
+	t.Parallel()
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html></html>")) }))
+	t.Cleanup(page.Close)
+	if found, _, _, err := probeNetherNet(t.Context(), probeHTTPClient(nil), [][]string{{page.URL}}, time.Minute, 5*time.Second, endpoint.ClientConfig{}.New()); err == nil {
+		t.Fatalf("probeNetherNet chose the website %q", found)
+	}
+}
+
+// A remembered endpoint that first answered empty and now serves a status is remembered as serving one.
+func TestAddressNetworkUpgradesRememberedEndpointThatGainsAStatus(t *testing.T) {
+	t.Parallel()
+	var serving atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serving.Load() {
+			answerStatus(w)
+		}
+	}))
+	t.Cleanup(server.Close)
+	probes := new(ProbeCache)
+	network := AddressNetwork{Probes: probes}
+	address := server.Listener.Addr().String()
+	host, port := splitServerAddress(address)
+	key := probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}
+	for _, want := range []bool{false, true} {
+		serving.Store(want)
+		if selected, err := network.Select(t.Context(), address); err != nil || IsRakNet(selected) {
+			t.Fatalf("Select = %T, %v; want NetherNet", selected, err)
+		}
+		if entry := probes.lookup(key); entry == nil || entry.status != want {
+			t.Fatalf("remembered entry = %+v, want status %v", entry, want)
+		}
 	}
 }

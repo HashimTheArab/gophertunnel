@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/ecdsa"
@@ -143,10 +144,14 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string) (choic
 	client := probeHTTPClient(n.HTTPClient)
 	probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: info}.New()
 	found, body, status, err := n.probe(ctx, client, batches, probeClient)
-	if err == nil && choice.entry != nil && choice.entry.status && !status {
-		// A remembered endpoint that served a status and now does not, such as one replaced by a
-		// website, no longer counts as an answer.
-		err = fmt.Errorf("%s: no longer serves a status", found)
+	if err == nil && choice.entry != nil && status != choice.entry.status {
+		if status {
+			choice = choice.replace(&probeEntry{endpoint: found, status: true, expires: choice.entry.expires})
+		} else {
+			// The remembered endpoint served a status and no longer does, so look for one afresh.
+			choice = choice.replace(nil)
+			found, body, status, err = n.probe(ctx, client, probeBatches(host, port), probeClient)
+		}
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -262,19 +267,27 @@ func (p probeChoice) rakNetAfter(err error) {
 
 // replaceAfter swaps the answer for next, or drops it when next is nil, if err is set.
 func (p probeChoice) replaceAfter(err error, next *probeEntry) {
-	if p.cache == nil || err == nil {
-		return
+	if err != nil {
+		p.replace(next)
 	}
-	p.cache.mu.Lock()
-	defer p.cache.mu.Unlock()
-	if p.cache.entries[p.key] != p.entry {
-		return
+}
+
+// replace returns p holding next, which is stored in place of p's answer, or dropping it when next
+// is nil, unless another Select has stored a newer answer since.
+func (p probeChoice) replace(next *probeEntry) probeChoice {
+	if p.cache != nil {
+		p.cache.mu.Lock()
+		if p.cache.entries[p.key] == p.entry {
+			if next == nil {
+				delete(p.cache.entries, p.key)
+			} else {
+				p.cache.entries[p.key] = next
+			}
+		}
+		p.cache.mu.Unlock()
 	}
-	if next == nil {
-		delete(p.cache.entries, p.key)
-		return
-	}
-	p.cache.entries[p.key] = next
+	p.entry = next
+	return p
 }
 
 // loginAddress returns the server address a vanilla client puts in its login after joining this
@@ -411,12 +424,11 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 	return found, err
 }
 
-// probeNetherNet returns the endpoint that answers with a 2xx and the start of its body, and whether
-// that body is a server status. Like vanilla it takes the first such answer from any URL, but only a
-// status wins at once: a 2xx with an empty or other body, such as a website's catch-all page, counts
-// as a failure until every URL has failed or the probe's timeout passes, when the first such answer
-// in URL order wins. Each batch starts once every request of the one before it has failed or
-// headStart has passed. probe builds each request.
+// probeNetherNet returns the endpoint whose 2xx answer wins, the start of its body, and whether the
+// body is a server status. A status wins at once, as vanilla's first 2xx does. An empty 2xx, an
+// endpoint with no status set, wins only once every URL has failed or the timeout passes; any other
+// body, such as a website's page, is no answer. Each batch starts once every request of the one before
+// it has failed or headStart has passed. probe builds each request.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration, probe *endpoint.Client) (string, []byte, bool, error) {
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -443,6 +455,9 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 				} else if r.body, r.err = probeEndpoint(ctx, client, endpoint, probe); r.err == nil {
 					_, err := parseProbeStatus(r.body)
 					r.status = err == nil
+					if !r.status && len(bytes.TrimSpace(r.body)) != 0 {
+						r.err = fmt.Errorf("%s: answer is not a NetherNet status: %w", endpoint, err)
+					}
 				}
 				results <- r
 				if r.err != nil || !r.status {
@@ -453,7 +468,7 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 		before = batch
 	}
 	var errs []error
-	var other *probeResult // the earliest 2xx in URL order whose body is not a status
+	var other *probeResult // the earliest empty 2xx in URL order
 	for range total {
 		r := <-results
 		switch {
@@ -474,8 +489,8 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 	return "", nil, false, fmt.Errorf("probe NetherNet: %w", errors.Join(errs...))
 }
 
-// probeResult is one endpoint's answer, by its place in URL order; err is nil for a 2xx, and status
-// reports a body that is a server status.
+// probeResult is one endpoint's answer, by its place in URL order; err is nil for a 2xx whose body is
+// a server status, reported by status, or empty.
 type probeResult struct {
 	order    int
 	endpoint string
@@ -485,7 +500,7 @@ type probeResult struct {
 }
 
 // probeBatch tells the batch after it when to start. A status ends the whole probe, so only failures,
-// which here include a 2xx without a status, release the next batch.
+// which here include an empty 2xx, release the next batch.
 type probeBatch struct {
 	pending atomic.Int32
 	failed  chan struct{} // closed once every request has failed
