@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
 	"github.com/df-mc/go-xsapi/v2/xal/nsal"
@@ -332,15 +334,11 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		// Report this dial's client to a probe that sends it, as the vanilla client does, unless the
 		// consumer set its own. Version and platform mirror the login's own defaults.
 		if filler, ok := s.(interface {
-			withProbeClientInfo(ProbeClientInfo) transportSelector
+			withProbeClientInfo(endpoint.ClientInfo) transportSelector
 		}); ok {
-			version := d.ClientData.GameVersion
-			if version == "" {
-				version = d.Protocol.Ver()
-			}
-			s = filler.withProbeClientInfo(ProbeClientInfo{
-				Version:  version,
-				Protocol: d.Protocol.ID(),
+			s = filler.withProbeClientInfo(endpoint.ClientInfo{
+				Version:  loginGameVersion(d.ClientData.GameVersion, d.Protocol),
+				Protocol: int(d.Protocol.ID()),
 				Platform: int(loginDeviceOS(d.ClientData.DeviceOS)),
 			})
 		}
@@ -415,9 +413,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
 
 	defaultIdentityData(&conn.identityData)
-	if conn.clientData.GameVersion == "" {
-		conn.clientData.GameVersion = d.Protocol.Ver()
-	}
+	conn.clientData.GameVersion = loginGameVersion(conn.clientData.GameVersion, d.Protocol)
 	defaultClientData(loginAddress, conn.identityData.DisplayName, &conn.clientData)
 
 	var request []byte
@@ -562,6 +558,12 @@ func DefaultSkinGeometry() []byte {
 
 func DefaultSkinResourcePatch() []byte {
 	return bytes.Clone(skinResourcePatch)
+}
+
+// loginGameVersion returns the game version a login sends for this one: the value set, or the
+// protocol's version, or the current one.
+func loginGameVersion(version string, p Protocol) string {
+	return cmp.Or(version, p.Ver(), protocol.CurrentVersion)
 }
 
 // loginDeviceOS returns the DeviceOS a login sends for this one: the value set, or the default a

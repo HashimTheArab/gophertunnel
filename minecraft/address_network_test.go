@@ -952,7 +952,7 @@ func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(server.Close)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: "play.example.com", port: 19132}, server.URL)
+	cache.store(probeKey{host: "play.example.com", port: 19132, client: AddressNetwork{}.probeClientInfo()}, server.URL)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), "Play.Example.COM:19132")
 	if err != nil {
@@ -961,7 +961,7 @@ func TestAddressNetworkProbeCacheKeyMatchesVanilla(t *testing.T) {
 	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
 		t.Fatalf("Select = %#v, want the answer cached for the lower-cased host", selected)
 	}
-	if cache.lookup(probeKey{host: "play.example.com", port: 0}) != nil {
+	if cache.lookup(probeKey{host: "play.example.com", port: 0, client: AddressNetwork{}.probeClientInfo()}) != nil {
 		t.Fatal("an address without a port shared the 19132 answer")
 	}
 }
@@ -980,7 +980,7 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: host, port: port}, server.URL)
+	cache.store(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}, server.URL)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1002,7 +1002,7 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: host, port: port}, "http://"+closedTCPAddress(t))
+	cache.store(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}, "http://"+closedTCPAddress(t))
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1222,7 +1222,7 @@ func TestAddressNetworkPingsNetherNetOnlyServer(t *testing.T) {
 		t.Fatalf("PingContext advertised %+v, want the endpoint's status", got)
 	}
 	host, port := splitServerAddress(address)
-	if entry := probes.lookup(probeKey{host: host, port: port}); entry == nil || entry.endpoint != server.URL {
+	if entry := probes.lookup(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}); entry == nil || entry.endpoint != server.URL {
 		t.Fatalf("probe answer = %#v, want %q kept for the join", entry, server.URL)
 	}
 }
@@ -1270,7 +1270,7 @@ func TestAddressNetworkPingDoesNotWaitForTheProbe(t *testing.T) {
 		t.Fatalf("PingContext took %v, want the RakNet answer before the probe times out", elapsed)
 	}
 	host, port := splitServerAddress(listener.Addr().String())
-	if entry := probes.lookup(probeKey{host: host, port: port}); entry != nil {
+	if entry := probes.lookup(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}); entry != nil {
 		t.Fatalf("probe answer = %#v, want none stored for a probe the RakNet answer cut short", entry)
 	}
 }
@@ -1291,7 +1291,7 @@ func TestAddressNetworkPingSkipsProbeForRakNetAnswer(t *testing.T) {
 	t.Cleanup(server.Close)
 	host, port := splitServerAddress(address)
 	probes := &ProbeCache{}
-	probes.store(probeKey{host: host, port: port}, "")
+	probes.store(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}, "")
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
@@ -1385,7 +1385,7 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	address := server.Listener.Addr().String()
 	host, port := splitServerAddress(address)
 	probes := &ProbeCache{}
-	probes.store(probeKey{host: host, port: port}, "")
+	probes.store(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}, "")
 	network := AddressNetwork{Probes: probes}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -1393,7 +1393,7 @@ func TestAddressNetworkPingForgetsRakNetAnswerAfterFailure(t *testing.T) {
 	// The refused RakNet ping may drop the answer before or after the NetherNet side reads it, so
 	// the first ping may already find the endpoint.
 	_, _ = network.PingContext(ctx, address)
-	if entry := probes.lookup(probeKey{host: host, port: port}); entry != nil && entry.endpoint == "" {
+	if entry := probes.lookup(probeKey{host: host, port: port, client: AddressNetwork{}.probeClientInfo()}); entry != nil && entry.endpoint == "" {
 		t.Fatal("RakNet answer still remembered after a failed RakNet ping, want it dropped")
 	}
 	pong, err := network.PingContext(ctx, address)
@@ -1441,16 +1441,45 @@ func TestProbeNetherNetSendsClientInfoQuery(t *testing.T) {
 	}
 }
 
-// The Dialer's client info fills an unset ProbeClientInfo and leaves a configured one alone.
+// The Dialer's client info fills the unset fields of ProbeClientInfo and leaves set ones alone.
 func TestAddressNetworkWithProbeClientInfo(t *testing.T) {
 	t.Parallel()
-	dial := ProbeClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}
+	dial := endpoint.ClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1}
 	if got := (AddressNetwork{}).withProbeClientInfo(dial).(AddressNetwork).ProbeClientInfo; got != dial {
 		t.Fatalf("unset ProbeClientInfo = %+v, want it filled with %+v", got, dial)
 	}
-	set := ProbeClientInfo{Version: "1.26.50", Protocol: 2200, Platform: 7}
+	set := endpoint.ClientInfo{Version: "1.26.50", Protocol: 2200, Platform: 7}
 	if got := (AddressNetwork{ProbeClientInfo: set}).withProbeClientInfo(dial).(AddressNetwork).ProbeClientInfo; got != set {
 		t.Fatalf("configured ProbeClientInfo = %+v, want it kept as %+v", got, set)
+	}
+	partial := endpoint.ClientInfo{Version: "1.26.50"}
+	want := endpoint.ClientInfo{Version: "1.26.50", Protocol: 2225, Platform: 1}
+	if got := (AddressNetwork{ProbeClientInfo: partial}).withProbeClientInfo(dial).(AddressNetwork).ProbeClientInfo; got != want {
+		t.Fatalf("partial ProbeClientInfo = %+v, want %+v", got, want)
+	}
+	if got := (AddressNetwork{ProbeClientInfo: partial}).probeClientInfo(); !got.Valid() {
+		t.Fatalf("partial ProbeClientInfo reports %+v, want every field set", got)
+	}
+}
+
+// A server that refuses one client's probe is still probed for another sharing the cache.
+func TestAddressNetworkProbeCacheKeysByClientInfo(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("protocol") != "2225" {
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	probes := new(ProbeCache)
+	old := AddressNetwork{Probes: probes, ProbeClientInfo: endpoint.ClientInfo{Version: "1.26.50", Protocol: 2200, Platform: 1}}
+	if network, err := old.Select(t.Context(), server.Listener.Addr().String()); err != nil || !IsRakNet(network) {
+		t.Fatalf("outdated client Select = %T, %v; want RakNet", network, err)
+	}
+	current := old
+	current.ProbeClientInfo.Protocol = 2225
+	if network, err := current.Select(t.Context(), server.Listener.Addr().String()); err != nil || IsRakNet(network) {
+		t.Fatalf("current client Select = %T, %v; want NetherNet", network, err)
 	}
 }
 
@@ -1498,7 +1527,7 @@ func TestAddressNetworkProbeIDReachesOfferPost(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	network := AddressNetwork{
-		ProbeClientInfo: ProbeClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1},
+		ProbeClientInfo: endpoint.ClientInfo{Version: "1.26.60", Protocol: 2225, Platform: 1},
 		NetherNet:       openNetherNet,
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
