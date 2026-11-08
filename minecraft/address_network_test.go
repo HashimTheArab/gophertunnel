@@ -1704,7 +1704,7 @@ func TestProbeNetherNetPassesOverAWebsite(t *testing.T) {
 	}
 }
 
-// An empty 2xx, as an endpoint with no status set answers, wins once every other URL has failed.
+// A 2xx that sets no status, as an endpoint with none set answers, wins once every other URL has failed.
 func TestProbeNetherNetFallsBackToAnAnswerWithoutStatus(t *testing.T) {
 	t.Parallel()
 	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -1742,6 +1742,38 @@ func TestAddressNetworkDropsRememberedEndpointThatLostItsStatus(t *testing.T) {
 	}
 }
 
+// A remembered endpoint that served a status and now sets none is probed for afresh and kept as such.
+func TestAddressNetworkReprobesRememberedEndpointThatSetsNoStatus(t *testing.T) {
+	t.Parallel()
+	var empty atomic.Bool
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if !empty.Load() {
+			answerStatus(w)
+		}
+	}))
+	t.Cleanup(server.Close)
+	probes := new(ProbeCache)
+	network := AddressNetwork{Probes: probes}
+	address := server.Listener.Addr().String()
+	host, port := splitServerAddress(address)
+	if _, err := network.Select(t.Context(), address); err != nil {
+		t.Fatal(err)
+	}
+	empty.Store(true)
+	requests.Store(0)
+	if selected, err := network.Select(t.Context(), address); err != nil || IsRakNet(selected) {
+		t.Fatalf("Select = %T, %v; want NetherNet", selected, err)
+	}
+	if n := requests.Load(); n != 2 {
+		t.Fatalf("requests = %d, want the remembered URL and then a fresh probe", n)
+	}
+	if entry := probes.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry == nil || entry.status {
+		t.Fatalf("remembered entry = %+v, want one without a status", entry)
+	}
+}
+
 // A website's page is no answer, so a RakNet server whose domain serves one is still joined over RakNet.
 func TestProbeNetherNetIgnoresAWebsite(t *testing.T) {
 	t.Parallel()
@@ -1774,6 +1806,24 @@ func TestAddressNetworkUpgradesRememberedEndpointThatGainsAStatus(t *testing.T) 
 		}
 		if entry := probes.lookup(key); entry == nil || entry.status != want {
 			t.Fatalf("remembered entry = %+v, want status %v", entry, want)
+		}
+	}
+}
+
+// A JSON body that sets no status counts as an answer without one, not as a website.
+func TestParseProbeStatusClassifiesBodies(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]error{
+		``:                        errNoStatus,
+		` `:                       errNoStatus,
+		`{}`:                      errNoStatus,
+		`null`:                    errNoStatus,
+		`{"name":"","players":0}`: errNoStatus,
+		`<html></html>`:           errNotStatus,
+		`{"name":"server"}`:       nil,
+	} {
+		if _, err := parseProbeStatus([]byte(body)); !errors.Is(err, want) && !(want == nil && err == nil) {
+			t.Fatalf("parseProbeStatus(%q) = %v, want %v", body, err, want)
 		}
 	}
 }
