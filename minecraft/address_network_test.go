@@ -1454,10 +1454,11 @@ func TestProbeNetherNetDropsHeldAnswersWhenTheProbeEnds(t *testing.T) {
 	}
 }
 
-// Only a written request counts as sent, and a retry on a new connection starts unsent again.
+// Only a written request counts as sent, a retry starts unsent again, and each change wakes the loop.
 func TestProbeAttemptTraceTracksTheCurrentConnection(t *testing.T) {
 	t.Parallel()
-	var attempt probeAttempt
+	changed := make(chan struct{}, 1)
+	attempt := probeAttempt{changed: changed}
 	trace := attempt.trace()
 	trace.GetConn("host:443")
 	trace.WroteRequest(httptrace.WroteRequestInfo{Err: io.ErrClosedPipe})
@@ -1468,8 +1469,14 @@ func TestProbeAttemptTraceTracksTheCurrentConnection(t *testing.T) {
 	if !attempt.sent.Load() {
 		t.Fatal("a written request did not count as sent")
 	}
+	<-changed
 	trace.GetConn("host:443")
 	if attempt.sent.Load() {
 		t.Fatal("a retry on a new connection kept the earlier connection's sent request")
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("a retry clearing the sent request did not wake the probe loop")
 	}
 }

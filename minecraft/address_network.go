@@ -356,21 +356,17 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 }
 
 // ProbeNetherNet returns the base URL of the NetherNet HTTP signaling endpoint vanilla would choose
-// among those that answer GET {url}/v1/join with a 2xx within six seconds, asking HTTPS before HTTP and, for port zero,
-// port 19132 and the schemes' default ports. Unlike vanilla, HTTP is asked after a one-second head
-// start at the latest, and on the game port as soon as HTTPS there fails.
+// among those answering GET {url}/v1/join with a 2xx within six seconds: HTTPS before HTTP and, for
+// port zero, port 19132 before the schemes' default ports.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
 	found, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout)
 	return found, err
 }
 
 // probeNetherNet returns the endpoint vanilla would choose among those that answer with a 2xx, and
-// the start of its body, cancelling the rest. Each batch starts once every request of the one
-// before it has failed or headStart has passed; its first endpoint, the game port, also once the
-// one before fails. Answers are taken in vanilla's order: a 2xx wins only once every earlier
-// endpoint has failed or has gone probeSendGrace without sending its request, so a preferred
-// endpoint that accepted the request is waited for, while one whose port never completes a
-// handshake cannot hold the probe.
+// the start of its body, cancelling the rest; preferredAnswer decides when an answer wins. Each
+// batch starts once every request of the one before it has failed or headStart has passed; its
+// first endpoint, the game port, also once the one before fails.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration) (string, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -381,6 +377,10 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 	results := make(chan probeResult, total)
 	attempts := make([]probeAttempt, total) // in vanilla's order
 	base := time.Now()                      // attempts time their start from base, on the monotonic clock
+	changed := make(chan struct{}, 1)       // an attempt's sent state changed
+	for i := range attempts {
+		attempts[i].changed = changed
+	}
 	var before *probeBatch
 	index := 0
 	for i, endpoints := range batches {
@@ -431,7 +431,11 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 			if r.err != nil {
 				errs = append(errs, r.err)
 			}
+		case <-changed:
 		case <-wake:
+		case <-ctx.Done():
+			// A transport that ignores ctx must not hold the probe past its timeout.
+			received = total
 		}
 	}
 	if err := context.Cause(ctx); err != nil {
@@ -442,8 +446,9 @@ func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string
 
 // probeAttempt is one endpoint's request, as preferredAnswer sees it while it is pending.
 type probeAttempt struct {
-	sent    atomic.Bool  // the request was written on the connection now in use
-	started atomic.Int64 // since base when the request began, plus one; zero before
+	sent    atomic.Bool     // the request was written on the connection now in use
+	started atomic.Int64    // since base when the request began, plus one; zero before
+	changed chan<- struct{} // signalled whenever sent changes, so held answers are rechecked
 }
 
 // start records that the request began.
@@ -453,12 +458,22 @@ func (a *probeAttempt) start(base time.Time) { a.started.Store(int64(time.Since(
 // a retry after the server closed a reused one, starts unsent.
 func (a *probeAttempt) trace() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
-		GetConn: func(string) { a.sent.Store(false) },
+		GetConn: func(string) { a.setSent(false) },
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
 			if info.Err == nil {
-				a.sent.Store(true)
+				a.setSent(true)
 			}
 		},
+	}
+}
+
+// setSent records whether the request is sent, waking the probe loop when that changes.
+func (a *probeAttempt) setSent(sent bool) {
+	if a.sent.Swap(sent) != sent && a.changed != nil {
+		select {
+		case a.changed <- struct{}{}:
+		default:
+		}
 	}
 }
 
