@@ -603,3 +603,37 @@ func TestAwaitCredentialsReportsClientStop(t *testing.T) {
 		conn.stop(net.ErrClosed)
 	})
 }
+
+// A waiter is given neither an answer that has already expired nor the outcome after its ctx ends.
+func TestAwaitCredentialsRejectsExpiredAnswerAndEndedWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		answers := make(chan json.RawMessage, 2)
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
+		answers <- turnAnswer(0)
+		var credentialsErr *CredentialsError
+		if credentials, err := conn.AwaitCredentials(context.Background()); !errors.As(err, &credentialsErr) {
+			t.Fatalf("AwaitCredentials() for an expired answer = %v, %v, want a CredentialsError", credentials, err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := conn.AwaitCredentials(ctx)
+			done <- err
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("AwaitCredentials() after its ctx ended error = %v, want context.Canceled", err)
+		}
+		answers <- turnAnswer(60)
+		synctest.Wait()
+		if credentials, err := conn.AwaitCredentials(context.Background()); err != nil || credentials.ExpirationInSeconds != 60 {
+			t.Fatalf("AwaitCredentials() after the shared request answered = %v, %v", credentials, err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("TURN requests = %d, want 2", got)
+		}
+		conn.stop(net.ErrClosed)
+	})
+}

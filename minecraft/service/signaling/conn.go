@@ -136,10 +136,9 @@ func (conn *Conn) Notify(n nethernet.Notifier) func() {
 func (conn *Conn) Credentials(context.Context) (*nethernet.Credentials, error) {
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
-	if conn.ctx.Err() != nil {
+	if !conn.ensureCredentialsRequestLocked() {
 		return nil, credentialsErr(context.Cause(conn.ctx))
 	}
-	conn.ensureCredentialsRequestLocked()
 	if conn.credentials == nil {
 		return &nethernet.Credentials{}, nil
 	}
@@ -195,9 +194,7 @@ const credentialsRequestTimeout = 60 * time.Second
 func (conn *Conn) refreshCredentials() {
 	conn.credentialsMu.Lock()
 	defer conn.credentialsMu.Unlock()
-	if conn.ctx.Err() == nil {
-		conn.ensureCredentialsRequestLocked()
-	}
+	conn.ensureCredentialsRequestLocked()
 }
 
 // freshCredentialsLocked reports credentials that have not expired. credentialsMu must be held.
@@ -213,12 +210,17 @@ type credentialsRequest struct {
 }
 
 // ensureCredentialsRequestLocked starts a TURN request when the credentials are missing or expired
-// and none is in flight. credentialsMu must be held and the Conn open.
-func (conn *Conn) ensureCredentialsRequestLocked() {
+// and none is in flight. It reports false, starting nothing, once the Conn is closed. credentialsMu
+// must be held.
+func (conn *Conn) ensureCredentialsRequestLocked() bool {
+	if conn.ctx.Err() != nil {
+		return false
+	}
 	if conn.credentialsRequest == nil && !conn.freshCredentialsLocked() {
 		conn.credentialsRequest = &credentialsRequest{done: make(chan struct{})}
 		go conn.requestCredentials(conn.credentialsRequest)
 	}
+	return true
 }
 
 // requestCredentials performs request. An answer is refreshed once its ExpirationInSeconds passes; a
@@ -245,10 +247,11 @@ func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	conn.credentialsRequest = nil
 	defer close(request.done)
 	if closing {
-		// Report the Conn closing, not the RPC error it caused.
-		err = net.ErrClosed
+		// Report the Conn closing. Its cause is unset while jrpc2 is still stopping.
 		if cause := context.Cause(conn.ctx); cause != nil {
 			err = cause
+		} else {
+			err = fmt.Errorf("%w: %w", net.ErrClosed, err)
 		}
 	}
 	if err != nil {
@@ -259,12 +262,18 @@ func (conn *Conn) requestCredentials(request *credentialsRequest) {
 	case err != nil:
 		conn.credentials = nil
 	default:
-		request.credentials = credentials
 		conn.credentials = credentials
 		conn.credentialsExpiry = now.Add(time.Duration(min(credentials.ExpirationInSeconds, maxCredentialsLifetime)) * time.Second)
 		conn.stopCredentialsRefreshLocked()
-		// A non-positive expiry is already due, so the next Credentials call requests again.
-		if wait := conn.credentialsExpiry.Sub(now); wait > 0 && conn.ctx.Err() == nil {
+		wait := conn.credentialsExpiry.Sub(now)
+		if wait <= 0 {
+			// Credentials still serves these, but AwaitCredentials never returns expired ones. The
+			// next call requests again.
+			request.err = credentialsErr(errors.New("answer had already expired"))
+			return
+		}
+		request.credentials = credentials
+		if conn.ctx.Err() == nil {
 			conn.credentialsRefresh = time.AfterFunc(wait, conn.refreshCredentials)
 		}
 	}
