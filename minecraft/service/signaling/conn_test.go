@@ -482,12 +482,12 @@ func TestAwaitCredentialsReportsFailure(t *testing.T) {
 	})
 }
 
-// Closing the Conn or ending ctx releases a waiter with the cause.
+// An ended ctx starts no request, and closing the Conn releases a waiter with the cause.
 func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		defer close(release)
-		conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) {
 			<-release
 			return nil, errors.New("released")
 		})
@@ -495,6 +495,10 @@ func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 		cancel(context.DeadlineExceeded)
 		if _, err := conn.AwaitCredentials(ctx); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("AwaitCredentials() with ended ctx error = %v, want its cause", err)
+		}
+		synctest.Wait()
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("TURN requests for an ended ctx = %d, want 0", got)
 		}
 		done := make(chan error, 1)
 		go func() {
@@ -509,5 +513,58 @@ func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 		if _, err := conn.AwaitCredentials(context.Background()); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("AwaitCredentials() on a closed Conn error = %v, want net.ErrClosed", err)
 		}
+	})
+}
+
+// AwaitCredentials joins a request Credentials started, and returns expired credentials while their
+// refresh is in flight, as Credentials does.
+func TestAwaitCredentialsJoinsAndServesOldOnes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		answers := make(chan json.RawMessage, 2)
+		conn, calls := credentialsConn(t, func() (json.RawMessage, error) { return <-answers, nil })
+		_, _ = conn.Credentials(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := conn.AwaitCredentials(context.Background())
+			done <- err
+		}()
+		synctest.Wait()
+		answers <- turnAnswer(-1)
+		if err := <-done; err != nil {
+			t.Fatalf("AwaitCredentials() error = %v", err)
+		}
+		if credentials, err := conn.AwaitCredentials(context.Background()); err != nil || len(credentials.ICEServers) != 1 {
+			t.Fatalf("AwaitCredentials() with expired credentials = %v, %v, want the old server", credentials, err)
+		}
+		synctest.Wait()
+		if got := calls.Load(); got != 2 {
+			t.Fatalf("TURN requests = %d, want one joined request and one refresh", got)
+		}
+		answers <- turnAnswer(60)
+		synctest.Wait()
+		conn.stop(net.ErrClosed)
+	})
+}
+
+// A waiter sees net.ErrClosed when the JSON-RPC client stops before the Conn context is canceled.
+func TestAwaitCredentialsReportsClientStop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		conn, _ := credentialsConn(t, func() (json.RawMessage, error) {
+			<-release
+			return nil, errors.New("released")
+		})
+		done := make(chan error, 1)
+		go func() {
+			_, err := conn.AwaitCredentials(context.Background())
+			done <- err
+		}()
+		synctest.Wait()
+		_ = conn.client.Close()
+		if err := <-done; !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("AwaitCredentials() error = %v, want net.ErrClosed", err)
+		}
+		conn.stop(net.ErrClosed)
 	})
 }
