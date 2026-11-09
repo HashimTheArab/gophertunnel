@@ -619,8 +619,7 @@ func (listener *Listener) status() ServerStatus {
 // log in, after which it will expose packets received to the user.
 func (listener *Listener) handleConn(conn *Conn) {
 	defer func() {
-		conn.endReadLoop()
-		_ = conn.Close()
+		conn.endReadLoop(net.ErrClosed)
 		listener.group.remove()
 		listener.updatePongData()
 	}()

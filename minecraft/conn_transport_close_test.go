@@ -72,7 +72,7 @@ func TestReadBatch_DisconnectReadAfterTransportClosedIsTheCause(t *testing.T) {
 		if err := conn.receive(encodedDisconnect(t, "You are banned")); err != nil {
 			t.Errorf("receive disconnect: %v", err)
 		}
-		conn.endReadLoop()
+		conn.endReadLoop(net.ErrClosed)
 	}()
 
 	_, err := conn.ReadBatch()
@@ -126,7 +126,7 @@ func TestReadBatch_PacketsBeforeTheDisconnectAreReadFirst(t *testing.T) {
 					}
 				}
 				conn.flushBatch()
-				conn.endReadLoop()
+				conn.endReadLoop(net.ErrClosed)
 			}()
 
 			packets, err := conn.ReadBatch()
@@ -188,7 +188,7 @@ func TestReadBatch_TransportClosedWithoutDisconnectReportsTheTransport(t *testin
 	transportErr := errors.New("nethernet: SCTP transport closed")
 
 	closeTransport(transportErr)
-	conn.endReadLoop()
+	conn.endReadLoop(net.ErrClosed)
 
 	if _, err := conn.ReadBatch(); !errors.Is(err, transportErr) {
 		t.Fatalf("ReadBatch() error = %v, want the transport closure", err)
