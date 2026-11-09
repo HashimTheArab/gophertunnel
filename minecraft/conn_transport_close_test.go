@@ -6,9 +6,12 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/df-mc/go-nethernet"
+	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -197,5 +200,78 @@ func TestReadBatch_DisconnectThatClosedTheConnIsTheCause(t *testing.T) {
 	var disconnect DisconnectError
 	if !errors.As(err, &disconnect) || disconnect.Error() != "server closed" {
 		t.Fatalf("ReadBatch() error = %v, want the Disconnect", err)
+	}
+}
+
+// spawnedOverNetherNet returns a spawned client Conn and its server Conn, joined over NetherNet with HTTP
+// signaling on loopback.
+func spawnedOverNetherNet(t *testing.T) (client, server *Conn) {
+	t.Helper()
+	signaling := endpoint.HandlerConfig{Logger: slog.New(slog.DiscardHandler)}.New()
+	t.Cleanup(func() { _ = signaling.Close() })
+	network := NetherNet{Signaling: signaling, ListenConfig: nethernet.ListenConfig{AllowAnonymous: true, DisableTrickleICE: true}}
+	listener, err := (ListenConfig{AuthenticationDisabled: true, ErrorLog: slog.New(slog.DiscardHandler)}).ListenNetwork(network, "test")
+	if err != nil {
+		t.Fatalf("ListenNetwork: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	httpServer := httptest.NewServer(signaling)
+	t.Cleanup(httpServer.Close)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	started := make(chan *Conn, 1)
+	go func() {
+		defer close(started)
+		accepted, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		if err := accepted.(*Conn).StartGameContext(ctx, GameData{}); err == nil {
+			started <- accepted.(*Conn)
+		}
+	}()
+	client, err = Dialer{ErrorLog: slog.New(slog.DiscardHandler)}.DialContextNetwork(ctx,
+		AddressNetwork{NetherNet: NetherNet{Dialer: nethernet.Dialer{AllowIdentitylessServer: true}}}, httpServer.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.DoSpawnContext(ctx); err != nil {
+		t.Fatalf("DoSpawn: %v", err)
+	}
+	server, ok := <-started
+	if !ok {
+		t.Fatal("the server did not start the game")
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	return client, server
+}
+
+// The dialer's and the listener's read loops both mark their end, so a reader whose peer dropped the
+// transport is released as soon as the loop has drained, not after transportDrainTimeout.
+func TestReadLoopsReleaseReadersWhenThePeerDrops(t *testing.T) {
+	t.Parallel()
+	for _, side := range []string{"dialer", "listener"} {
+		t.Run(side, func(t *testing.T) {
+			t.Parallel()
+			client, server := spawnedOverNetherNet(t)
+			reader, peer := client, server
+			if side == "listener" {
+				reader, peer = server, client
+			}
+			_ = peer.Abort()
+
+			// Packets queued before the drop are still read first.
+			start := time.Now()
+			for {
+				if _, err := reader.ReadPacket(); err != nil {
+					break
+				}
+			}
+			if elapsed := time.Since(start); elapsed > transportDrainTimeout/2 {
+				t.Fatalf("ReadPacket() took %v, want the read loop's end to release it", elapsed)
+			}
+		})
 	}
 }
