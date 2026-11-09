@@ -485,7 +485,11 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := conn.Flush(); err != nil {
-				_ = conn.close(err)
+				// Once the transport has closed, the read loop ends the Conn with what the transport
+				// delivered before closing, such as a Disconnect: a failed write must not end it first.
+				if conn.transportCtx == nil || conn.transportCtx.Err() == nil {
+					_ = conn.close(err)
+				}
 				return
 			}
 		}

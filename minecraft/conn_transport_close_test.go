@@ -33,8 +33,22 @@ func (c contextConn) Close() error {
 	return c.Conn.Close()
 }
 
+// Write fails once the context has ended, as go-nethernet's does, and otherwise discards what it is given.
+func (c contextConn) Write(b []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, errors.Join(context.Cause(c.ctx), net.ErrClosed)
+	}
+	return len(b), nil
+}
+
 // newTransportClosingConn returns a batch-reading Conn over a transport whose closure the test controls.
 func newTransportClosingConn(t *testing.T) (*Conn, context.CancelCauseFunc) {
+	t.Helper()
+	return newTransportClosingConnFlushing(t, -1)
+}
+
+// newTransportClosingConnFlushing is newTransportClosingConn with the Conn's periodic flush at flushRate.
+func newTransportClosingConnFlushing(t *testing.T, flushRate time.Duration) (*Conn, context.CancelCauseFunc) {
 	t.Helper()
 	client, server := net.Pipe()
 	t.Cleanup(func() {
@@ -42,7 +56,7 @@ func newTransportClosingConn(t *testing.T) (*Conn, context.CancelCauseFunc) {
 		_ = server.Close()
 	})
 	ctx, cancel := context.WithCancelCause(context.Background())
-	conn := newConn(contextConn{Conn: client, ctx: ctx, cancel: cancel}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	conn := newConn(contextConn{Conn: client, ctx: ctx, cancel: cancel}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, flushRate, false)
 	conn.pool = conn.proto.Packets(false)
 	conn.batchReading = true
 	return conn, cancel
@@ -281,5 +295,29 @@ func TestReadLoopsReleaseReadersWhenThePeerDrops(t *testing.T) {
 				t.Fatalf("ReadPacket() took %v, want the read loop's end to release it", elapsed)
 			}
 		})
+	}
+}
+
+func TestReadBatch_FailedFlushAfterTransportClosedLeavesTheDisconnect(t *testing.T) {
+	t.Parallel()
+	conn, closeTransport := newTransportClosingConnFlushing(t, 10*time.Millisecond)
+	conn.loggedIn = true
+
+	// The application keeps writing after the transport closed, so the periodic flush fails before the
+	// read loop has decoded the peer's final Disconnect.
+	closeTransport(errors.New("nethernet: SCTP transport closed"))
+	if err := conn.WritePacket(&packet.Text{TextType: packet.TextTypeRaw, Message: "still writing"}); err != nil {
+		t.Fatalf("WritePacket() error = %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := conn.receive(encodedDisconnect(t, "kicked")); err != nil {
+		t.Fatalf("receive disconnect: %v", err)
+	}
+	conn.endReadLoop(net.ErrClosed)
+
+	_, err := conn.ReadBatch()
+	var disconnect DisconnectError
+	if !errors.As(err, &disconnect) || disconnect.Error() != "kicked" {
+		t.Fatalf("ReadBatch() error = %v, want the Disconnect", err)
 	}
 }
