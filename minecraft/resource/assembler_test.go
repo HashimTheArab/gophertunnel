@@ -129,3 +129,32 @@ func TestResourceFiles_RootAndCaseFolding(t *testing.T) {
 		t.Fatalf("nested ResourceFiles = %v, %v", files, err)
 	}
 }
+
+// TestResourceFiles_ArchiveSeparators reads Windows-authored archives through slash paths.
+func TestResourceFiles_ArchiveSeparators(t *testing.T) {
+	for _, prefix := range []string{"", `MyPack\`} {
+		t.Run(prefix, func(t *testing.T) {
+			pack, err := ReadBytes(packArchive(t, map[string]string{
+				prefix + "manifest.json":      testManifest,
+				prefix + `Entity\player.json`: `{"test":true}`,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files, err := pack.ResourceFiles("entity")
+			if err != nil || !slices.Equal(files, []string{"Entity/player.json"}) {
+				t.Fatalf("ResourceFiles = %v, %v", files, err)
+			}
+			if !pack.HasResourceFile("entity/player.json") {
+				t.Fatal("slash path did not find Windows archive member")
+			}
+			data, err := pack.ReadFile(files[0])
+			if err != nil || string(data) != `{"test":true}` {
+				t.Fatalf("ReadFile = %q, %v", data, err)
+			}
+			if pack.HasResourceFile("entity/../manifest.json") {
+				t.Fatal("resource lookup accepted traversal")
+			}
+		})
+	}
+}

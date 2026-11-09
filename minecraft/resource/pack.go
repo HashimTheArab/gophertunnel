@@ -363,7 +363,7 @@ func (p *Pack) ResourceFiles(dir string) ([]string, error) {
 	manifest, want := pathSegments(p.manifestDir), pathSegments(path.Join(p.manifestDir, dir))
 	var files []string
 	for _, file := range zr.File {
-		segments := strings.Split(file.Name, "/")
+		segments := pathSegments(resourceArchivePath(file.Name))
 		if len(segments) <= len(want) || !file.FileInfo().Mode().IsRegular() {
 			continue
 		}
@@ -389,6 +389,11 @@ func pathSegments(p string) []string {
 	return strings.Split(p, "/")
 }
 
+// resourceArchivePath gives Windows-authored ZIP members the same separator as resource paths.
+func resourceArchivePath(name string) string {
+	return strings.ReplaceAll(name, `\`, "/")
+}
+
 // findResourceFile finds a regular file using a path relative to manifest.json.
 func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	if filePath == "." || !fs.ValidPath(filePath) {
@@ -400,7 +405,7 @@ func (p *Pack) findResourceFile(filePath string) (*zip.File, error) {
 	}
 	want := path.Join(p.manifestDir, filePath)
 	for _, file := range zr.File {
-		if strings.EqualFold(file.Name, want) && file.FileInfo().Mode().IsRegular() {
+		if strings.EqualFold(resourceArchivePath(file.Name), want) && file.FileInfo().Mode().IsRegular() {
 			return file, nil
 		}
 	}
@@ -623,16 +628,20 @@ type dirPackReader struct {
 // over same-named files inside its folders, such as textures/entity/manifest.json. Like vanilla, it fails
 // when several matches share the shallowest depth rather than guess between them.
 func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
-	var match *zip.File
+	var (
+		match     *zip.File
+		matchName string
+	)
 	matchDepth, ambiguous := 0, false
 	for _, f := range r.File {
-		if !f.Mode().IsRegular() || path.Base(f.Name) != fileName {
+		name := resourceArchivePath(f.Name)
+		if !f.Mode().IsRegular() || path.Base(name) != fileName {
 			continue
 		}
-		// Depth of the name as stored, since that is the entry opened and the root manifestDir derives from.
-		switch depth := strings.Count(f.Name, "/"); {
+		// Depth of the name as stored, with either separator, since manifestDir derives from it.
+		switch depth := strings.Count(name, "/"); {
 		case match == nil || depth < matchDepth:
-			match, matchDepth, ambiguous = f, depth, false
+			match, matchName, matchDepth, ambiguous = f, name, depth, false
 		case depth == matchDepth:
 			ambiguous = true
 		}
@@ -647,7 +656,7 @@ func (r zipPackReader) find(fileName string) (io.ReadCloser, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("open zip file %v: %w", match.Name, err)
 	}
-	return fileReader, match.Name, nil
+	return fileReader, matchName, nil
 }
 
 func (r dirPackReader) find(fileName string) (io.ReadCloser, string, error) {
