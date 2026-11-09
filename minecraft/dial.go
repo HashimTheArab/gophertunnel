@@ -451,7 +451,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	case <-ctx.Done():
 		return nil, conn.wrap(context.Cause(ctx), "dial")
 	case <-conn.ctx.Done():
-		return nil, conn.closeErr("dial")
+		return nil, conn.readCloseErr("dial")
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
 		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
@@ -464,7 +464,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		case <-ctx.Done():
 			return nil, conn.wrap(context.Cause(ctx), "dial")
 		case <-conn.ctx.Done():
-			return nil, conn.closeErr("dial")
+			return nil, conn.readCloseErr("dial")
 		case <-connected:
 			if err := conn.awaitPackStores(ctx); err != nil {
 				return nil, err
@@ -494,6 +494,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel context.CancelCauseFunc) {
 	closeCause := error(net.ErrClosed)
 	defer func() {
+		conn.endReadLoop()
 		_ = conn.close(closeCause)
 	}()
 	cancelContext := true

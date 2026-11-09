@@ -242,6 +242,13 @@ type Conn struct {
 	abortErr         error
 	ctx              context.Context
 	cancelFunc       context.CancelCauseFunc
+	// transportCtx is the context of the transport, if it has one. The Conn's context derives from it.
+	transportCtx context.Context
+	// readLoopDone is closed once the goroutine decoding the transport has returned.
+	readLoopDone     chan struct{}
+	readLoopDoneOnce sync.Once
+	// disconnectCause is the error a Disconnect packet from the peer closed the Conn with.
+	disconnectCause atomic.Pointer[error]
 
 	conn        net.Conn
 	log         *slog.Logger
@@ -456,8 +463,10 @@ func newConn(netConn net.Conn, key *ecdsa.PrivateKey, log *slog.Logger, proto Pr
 	conn.enc = packet.NewEncoderFor(netConn, conn.delay.writeBatch)
 	conn.dec = packet.NewDecoder(netConn)
 
+	conn.readLoopDone = make(chan struct{})
 	if c, ok := netConn.(interface{ Context() context.Context }); ok {
-		conn.ctx, conn.cancelFunc = context.WithCancelCause(c.Context())
+		conn.transportCtx = c.Context()
+		conn.ctx, conn.cancelFunc = context.WithCancelCause(conn.transportCtx)
 	} else {
 		conn.ctx, conn.cancelFunc = context.WithCancelCause(context.Background())
 	}
@@ -558,7 +567,7 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 
 	select {
 	case <-conn.ctx.Done():
-		return conn.closeErr("start game")
+		return conn.readCloseErr("start game")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "start game")
 	case <-conn.spawn:
@@ -614,7 +623,7 @@ func (conn *Conn) DoSpawnTimeout(timeout time.Duration) error {
 func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	select {
 	case <-conn.ctx.Done():
-		return conn.closeErr("do spawn")
+		return conn.readCloseErr("do spawn")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "do spawn")
 	case <-conn.spawn:
@@ -847,7 +856,7 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 
 	select {
 	case <-conn.ctx.Done():
-		return nil, conn.closeErr("read packet")
+		return nil, conn.readCloseErr("read packet")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read packet")
 	case data := <-conn.packets:
@@ -950,6 +959,7 @@ func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
 		select {
 		case <-conn.batchReady:
 		case <-conn.ctx.Done():
+			conn.awaitReadLoop()
 			if batch, ok := conn.takeBatch(); ok {
 				return batch, nil
 			}
@@ -1090,7 +1100,7 @@ func (conn *Conn) ReadBytes() ([]byte, error) {
 	}
 	select {
 	case <-conn.ctx.Done():
-		return nil, conn.closeErr("read")
+		return nil, conn.readCloseErr("read")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read")
 	case data := <-conn.packets:
@@ -1113,7 +1123,7 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 	}
 	select {
 	case <-conn.ctx.Done():
-		return 0, conn.closeErr("read")
+		return 0, conn.readCloseErr("read")
 	case <-conn.readDeadline:
 		return 0, conn.wrap(context.DeadlineExceeded, "read")
 	case data := <-conn.packets:
@@ -1419,13 +1429,17 @@ func (conn *Conn) receive(data []byte) error {
 			// Make the packets received earlier in this batch readable before the connection closes.
 			conn.flushBatch()
 			disconnectMessage := conn.disconnectPacketMessage(disconnectPacket)
-			_ = conn.close(conn.wrap(&DisconnectPacketError{
+			cause := conn.wrap(&DisconnectPacketError{
 				Reason:                  disconnectPacket.Reason,
 				HideDisconnectionScreen: disconnectPacket.HideDisconnectionScreen,
 				Message:                 disconnectPacket.Message,
 				FilteredMessage:         disconnectPacket.FilteredMessage,
 				DisplayMessage:          disconnectMessage,
-			}, "receive"))
+			}, "receive")
+			// The peer may close its transport right after the Disconnect, closing the Conn before this
+			// cause can: keep it so readers report the Disconnect instead.
+			conn.disconnectCause.CompareAndSwap(nil, &cause)
+			_ = conn.close(cause)
 			return nil
 		}
 		// The Disconnect packet is not in this connection's pool (clients do not normally send one), so
@@ -2284,7 +2298,7 @@ func (conn *Conn) awaitPackStores(ctx context.Context) error {
 	case <-ctx.Done():
 		return conn.wrap(context.Cause(ctx), "dial")
 	case <-conn.ctx.Done():
-		return conn.closeErr("dial")
+		return conn.readCloseErr("dial")
 	}
 }
 
@@ -3035,8 +3049,42 @@ func (conn *Conn) cancel(cause error) {
 func (conn *Conn) closeErr(op string) error {
 	select {
 	case <-conn.ctx.Done():
+		if cause := conn.disconnectCause.Load(); cause != nil {
+			return conn.wrap(*cause, op)
+		}
 		return conn.wrap(context.Cause(conn.ctx), op)
 	default:
 		return conn.wrap(net.ErrClosed, op)
 	}
+}
+
+// transportDrainTimeout bounds how long a reader waits for the read loop to decode what a closed
+// transport delivered before closing. go-nethernet hands those messages over within a second.
+const transportDrainTimeout = 3 * time.Second
+
+// readCloseErr is closeErr for a caller waiting to read from the Conn. It must not be called from the
+// read loop.
+func (conn *Conn) readCloseErr(op string) error {
+	conn.awaitReadLoop()
+	return conn.closeErr(op)
+}
+
+// awaitReadLoop waits, for at most transportDrainTimeout, for the read loop to return when the transport
+// closing is what closed the Conn. A transport such as NetherNet reports its closure while the last
+// messages it received are still to be decoded, so a peer's final Disconnect would otherwise lose to it.
+func (conn *Conn) awaitReadLoop() {
+	if conn.transportCtx == nil || !errors.Is(context.Cause(conn.ctx), context.Cause(conn.transportCtx)) {
+		return
+	}
+	timer := time.NewTimer(transportDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-conn.readLoopDone:
+	case <-timer.C:
+	}
+}
+
+// endReadLoop marks the read loop as returned: everything the transport delivered has been received.
+func (conn *Conn) endReadLoop() {
+	conn.readLoopDoneOnce.Do(func() { close(conn.readLoopDone) })
 }
