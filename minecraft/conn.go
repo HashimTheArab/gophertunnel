@@ -1629,10 +1629,11 @@ func (conn *Conn) flushBatch() {
 		// was. Deferred packets stay readable after a close, matching deferredPackets in single-packet
 		// mode.
 		batch = append(deferred, batch...)
-	} else if conn.ctx.Err() != nil && !conn.closedByTransport() {
+	} else if conn.ctx.Err() != nil && (!conn.closedByTransport() || conn.disconnectCause.Load() != nil) {
 		// The connection closed: drop collected packets, matching queuePacket dropping post-close
 		// traffic in single-packet mode. Packets the transport delivered before its own closure are
-		// kept, as they arrived before the connection ended.
+		// kept, as they arrived before the connection ended, but not those behind a Disconnect: receive
+		// flushes what preceded the Disconnect before recording it.
 		return
 	}
 	conn.queueBatch(batch)

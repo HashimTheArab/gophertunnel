@@ -91,11 +91,14 @@ func TestReadBatch_PacketsBeforeTheDisconnectAreReadFirst(t *testing.T) {
 		name     string
 		loggedIn bool
 		oneBatch bool
+		// after sends another packet behind the Disconnect, which must not be delivered.
+		after bool
 	}{
 		// Before login, received packets are deferred; once logged in they are collected into batches.
 		{name: "during login"},
 		{name: "logged in", loggedIn: true},
 		{name: "logged in, same wire batch", loggedIn: true, oneBatch: true},
+		{name: "logged in, packet after the Disconnect", loggedIn: true, oneBatch: true, after: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -116,6 +119,11 @@ func TestReadBatch_PacketsBeforeTheDisconnectAreReadFirst(t *testing.T) {
 				}
 				if err := conn.receive(encodedDisconnect(t, "bye")); err != nil {
 					t.Errorf("receive disconnect: %v", err)
+				}
+				if test.after {
+					if err := conn.receive(buf.Bytes()); err != nil {
+						t.Errorf("receive text after the disconnect: %v", err)
+					}
 				}
 				conn.flushBatch()
 				conn.endReadLoop()
