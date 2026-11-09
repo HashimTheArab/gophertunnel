@@ -451,7 +451,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	case <-ctx.Done():
 		return nil, conn.wrap(context.Cause(ctx), "dial")
 	case <-conn.ctx.Done():
-		return nil, conn.readCloseErr("dial")
+		return nil, conn.readCloseErr(ctx, "dial")
 	case <-readyForLogin:
 		// We've received our network settings, so we can now send our login request.
 		conn.expect(packet.IDResourcePacksInfo, packet.IDServerToClientHandshake, packet.IDPlayStatus, packet.IDStartGame)
@@ -464,7 +464,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		case <-ctx.Done():
 			return nil, conn.wrap(context.Cause(ctx), "dial")
 		case <-conn.ctx.Done():
-			return nil, conn.readCloseErr("dial")
+			return nil, conn.readCloseErr(ctx, "dial")
 		case <-connected:
 			if err := conn.awaitPackStores(ctx); err != nil {
 				return nil, err
@@ -515,7 +515,12 @@ func listenConn(conn *Conn, readyForLogin, connected chan struct{}, cancel conte
 			if !readyToLoginBefore && conn.readyToLogin {
 				// This is the signal that the connection is ready to login, so we put a value in the channel so that
 				// it may be detected.
-				readyForLogin <- struct{}{}
+				select {
+				case readyForLogin <- struct{}{}:
+				case <-conn.ctx.Done():
+					// The dial stopped waiting: it is reading the closure instead, and waits for this
+					// loop to end.
+				}
 			}
 			if !loggedInBefore && conn.loggedIn {
 				// This is the signal that the connection was considered logged in, so we put a value in the channel so

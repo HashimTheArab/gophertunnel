@@ -249,6 +249,9 @@ type Conn struct {
 	readLoopDoneOnce sync.Once
 	// disconnectCause is the error a Disconnect packet from the peer closed the Conn with.
 	disconnectCause atomic.Pointer[error]
+	// closedLocally is set when the Conn cancelled its own context, rather than its transport's
+	// closure cancelling it first.
+	closedLocally atomic.Bool
 
 	conn        net.Conn
 	log         *slog.Logger
@@ -567,7 +570,7 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 
 	select {
 	case <-conn.ctx.Done():
-		return conn.readCloseErr("start game")
+		return conn.readCloseErr(ctx, "start game")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "start game")
 	case <-conn.spawn:
@@ -623,7 +626,7 @@ func (conn *Conn) DoSpawnTimeout(timeout time.Duration) error {
 func (conn *Conn) DoSpawnContext(ctx context.Context) error {
 	select {
 	case <-conn.ctx.Done():
-		return conn.readCloseErr("do spawn")
+		return conn.readCloseErr(ctx, "do spawn")
 	case <-ctx.Done():
 		return conn.wrap(ctx.Err(), "do spawn")
 	case <-conn.spawn:
@@ -856,7 +859,7 @@ func (conn *Conn) ReadPacket() (pk packet.Packet, err error) {
 
 	select {
 	case <-conn.ctx.Done():
-		return nil, conn.readCloseErr("read packet")
+		return nil, conn.readCloseErr(context.Background(), "read packet")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read packet")
 	case data := <-conn.packets:
@@ -959,7 +962,7 @@ func (conn *Conn) nextBatch(op string) ([]*packetData, error) {
 		select {
 		case <-conn.batchReady:
 		case <-conn.ctx.Done():
-			conn.awaitReadLoop()
+			conn.awaitReadLoop(context.Background())
 			if batch, ok := conn.takeBatch(); ok {
 				return batch, nil
 			}
@@ -1100,7 +1103,7 @@ func (conn *Conn) ReadBytes() ([]byte, error) {
 	}
 	select {
 	case <-conn.ctx.Done():
-		return nil, conn.readCloseErr("read")
+		return nil, conn.readCloseErr(context.Background(), "read")
 	case <-conn.readDeadline:
 		return nil, conn.wrap(context.DeadlineExceeded, "read")
 	case data := <-conn.packets:
@@ -1123,7 +1126,7 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 	}
 	select {
 	case <-conn.ctx.Done():
-		return 0, conn.readCloseErr("read")
+		return 0, conn.readCloseErr(context.Background(), "read")
 	case <-conn.readDeadline:
 		return 0, conn.wrap(context.DeadlineExceeded, "read")
 	case data := <-conn.packets:
@@ -1437,8 +1440,11 @@ func (conn *Conn) receive(data []byte) error {
 				DisplayMessage:          disconnectMessage,
 			}, "receive")
 			// The peer may close its transport right after the Disconnect, closing the Conn before this
-			// cause can: keep it so readers report the Disconnect instead.
-			conn.disconnectCause.CompareAndSwap(nil, &cause)
+			// cause can: keep it so readers report the Disconnect instead. A Conn closed locally keeps
+			// reporting its own closure.
+			if conn.ctx.Err() == nil || conn.closedByTransport() {
+				conn.disconnectCause.CompareAndSwap(nil, &cause)
+			}
 			_ = conn.close(cause)
 			return nil
 		}
@@ -1626,9 +1632,10 @@ func (conn *Conn) flushBatch() {
 		// was. Deferred packets stay readable after a close, matching deferredPackets in single-packet
 		// mode.
 		batch = append(deferred, batch...)
-	} else if conn.ctx.Err() != nil {
+	} else if conn.ctx.Err() != nil && !conn.closedByTransport() {
 		// The connection closed: drop collected packets, matching queuePacket dropping post-close
-		// traffic in single-packet mode.
+		// traffic in single-packet mode. Packets the transport delivered before its own closure are
+		// kept, as they arrived before the connection ended.
 		return
 	}
 	conn.queueBatch(batch)
@@ -2298,7 +2305,7 @@ func (conn *Conn) awaitPackStores(ctx context.Context) error {
 	case <-ctx.Done():
 		return conn.wrap(context.Cause(ctx), "dial")
 	case <-conn.ctx.Done():
-		return conn.readCloseErr("dial")
+		return conn.readCloseErr(ctx, "dial")
 	}
 }
 
@@ -3040,6 +3047,9 @@ func (conn *Conn) release(cause error, closeTransport bool) error {
 // cancel cancels the Conn context with cause. The first cause is kept.
 func (conn *Conn) cancel(cause error) {
 	if conn.cancelFunc != nil {
+		if conn.ctx.Err() == nil {
+			conn.closedLocally.Store(true)
+		}
 		conn.cancelFunc(cause)
 	}
 }
@@ -3062,18 +3072,24 @@ func (conn *Conn) closeErr(op string) error {
 // transport delivered before closing. go-nethernet hands those messages over within a second.
 const transportDrainTimeout = 3 * time.Second
 
-// readCloseErr is closeErr for a caller waiting to read from the Conn. It must not be called from the
-// read loop.
-func (conn *Conn) readCloseErr(op string) error {
-	conn.awaitReadLoop()
+// readCloseErr is closeErr for a caller waiting to read from the Conn, which stops waiting for the read
+// loop once ctx ends. It must not be called from the read loop.
+func (conn *Conn) readCloseErr(ctx context.Context, op string) error {
+	conn.awaitReadLoop(ctx)
 	return conn.closeErr(op)
 }
 
-// awaitReadLoop waits, for at most transportDrainTimeout, for the read loop to return when the transport
-// closing is what closed the Conn. A transport such as NetherNet reports its closure while the last
-// messages it received are still to be decoded, so a peer's final Disconnect would otherwise lose to it.
-func (conn *Conn) awaitReadLoop() {
-	if conn.transportCtx == nil || !errors.Is(context.Cause(conn.ctx), context.Cause(conn.transportCtx)) {
+// closedByTransport reports whether the transport's closure ended the Conn before the Conn closed itself.
+func (conn *Conn) closedByTransport() bool {
+	return conn.transportCtx != nil && conn.transportCtx.Err() != nil && !conn.closedLocally.Load()
+}
+
+// awaitReadLoop waits, for at most transportDrainTimeout or until ctx ends, for the read loop to return
+// when the transport closing is what closed the Conn. A transport such as NetherNet reports its closure
+// while the last messages it received are still to be decoded, so a peer's final Disconnect would
+// otherwise lose to it.
+func (conn *Conn) awaitReadLoop(ctx context.Context) {
+	if !conn.closedByTransport() {
 		return
 	}
 	timer := time.NewTimer(transportDrainTimeout)
@@ -3081,6 +3097,7 @@ func (conn *Conn) awaitReadLoop() {
 	select {
 	case <-conn.readLoopDone:
 	case <-timer.C:
+	case <-ctx.Done():
 	}
 }
 

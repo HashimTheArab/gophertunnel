@@ -16,13 +16,19 @@ import (
 
 // contextConn is a transport that, like a NetherNet connection, reports its closure through a
 // context. go-nethernet cancels it as soon as SCTP closes, while the messages delivered before that are
-// still being read.
+// still being read, and cancels it with net.ErrClosed when closed locally.
 type contextConn struct {
 	net.Conn
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelCauseFunc
 }
 
 func (c contextConn) Context() context.Context { return c.ctx }
+
+func (c contextConn) Close() error {
+	c.cancel(net.ErrClosed)
+	return c.Conn.Close()
+}
 
 // newTransportClosingConn returns a batch-reading Conn over a transport whose closure the test controls.
 func newTransportClosingConn(t *testing.T) (*Conn, context.CancelCauseFunc) {
@@ -33,7 +39,7 @@ func newTransportClosingConn(t *testing.T) (*Conn, context.CancelCauseFunc) {
 		_ = server.Close()
 	})
 	ctx, cancel := context.WithCancelCause(context.Background())
-	conn := newConn(contextConn{Conn: client, ctx: ctx}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	conn := newConn(contextConn{Conn: client, ctx: ctx, cancel: cancel}, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 	conn.pool = conn.proto.Packets(false)
 	conn.batchReading = true
 	return conn, cancel
@@ -78,32 +84,90 @@ func TestReadBatch_DisconnectReadAfterTransportClosedIsTheCause(t *testing.T) {
 
 func TestReadBatch_PacketsBeforeTheDisconnectAreReadFirst(t *testing.T) {
 	t.Parallel()
-	conn, closeTransport := newTransportClosingConn(t)
+	for _, test := range []struct {
+		name     string
+		loggedIn bool
+		oneBatch bool
+	}{
+		// Before login, received packets are deferred; once logged in they are collected into batches.
+		{name: "during login"},
+		{name: "logged in", loggedIn: true},
+		{name: "logged in, same wire batch", loggedIn: true, oneBatch: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			conn, closeTransport := newTransportClosingConn(t)
+			conn.loggedIn = test.loggedIn
 
-	closeTransport(errors.New("nethernet: SCTP transport closed"))
-	go func() {
-		var buf bytes.Buffer
-		_ = (&packet.Header{PacketID: packet.IDText}).Write(&buf)
-		(&packet.Text{TextType: packet.TextTypeRaw, Message: "last words"}).Marshal(protocol.NewWriter(&buf, 0))
-		time.Sleep(50 * time.Millisecond)
-		if err := conn.receive(buf.Bytes()); err != nil {
-			t.Errorf("receive text: %v", err)
-		}
-		conn.flushBatch()
-		if err := conn.receive(encodedDisconnect(t, "bye")); err != nil {
-			t.Errorf("receive disconnect: %v", err)
-		}
-		conn.endReadLoop()
-	}()
+			closeTransport(errors.New("nethernet: SCTP transport closed"))
+			go func() {
+				var buf bytes.Buffer
+				_ = (&packet.Header{PacketID: packet.IDText}).Write(&buf)
+				(&packet.Text{TextType: packet.TextTypeRaw, Message: "last words"}).Marshal(protocol.NewWriter(&buf, 0))
+				time.Sleep(50 * time.Millisecond)
+				if err := conn.receive(buf.Bytes()); err != nil {
+					t.Errorf("receive text: %v", err)
+				}
+				if !test.oneBatch {
+					conn.flushBatch()
+				}
+				if err := conn.receive(encodedDisconnect(t, "bye")); err != nil {
+					t.Errorf("receive disconnect: %v", err)
+				}
+				conn.flushBatch()
+				conn.endReadLoop()
+			}()
 
-	packets, err := conn.ReadBatch()
-	if err != nil || len(packets) != 1 {
-		t.Fatalf("ReadBatch() = %v, %v; want the Text packet sent before the Disconnect", packets, err)
+			packets, err := conn.ReadBatch()
+			if err != nil || len(packets) != 1 {
+				t.Fatalf("ReadBatch() = %v, %v; want the Text packet sent before the Disconnect", packets, err)
+			}
+			_, err = conn.ReadBatch()
+			var disconnect DisconnectError
+			if !errors.As(err, &disconnect) || disconnect.Error() != "bye" {
+				t.Fatalf("second ReadBatch() error = %v, want the Disconnect", err)
+			}
+		})
 	}
-	_, err = conn.ReadBatch()
-	var disconnect DisconnectError
-	if !errors.As(err, &disconnect) || disconnect.Error() != "bye" {
-		t.Fatalf("second ReadBatch() error = %v, want the Disconnect", err)
+}
+
+func TestReadBatch_LocalCloseIsReportedWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	conn, _ := newTransportClosingConn(t)
+	conn.loggedIn = true
+
+	// Closing the Conn closes its transport, which cancels the transport's context too. The read loop
+	// has not ended and then decodes a Disconnect that was already received.
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := conn.receive(encodedDisconnect(t, "too late")); err != nil {
+		t.Fatalf("receive disconnect: %v", err)
+	}
+
+	start := time.Now()
+	_, err := conn.ReadBatch()
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("ReadBatch() error = %v, want the local closure", err)
+	}
+	if elapsed := time.Since(start); elapsed > transportDrainTimeout/2 {
+		t.Fatalf("ReadBatch() took %v, want no wait for the read loop after a local close", elapsed)
+	}
+}
+
+func TestDoSpawnContext_StopsWaitingForTheReadLoopWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+	conn, closeTransport := newTransportClosingConn(t)
+	closeTransport(errors.New("nethernet: SCTP transport closed"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := conn.DoSpawnContext(ctx); err == nil {
+		t.Fatal("DoSpawnContext() succeeded on a closed Conn")
+	}
+	if elapsed := time.Since(start); elapsed > transportDrainTimeout/2 {
+		t.Fatalf("DoSpawnContext() took %v, want it to stop waiting when its context ends", elapsed)
 	}
 }
 
