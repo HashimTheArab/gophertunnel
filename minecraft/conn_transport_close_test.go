@@ -183,3 +183,19 @@ func TestReadBatch_TransportClosedWithoutDisconnectReportsTheTransport(t *testin
 		t.Fatalf("ReadBatch() error = %v, want the transport closure", err)
 	}
 }
+
+func TestReadBatch_DisconnectThatClosedTheConnIsTheCause(t *testing.T) {
+	t.Parallel()
+	conn, _ := newTransportClosingConn(t)
+	conn.loggedIn = true
+
+	// The transport stays up: the Disconnect itself closes the Conn.
+	if err := conn.receive(encodedDisconnect(t, "server closed")); err != nil {
+		t.Fatalf("receive disconnect: %v", err)
+	}
+	_, err := conn.ReadBatch()
+	var disconnect DisconnectError
+	if !errors.As(err, &disconnect) || disconnect.Error() != "server closed" {
+		t.Fatalf("ReadBatch() error = %v, want the Disconnect", err)
+	}
+}

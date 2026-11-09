@@ -1440,11 +1440,8 @@ func (conn *Conn) receive(data []byte) error {
 				DisplayMessage:          disconnectMessage,
 			}, "receive")
 			// The peer may close its transport right after the Disconnect, closing the Conn before this
-			// cause can: keep it so readers report the Disconnect instead. A Conn closed locally keeps
-			// reporting its own closure.
-			if conn.ctx.Err() == nil || conn.closedByTransport() {
-				conn.disconnectCause.CompareAndSwap(nil, &cause)
-			}
+			// cause can: keep it so closeErr can report the Disconnect instead.
+			conn.disconnectCause.CompareAndSwap(nil, &cause)
 			_ = conn.close(cause)
 			return nil
 		}
@@ -3059,10 +3056,13 @@ func (conn *Conn) cancel(cause error) {
 func (conn *Conn) closeErr(op string) error {
 	select {
 	case <-conn.ctx.Done():
-		if cause := conn.disconnectCause.Load(); cause != nil {
+		closeCause := context.Cause(conn.ctx)
+		// A Disconnect is the cause when it closed the Conn, or when the transport's closure beat it
+		// to it. A Conn closed locally first reports its own closure.
+		if cause := conn.disconnectCause.Load(); cause != nil && (!conn.closedLocally.Load() || closeCause == *cause) {
 			return conn.wrap(*cause, op)
 		}
-		return conn.wrap(context.Cause(conn.ctx), op)
+		return conn.wrap(closeCause, op)
 	default:
 		return conn.wrap(net.ErrClosed, op)
 	}
