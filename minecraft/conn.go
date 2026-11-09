@@ -1258,6 +1258,19 @@ func (conn *Conn) Latency() time.Duration {
 	panic(fmt.Sprintf("connection type %T has no Latency() time.Duration method", conn.conn))
 }
 
+// AveragePing returns the average full round-trip time of recent connected pings, measured by the
+// underlying connection from sending a ping to receiving its pong. Unlike Latency, it does not include
+// the time the other end holds acknowledgements. It returns false if the connection does not measure
+// pings or has not received a pong yet.
+func (conn *Conn) AveragePing() (time.Duration, bool) {
+	if c, ok := conn.conn.(interface {
+		AveragePing() (time.Duration, bool)
+	}); ok {
+		return c.AveragePing()
+	}
+	return 0, false
+}
+
 // ClientCacheEnabled checks if the connection has the client blob cache enabled. If true, the server may send
 // blobs to the client to reduce network transmission, but if false, the client does not support it, and the
 // server must send chunks as usual.
