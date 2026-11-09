@@ -51,6 +51,6 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 )
 
-replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20261108113906-d4f2a990a702
+replace github.com/sandertv/go-raknet => github.com/hashimthearab/go-raknet v1.15.1-0.20261109085609-484503321e03
 
 replace github.com/df-mc/go-nethernet => github.com/hashimthearab/go-nethernet v0.0.0-20261106225539-0ca813d9022f
