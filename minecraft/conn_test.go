@@ -9,6 +9,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/constant"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"io"
 	"log/slog"
 	"net"
@@ -2039,5 +2044,32 @@ func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
 	}
 	if got := conn.shieldID.Load(); got != 355 {
 		t.Fatalf("shield ID after an active-protocol registry = %d, want 355", got)
+	}
+}
+
+// A disconnect reason without text reaches the player as a bare number.
+func TestDisconnectReasonsHaveText(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "protocol/packet/disconnect.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse disconnect reasons: %v", err)
+	}
+	// Imports are not resolved: constant values do not depend on them.
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
+	_, _ = (&types.Config{Error: func(error) {}}).Check("packet", fset, []*ast.File{file}, info)
+	found := 0
+	for ident, object := range info.Defs {
+		reason, ok := object.(*types.Const)
+		if !ok || !strings.HasPrefix(ident.Name, "DisconnectReason") {
+			continue
+		}
+		found++
+		value, _ := constant.Int64Val(reason.Val())
+		if disconnectReasons[int32(value)] == "" {
+			t.Errorf("%s (%d) has no text in disconnectReasons", ident.Name, value)
+		}
+	}
+	if found == 0 {
+		t.Fatal("found no disconnect reasons")
 	}
 }

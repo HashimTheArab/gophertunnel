@@ -213,6 +213,21 @@ var disconnectReasons = map[int32]string{
 	packet.DisconnectReasonEditorMismatchEditorToVanilla:                 "The server is not in Editor Mode. Failed to connect.",
 	packet.DisconnectReasonEditorMismatchVanillaToEditor:                 "The server is in Editor Mode. Failed to connect.",
 	packet.DisconnectReasonDenyListed:                                    "You are in deny list.",
+	packet.DisconnectReasonNonceMissing:                                  "Your sign-in check was incomplete.",
+	packet.DisconnectReasonNonceNotFound:                                 "Your sign-in check could not be found.",
+	packet.DisconnectReasonNonceExpired:                                  "Your sign-in check expired.",
+	packet.DisconnectReasonNonceNotValid:                                 "Your sign-in check was not valid.",
+	packet.DisconnectReasonHostDisconnected:                              "The host closed the world.",
+	packet.DisconnectReasonEditorJoinIntentPolicyFailure:                 "This world can't be joined in Editor Mode.",
+	packet.DisconnectReasonNetherNetIdentityNotAllowed:                   "This server did not accept your connection.",
+	packet.DisconnectReasonInvalidName:                                   "Your name is not allowed on this server.",
+	packet.DisconnectReasonExpiredToken:                                  "Your sign-in has expired.",
+	packet.DisconnectReasonHostAcceptsNoTypeOfAuth:                       "The host doesn't allow any way to sign in.",
+	packet.DisconnectReasonNotAuthenticatedFastFail:                      "You need to be signed in to join.",
+	packet.DisconnectReasonEditorNotAllowed:                              "Editor Mode is not allowed on this server.",
+	packet.DisconnectReasonMissingStructureData:                          "Some structure data is missing.",
+	packet.DisconnectReasonUnsupportedTransport:                          "This server uses a connection type your game doesn't support.",
+	packet.DisconnectReasonSubClientLoginNotBound:                        "The extra player could not be linked to this game.",
 }
 
 // Handoff names where a Conn's automatic packet handling ends and the caller takes over the connection.
