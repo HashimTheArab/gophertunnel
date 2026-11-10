@@ -9,6 +9,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net"
@@ -2039,5 +2042,25 @@ func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
 	}
 	if got := conn.shieldID.Load(); got != 355 {
 		t.Fatalf("shield ID after an active-protocol registry = %d, want 355", got)
+	}
+}
+
+// A disconnect reason without text reaches the player as a bare number.
+func TestDisconnectReasonsHaveText(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "protocol/packet/disconnect.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse disconnect reasons: %v", err)
+	}
+	for _, decl := range file.Decls {
+		block, ok := decl.(*ast.GenDecl)
+		if !ok || block.Tok != token.CONST {
+			continue
+		}
+		for iota, spec := range block.Specs {
+			name := spec.(*ast.ValueSpec).Names[0].Name
+			if _, ok := disconnectReasons[int32(iota)]; !ok && name != "_" {
+				t.Errorf("%s (%d) has no text in disconnectReasons", name, iota)
+			}
+		}
 	}
 }

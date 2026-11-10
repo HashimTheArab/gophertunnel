@@ -34,6 +34,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// defaultDialMaxDecompressedLen is the largest decompressed batch the vanilla client accepts.
+const defaultDialMaxDecompressedLen = 64 * 1024 * 1024
+
 // Dialer allows specifying specific settings for connection to a Minecraft server.
 // The zero value of Dialer is used for the package level Dial function.
 type Dialer struct {
@@ -134,7 +137,7 @@ type Dialer struct {
 	LazyBlockActorData bool
 
 	// MaxDecompressedLen is the maximum length of a decompressed packet batch. If 0, the default value is
-	// 16MB (16 * 1024 * 1024). Setting this to a negative integer disables the limit.
+	// 64MB (64 * 1024 * 1024), the vanilla client's limit. Setting this to a negative integer disables the limit.
 	MaxDecompressedLen int
 
 	// FlushRate is the rate at which packets sent are flushed. Packets are buffered for a duration up to
@@ -407,7 +410,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	conn.forwardClientCacheStatus = d.ForwardClientCacheStatus
 	conn.disconnectOnInvalidPacket = d.DisconnectOnInvalidPackets
 	conn.disconnectOnUnknownPacket = d.DisconnectOnUnknownPackets
-	conn.maxDecompressedLen = d.MaxDecompressedLen
+	conn.maxDecompressedLen = d.maxDecompressedLen()
 	conn.handoff = d.Handoff
 	conn.batchReading = d.EnableBatchReading
 	conn.SetPacketBatchFunc(d.PacketBatchFunc)
@@ -487,6 +490,11 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("dial: no network under id %v", network)}
 	}
 	return d.DialContextNetwork(ctx, n, address)
+}
+
+// maxDecompressedLen returns MaxDecompressedLen, or the vanilla client's limit if it is unset.
+func (d Dialer) maxDecompressedLen() int {
+	return cmp.Or(d.MaxDecompressedLen, defaultDialMaxDecompressedLen)
 }
 
 // listenConn listens on the connection until it is closed on another goroutine. The channel passed will
