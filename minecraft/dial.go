@@ -34,9 +34,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// defaultDialMaxDecompressedLen is the largest decompressed batch the vanilla client accepts.
-const defaultDialMaxDecompressedLen = 64 * 1024 * 1024
-
 // Dialer allows specifying specific settings for connection to a Minecraft server.
 // The zero value of Dialer is used for the package level Dial function.
 type Dialer struct {
@@ -494,7 +491,7 @@ func (d Dialer) DialContext(ctx context.Context, network, address string) (conn 
 
 // maxDecompressedLen returns MaxDecompressedLen, or the vanilla client's limit if it is unset.
 func (d Dialer) maxDecompressedLen() int {
-	return cmp.Or(d.MaxDecompressedLen, defaultDialMaxDecompressedLen)
+	return cmp.Or(d.MaxDecompressedLen, packet.DefaultClientMaxDecompressedLen)
 }
 
 // listenConn listens on the connection until it is closed on another goroutine. The channel passed will

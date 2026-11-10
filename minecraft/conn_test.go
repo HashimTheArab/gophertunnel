@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"log/slog"
 	"net"
@@ -2047,20 +2049,27 @@ func TestWritePacketRawDecodesRegistryWithActiveProtocol(t *testing.T) {
 
 // A disconnect reason without text reaches the player as a bare number.
 func TestDisconnectReasonsHaveText(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "protocol/packet/disconnect.go", nil, 0)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "protocol/packet/disconnect.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse disconnect reasons: %v", err)
 	}
-	for _, decl := range file.Decls {
-		block, ok := decl.(*ast.GenDecl)
-		if !ok || block.Tok != token.CONST {
+	// Imports are not resolved: constant values do not depend on them.
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
+	_, _ = (&types.Config{Error: func(error) {}}).Check("packet", fset, []*ast.File{file}, info)
+	found := 0
+	for ident, object := range info.Defs {
+		reason, ok := object.(*types.Const)
+		if !ok || !strings.HasPrefix(ident.Name, "DisconnectReason") {
 			continue
 		}
-		for iota, spec := range block.Specs {
-			name := spec.(*ast.ValueSpec).Names[0].Name
-			if _, ok := disconnectReasons[int32(iota)]; !ok && name != "_" {
-				t.Errorf("%s (%d) has no text in disconnectReasons", name, iota)
-			}
+		found++
+		value, _ := constant.Int64Val(reason.Val())
+		if disconnectReasons[int32(value)] == "" {
+			t.Errorf("%s (%d) has no text in disconnectReasons", ident.Name, value)
 		}
+	}
+	if found == 0 {
+		t.Fatal("found no disconnect reasons")
 	}
 }

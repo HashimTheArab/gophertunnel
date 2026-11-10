@@ -48,7 +48,7 @@ func TestNetherNetIdentityProviderNormalizesIssuer(t *testing.T) {
 
 // An unset limit matches the vanilla client; a set or disabled limit is kept.
 func TestDialerMaxDecompressedLen(t *testing.T) {
-	for configured, want := range map[int]int{0: 64 << 20, 4096: 4096, -1: -1} {
+	for configured, want := range map[int]int{0: packet.DefaultClientMaxDecompressedLen, 4096: 4096, -1: -1} {
 		if got := (Dialer{MaxDecompressedLen: configured}).maxDecompressedLen(); got != want {
 			t.Errorf("MaxDecompressedLen %d: got %d, want %d", configured, got, want)
 		}

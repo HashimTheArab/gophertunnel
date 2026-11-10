@@ -114,7 +114,9 @@ const (
 	maximumInBatch = 1600
 	// DefaultMaxDecompressedLen is the default maximum decompressed batch size.
 	DefaultMaxDecompressedLen = 16 * 1024 * 1024
-	maxPooledDecoderBufferCap = 1 << 20
+	// DefaultClientMaxDecompressedLen is the largest decompressed batch the vanilla client accepts.
+	DefaultClientMaxDecompressedLen = 64 * 1024 * 1024
+	maxPooledDecoderBufferCap       = 1 << 20
 )
 
 var decompressBufferPool = sync.Pool{
