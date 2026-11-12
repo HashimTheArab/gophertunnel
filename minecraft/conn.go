@@ -372,6 +372,8 @@ type Conn struct {
 	// texturePacksRequired specifies if clients that join must accept the texture pack in order for them to
 	// be able to join the server. If they don't accept, they can only leave the server.
 	texturePacksRequired bool
+	// disableEducationPacks prevents built-in Education Edition packs from being appended to the resource pack stack.
+	disableEducationPacks bool
 	// forceDisableVibrantVisuals specifies whether the connection is forced to have vibrant visuals disabled.
 	forceDisableVibrantVisuals bool
 	// resourcePackWorldTemplateUUID and resourcePackWorldTemplateVersion are written into ResourcePacksInfo.
@@ -2397,8 +2399,10 @@ func (conn *Conn) handleResourcePackClientResponse(pk *packet.ResourcePackClient
 			for _, pack := range conn.resourcePacks {
 				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: pack.UUID().String(), Version: pack.Version()})
 			}
-			for _, exempted := range exemptedPacks {
-				pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: exempted.uuid, Version: exempted.version})
+			if !conn.disableEducationPacks {
+				for _, exempted := range exemptedPacks {
+					pk.TexturePacks = append(pk.TexturePacks, protocol.StackResourcePack{UUID: exempted.uuid, Version: exempted.version})
+				}
 			}
 		}
 		conn.packMu.Unlock()
@@ -2728,7 +2732,7 @@ func StartGameFromGameData(data GameData) *packet.StartGame {
 		WorldGameMode:                data.WorldGameMode,
 		Hardcore:                     data.Hardcore,
 		XBLBroadcastMode:             data.XBLBroadcastMode,
-		PlatformBroadcastMode:        data.XBLBroadcastMode,
+		PlatformBroadcastMode:        data.PlatformBroadcastMode,
 		ServerAuthoritativeInventory: data.ServerAuthoritativeInventory,
 		PlayerPermissions:            data.PlayerPermissions,
 		ChatRestrictionLevel:         data.ChatRestrictionLevel,
@@ -2770,6 +2774,7 @@ func GameDataFromStartGame(pk *packet.StartGame) GameData {
 		WorldGameMode:                pk.WorldGameMode,
 		Hardcore:                     pk.Hardcore,
 		XBLBroadcastMode:             pk.XBLBroadcastMode,
+		PlatformBroadcastMode:        pk.PlatformBroadcastMode,
 		ServerAuthoritativeInventory: pk.ServerAuthoritativeInventory,
 		PlayerPermissions:            pk.PlayerPermissions,
 		ChatRestrictionLevel:         pk.ChatRestrictionLevel,
