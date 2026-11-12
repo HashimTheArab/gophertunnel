@@ -54,7 +54,7 @@ type AddressNetwork struct {
 	// DefaultProtocol on Android.
 	ProbeClientInfo endpoint.ClientInfo
 
-	probeHeadStart   time.Duration // overrides httpProbeHeadStart in tests
+	probeHeadStart   time.Duration // overrides HTTPProbeHeadStart in tests
 	probeTimeout     time.Duration // overrides netherNetProbeTimeout in tests
 	trustRedialAfter time.Duration // overrides trustRedialAfter in tests
 }
@@ -85,9 +85,9 @@ func fillClientInfo(info, fallback endpoint.ClientInfo) endpoint.ClientInfo {
 // waits up to a minute; a shorter bound keeps that fallback quick.
 const netherNetProbeTimeout = 6 * time.Second
 
-// httpProbeHeadStart is how long the HTTPS batch runs alone at most before HTTP is asked too, as
-// in vanilla.
-const httpProbeHeadStart = 3 * time.Second
+// HTTPProbeHeadStart is how long the HTTPS batch runs alone at most before HTTP is asked too, as
+// in vanilla. HTTP starts sooner once every HTTPS request has failed.
+const HTTPProbeHeadStart = 3 * time.Second
 
 // defaultServerPort is the game port probed, besides the scheme's own, when a server address names
 // no port.
@@ -176,7 +176,7 @@ func rememberedChoice(cache *ProbeCache, host string, port uint16, info endpoint
 
 // probe runs probeNetherNet with the package timings unless a test overrides them.
 func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches [][]string, probeClient *endpoint.Client) (string, []byte, bool, error) {
-	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, httpProbeHeadStart), cmp.Or(n.probeTimeout, netherNetProbeTimeout), probeClient)
+	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), cmp.Or(n.probeTimeout, netherNetProbeTimeout), probeClient)
 }
 
 // probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport
@@ -428,7 +428,7 @@ func (AddressNetwork) Listen(string) (NetworkListener, error) {
 // GET {url}/v1/join within six seconds, as probeNetherNet picks it, asking HTTPS before HTTP and, for
 // port zero or 19132, port 19132 and the schemes' default ports. The GET carries no client info.
 func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port uint16) (string, error) {
-	found, _, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
+	found, _, _, err := probeNetherNet(ctx, probeHTTPClient(client), probeBatches(host, port), HTTPProbeHeadStart, netherNetProbeTimeout, endpoint.ClientConfig{}.New())
 	return found, err
 }
 
@@ -662,7 +662,7 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	// The offer reuses the probe's client, so its POST carries the network ID the GET announced.
 	client := probeHTTPClient(n.HTTPClient)
 	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.probeInfo, defaultProbeClientInfo())}.New()
-	found, _, _, err := probeNetherNet(ctx, client, probeBatches(host, port), httpProbeHeadStart, netherNetProbeTimeout, n.probeClient)
+	found, _, _, err := probeNetherNet(ctx, client, probeBatches(host, port), HTTPProbeHeadStart, netherNetProbeTimeout, n.probeClient)
 	if err != nil {
 		if ctx.Err() != nil {
 			return n, ctx.Err()
