@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/df-mc/go-nethernet"
@@ -299,6 +300,88 @@ func (c *testTransportConn) Context() context.Context { return c.ctx }
 func (c *testTransportConn) Close() error {
 	c.cancel()
 	return c.Conn.Close()
+}
+
+// A fresh signaling connection has no TURN servers until its first request answers, so a dial waits
+// for that answer, at most freshSignalingCredentialsWait or until the dial's deadline.
+func TestNetherNetDialContextAwaitsFreshSignalingCredentials(t *testing.T) {
+	turn := &nethernet.Credentials{ExpirationInSeconds: 60, ICEServers: []nethernet.ICEServer{{
+		Username: "user", Password: "pass", URLs: []string{"turn:relay.example:3478"},
+	}}}
+	tests := []struct {
+		name     string
+		answer   time.Duration // how long the TURN request takes; negative never answers
+		deadline time.Duration
+		wantWait time.Duration
+		wantICE  bool
+	}{
+		{name: "answer arrives", answer: 300 * time.Millisecond, deadline: time.Minute, wantWait: 300 * time.Millisecond, wantICE: true},
+		{name: "no answer", answer: -1, deadline: time.Minute, wantWait: freshSignalingCredentialsWait},
+		{name: "dial deadline first", answer: -1, deadline: 500 * time.Millisecond, wantWait: 500 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				signaling := newTestTURNSignaling(turn, tt.answer)
+				ctx, cancel := context.WithTimeout(context.Background(), tt.deadline)
+				defer cancel()
+				start := time.Now()
+				var waited time.Duration
+				var gotICE bool
+				network := NetherNet{
+					DialSignaling: func(context.Context, string) (SignalingConn, error) { return signaling, nil },
+					dial: func(ctx context.Context, _ string, s nethernet.Signaling, _ nethernet.Dialer) (net.Conn, error) {
+						waited = time.Since(start)
+						credentials, _ := s.Credentials(ctx)
+						gotICE = credentials != nil && len(credentials.ICEServers) > 0
+						return nil, errors.New("dial stopped by the test")
+					},
+					signalingCloseDelay: time.Millisecond,
+				}
+				_, _ = network.DialContext(ctx, "remote-network-id")
+				if waited != tt.wantWait {
+					t.Errorf("dial started after %v, want %v", waited, tt.wantWait)
+				}
+				if gotICE != tt.wantICE {
+					t.Errorf("dial gathers with ICE servers = %v, want %v", gotICE, tt.wantICE)
+				}
+			})
+		})
+	}
+}
+
+// testTURNSignaling behaves like signaling.Conn: Credentials returns the last TURN answer without
+// waiting, and AwaitCredentials waits for the request started when the connection opened.
+type testTURNSignaling struct {
+	*testNetherNetSignaling
+	answered chan struct{}
+	answer   *nethernet.Credentials
+}
+
+func newTestTURNSignaling(answer *nethernet.Credentials, after time.Duration) *testTURNSignaling {
+	s := &testTURNSignaling{testNetherNetSignaling: newTestNetherNetSignaling(), answered: make(chan struct{}), answer: answer}
+	if after >= 0 {
+		time.AfterFunc(after, func() { close(s.answered) })
+	}
+	return s
+}
+
+func (s *testTURNSignaling) Credentials(context.Context) (*nethernet.Credentials, error) {
+	select {
+	case <-s.answered:
+		return s.answer, nil
+	default:
+		return &nethernet.Credentials{}, nil
+	}
+}
+
+func (s *testTURNSignaling) AwaitCredentials(ctx context.Context) (*nethernet.Credentials, error) {
+	select {
+	case <-s.answered:
+		return s.answer, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 type testNetherNetSignaling struct {
