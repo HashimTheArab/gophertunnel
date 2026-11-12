@@ -122,6 +122,10 @@ type ListenConfig struct {
 	// TexturePacksRequired specifies if clients that join must accept the texture pack in order for them to
 	// be able to join the server. If they don't accept, they can only leave the server.
 	TexturePacksRequired bool
+	// DisableEducationPacks prevents the built-in Education Edition resource packs from being appended to the
+	// resource pack stack. These packs include vanilla resources such as the particle atlas and may override
+	// equivalent resources from a player's global resource packs.
+	DisableEducationPacks bool
 	// ForceDisableVibrantVisuals specifies if the server should force disable vibrant visuals for all clients.
 	ForceDisableVibrantVisuals bool
 	// ResourcePackWorldTemplateUUID is written into ResourcePacksInfo. Leave zero for default server behaviour.
@@ -562,6 +566,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	conn.acceptPacketHeader = listener.cfg.AcceptPacketHeader
 	conn.SetPacketBatchFunc(listener.cfg.PacketBatchFunc)
 	conn.texturePacksRequired = listener.cfg.TexturePacksRequired
+	conn.disableEducationPacks = listener.cfg.DisableEducationPacks
 	conn.forceDisableVibrantVisuals = listener.cfg.ForceDisableVibrantVisuals
 	conn.resourcePackWorldTemplateUUID = listener.cfg.ResourcePackWorldTemplateUUID
 	conn.resourcePackWorldTemplateVersion = listener.cfg.ResourcePackWorldTemplateVersion
