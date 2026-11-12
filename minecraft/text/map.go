@@ -38,6 +38,9 @@ const (
 	Lapis      = "§t"
 	Amethyst   = "§u"
 	Resin      = "§v"
+	// PartyBlue is the client's party_blue colour. The client reads its exact
+	// shade from the $party_blue_color UI variable.
+	PartyBlue = "§w"
 )
 
 const (
@@ -69,6 +72,7 @@ const (
 	ansiLapis      = "\x1b[38;5;4m"
 	ansiAmethyst   = "\x1b[38;5;171m"
 	ansiResin      = "\x1b[38;5;172m"
+	ansiPartyBlue  = "\x1b[38;5;33m"
 
 	ansiObfuscated = ""
 	ansiBold       = "\x1b[1m"
@@ -105,6 +109,7 @@ var m = map[string]string{
 	Lapis:      ansiLapis,
 	Amethyst:   ansiAmethyst,
 	Resin:      ansiResin,
+	PartyBlue:  ansiPartyBlue,
 
 	Obfuscated: ansiObfuscated,
 	Bold:       ansiBold,
@@ -146,6 +151,7 @@ var strMap = map[string]string{
 	"lapis":       Lapis,
 	"amethyst":    Amethyst,
 	"resin":       Resin,
+	"party-blue":  PartyBlue,
 }
 
 // ColorEntry represents a named Minecraft formatting code.
