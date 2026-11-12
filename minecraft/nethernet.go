@@ -40,7 +40,8 @@ type NetherNet struct {
 	// When nil, dials without DialSignaling and pings use a new [endpoint.Client], and Listen serves an
 	// [endpoint.Handler] on its address. A Client cannot listen and a Handler cannot dial or ping.
 	Signaling nethernet.Signaling
-	// DialSignaling optionally opens a fresh signaling connection for each outbound dial.
+	// DialSignaling optionally opens a fresh signaling connection for each outbound dial. The dial
+	// waits up to freshSignalingCredentialsWait for its first TURN answer before gathering.
 	// NetherNet owns the returned signaling connection: it closes it when the resulting
 	// transport connection closes, or after a failed dial once the dialer's terminal
 	// error signal has had time to complete.
@@ -114,6 +115,23 @@ func (n NetherNet) DialContextIdentityProvider(ctx context.Context, address stri
 	})
 }
 
+// freshSignalingCredentialsWait bounds how long a dial waits for a fresh signaling connection's first
+// TURN answer, one round trip on a connection that is already open.
+const freshSignalingCredentialsWait = 2 * time.Second
+
+// awaitFreshCredentials waits for signaling opened for this dial to receive its first TURN answer, which
+// a long-lived connection already holds, so the dial gathers with relay servers. A failed or slower
+// answer leaves the dial to gather without them.
+func awaitFreshCredentials(ctx context.Context, signaling nethernet.Signaling) {
+	awaiter, ok := signaling.(nethernet.CredentialsAwaiter)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, freshSignalingCredentialsWait)
+	defer cancel()
+	_, _ = awaiter.AwaitCredentials(ctx)
+}
+
 func (n NetherNet) dialContext(ctx context.Context, address string, identity *nethernet.Identity) (net.Conn, error) {
 	signaling := n.Signaling
 	var owned SignalingConn
@@ -126,6 +144,7 @@ func (n NetherNet) dialContext(ctx context.Context, address string, identity *ne
 			return nil, errors.New("minecraft: NetherNet.DialContext: DialSignaling returned nil")
 		}
 		signaling, owned = conn, conn
+		awaitFreshCredentials(ctx, conn)
 	}
 	if signaling == nil {
 		signaling = endpoint.NewClient()
