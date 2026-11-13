@@ -18,3 +18,14 @@ func TestCodes_IncludesEveryCode(t *testing.T) {
 		}
 	}
 }
+
+func TestClean_RemovesEveryCode(t *testing.T) {
+	for _, code := range Codes() {
+		if got := Clean(code + "x"); got != "x" {
+			t.Errorf("Clean(%q) = %q, want %q", code+"x", got, "x")
+		}
+	}
+	if got := Clean("§wParty§r §xkept"); got != "Party §xkept" {
+		t.Errorf("Clean kept or removed the wrong codes: %q", got)
+	}
+}

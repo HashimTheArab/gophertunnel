@@ -7,8 +7,15 @@ import (
 	"strings"
 )
 
-// cleaner represents the regex used to clean Minecraft formatting codes from a string.
-var cleaner = regexp.MustCompile("§[0-9a-v]")
+// cleaner represents the regex used to clean Minecraft formatting codes from a string. It matches
+// every code Codes returns, so a new code is cleaned as soon as it is added to the package.
+var cleaner = func() *regexp.Regexp {
+	var letters strings.Builder
+	for _, code := range Codes() {
+		letters.WriteString(regexp.QuoteMeta(strings.TrimPrefix(code, "§")))
+	}
+	return regexp.MustCompile("§[" + letters.String() + "]")
+}()
 
 // Clean removes all Minecraft formatting codes from the string passed.
 func Clean(s string) string {
