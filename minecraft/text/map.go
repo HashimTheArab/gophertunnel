@@ -170,6 +170,18 @@ var formattingCodes = map[string]struct{}{
 	Reset:      {},
 }
 
+// Codes returns every formatting code the package knows, colours and styles
+// alike, including Reset, sorted by code. Unlike Colors and FormattingCodes it
+// does not depend on a code having a Colourf tag name.
+func Codes() []string {
+	codes := make([]string, 0, len(m))
+	for code := range m {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
 // Colors returns all Minecraft color codes sorted by code.
 func Colors() []ColorEntry {
 	return collectEntries(false)
