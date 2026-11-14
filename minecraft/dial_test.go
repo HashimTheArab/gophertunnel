@@ -1380,3 +1380,38 @@ type unbatchedConn struct{ net.Conn }
 
 func (unbatchedConn) BatchHeader() []byte     { return nil }
 func (unbatchedConn) DisableEncryption() bool { return true }
+
+func TestDialContextSpawnsWhenServerNeverSendsChunkRadiusUpdated(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login without ChunkRadiusUpdated: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork without ChunkRadiusUpdated: %v", err)
+	}
+	if got := conn.ChunkRadius(); got != requestedChunkRadius {
+		t.Errorf("ChunkRadius() = %d, want the requested %d", got, requestedChunkRadius)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}

@@ -2685,6 +2685,9 @@ func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
 
 var hiveRegex = regexp.MustCompile(`.*\.hivebedrock\.network.*`)
 
+// requestedChunkRadius is the chunk radius a client connection asks the server for after StartGame.
+const requestedChunkRadius = 16
+
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
@@ -2695,7 +2698,7 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	conn.observeStartGame(pk)
 
 	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: requestedChunkRadius, MaxChunkRadius: requestedChunkRadius})
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
 }
@@ -2864,6 +2867,10 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 	case packet.PlayStatusPlayerSpawn:
 		// We've spawned and can send the last packet in the spawn sequence.
 		conn.waitingForSpawn.Store(true)
+		// The vanilla client spawns on PlayerSpawn and keeps the radius it requested until the server
+		// updates it. Some servers never answer RequestChunkRadius, so waiting for ChunkRadiusUpdated here
+		// would leave the dial hanging. A ChunkRadiusUpdated that arrives later still replaces the radius.
+		conn.assumeRequestedChunkRadius()
 		conn.tryFinaliseClientConn()
 		return nil
 	case packet.PlayStatusLoginFailedInvalidTenant:
@@ -2917,6 +2924,20 @@ func (conn *Conn) tryFinaliseClientConn() {
 		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
 		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
 	}
+}
+
+// assumeRequestedChunkRadius records the chunk radius requested after StartGame as the connection's radius
+// when the server has not sent ChunkRadiusUpdated.
+func (conn *Conn) assumeRequestedChunkRadius() {
+	if conn.gameDataReceived.Load() {
+		return
+	}
+	conn.gameDataMu.Lock()
+	if conn.gameData.ChunkRadius == 0 {
+		conn.gameData.ChunkRadius = requestedChunkRadius
+	}
+	conn.gameDataMu.Unlock()
+	conn.gameDataReceived.Store(true)
 }
 
 // enableEncryption enables encryption on the server side over the connection. It sends an unencrypted
