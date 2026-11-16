@@ -46,7 +46,7 @@ type Discovery struct {
 	// Typically, the only environment type available for a version is "prod".
 	SupportedEnvironments map[string][]string `json:"supportedEnvironments,omitempty"`
 
-	// Fetched is when the Discovery was fetched, so a later one can be told from an earlier one.
+	// Fetched is when the request for the Discovery started, so a later one can be told from an earlier one.
 	Fetched time.Time `json:"-"`
 }
 
@@ -177,14 +177,20 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 	if d, fresh := cachedDiscovery(requestURL); fresh {
 		return d, nil
 	}
+	start := time.Now()
 	d, err := discover(ctx, client, requestURL)
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
-	if _, cached := discoveryCache[requestURL]; err == nil && cached && len(d.ServiceEnvironments) == 0 {
+	cached, ok := discoveryCache[requestURL]
+	if err == nil && ok && cached.d.Fetched.After(start) {
+		// A request started later has answered already, so this answer may be older than it.
+		return cached.d, nil
+	}
+	if err == nil && ok && len(d.ServiceEnvironments) == 0 {
 		err = errors.New("minecraft/service: refreshed discovery lists no services")
 	}
 	if err == nil {
-		d.Fetched = time.Now()
+		d.Fetched = start
 		checked := d.Fetched
 		if len(d.ServiceEnvironments) == 0 {
 			checked = checked.Add(discoveryRetry - discoveryTTL) // a first answer listing nothing is fetched again soon

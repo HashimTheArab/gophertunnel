@@ -141,6 +141,35 @@ func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 	})
 }
 
+// An answer to a request that started before another request answered does not replace that newer answer.
+func TestDiscoveryKeepsTheLaterRequestsAnswer(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		older := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			<-release
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"old":{"prod":{}}}}}`))}, nil
+		})})
+		newer := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			return discoveryOK(), nil
+		})})
+		done := make(chan *Discovery, 1)
+		go func() { d, _ := Discover(older, t.Name(), "test"); done <- d }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		if _, err := Discover(newer, t.Name(), "test"); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if d := <-done; d == nil || d.ServiceEnvironments["auth"] == nil {
+			t.Fatalf("older request returned %+v, want the later request's answer", d)
+		}
+		if d, _ := Discover(newer, t.Name(), "test"); d.ServiceEnvironments["auth"] == nil {
+			t.Fatalf("cached %+v, want the later request's answer", d)
+		}
+	})
+}
+
 // Concurrent callers for the same URL share one request, and later callers use its cached result.
 func TestDiscoveryMakesOneRequestForConcurrentCallers(t *testing.T) {
 	isolateDiscoveryCache(t)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -203,7 +204,11 @@ func TestAuthEnvDiscardsSupersededPreload(t *testing.T) {
 
 // An issuer that serves no signing keys does not replace the working environment.
 func TestAuthEnvKeepsEnvironmentWithoutSigningKeys(t *testing.T) {
-	first, keyless := issuerServer(t), issuerServerWith(t, nil, false)
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	first, keyless := issuerServer(t), issuerServerWith(t, gate, false)
+	t.Cleanup(release)
 	current := discoveryWithIssuer(t, first.URL)
 	installAuthDiscovery(t, &current)
 	initial, err := authEnv(context.Background())
@@ -213,8 +218,9 @@ func TestAuthEnvKeepsEnvironmentWithoutSigningKeys(t *testing.T) {
 	current = discoveryWithIssuer(t, keyless.URL)
 	_, _ = authEnv(context.Background())
 	authState.Lock()
-	firstTry := authState.want
+	firstTry := authState.want // read while the preload waits on the issuer
 	authState.Unlock()
+	release()
 	waitPreloadSettled(t)
 	authState.Lock()
 	retry := authState.want
