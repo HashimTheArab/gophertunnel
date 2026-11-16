@@ -25,9 +25,8 @@ import (
 
 // Dialer specifies options for connecting to the signaling service.
 type Dialer struct {
-	// Environment is the environment used for connecting to the signaling service. If nil, it is resolved
-	// from [service.Default] as vanilla does: the 'signaling-afd' configuration, falling back to the
-	// discovered 'signaling' service when that fails.
+	// Environment provides the signaling configuration. If nil, it is the 'signaling-afd' configuration from
+	// [service.Default], falling back to the discovered 'signaling' service as vanilla does.
 	Environment ConfigurationProvider
 	// HTTPClient is the HTTP client used for WebSocket handshake messages and [Environment] discovery.
 	HTTPClient *http.Client
@@ -87,7 +86,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			p.fallback = direct.ServiceURI
 		}
 		if p.afd == nil && p.fallback == nil {
-			return nil, fmt.Errorf("resolve signaling environment: discovery lists neither signaling-afd nor signaling: %w", afdErr)
+			return nil, fmt.Errorf("resolve signaling environment: discovery lists no usable signaling-afd or signaling service: %w", afdErr)
 		}
 		d.Environment = p
 	}
@@ -203,7 +202,8 @@ func (ch requestChannel) Recv() ([]byte, error) {
 		for _, m := range objects {
 			r, ok := serverRequestOf(m)
 			if !ok {
-				if _, result := m["result"]; result || failed(m) {
+				_, result := m["result"]
+				if _, failure := m["error"]; result || failure {
 					replies = append(replies, m)
 				} else {
 					changed = true // neither a request nor a reply

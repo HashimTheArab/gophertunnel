@@ -155,9 +155,8 @@ type Configuration struct {
 	PingFrequency time.Duration `json:"pingFrequency"`
 }
 
-// UnmarshalJSON decodes the given JSON data into [Configuration].
-// Some of the fields cannot be decoded directly into Go types so
-// we first decode them as strings then manually parse them into appropriate types.
+// UnmarshalJSON decodes a configuration, requiring an endpoint with a host and falling back to
+// [DefaultPingFrequency] for a missing or malformed pingFrequency.
 func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	type Alias Configuration
 	data := struct {

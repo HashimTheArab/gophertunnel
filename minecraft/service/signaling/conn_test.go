@@ -658,8 +658,7 @@ func TestRequestsAreHandledInOrder(t *testing.T) {
 	}
 }
 
-// Unknown members, non-objects and objects that are neither request nor reply are dropped, requests are split
-// from replies, and unchanged frames pass as they are.
+// Only JSON-RPC members of requests and replies are kept, with requests split off to the Conn.
 func TestRequestChannelReadsLeniently(t *testing.T) {
 	frames := []string{
 		`not json`,
@@ -685,6 +684,7 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
 		`{"jsonrpc":"2.0","id":4,"result":{}}`,
 		`[{"id":6,"jsonrpc":"2.0","result":{}}]`,
+		`{"jsonrpc":"2.0","id":8,"error":null}`,
 	} {
 		got, err := ch.Recv()
 		if err != nil || string(got) != want {
