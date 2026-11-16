@@ -11,12 +11,12 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/creachadair/jrpc2"
+	"github.com/creachadair/jrpc2/channel"
 	"github.com/df-mc/go-nethernet"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
@@ -125,57 +125,129 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		notifiers: make(map[uint32]nethernet.Notifier),
 		pending:   newPendingMap(),
 
-		notifications: make(chan *jrpc2.Request, notificationQueueSize),
+		requests: make(chan serverRequest, requestQueueSize),
 	}
 	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
-	conn.client = jrpc2.NewClient(&websocketChannel{Conn: c, log: d.Log}, &jrpc2.ClientOptions{
+	ws := &websocketChannel{c}
+	conn.sendRaw = ws.Send
+	conn.client = jrpc2.NewClient(requestChannel{Channel: ws, conn: conn}, &jrpc2.ClientOptions{
 		Logger: func(text string) {
 			d.Log.Debug(text, slog.String("src", "jrpc2"))
 		},
-		// The service may send a message without an ID; it is handled by method as vanilla does. jrpc2
-		// calls OnNotify holding its client lock, so the handler runs on the notification worker.
-		OnNotify: conn.queueNotification,
 		OnStop: func(_ *jrpc2.Client, err error) {
 			if err == nil {
 				err = net.ErrClosed
 			}
 			conn.stop(fmt.Errorf("jrpc2 client stopped: %w", err))
 		},
-		OnCallback: func(ctx context.Context, request *jrpc2.Request) (any, error) {
-			// An error returned to jrpc2 may stall the connection, so dispatch logs it instead.
-			return conn.dispatch(ctx, request), nil
-		},
 	})
-	go conn.handleNotifications()
+	go conn.handleRequests()
 	go conn.ping(cfg.PingFrequency)
 	conn.refreshCredentials()
 	return conn, nil
 }
 
 // websocketChannel is an implementation of [channel.Channel] over [websocket.Conn].
-// It is used to transmit JSON-RPC messages over a WebSocket connection in [jrpc2.Client].
-type websocketChannel struct {
-	*websocket.Conn
-	log *slog.Logger
-}
+type websocketChannel struct{ *websocket.Conn }
 
 // Send writes the provided bytes to the WebSocket connection.
 func (ch *websocketChannel) Send(b []byte) error {
 	return ch.Write(context.Background(), websocket.MessageText, b)
 }
 
-// Recv returns the next JSON-RPC message. Like vanilla, it reads leniently: a frame that is not JSON is
-// skipped, and top-level members JSON-RPC does not define are dropped, which jrpc2 would reject.
+// Recv blocks until a new data is received in the WebSocket connection
+// and returns the payload.
 func (ch *websocketChannel) Recv() ([]byte, error) {
+	_, msg, err := ch.Read(context.Background())
+	return msg, err
+}
+
+// Close closes the underlying WebSocket connection.
+func (ch *websocketChannel) Close() error {
+	return ch.Conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// requestChannel is the channel a Conn's jrpc2 client reads. It reads leniently like vanilla, skipping
+// frames that are not JSON-RPC and dropping members JSON-RPC does not define, which jrpc2 rejects. It hands
+// the requests the service sends to the Conn in arrival order and passes only replies on to jrpc2.
+type requestChannel struct {
+	channel.Channel
+	conn *Conn
+}
+
+// Recv returns the next frame holding replies to the client's own calls.
+func (ch requestChannel) Recv() ([]byte, error) {
 	for {
-		_, msg, err := ch.Read(context.Background())
+		msg, err := ch.Channel.Recv()
 		if err != nil {
 			return nil, err
 		}
-		if b, ok := jsonRPCMessage(msg); ok {
+		objects, batch, ok := jsonRPCObjects(msg)
+		if !ok {
+			ch.conn.d.Log.Debug("skipping signaling frame that is not a JSON-RPC message", slog.Int("size", len(msg)))
+			continue
+		}
+		replies := objects[:0]
+		for _, m := range objects {
+			method, ok := m["method"]
+			if !ok {
+				replies = append(replies, m)
+				continue
+			}
+			r := serverRequest{id: m["id"], params: m["params"]}
+			_ = json.Unmarshal(method, &r.method)
+			if string(bytes.TrimSpace(r.id)) == "null" {
+				r.id = nil
+			}
+			select {
+			case ch.conn.requests <- r:
+			case <-ch.conn.ctx.Done():
+				return nil, net.ErrClosed
+			}
+		}
+		if len(replies) == 0 {
+			continue
+		}
+		var v any = replies
+		if !batch {
+			v = replies[0]
+		}
+		if b, err := json.Marshal(v); err == nil {
 			return b, nil
 		}
-		ch.log.Debug("skipping signaling frame that is not a JSON-RPC message", slog.Int("size", len(msg)))
+	}
+}
+
+// jsonRPCObjects decodes a JSON-RPC object or batch, dropping the top-level members JSON-RPC does not
+// define. It reports whether msg was a batch, and false if msg is not an object or array of objects.
+func jsonRPCObjects(msg []byte) (objects []map[string]json.RawMessage, batch, ok bool) {
+	trimmed := bytes.TrimSpace(msg)
+	if batch = len(trimmed) > 0 && trimmed[0] == '['; batch {
+		if json.Unmarshal(trimmed, &objects) != nil || len(objects) == 0 {
+			return nil, false, false
+		}
+	} else {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(trimmed, &m) != nil {
+			return nil, false, false
+		}
+		objects = []map[string]json.RawMessage{m}
+	}
+	for _, m := range objects {
+		if m == nil {
+			return nil, false, false
+		}
+		dropUnknownMembers(m)
+	}
+	return objects, batch, true
+}
+
+// dropUnknownMembers deletes the members of m JSON-RPC does not define.
+func dropUnknownMembers(m map[string]json.RawMessage) {
+	for key := range m {
+		if !jsonRPCMember(key) {
+			delete(m, key)
+		}
 	}
 }
 
@@ -186,52 +258,4 @@ func jsonRPCMember(key string) bool {
 		return true
 	}
 	return false
-}
-
-// jsonRPCMessage returns msg, a JSON-RPC object or batch, without the top-level members JSON-RPC does
-// not define. It reports false if msg is not a JSON object or array of objects.
-func jsonRPCMessage(msg []byte) ([]byte, bool) {
-	trimmed := bytes.TrimSpace(msg)
-	batch := len(trimmed) > 0 && trimmed[0] == '['
-	if !batch {
-		// A single object is read as a batch of one.
-		trimmed = slices.Concat([]byte("["), trimmed, []byte("]"))
-	}
-	var objects []map[string]json.RawMessage
-	if json.Unmarshal(trimmed, &objects) != nil || len(objects) == 0 {
-		return nil, false
-	}
-	changed := false
-	for _, m := range objects {
-		if m == nil {
-			return nil, false
-		}
-		changed = dropUnknownMembers(m) || changed
-	}
-	if !changed {
-		return msg, true
-	}
-	var v any = objects
-	if !batch {
-		v = objects[0]
-	}
-	b, err := json.Marshal(v)
-	return b, err == nil
-}
-
-// dropUnknownMembers deletes the members of m JSON-RPC does not define and reports whether it did.
-func dropUnknownMembers(m map[string]json.RawMessage) bool {
-	changed := false
-	for key := range m {
-		if !jsonRPCMember(key) {
-			delete(m, key)
-			changed = true
-		}
-	}
-	return changed
-}
-
-// Close closes the underlying WebSocket connection.
-func (ch *websocketChannel) Close() error {
-	return ch.Conn.Close(websocket.StatusNormalClosure, "")
 }

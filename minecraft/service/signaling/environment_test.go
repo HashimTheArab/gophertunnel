@@ -102,6 +102,7 @@ func TestConfigurationPingFrequency(t *testing.T) {
 		`"-00:00:15"`:        DefaultPingFrequency,
 		`"00:00:Inf"`:        DefaultPingFrequency,
 		`"00:00:1e12"`:       DefaultPingFrequency,
+		`"00:00:00.5000000"`: DefaultPingFrequency,
 	}
 	for value, want := range tests {
 		var cfg Configuration
@@ -139,5 +140,18 @@ func TestDiscoveredConfigurationFallsBackWhenTheRequestHangs(t *testing.T) {
 	}
 	if cfg.ServiceURI != fallback || ctx.Err() != nil {
 		t.Fatalf("configuration = %s, dial context error = %v, want the fallback with time left", cfg.ServiceURI, ctx.Err())
+	}
+}
+
+// Discovery that lists only the signaling service connects to it directly.
+func TestDiscoveredConfigurationWithoutAFD(t *testing.T) {
+	fallback, err := url.Parse("wss://fallback.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := discoveredConfiguration{fallback: fallback, log: slog.New(slog.DiscardHandler)}
+	cfg, err := p.Configuration(context.Background(), http.DefaultClient, testTokenSource)
+	if err != nil || cfg.ServiceURI != fallback || cfg.PingFrequency != DefaultPingFrequency {
+		t.Fatalf("Configuration() = %+v, %v, want the signaling service every %v", cfg, err, DefaultPingFrequency)
 	}
 }

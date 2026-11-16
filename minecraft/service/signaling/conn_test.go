@@ -524,6 +524,53 @@ func (n signalNotifier) NotifySignal(signal *nethernet.Signal) bool {
 	return true
 }
 
+// requestConn returns a Conn reading ch the way DialContext wires the WebSocket, delivering signals to notifier.
+func requestConn(t *testing.T, ch channel.Channel, notifier nethernet.Notifier) *Conn {
+	t.Helper()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	conn := &Conn{
+		ctx: ctx, cancel: cancel,
+		d:         Dialer{Log: slog.New(slog.DiscardHandler)},
+		notifiers: map[uint32]nethernet.Notifier{0: notifier},
+		pending:   newPendingMap(),
+		requests:  make(chan serverRequest, requestQueueSize),
+		sendRaw:   ch.Send,
+	}
+	conn.client = jrpc2.NewClient(requestChannel{Channel: ch, conn: conn}, nil)
+	t.Cleanup(func() {
+		cancel(net.ErrClosed)
+		_ = conn.client.Close()
+	})
+	go conn.handleRequests()
+	return conn
+}
+
+// receiveMessage is a Signaling_ReceiveMessage_v1_0 frame carrying signal, with an ID if id is non-empty.
+func receiveMessage(t *testing.T, signal *nethernet.Signal, id string) []byte {
+	t.Helper()
+	inner, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  MethodSignalingWebRTC,
+		"params":  map[string]any{"netherNetId": "network", "message": signal.String()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  MethodSignalingReceiveMessage,
+		"params":  []map[string]any{{"From": uuid.New(), "Id": uuid.New(), "Message": string(inner)}},
+	}
+	if id != "" {
+		frame["id"] = json.RawMessage(id)
+	}
+	b, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // An ID-less message is handled by method, and its delivery receipt goes out without deadlocking the client.
 func TestNotificationIsHandledByMethod(t *testing.T) {
 	delivered := make(chan struct{}, 1)
@@ -535,35 +582,21 @@ func TestNotificationIsHandledByMethod(t *testing.T) {
 		}),
 	}, &jrpc2.ServerOptions{AllowPush: true}).Start(serverChannel)
 	defer server.Stop()
-
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(net.ErrClosed)
 	signals := make(signalNotifier, 1)
-	conn := &Conn{
-		ctx: ctx, cancel: cancel,
-		d:             Dialer{Log: slog.New(slog.DiscardHandler)},
-		notifiers:     map[uint32]nethernet.Notifier{0: signals},
-		notifications: make(chan *jrpc2.Request, notificationQueueSize),
-	}
-	conn.client = jrpc2.NewClient(clientChannel, &jrpc2.ClientOptions{OnNotify: conn.queueNotification})
-	defer conn.client.Close()
-	go conn.handleNotifications()
+	requestConn(t, clientChannel, signals)
 
 	signal := &nethernet.Signal{Type: nethernet.SignalTypeOffer, ConnectionID: 42, Data: "offer"}
-	inner, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  MethodSignalingWebRTC,
-		"params":  map[string]any{"netherNetId": "network", "message": signal.String()},
-	})
-	if err != nil {
-		t.Fatalf("marshal inner message: %v", err)
+	var params []json.RawMessage
+	var frame map[string]json.RawMessage
+	if err := json.Unmarshal(receiveMessage(t, signal, ""), &frame); err != nil {
+		t.Fatal(err)
 	}
-	if err := server.Notify(context.Background(), MethodSignalingReceiveMessage, []map[string]any{{
-		"From": uuid.New(), "Id": uuid.New(), "Message": string(inner),
-	}}); err != nil {
+	if err := json.Unmarshal(frame["params"], &params); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Notify(context.Background(), MethodSignalingReceiveMessage, params); err != nil {
 		t.Fatalf("push notification: %v", err)
 	}
-
 	select {
 	case got := <-signals:
 		if got.ConnectionID != signal.ConnectionID || got.Data != signal.Data {
@@ -577,4 +610,99 @@ func TestNotificationIsHandledByMethod(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("delivery receipt was not sent")
 	}
+}
+
+// Requests from the service are handled in wire order, and one with an ID is answered.
+func TestRequestsAreHandledInOrder(t *testing.T) {
+	clientChannel, serverChannel := channel.Direct()
+	signals := make(signalNotifier, 2)
+	requestConn(t, clientChannel, signals)
+	// The server side is read throughout, as the service would, so the receipts sent meanwhile never block.
+	frames := make(chan []byte, 64)
+	go func() {
+		for {
+			b, err := serverChannel.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case frames <- b:
+			default:
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = serverChannel.Close() })
+
+	offer := &nethernet.Signal{Type: nethernet.SignalTypeOffer, ConnectionID: 7, Data: "offer"}
+	candidate := &nethernet.Signal{Type: nethernet.SignalTypeCandidate, ConnectionID: 7, Data: "candidate"}
+	for _, frame := range [][]byte{receiveMessage(t, offer, ""), receiveMessage(t, candidate, "5")} {
+		if err := serverChannel.Send(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []*nethernet.Signal{offer, candidate} {
+		select {
+		case got := <-signals:
+			if got.Type != want.Type {
+				t.Fatalf("signal type = %s, want %s first", got.Type, want.Type)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s signal was not handled", want.Type)
+		}
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case b := <-frames:
+			var reply map[string]json.RawMessage
+			if json.Unmarshal(b, &reply) == nil && string(reply["id"]) == "5" {
+				if string(reply["result"]) != "null" {
+					t.Fatalf("response = %s, want a null result", b)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("request with an ID was not answered")
+		}
+	}
+}
+
+// Unknown top-level members are dropped, frames that are not JSON-RPC are skipped, and requests are split from replies.
+func TestRequestChannelReadsLeniently(t *testing.T) {
+	frames := []string{
+		`not json`,
+		`null`,
+		`[]`,
+		`[{"jsonrpc":"2.0","id":1,"result":{}},null]`,
+		`{"jsonrpc":"2.0","method":"` + MethodSystemPong + `","traceId":"x"}`,
+		`[{"jsonrpc":"2.0","id":2,"result":{},"traceId":"x"},{"jsonrpc":"2.0","method":"` + MethodSystemPong + `"}]`,
+		`{"jsonrpc":"2.0","id":3,"result":{},"traceId":"x"}`,
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(net.ErrClosed)
+	conn := &Conn{ctx: ctx, d: Dialer{Log: slog.New(slog.DiscardHandler)}, requests: make(chan serverRequest, 8)}
+	ch := requestChannel{Channel: &scriptedChannel{frames: frames}, conn: conn}
+	for _, want := range []string{`[{"id":2,"jsonrpc":"2.0","result":{}}]`, `{"id":3,"jsonrpc":"2.0","result":{}}`} {
+		got, err := ch.Recv()
+		if err != nil || string(got) != want {
+			t.Fatalf("Recv() = %s, %v, want %s", got, err, want)
+		}
+	}
+	if len(conn.requests) != 2 {
+		t.Fatalf("requests handed to the Conn = %d, want 2", len(conn.requests))
+	}
+}
+
+// scriptedChannel is a channel.Channel that receives frames in order.
+type scriptedChannel struct{ frames []string }
+
+func (c *scriptedChannel) Send([]byte) error { return nil }
+func (c *scriptedChannel) Close() error      { return nil }
+func (c *scriptedChannel) Recv() ([]byte, error) {
+	if len(c.frames) == 0 {
+		return nil, net.ErrClosed
+	}
+	f := c.frames[0]
+	c.frames = c.frames[1:]
+	return []byte(f), nil
 }

@@ -41,9 +41,10 @@ type Conn struct {
 
 	pending *pendingMap
 
-	// notifications holds messages the service sent without an ID, handled in order by
-	// handleNotifications.
-	notifications chan *jrpc2.Request
+	// requests holds the requests the service sends, handled in arrival order by handleRequests.
+	requests chan serverRequest
+	// sendRaw writes a message to the service, such as the response to one of those requests.
+	sendRaw func([]byte) error
 
 	// credentials is the last answer to a TURN request, nil before one or after a failed request.
 	credentials *nethernet.Credentials
@@ -311,47 +312,54 @@ func (conn *Conn) stopCredentialsRefreshLocked() {
 	}
 }
 
-// notificationQueueSize bounds the notifications waiting for handleNotifications.
-const notificationQueueSize = 64
-
-// queueNotification hands a message the service sent without an ID to handleNotifications. It must not
-// block: jrpc2 calls it holding its client lock.
-func (conn *Conn) queueNotification(request *jrpc2.Request) {
-	select {
-	case conn.notifications <- request:
-	default:
-		conn.d.Log.Warn("dropping signaling notification, too many waiting", slog.String("method", request.Method()))
-	}
+// serverRequest is a request the service sends, with the ID it expects a response for, or none.
+type serverRequest struct {
+	id     json.RawMessage
+	method string
+	params json.RawMessage
 }
 
-// handleNotifications dispatches queued notifications in order until the Conn closes.
-func (conn *Conn) handleNotifications() {
+// requestQueueSize bounds the requests waiting for handleRequests; reading waits while it is full.
+const requestQueueSize = 256
+
+// handleRequests handles the requests the service sends in arrival order until the Conn closes, and
+// answers those with an ID. jrpc2 hands each received frame to its own goroutine, so an ICE candidate
+// could otherwise overtake the offer it belongs to.
+func (conn *Conn) handleRequests() {
 	for {
 		select {
 		case <-conn.ctx.Done():
 			return
-		case request := <-conn.notifications:
-			conn.dispatch(conn.ctx, request)
+		case r := <-conn.requests:
+			result := conn.dispatch(conn.ctx, r)
+			if r.id == nil {
+				continue
+			}
+			b, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": r.id, "result": result})
+			if err == nil {
+				err = conn.sendRaw(b)
+			}
+			if err != nil {
+				conn.d.Log.Debug("response to signaling request not sent", slog.String("method", r.method), slog.Any("error", err))
+			}
 		}
 	}
 }
 
-// dispatch handles a message from the service, whether or not it has an ID, and logs a failure
-// instead of returning it.
-func (conn *Conn) dispatch(ctx context.Context, request *jrpc2.Request) (v any) {
+// dispatch handles a request from the service and logs a failure instead of returning it.
+func (conn *Conn) dispatch(ctx context.Context, r serverRequest) (v any) {
 	defer func() {
 		if err := recover(); err != nil {
 			conn.d.Log.Error("callback handler panicked", slog.Any("error", err))
-			v = nil
 		}
 	}()
-	v, err := conn.handleCallback(ctx, request)
+	v, err := conn.handleCallback(ctx, r)
 	if err != nil {
 		conn.d.Log.Error("error handling server message",
 			slog.GroupAttrs("request",
-				slog.String("id", request.ID()),
-				slog.String("method", request.Method()),
-				slog.String("params", request.ParamString()),
+				slog.String("id", string(r.id)),
+				slog.String("method", r.method),
+				slog.String("params", string(r.params)),
 			),
 			slog.Any("error", err),
 		)
@@ -361,24 +369,24 @@ func (conn *Conn) dispatch(ctx context.Context, request *jrpc2.Request) (v any) 
 }
 
 // handleCallback handles a JSON-RPC method called by the server, with or without an ID.
-func (conn *Conn) handleCallback(ctx context.Context, request *jrpc2.Request) (any, error) {
-	switch request.Method() {
+func (conn *Conn) handleCallback(ctx context.Context, r serverRequest) (any, error) {
+	switch r.method {
 	case MethodSystemPong:
 		return nil, nil
 	case MethodSignalingReceiveMessage:
-		return conn.handleMessage(ctx, request)
+		return conn.handleMessage(ctx, r.params)
 	case MethodSignalingReceiveError:
-		return nil, conn.handleReceiveError([]byte(request.ParamString()))
+		return nil, conn.handleReceiveError(r.params)
 	default:
-		return nil, fmt.Errorf("received message for unknown method: %q", request.Method())
+		return nil, fmt.Errorf("received message for unknown method: %q", r.method)
 	}
 }
 
 // handleMessage handles one or more messages received from the server.
 // It decodes each message included in the request and calls handleInnerMessage.
-func (conn *Conn) handleMessage(ctx context.Context, request *jrpc2.Request) (v any, err error) {
+func (conn *Conn) handleMessage(ctx context.Context, raw json.RawMessage) (v any, err error) {
 	var params envelopeParams
-	if err := request.UnmarshalParams(&params); err != nil {
+	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, fmt.Errorf("decode parameters: %w", err)
 	}
 	for _, e := range params {
@@ -529,7 +537,7 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 // deliveryReceiptTimeout bounds sending one delivery receipt.
 const deliveryReceiptTimeout = 15 * time.Second
 
-// acknowledge sends the delivery receipt for messageID to the player that sent it.
+// acknowledge tells the player that sent messageID that it was delivered.
 func (conn *Conn) acknowledge(messageID, to uuid.UUID) {
 	ctx, cancel := context.WithTimeout(conn.ctx, deliveryReceiptTimeout)
 	defer cancel()

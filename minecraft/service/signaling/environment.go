@@ -69,8 +69,8 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 	}
 }
 
-// configurationRetry retries a configuration request that failed transiently with delays of 1, 2, 4, 8
-// and 16 seconds, as vanilla doubles its delay from one second, while the request's context allows.
+// configurationRetry retries a configuration request that failed transiently, doubling the delay from one
+// second as vanilla does, for as long as the request's context allows.
 var configurationRetry = authclient.RetryOptions{Attempts: 6, MinDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
 
 // maxConfigurationWait bounds the configuration request when a fallback exists; it also takes at most
@@ -98,29 +98,41 @@ type discoveredConfiguration struct {
 
 // Configuration implements [ConfigurationProvider].
 func (p discoveredConfiguration) Configuration(ctx context.Context, client *http.Client, src service.TokenSource) (*Configuration, error) {
-	err := errors.New("service/signaling: discovery has no signaling-afd service")
-	if p.afd != nil {
-		afdCtx := ctx
-		if p.fallback != nil {
-			wait := maxConfigurationWait
-			if deadline, ok := ctx.Deadline(); ok {
-				wait = min(wait, time.Until(deadline)/2)
-			}
-			var cancel context.CancelFunc
-			afdCtx, cancel = context.WithTimeout(ctx, wait)
-			defer cancel()
-		}
-		var cfg *Configuration
-		if cfg, err = p.afd.Configuration(afdCtx, client, src); err == nil {
-			return cfg, nil
-		}
+	fallback := &Configuration{ServiceURI: p.fallback, PingFrequency: DefaultPingFrequency}
+	if p.afd == nil {
+		p.log.Debug("discovery has no signaling-afd service, connecting to the discovered signaling service")
+		return fallback, nil
 	}
-	if p.fallback == nil || ctx.Err() != nil {
+	if p.fallback == nil {
+		return p.afd.Configuration(ctx, client, src)
+	}
+	// The token is fetched first, so only the configuration request is bounded to leave the fallback time.
+	token, err := src.ServiceToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("request service token: %w", err)
+	}
+	wait := maxConfigurationWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/2)
+	}
+	afdCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	cfg, err := p.afd.Configuration(afdCtx, client, fixedTokenSource{token})
+	if err == nil {
+		return cfg, nil
+	}
+	if ctx.Err() != nil {
 		return nil, err
 	}
 	p.log.Warn("signaling configuration unavailable, connecting to the discovered signaling service", slog.Any("error", err))
-	return &Configuration{ServiceURI: p.fallback, PingFrequency: DefaultPingFrequency}, nil
+	return fallback, nil
 }
+
+// fixedTokenSource is a service.TokenSource that returns one token.
+type fixedTokenSource struct{ token *service.Token }
+
+// ServiceToken implements [service.TokenSource].
+func (s fixedTokenSource) ServiceToken(context.Context) (*service.Token, error) { return s.token, nil }
 
 // ConfigurationProvider resolves the signaling service a [Dialer] connects to, such as [AFDEnvironment].
 type ConfigurationProvider interface {
@@ -166,7 +178,7 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	cfg.PingFrequency = DefaultPingFrequency
 	var frequency string
 	if json.Unmarshal(data.PingFrequency, &frequency) == nil {
-		if d, ok := parseTimeSpan(frequency); ok && d > 0 {
+		if d, ok := parseTimeSpan(frequency); ok && d >= time.Second {
 			cfg.PingFrequency = d
 		}
 	}
