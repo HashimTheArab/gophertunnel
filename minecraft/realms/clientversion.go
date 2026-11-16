@@ -16,7 +16,7 @@ const (
 	// compatiblePath answers COMPATIBLE, COMPATIBLE_SHOW_INFO, OUTDATED or ALPHA_ENDED for the
 	// Client-Version sent with the request. The vanilla client checks it before offering Realms play.
 	compatiblePath = "/mco/client/compatible"
-	// compatibleResponse is the body returned for a version Realms still accepts.
+	// compatibleResponse accepts the version with no notice.
 	compatibleResponse = "COMPATIBLE"
 	// compatibleShowInfoResponse also accepts the version; vanilla shows the player a notice with it.
 	compatibleShowInfoResponse = "COMPATIBLE_SHOW_INFO"
@@ -130,8 +130,8 @@ func (c *Client) versionCompatible(ctx context.Context, version string) (bool, e
 	return compatibleAnswer(string(body)), nil
 }
 
-// compatibleAnswer reports whether a compatibility check answer accepts the version, as both
-// COMPATIBLE and COMPATIBLE_SHOW_INFO do for vanilla.
+// compatibleAnswer reports whether a compatibility answer accepts the version. Vanilla plays on both; the notice
+// COMPATIBLE_SHOW_INFO asks for has no screen in a proxy.
 func compatibleAnswer(body string) bool {
 	answer := strings.TrimSpace(body)
 	return strings.EqualFold(answer, compatibleResponse) || strings.EqualFold(answer, compatibleShowInfoResponse)

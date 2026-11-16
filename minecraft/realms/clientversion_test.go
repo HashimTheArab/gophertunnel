@@ -25,12 +25,12 @@ func stubRealms(t *testing.T, acceptedVersion string) (*Client, *[]string) {
 	var mu sync.Mutex
 	var versions []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Charset"); got != "utf-8" {
+			t.Errorf("%s Charset = %q", r.URL.Path, got)
+		}
 		if strings.HasSuffix(r.URL.Path, "/join") {
 			if got := r.UserAgent(); got != "libhttpclient/1.0.0.0" {
 				t.Errorf("User-Agent = %q", got)
-			}
-			if got := r.Header.Get("Charset"); got != "utf-8" {
-				t.Errorf("Charset = %q", got)
 			}
 			if got := r.Header.Get("X-ClientPlatform"); got != "Android" {
 				t.Errorf("X-ClientPlatform = %q", got)
@@ -46,7 +46,7 @@ func stubRealms(t *testing.T, acceptedVersion string) (*Client, *[]string) {
 
 		if r.URL.Path == compatiblePath {
 			if version == acceptedVersion {
-				_, _ = w.Write([]byte(compatibleResponse))
+				_, _ = w.Write([]byte(compatibleShowInfoResponse))
 			} else {
 				_, _ = w.Write([]byte("OUTDATED"))
 			}
@@ -195,8 +195,7 @@ func TestUnknownClientVersion(t *testing.T) {
 	}
 }
 
-// Realms accepts a version with COMPATIBLE or, with a notice for the player, COMPATIBLE_SHOW_INFO;
-// OUTDATED, ALPHA_ENDED and unknown answers reject it.
+// Only the two COMPATIBLE answers accept a version.
 func TestCompatibleAnswer(t *testing.T) {
 	for answer, want := range map[string]bool{
 		"COMPATIBLE":           true,
