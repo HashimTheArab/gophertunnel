@@ -86,7 +86,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			p.fallback = direct.ServiceURI
 		}
 		if p.afd == nil && p.fallback == nil {
-			return nil, fmt.Errorf("resolve signaling environment: %w", afdErr)
+			return nil, fmt.Errorf("resolve signaling environment: discovery lists neither signaling-afd nor signaling: %w", afdErr)
 		}
 		d.Environment = p
 	}
