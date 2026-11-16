@@ -667,7 +667,7 @@ func TestRequestsAreHandledInOrder(t *testing.T) {
 	}
 }
 
-// Unknown top-level members are dropped, frames that are not JSON-RPC are skipped, and requests are split from replies.
+// Unknown members and non-objects are dropped, requests are split from replies, and unchanged frames pass as they are.
 func TestRequestChannelReadsLeniently(t *testing.T) {
 	frames := []string{
 		`not json`,
@@ -676,13 +676,19 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`[{"jsonrpc":"2.0","id":1,"result":{}},null]`,
 		`{"jsonrpc":"2.0","method":"` + MethodSystemPong + `","traceId":"x"}`,
 		`[{"jsonrpc":"2.0","id":2,"result":{},"traceId":"x"},{"jsonrpc":"2.0","method":"` + MethodSystemPong + `"}]`,
-		`{"jsonrpc":"2.0","id":3,"result":{},"traceId":"x"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
+		`{"jsonrpc":"2.0","id":4,"result":{}}`,
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(net.ErrClosed)
 	conn := &Conn{ctx: ctx, d: Dialer{Log: slog.New(slog.DiscardHandler)}, requests: make(chan serverRequest, 8)}
 	ch := requestChannel{Channel: &scriptedChannel{frames: frames}, conn: conn}
-	for _, want := range []string{`[{"id":2,"jsonrpc":"2.0","result":{}}]`, `{"id":3,"jsonrpc":"2.0","result":{}}`} {
+	for _, want := range []string{
+		`[{"id":1,"jsonrpc":"2.0","result":{}}]`,
+		`[{"id":2,"jsonrpc":"2.0","result":{}}]`,
+		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
+		`{"jsonrpc":"2.0","id":4,"result":{}}`,
+	} {
 		got, err := ch.Recv()
 		if err != nil || string(got) != want {
 			t.Fatalf("Recv() = %s, %v, want %s", got, err, want)

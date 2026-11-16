@@ -322,9 +322,8 @@ type serverRequest struct {
 // requestQueueSize bounds the requests waiting for handleRequests; reading waits while it is full.
 const requestQueueSize = 256
 
-// handleRequests handles the requests the service sends in arrival order until the Conn closes, and
-// answers those with an ID. jrpc2 hands each received frame to its own goroutine, so an ICE candidate
-// could otherwise overtake the offer it belongs to.
+// handleRequests handles the service's requests in arrival order, answering those with an ID, until the
+// Conn closes. jrpc2 hands each frame to its own goroutine, which could let a candidate overtake its offer.
 func (conn *Conn) handleRequests() {
 	for {
 		select {

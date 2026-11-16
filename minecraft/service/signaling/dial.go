@@ -167,9 +167,8 @@ func (ch *websocketChannel) Close() error {
 	return ch.Conn.Close(websocket.StatusNormalClosure, "")
 }
 
-// requestChannel is the channel a Conn's jrpc2 client reads. It reads leniently like vanilla, skipping
-// frames that are not JSON-RPC and dropping members JSON-RPC does not define, which jrpc2 rejects. It hands
-// the requests the service sends to the Conn in arrival order and passes only replies on to jrpc2.
+// requestChannel reads a Conn's connection leniently, as vanilla does, and hands the service's requests to
+// the Conn in arrival order. Only replies to the client's own calls reach jrpc2.
 type requestChannel struct {
 	channel.Channel
 	conn *Conn
@@ -182,23 +181,19 @@ func (ch requestChannel) Recv() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		objects, batch, ok := jsonRPCObjects(msg)
+		objects, batch, changed, ok := jsonRPCObjects(msg)
 		if !ok {
 			ch.conn.d.Log.Debug("skipping signaling frame that is not a JSON-RPC message", slog.Int("size", len(msg)))
 			continue
 		}
 		replies := objects[:0]
 		for _, m := range objects {
-			method, ok := m["method"]
+			r, ok := serverRequestOf(m)
 			if !ok {
 				replies = append(replies, m)
 				continue
 			}
-			r := serverRequest{id: m["id"], params: m["params"]}
-			_ = json.Unmarshal(method, &r.method)
-			if string(bytes.TrimSpace(r.id)) == "null" {
-				r.id = nil
-			}
+			changed = true
 			select {
 			case ch.conn.requests <- r:
 			case <-ch.conn.ctx.Done():
@@ -207,6 +202,9 @@ func (ch requestChannel) Recv() ([]byte, error) {
 		}
 		if len(replies) == 0 {
 			continue
+		}
+		if !changed {
+			return msg, nil
 		}
 		var v any = replies
 		if !batch {
@@ -218,37 +216,55 @@ func (ch requestChannel) Recv() ([]byte, error) {
 	}
 }
 
-// jsonRPCObjects decodes a JSON-RPC object or batch, dropping the top-level members JSON-RPC does not
-// define. It reports whether msg was a batch, and false if msg is not an object or array of objects.
-func jsonRPCObjects(msg []byte) (objects []map[string]json.RawMessage, batch, ok bool) {
-	trimmed := bytes.TrimSpace(msg)
-	if batch = len(trimmed) > 0 && trimmed[0] == '['; batch {
-		if json.Unmarshal(trimmed, &objects) != nil || len(objects) == 0 {
-			return nil, false, false
-		}
-	} else {
-		var m map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &m) != nil {
-			return nil, false, false
-		}
-		objects = []map[string]json.RawMessage{m}
+// serverRequestOf returns m as a request from the service. Like jrpc2, it treats m as a request only if it
+// has a method and neither a result nor an error.
+func serverRequestOf(m map[string]json.RawMessage) (serverRequest, bool) {
+	var r serverRequest
+	_, result := m["result"]
+	_, failure := m["error"]
+	if result || failure || json.Unmarshal(m["method"], &r.method) != nil || r.method == "" {
+		return r, false
 	}
-	for _, m := range objects {
-		if m == nil {
-			return nil, false, false
-		}
-		dropUnknownMembers(m)
+	r.id, r.params = m["id"], m["params"]
+	if string(bytes.TrimSpace(r.id)) == "null" {
+		r.id = nil
 	}
-	return objects, batch, true
+	return r, true
 }
 
-// dropUnknownMembers deletes the members of m JSON-RPC does not define.
-func dropUnknownMembers(m map[string]json.RawMessage) {
+// jsonRPCObjects decodes a JSON-RPC object or batch without the top-level members JSON-RPC does not define.
+// It skips batch elements that are not objects, reports whether anything was removed, and reports false if
+// msg holds no object at all.
+func jsonRPCObjects(msg []byte) (objects []map[string]json.RawMessage, batch, changed, ok bool) {
+	trimmed := bytes.TrimSpace(msg)
+	elements := []json.RawMessage{trimmed}
+	if batch = len(trimmed) > 0 && trimmed[0] == '['; batch {
+		if json.Unmarshal(trimmed, &elements) != nil {
+			return nil, false, false, false
+		}
+	}
+	for _, e := range elements {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(e, &m) != nil || m == nil {
+			changed = true
+			continue
+		}
+		changed = dropUnknownMembers(m) || changed
+		objects = append(objects, m)
+	}
+	return objects, batch, changed, len(objects) > 0
+}
+
+// dropUnknownMembers deletes the members of m JSON-RPC does not define and reports whether it did.
+func dropUnknownMembers(m map[string]json.RawMessage) bool {
+	changed := false
 	for key := range m {
 		if !jsonRPCMember(key) {
 			delete(m, key)
+			changed = true
 		}
 	}
+	return changed
 }
 
 // jsonRPCMember reports whether key is a top-level member of a JSON-RPC 2.0 request or response.

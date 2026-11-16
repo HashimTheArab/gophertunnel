@@ -35,7 +35,7 @@ func configurationServer(t *testing.T, statuses []int, bodies []string) (*AFDEnv
 	return &AFDEnvironment{ServiceEnvironment: internal.ServiceEnvironment{ServiceURI: u}}, calls
 }
 
-var testTokenSource = staticTokenSource{token: &service.Token{AuthorizationHeader: "test-token"}}
+var testTokenSource = fixedTokenSource{token: &service.Token{AuthorizationHeader: "test-token"}}
 
 const validConfiguration = `{"result":{"signalingUri":"wss://signaling.example","pingFrequency":"00:00:30"}}`
 
