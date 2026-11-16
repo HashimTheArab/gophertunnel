@@ -319,7 +319,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 			e = issuing
 		}
 		identityProvider = netherNetIdentityProvider(e.Issuer)
-		verifier = authVerifier{}
+		verifier = authVerifier{client: d.HTTPClient}
 		identityData, err := login.ParseTokenIdentityData(ctx, token, verifier)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}

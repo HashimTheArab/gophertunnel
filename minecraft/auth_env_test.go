@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
@@ -273,11 +274,41 @@ func TestIssuingAuthEnvFollowsTheTokenIssuer(t *testing.T) {
 	if e, _ := issuingAuthEnv(tokenFrom("https://untrusted.example")); e.Issuer.String() != moved.URL {
 		t.Errorf("token from an untrusted issuer matched %v, want the current %s", e.Issuer, moved.URL)
 	}
+	authState.Lock()
+	authState.prevUntil = time.Now()
+	authState.Unlock()
+	if e, _ := issuingAuthEnv(tokenFrom(first.URL)); e.Issuer.String() != moved.URL {
+		t.Errorf("token from the replaced issuer after its grace matched %v, want the current %s", e.Issuer, moved.URL)
+	}
+}
+
+// Verifying a login, which passes a bare context, refreshes discovery with the Listener's HTTP client.
+func TestAuthVerifierUsesItsHTTPClient(t *testing.T) {
+	server := issuerServer(t)
+	d := discoveryWithIssuer(t, server.URL)
+	client := &http.Client{}
+	var used *http.Client
+	oldDiscover := authEnvDiscover
+	authEnvDiscover = func(ctx context.Context) (*service.Discovery, error) {
+		used = auth.ContextClient(ctx)
+		return d, nil
+	}
+	resetAuthState()
+	t.Cleanup(func() {
+		waitPreloadSettled(t)
+		authEnvDiscover = oldDiscover
+		resetAuthState()
+	})
+	_, _ = authVerifier{client: client}.Verify(context.Background(), tokenFrom(server.URL))
+	if used != client {
+		t.Fatal("discovery did not use the verifier's HTTP client")
+	}
 }
 
 // resetAuthState empties the authorization environment authEnv maintains.
 func resetAuthState() {
 	authState.Lock()
 	defer authState.Unlock()
-	authState.env, authState.prev, authState.seen, authState.want, authState.pending, authState.retryAt = nil, nil, nil, nil, false, time.Time{}
+	authState.env, authState.prev, authState.seen, authState.want = nil, nil, nil, nil
+	authState.pending, authState.retryAt, authState.prevUntil = false, time.Time{}, time.Time{}
 }

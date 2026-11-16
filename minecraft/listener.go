@@ -22,6 +22,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -316,7 +317,7 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		if _, err := oidcVerifier(ctx); err != nil {
 			return nil, fmt.Errorf("create default OIDC verifier: %w", err)
 		}
-		verifier = authVerifier{}
+		verifier = authVerifier{client: cfg.HTTPClient}
 	}
 
 	netListener, err := network.Listen(address)
@@ -358,16 +359,21 @@ func Listen(network, address string) (*Listener, error) {
 // authEnvState is the authorization environment authEnv maintains.
 type authEnvState struct {
 	sync.Mutex
-	env     *service.AuthorizationEnvironment
-	prev    *service.AuthorizationEnvironment // the environment the last swap replaced
-	seen    *service.Discovery                // the latest Discovery authEnv decoded
-	want    *service.AuthorizationEnvironment // the environment seen describes, once loaded
-	pending bool                              // want is being preloaded
-	retryAt time.Time                         // when a failed preload may be tried again
+	env       *service.AuthorizationEnvironment
+	prev      *service.AuthorizationEnvironment // the environment the last swap replaced
+	prevUntil time.Time                         // until when tokens from prev are still accepted
+	seen      *service.Discovery                // the latest Discovery authEnv decoded
+	want      *service.AuthorizationEnvironment // the environment seen describes, once loaded
+	pending   bool                              // want is being preloaded
+	retryAt   time.Time                         // when a failed preload may be tried again
 }
 
 // authState is the process-wide authorization environment.
 var authState authEnvState
+
+// authPrevGrace is how long after a swap tokens from the replaced issuer are still accepted, for clients
+// and token sources that discovered before it.
+const authPrevGrace = 24 * time.Hour
 
 // authEnvRetry is how long a changed environment whose verifier failed to load waits before another try.
 const authEnvRetry = 5 * time.Minute
@@ -459,7 +465,8 @@ func preloadAuthEnv(e *service.AuthorizationEnvironment) {
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
 	default:
-		authState.prev, authState.env, authState.want = authState.env, e, nil
+		authState.prev, authState.prevUntil = authState.env, time.Now().Add(authPrevGrace)
+		authState.env, authState.want = e, nil
 	}
 }
 
@@ -470,10 +477,21 @@ func newerDiscovery(d, seen *service.Discovery) bool {
 
 // authVerifier verifies a multiplayer token against the trusted authorization environment that issued it,
 // following discovery: the current one, one being loaded, or the one the last swap replaced.
-type authVerifier struct{}
+type authVerifier struct {
+	client *http.Client // the Dialer's or Listener's client, else the one the environment was built with
+}
 
 // Verify implements [login.TokenVerifier].
-func (authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+func (v authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+	client := v.client
+	if client == nil {
+		authState.Lock()
+		if authState.env != nil {
+			client = authState.env.HTTPClient
+		}
+		authState.Unlock()
+	}
+	ctx = auth.WithContextClient(ctx, client)
 	if _, err := authEnv(ctx); err != nil {
 		return nil, err
 	}
@@ -481,11 +499,11 @@ func (authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDToke
 	if !ok {
 		return nil, errors.New("minecraft: no authorization environment")
 	}
-	v, err := e.VerifierContext(ctx)
+	verifier, err := e.VerifierContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("obtain verifier: %w", err)
 	}
-	return v.Verify(ctx, rawIDToken)
+	return verifier.Verify(ctx, rawIDToken)
 }
 
 // issuingAuthEnv returns the trusted authorization environment whose issuer issued token, or the current
@@ -494,7 +512,14 @@ func issuingAuthEnv(token string) (*service.AuthorizationEnvironment, bool) {
 	iss := tokenIssuer(token)
 	authState.Lock()
 	defer authState.Unlock()
-	for _, e := range []*service.AuthorizationEnvironment{authState.env, authState.want, authState.prev} {
+	trusted := []*service.AuthorizationEnvironment{authState.env}
+	if time.Now().After(authState.retryAt) {
+		trusted = append(trusted, authState.want) // not while a failed load backs off
+	}
+	if time.Now().Before(authState.prevUntil) {
+		trusted = append(trusted, authState.prev)
+	}
+	for _, e := range trusted {
 		if e != nil && iss != "" && sameIssuer(iss, e.Issuer) {
 			return e, true
 		}

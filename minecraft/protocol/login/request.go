@@ -102,8 +102,7 @@ func Parse(request []byte, verifier TokenVerifier) (IdentityData, ClientData, Au
 	)
 	switch {
 	case verifier != nil && req.Token != "":
-		// The context here is used for making requests via remote key set, which does not normally
-		// occur in this case since we use a custom-made OIDC verifier that has already static key set included.
+		// The verifier may fetch its issuer's configuration or signing keys the first time it sees one.
 		idt, err := verifier.Verify(context.Background(), req.Token)
 		if err != nil {
 			return iData, cData, res, fmt.Errorf("verify ID token: %w", err)
