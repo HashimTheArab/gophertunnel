@@ -76,7 +76,8 @@ var (
 	// environments without waiting on the network each time.
 	discoveryCache   = make(map[string]discoveryEntry)
 	discoveryCacheMu sync.Mutex
-	// discoveryRequests shares one request between callers discovering the same URL with the same client.
+	// discoveryRequests shares one request between callers with nothing cached that discover the same URL with
+	// the same client.
 	discoveryRequests singleflight.Group
 )
 
@@ -136,16 +137,20 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 	client := auth.ContextClient(ctx)
 	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
 	key := fmt.Sprintf("%p %s", client, requestURL)
-	refresh := func() (any, error) {
-		// The shared request outlives callers that stop waiting, bounded by its call deadline.
-		return refreshDiscovery(context.WithoutCancel(ctx), client, requestURL)
-	}
+	// A request outlives callers that stop waiting, bounded by its call deadline.
+	reqCtx := context.WithoutCancel(ctx)
 	if d, fresh := cachedDiscovery(requestURL); d != nil {
 		if !fresh && startRefresh(requestURL) {
 			// The cached result is served while one request refreshes it in the background.
-			discoveryRequests.DoChan(key, refresh)
+			go func() {
+				defer endRefresh(requestURL)
+				_, _ = refreshDiscovery(reqCtx, client, requestURL)
+			}()
 		}
 		return d, nil
+	}
+	refresh := func() (any, error) {
+		return refreshDiscovery(reqCtx, client, requestURL)
 	}
 	select {
 	case <-ctx.Done():
@@ -169,11 +174,6 @@ const discoveryRetry = 5 * time.Minute
 // refreshDiscovery fetches requestURL and caches the result. When the request fails, a cached result is
 // kept and refreshed again after discoveryRetry.
 func refreshDiscovery(ctx context.Context, client *http.Client, requestURL string) (*Discovery, error) {
-	defer func() {
-		discoveryCacheMu.Lock()
-		delete(discoveryRefreshing, requestURL)
-		discoveryCacheMu.Unlock()
-	}()
 	if d, fresh := cachedDiscovery(requestURL); fresh {
 		return d, nil
 	}
@@ -203,6 +203,7 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 }
 
 // discoveryRefreshing holds the request URLs being refreshed in the background, guarded by discoveryCacheMu.
+// The background refresh that claimed a URL releases it.
 var discoveryRefreshing = make(map[string]bool)
 
 // startRefresh reports whether a background refresh of requestURL should start, marking it started.
@@ -214,6 +215,13 @@ func startRefresh(requestURL string) bool {
 	}
 	discoveryRefreshing[requestURL] = true
 	return true
+}
+
+// endRefresh releases a claim taken by startRefresh.
+func endRefresh(requestURL string) {
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	delete(discoveryRefreshing, requestURL)
 }
 
 // cachedDiscovery returns the cached result of an earlier discovery of requestURL, if any, and whether it

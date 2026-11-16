@@ -285,22 +285,26 @@ func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
 	})
 }
 
-// A refresh that finds the result already fresh still releases the URL for later refreshes.
-func TestRefreshReleasesItsClaimWhenFresh(t *testing.T) {
+// A background refresh releases its claim on the URL when it ends, so a later stale result is refreshed again.
+func TestBackgroundRefreshReleasesItsClaim(t *testing.T) {
 	isolateDiscoveryCache(t)
-	const requestURL = "https://discovery.test/claim"
-	discoveryCacheMu.Lock()
-	discoveryCache[requestURL] = discoveryEntry{d: &Discovery{}, checked: time.Now()}
-	discoveryCacheMu.Unlock()
-	if !startRefresh(requestURL) {
-		t.Fatal("first claim refused")
-	}
-	if _, err := refreshDiscovery(context.Background(), http.DefaultClient, requestURL); err != nil {
-		t.Fatal(err)
-	}
-	if !startRefresh(requestURL) {
-		t.Fatal("claim not released after a refresh that found the result fresh")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			return discoveryOK(), nil
+		})})
+		for range 3 {
+			if _, err := Discover(ctx, t.Name(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			time.Sleep(discoveryTTL)
+		}
+		if calls != 3 {
+			t.Fatalf("discovery requests = %d, want 3", calls)
+		}
+	})
 }
 
 // A first discovery that lists no services is returned but fetched again after discoveryRetry.

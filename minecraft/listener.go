@@ -315,8 +315,8 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		if cfg.HTTPClient != nil {
 			ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
 		}
-		if _, err := oidcVerifier(ctx); err != nil {
-			return nil, fmt.Errorf("create default OIDC verifier: %w", err)
+		if err := warmAuthVerifier(ctx); err != nil {
+			return nil, fmt.Errorf("load OIDC verifier: %w", err)
 		}
 		verifier = authVerifier{client: cfg.HTTPClient}
 	}
@@ -403,11 +403,11 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	}
 	e := new(service.AuthorizationEnvironment)
 	if err = discovery.Environment(e); err != nil {
-		if cached == nil {
-			return nil, fmt.Errorf("decode environment for auth: %w", err)
-		}
 		authState.Lock()
 		defer authState.Unlock()
+		if authState.env == nil {
+			return nil, fmt.Errorf("decode environment for auth: %w", err)
+		}
 		if newerDiscovery(discovery, authState.seen) {
 			// Decoded once, so later calls take the fast path; it describes no environment to swap to.
 			authState.seen, authState.want = discovery, nil
@@ -578,19 +578,18 @@ func urlString(u *url.URL) string {
 	return u.String()
 }
 
-// oidcVerifier returns the OpenID token verifier that could be used for
-// authenticating new multiplayer tokens issued by the authorization service
-// of Minecraft.
-func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
+// warmAuthVerifier caches the authorization environment and its multiplayer token verifier, so a Listener
+// starts only once logins can be verified.
+func warmAuthVerifier(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	e, err := authEnv(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("obtain environment for authorization: %w", err)
+		return fmt.Errorf("obtain environment for authorization: %w", err)
 	}
-	// Verifier already caches the *oidc.IDTokenVerifier so we don't need to cache it here.
-	return e.VerifierContext(ctx)
+	_, err = e.VerifierContext(ctx)
+	return err
 }
 
 // PreloadAuthEnvironment resolves and caches the authorization environment used for issuing and verifying
