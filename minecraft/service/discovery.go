@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,6 +45,9 @@ type Discovery struct {
 	// and each value is a slice of supported environment types for the version.
 	// Typically, the only environment type available for a version is "prod".
 	SupportedEnvironments map[string][]string `json:"supportedEnvironments,omitempty"`
+
+	// Fetched is when the Discovery was fetched, so a later one can be told from an earlier one.
+	Fetched time.Time `json:"-"`
 }
 
 const (
@@ -136,7 +140,7 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return refreshDiscovery(context.WithoutCancel(ctx), client, requestURL)
 	}
 	if d, fresh := cachedDiscovery(requestURL); d != nil {
-		if !fresh {
+		if !fresh && startRefresh(requestURL) {
 			// The cached result is served while one request refreshes it in the background.
 			discoveryRequests.DoChan(key, refresh)
 		}
@@ -164,10 +168,15 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 		return d, nil
 	}
 	d, err := discover(ctx, client, requestURL)
+	if err == nil && len(d.ServiceEnvironments) == 0 {
+		err = errors.New("minecraft/service: discovery lists no services")
+	}
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
+	delete(discoveryRefreshing, requestURL)
 	if err == nil {
-		discoveryCache[requestURL] = discoveryEntry{d: d, fetched: time.Now()}
+		d.Fetched = time.Now()
+		discoveryCache[requestURL] = discoveryEntry{d: d, fetched: d.Fetched}
 		return d, nil
 	}
 	if e, ok := discoveryCache[requestURL]; ok && time.Since(e.fetched) >= discoveryTTL {
@@ -177,6 +186,20 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 			slog.String("url", requestURL), slog.Any("error", err))
 	}
 	return nil, err
+}
+
+// discoveryRefreshing holds the request URLs being refreshed in the background, guarded by discoveryCacheMu.
+var discoveryRefreshing = make(map[string]bool)
+
+// startRefresh reports whether a background refresh of requestURL should start, marking it started.
+func startRefresh(requestURL string) bool {
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	if discoveryRefreshing[requestURL] {
+		return false
+	}
+	discoveryRefreshing[requestURL] = true
+	return true
 }
 
 // cachedDiscovery returns the cached result of an earlier discovery of requestURL, if any, and whether it

@@ -63,7 +63,7 @@ func discoveryWithIssuer(t *testing.T, issuer string) *service.Discovery {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &service.Discovery{ServiceEnvironments: map[string]map[string]json.RawMessage{"auth": {"prod": auth}}}
+	return &service.Discovery{ServiceEnvironments: map[string]map[string]json.RawMessage{"auth": {"prod": auth}}, Fetched: time.Now()}
 }
 
 // The authorization environment follows discovery, and swaps to a moved issuer only once its verifier is ready.
@@ -75,6 +75,7 @@ func TestAuthEnvFollowsDiscovery(t *testing.T) {
 	authEnvDiscover = func(context.Context) (*service.Discovery, error) { return current, discoverErr }
 	resetAuthState()
 	t.Cleanup(func() {
+		waitPreloadSettled(t)
 		authEnvDiscover = oldDiscover
 		resetAuthState()
 	})
@@ -126,13 +127,7 @@ func TestAuthEnvFollowsDiscovery(t *testing.T) {
 func TestAuthEnvColdCallsShareOneEnvironment(t *testing.T) {
 	server := issuerServer(t)
 	d := discoveryWithIssuer(t, server.URL)
-	oldDiscover := authEnvDiscover
-	authEnvDiscover = func(context.Context) (*service.Discovery, error) { return d, nil }
-	resetAuthState()
-	t.Cleanup(func() {
-		authEnvDiscover = oldDiscover
-		resetAuthState()
-	})
+	installAuthDiscovery(t, &d)
 	envs := make(chan *service.AuthorizationEnvironment, 8)
 	for range 8 {
 		go func() {
@@ -155,6 +150,7 @@ func installAuthDiscovery(t *testing.T, current **service.Discovery) {
 	authEnvDiscover = func(context.Context) (*service.Discovery, error) { return *current, nil }
 	resetAuthState()
 	t.Cleanup(func() {
+		waitPreloadSettled(t)
 		authEnvDiscover = oldDiscover
 		resetAuthState()
 	})
@@ -217,6 +213,31 @@ func TestAuthEnvKeepsEnvironmentWithoutSigningKeys(t *testing.T) {
 	authState.Unlock()
 	if !backingOff {
 		t.Fatal("failed preload is not backing off")
+	}
+}
+
+// An older Discovery read before a refresh does not roll back a change a newer one started.
+func TestAuthEnvIgnoresOlderDiscovery(t *testing.T) {
+	gate := make(chan struct{})
+	first, moved := issuerServer(t), issuerServerWith(t, gate, true)
+	older := discoveryWithIssuer(t, first.URL)
+	current := older
+	installAuthDiscovery(t, &current)
+	t.Cleanup(func() { close(gate) })
+	if _, err := authEnv(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current = discoveryWithIssuer(t, moved.URL)
+	_, _ = authEnv(context.Background())
+	stale := discoveryWithIssuer(t, first.URL)
+	stale.Fetched = older.Fetched
+	current = stale
+	_, _ = authEnv(context.Background())
+	authState.Lock()
+	want := authState.want
+	authState.Unlock()
+	if want == nil || want.Issuer.String() != moved.URL {
+		t.Fatalf("pending environment = %v, want the newer issuer %s", want, moved.URL)
 	}
 }
 

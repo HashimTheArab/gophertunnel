@@ -25,6 +25,7 @@ func isolateDiscoveryCache(t *testing.T) {
 	clear := func() {
 		discoveryCacheMu.Lock()
 		discoveryCache = make(map[string]discoveryEntry)
+		discoveryRefreshing = make(map[string]bool)
 		discoveryCacheMu.Unlock()
 	}
 	clear()
@@ -33,7 +34,7 @@ func isolateDiscoveryCache(t *testing.T) {
 
 // discoveryOK is a successful, empty discovery reply.
 func discoveryOK() *http.Response {
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}
 }
 
 // Slow discovery must leave cached entries readable and let queued callers cancel.
@@ -47,7 +48,7 @@ func TestDiscoveryStallDoesNotBlockCacheOrCancellation(t *testing.T) {
 				close(started)
 				<-release
 			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}, nil
 		})})
 		if _, err := Discover(ctx, t.Name(), "cached"); err != nil {
 			t.Fatal(err)
@@ -91,7 +92,7 @@ func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
 			case <-r.Context().Done():
 				return nil, r.Context().Err()
 			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}, nil
 		})})
 		ownerCtx, cancelOwner := context.WithCancel(base)
 		owner := make(chan error, 1)

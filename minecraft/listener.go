@@ -408,7 +408,11 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
 	}
 	e := new(service.AuthorizationEnvironment)
-	if err := discovery.Environment(e); err != nil {
+	err = discovery.Environment(e)
+	if err == nil && (e.ServiceURI == nil || e.Issuer == nil) {
+		err = errors.New("no service URI or issuer")
+	}
+	if err != nil {
 		if cached != nil {
 			return cached, nil
 		}
@@ -417,7 +421,8 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 
 	authState.Lock()
 	defer authState.Unlock()
-	if authState.seen != discovery {
+	// A caller holding an older Discovery than one already seen must not roll the state back.
+	if authState.seen != discovery && (authState.seen == nil || !discovery.Fetched.Before(authState.seen.Fetched)) {
 		authState.seen = discovery
 		switch {
 		case authState.env == nil:
