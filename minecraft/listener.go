@@ -369,14 +369,18 @@ func Listen(network, address string) (*Listener, error) {
 	return lc.Listen(network, address)
 }
 
-// authState is the authorization environment authEnv maintains.
-var authState struct {
+// authEnvState is the authorization environment authEnv maintains.
+type authEnvState struct {
 	sync.Mutex
-	env       *service.AuthorizationEnvironment
-	discovery *service.Discovery // the Discovery env was last checked against
-	pending   bool               // a changed environment is being preloaded
-	retryAt   time.Time          // when a failed preload may be tried again
+	env     *service.AuthorizationEnvironment
+	seen    *service.Discovery                // the latest Discovery authEnv decoded
+	want    *service.AuthorizationEnvironment // the environment seen describes, once loaded
+	pending bool                              // want is being preloaded
+	retryAt time.Time                         // when a failed preload may be tried again
 }
+
+// authState is the process-wide authorization environment.
+var authState authEnvState
 
 // authEnvRetry is how long a changed environment whose verifier failed to load waits before another try.
 const authEnvRetry = 5 * time.Minute
@@ -393,16 +397,15 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 
 	discovery, err := authEnvDiscover(ctx)
 	authState.Lock()
-	cached, checked := authState.env, authState.discovery
+	cached, seen := authState.env, authState.seen
+	if cached != nil && (err != nil || discovery == seen) {
+		authState.preloadLocked()
+		authState.Unlock()
+		return cached, nil
+	}
 	authState.Unlock()
 	if err != nil {
-		if cached != nil {
-			return cached, nil
-		}
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
-	}
-	if cached != nil && discovery == checked {
-		return cached, nil
 	}
 	e := new(service.AuthorizationEnvironment)
 	if err := discovery.Environment(e); err != nil {
@@ -414,24 +417,36 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 
 	authState.Lock()
 	defer authState.Unlock()
-	switch {
-	case authState.env == nil:
-		e.HTTPClient, _ = ctx.Value(oauth2.HTTPClient).(*http.Client)
-		authState.env, authState.discovery = e, discovery
-	case authState.discovery == discovery:
-	case sameAuthorization(authState.env, e):
-		authState.discovery = discovery
-	case !authState.pending && time.Now().After(authState.retryAt):
-		e.HTTPClient = authState.env.HTTPClient
-		authState.pending = true
-		go preloadAuthEnv(e, discovery)
+	if authState.seen != discovery {
+		authState.seen = discovery
+		switch {
+		case authState.env == nil:
+			e.HTTPClient, _ = ctx.Value(oauth2.HTTPClient).(*http.Client)
+			authState.env = e
+		case sameAuthorization(authState.env, e):
+			authState.want = nil
+		case authState.want == nil || !sameAuthorization(authState.want, e):
+			e.HTTPClient = authState.env.HTTPClient
+			authState.want, authState.retryAt = e, time.Time{}
+		}
 	}
+	authState.preloadLocked()
 	return authState.env, nil
 }
 
-// preloadAuthEnv makes e the authorization environment once its verifier and signing keys are loaded, so
-// verification never waits on them.
-func preloadAuthEnv(e *service.AuthorizationEnvironment, discovery *service.Discovery) {
+// preloadLocked starts loading the environment discovery now describes, unless one is loading or a failed
+// attempt is backing off. s must be locked.
+func (s *authEnvState) preloadLocked() {
+	if s.want == nil || s.pending || time.Now().Before(s.retryAt) {
+		return
+	}
+	s.pending = true
+	go preloadAuthEnv(s.want)
+}
+
+// preloadAuthEnv makes e the authorization environment once its verifier and signing keys are loaded,
+// unless discovery has moved on from e meanwhile.
+func preloadAuthEnv(e *service.AuthorizationEnvironment) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	err := e.PreloadVerifier(ctx)
@@ -439,13 +454,15 @@ func preloadAuthEnv(e *service.AuthorizationEnvironment, discovery *service.Disc
 	authState.Lock()
 	defer authState.Unlock()
 	authState.pending = false
-	if err != nil {
+	switch {
+	case authState.want != e:
+	case err != nil:
 		authState.retryAt = time.Now().Add(authEnvRetry)
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
-		return
+	default:
+		authState.env, authState.want = e, nil
 	}
-	authState.env, authState.discovery = e, discovery
 }
 
 // sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab titles.

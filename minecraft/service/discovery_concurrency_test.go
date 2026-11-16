@@ -251,3 +251,34 @@ func TestDiscoveryRefreshesAfterTTL(t *testing.T) {
 		}
 	})
 }
+
+// A refresh that fails after another stored a fresh result leaves that result fresh.
+func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		const requestURL = "https://discovery.test/fresh"
+		stale, fresh := &Discovery{}, &Discovery{}
+		discoveryCacheMu.Lock()
+		discoveryCache[requestURL] = discoveryEntry{d: stale, fetched: time.Now().Add(-discoveryTTL)}
+		discoveryCacheMu.Unlock()
+		release := make(chan struct{})
+		client := &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			<-release
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		done := make(chan struct{})
+		go func() {
+			_, _ = refreshDiscovery(context.Background(), client, requestURL)
+			close(done)
+		}()
+		synctest.Wait()
+		discoveryCacheMu.Lock()
+		discoveryCache[requestURL] = discoveryEntry{d: fresh, fetched: time.Now()}
+		discoveryCacheMu.Unlock()
+		close(release)
+		<-done
+		if d, isFresh := cachedDiscovery(requestURL); d != fresh || !isFresh {
+			t.Fatalf("cached discovery fresh = %v, same = %v, want the fresh result kept", isFresh, d == fresh)
+		}
+	})
+}

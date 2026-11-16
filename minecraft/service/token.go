@@ -225,8 +225,12 @@ func (e *AuthorizationEnvironment) PreloadVerifier(ctx context.Context) error {
 	if keys, _ := keySet.keysFromCache(); len(keys) != 0 {
 		return nil
 	}
-	if _, err := keySet.keysFromRemote(ctx); err != nil {
+	keys, err := keySet.keysFromRemote(ctx)
+	if err != nil {
 		return fmt.Errorf("fetch jwks: %w", err)
+	}
+	if len(keys) == 0 {
+		return errors.New("fetch jwks: no signing keys")
 	}
 	return nil
 }

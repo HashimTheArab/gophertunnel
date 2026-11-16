@@ -20,6 +20,13 @@ import (
 // issuerServer serves an OpenID configuration and one signing key, as the authorization service does.
 func issuerServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return issuerServerWith(t, nil, true)
+}
+
+// issuerServerWith is issuerServer that waits for gate, if any, before answering, and serves no keys unless
+// withKeys is set.
+func issuerServerWith(t *testing.T, gate <-chan struct{}, withKeys bool) *httptest.Server {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -27,13 +34,20 @@ func issuerServer(t *testing.T) *httptest.Server {
 	thumbprint := sha1.Sum(key.N.Bytes())
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gate != nil {
+			<-gate
+		}
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"issuer": server.URL, "jwks_uri": server.URL + "/keys", "id_token_signing_alg_values_supported": []string{"RS256"},
 			})
 		case "/keys":
-			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k", Algorithm: "RS256", Use: "sig", CertificateThumbprintSHA1: thumbprint[:]}}})
+			set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{}}
+			if withKeys {
+				set.Keys = append(set.Keys, jose.JSONWebKey{Key: &key.PublicKey, KeyID: "k", Algorithm: "RS256", Use: "sig", CertificateThumbprintSHA1: thumbprint[:]})
+			}
+			_ = json.NewEncoder(w).Encode(set)
 		default:
 			http.NotFound(w, r)
 		}
@@ -134,9 +148,81 @@ func TestAuthEnvColdCallsShareOneEnvironment(t *testing.T) {
 	}
 }
 
+// installAuthDiscovery makes authEnv read *current and starts from an empty state.
+func installAuthDiscovery(t *testing.T, current **service.Discovery) {
+	t.Helper()
+	oldDiscover := authEnvDiscover
+	authEnvDiscover = func(context.Context) (*service.Discovery, error) { return *current, nil }
+	resetAuthState()
+	t.Cleanup(func() {
+		authEnvDiscover = oldDiscover
+		resetAuthState()
+	})
+}
+
+// waitPreloadSettled waits until no changed environment is loading.
+func waitPreloadSettled(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		authState.Lock()
+		pending := authState.pending
+		authState.Unlock()
+		if !pending {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("preload did not finish")
+}
+
+// A preload superseded by a newer discovery is discarded instead of installed.
+func TestAuthEnvDiscardsSupersededPreload(t *testing.T) {
+	gate := make(chan struct{})
+	first, moved := issuerServer(t), issuerServerWith(t, gate, true)
+	current := discoveryWithIssuer(t, first.URL)
+	installAuthDiscovery(t, &current)
+	initial, err := authEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = discoveryWithIssuer(t, moved.URL)
+	_, _ = authEnv(context.Background())
+	current = discoveryWithIssuer(t, first.URL)
+	_, _ = authEnv(context.Background())
+	close(gate)
+	waitPreloadSettled(t)
+	if e, _ := authEnv(context.Background()); e != initial {
+		t.Fatalf("environment issuer = %v, want the restored %s", e.Issuer, first.URL)
+	}
+}
+
+// An issuer that serves no signing keys does not replace the working environment.
+func TestAuthEnvKeepsEnvironmentWithoutSigningKeys(t *testing.T) {
+	first, keyless := issuerServer(t), issuerServerWith(t, nil, false)
+	current := discoveryWithIssuer(t, first.URL)
+	installAuthDiscovery(t, &current)
+	initial, err := authEnv(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = discoveryWithIssuer(t, keyless.URL)
+	_, _ = authEnv(context.Background())
+	waitPreloadSettled(t)
+	if e, _ := authEnv(context.Background()); e != initial {
+		t.Fatalf("environment issuer = %v, want the working %s", e.Issuer, first.URL)
+	}
+	authState.Lock()
+	backingOff := time.Now().Before(authState.retryAt)
+	authState.Unlock()
+	if !backingOff {
+		t.Fatal("failed preload is not backing off")
+	}
+}
+
 // resetAuthState empties the authorization environment authEnv maintains.
 func resetAuthState() {
 	authState.Lock()
 	defer authState.Unlock()
-	authState.env, authState.discovery, authState.pending, authState.retryAt = nil, nil, false, time.Time{}
+	authState.env, authState.seen, authState.want, authState.pending, authState.retryAt = nil, nil, nil, false, time.Time{}
 }

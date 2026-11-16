@@ -170,7 +170,7 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 		discoveryCache[requestURL] = discoveryEntry{d: d, fetched: time.Now()}
 		return d, nil
 	}
-	if e, ok := discoveryCache[requestURL]; ok {
+	if e, ok := discoveryCache[requestURL]; ok && time.Since(e.fetched) >= discoveryTTL {
 		e.fetched = time.Now().Add(discoveryRetry - discoveryTTL)
 		discoveryCache[requestURL] = e
 		slog.Warn("minecraft/service: refresh discovery failed, keeping the cached result",
