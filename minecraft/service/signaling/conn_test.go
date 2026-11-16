@@ -527,21 +527,12 @@ func (n signalNotifier) NotifySignal(signal *nethernet.Signal) bool {
 // requestConn returns a Conn reading ch the way DialContext wires the WebSocket, delivering signals to notifier.
 func requestConn(t *testing.T, ch channel.Channel, notifier nethernet.Notifier) *Conn {
 	t.Helper()
-	ctx, cancel := context.WithCancelCause(context.Background())
-	conn := &Conn{
-		ctx: ctx, cancel: cancel,
-		d:         Dialer{Log: slog.New(slog.DiscardHandler)},
-		notifiers: map[uint32]nethernet.Notifier{0: notifier},
-		pending:   newPendingMap(),
-		requests:  make(chan serverRequest, requestQueueSize),
-		sendRaw:   ch.Send,
-	}
-	conn.client = jrpc2.NewClient(requestChannel{Channel: ch, conn: conn}, nil)
+	conn := newConn(Dialer{Log: slog.New(slog.DiscardHandler)}, ch, uuid.Nil)
+	conn.notifiers[0] = notifier
 	t.Cleanup(func() {
-		cancel(net.ErrClosed)
+		conn.cancel(net.ErrClosed)
 		_ = conn.client.Close()
 	})
-	go conn.handleRequests()
 	return conn
 }
 
@@ -682,6 +673,7 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`{"jsonrpc":"2.0","method":"` + MethodSystemPong + `","error":null}`,
 		`{"id":5,"event":"keepalive"}`,
 		`[{"jsonrpc":"2.0","id":6,"result":{}},{"id":7}]`,
+		`{"jsonrpc":"2.0","id":8,"error":null}`,
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(net.ErrClosed)

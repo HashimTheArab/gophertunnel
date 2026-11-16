@@ -49,7 +49,7 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 		token.SetAuthHeader(req)
 		return req, nil
-	}, authclient.CallOptions{Retry: configurationRetry})
+	}, authclient.CallOptions{Timeout: configurationTimeout, Retry: configurationRetry})
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +72,9 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 // configurationRetry retries a configuration request that failed transiently after 1, 2, 4, 8, 16 and 30
 // seconds, as vanilla does, for as long as the request's context allows.
 var configurationRetry = authclient.RetryOptions{Attempts: 7, MinDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
+
+// configurationTimeout fits the whole retry schedule, so the caller's context is what usually ends it.
+const configurationTimeout = 2 * time.Minute
 
 // maxConfigurationWait bounds the configuration request when a fallback exists; it also takes at most
 // half of the dial's remaining time, so the fallback can still connect.

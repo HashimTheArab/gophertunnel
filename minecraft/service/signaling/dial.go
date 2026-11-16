@@ -18,6 +18,7 @@ import (
 	"github.com/creachadair/jrpc2"
 	"github.com/creachadair/jrpc2/channel"
 	"github.com/df-mc/go-nethernet"
+	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/service"
 	"golang.org/x/oauth2"
 )
@@ -82,7 +83,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 			p.afd = nil
 		}
 		var direct directEnvironment
-		if discovery.Environment(&direct) == nil {
+		if discovery.Environment(&direct) == nil && direct.ServiceURI != nil && direct.ServiceURI.Host != "" {
 			p.fallback = direct.ServiceURI
 		}
 		if p.afd == nil && p.fallback == nil {
@@ -118,20 +119,27 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		slog.String("service_version", resp.Header.Get("Service-Version")),
 	)
 
+	conn := newConn(d, &websocketChannel{c}, token.Claims.PlayerMessagingID)
+	conn.conn = c
+	go conn.ping(cfg.PingFrequency)
+	conn.refreshCredentials()
+	return conn, nil
+}
+
+// newConn returns a Conn exchanging messages over ch and handling the service's requests.
+func newConn(d Dialer, ch channel.Channel, pmid uuid.UUID) *Conn {
 	conn := &Conn{
-		conn: c,
 		d:    d,
-		pmid: token.Claims.PlayerMessagingID,
+		pmid: pmid,
 
 		notifiers: make(map[uint32]nethernet.Notifier),
 		pending:   newPendingMap(),
 
 		requests: make(chan serverRequest, requestQueueSize),
+		sendRaw:  ch.Send,
 	}
 	conn.ctx, conn.cancel = context.WithCancelCause(context.Background())
-	ws := &websocketChannel{c}
-	conn.sendRaw = ws.Send
-	conn.client = jrpc2.NewClient(requestChannel{Channel: ws, conn: conn}, &jrpc2.ClientOptions{
+	conn.client = jrpc2.NewClient(requestChannel{Channel: ch, conn: conn}, &jrpc2.ClientOptions{
 		Logger: func(text string) {
 			d.Log.Debug(text, slog.String("src", "jrpc2"))
 		},
@@ -143,9 +151,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		},
 	})
 	go conn.handleRequests()
-	go conn.ping(cfg.PingFrequency)
-	conn.refreshCredentials()
-	return conn, nil
+	return conn
 }
 
 // websocketChannel is an implementation of [channel.Channel] over [websocket.Conn].
@@ -197,7 +203,7 @@ func (ch requestChannel) Recv() ([]byte, error) {
 		for _, m := range objects {
 			r, ok := serverRequestOf(m)
 			if !ok {
-				if _, result := m["result"]; result || m["error"] != nil {
+				if _, result := m["result"]; result || failed(m) {
 					replies = append(replies, m)
 				} else {
 					changed = true // neither a request nor a reply
@@ -232,8 +238,7 @@ func (ch requestChannel) Recv() ([]byte, error) {
 func serverRequestOf(m map[string]json.RawMessage) (serverRequest, bool) {
 	var r serverRequest
 	_, result := m["result"]
-	failure := m["error"] != nil && string(bytes.TrimSpace(m["error"])) != "null"
-	if result || failure || json.Unmarshal(m["method"], &r.method) != nil || r.method == "" {
+	if result || failed(m) || json.Unmarshal(m["method"], &r.method) != nil || r.method == "" {
 		return r, false
 	}
 	r.id, r.params = m["id"], m["params"]
@@ -241,6 +246,11 @@ func serverRequestOf(m map[string]json.RawMessage) (serverRequest, bool) {
 		r.id = nil
 	}
 	return r, true
+}
+
+// failed reports whether m carries a JSON-RPC error; an "error" member set to null carries none.
+func failed(m map[string]json.RawMessage) bool {
+	return m["error"] != nil && string(bytes.TrimSpace(m["error"])) != "null"
 }
 
 // jsonRPCObjects decodes a JSON-RPC object or batch without the top-level members JSON-RPC does not define.
