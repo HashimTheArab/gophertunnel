@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 )
@@ -23,7 +24,7 @@ func (f discoveryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func isolateDiscoveryCache(t *testing.T) {
 	clear := func() {
 		discoveryCacheMu.Lock()
-		discoveryCache = make(map[string]*Discovery)
+		discoveryCache = make(map[string]discoveryEntry)
 		discoveryCacheMu.Unlock()
 	}
 	clear()
@@ -198,6 +199,38 @@ func TestDiscoveryFinishesSharedRequestWithoutWaiters(t *testing.T) {
 		synctest.Wait()
 		if _, err := Discover(base, t.Name(), "test"); err != nil || calls != 1 || !bounded {
 			t.Fatalf("err = %v, network calls = %d, want 1; request bounded = %v", err, calls, bounded)
+		}
+	})
+}
+
+// A discovery is reused for discoveryTTL, fetched again after it, and kept when the refresh fails.
+func TestDiscoveryRefreshesAfterTTL(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		var calls int
+		failing := false
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			if failing {
+				return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(""))}, nil
+			}
+			return discoveryOK(), nil
+		})})
+		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil || calls != 1 {
+			t.Fatalf("within the TTL: requests = %d, error = %v, want 1 request", calls, err)
+		}
+		time.Sleep(discoveryTTL)
+		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil || calls != 2 {
+			t.Fatalf("after the TTL: requests = %d, error = %v, want 2 requests", calls, err)
+		}
+		failing = true
+		time.Sleep(discoveryTTL)
+		d, err := Discover(ctx, t.Name(), "1.0.0")
+		if err != nil || d == nil || calls != 3 {
+			t.Fatalf("failed refresh: discovery = %v, requests = %d, error = %v, want the cached discovery", d, calls, err)
 		}
 	})
 }

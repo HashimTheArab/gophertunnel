@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -353,27 +354,51 @@ func Listen(network, address string) (*Listener, error) {
 	return lc.Listen(network, address)
 }
 
-// authEnvCache holds authorization environment used to issue or verify
-// the multiplayer token for OpenID authentication. It is cached by authEnv.
+// authEnvCache holds the authorization environment used to issue or verify the multiplayer token for
+// OpenID authentication, cached by authEnv.
 var (
 	authEnvCache   *service.AuthorizationEnvironment
+	authEnvChecked time.Time // when authEnvCache was last compared with discovery
 	authEnvCacheMu sync.Mutex
 )
 
-// authEnv returns the authorization environment that can be used for issuing
-// or verifying the multiplayer token for OpenID authentication.
-// This method is only called once and cached globally which means it will
-// use the HTTP client from the first caller's context (oauth2.HTTPClient).
+// authEnvTTL is how long authEnv reuses its environment before comparing it with discovery again, so a
+// long-running process follows an authorization service that moves or changes its issuer.
+const authEnvTTL = time.Hour
+
+// authEnv returns the authorization environment that can be used for issuing or verifying the multiplayer
+// token for OpenID authentication. It is cached globally with the HTTP client from the context
+// (oauth2.HTTPClient) of the caller that built it. While discovery lists the same service and issuer, the
+// cached environment and its verifier are kept; if discovery fails, the cached environment is used.
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	authEnvCacheMu.Lock()
 	defer authEnvCacheMu.Unlock()
-	if authEnvCache != nil {
+	if authEnvCache != nil && time.Since(authEnvChecked) < authEnvTTL {
 		return authEnvCache, nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
+	e, err := authEnvDiscover(ctx)
+	if err != nil {
+		if authEnvCache != nil {
+			return authEnvCache, nil
+		}
+		return nil, err
+	}
+	authEnvChecked = time.Now()
+	if authEnvCache == nil || !sameAuthorization(authEnvCache, e) {
+		authEnvCache = e
+	}
+	return authEnvCache, nil
+}
+
+// authEnvDiscover decodes the authorization environment from discovery; tests replace it.
+var authEnvDiscover = discoverAuthEnv
+
+// discoverAuthEnv decodes the authorization environment from discovery.
+func discoverAuthEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	discovery, err := service.Default(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
@@ -385,8 +410,21 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	if client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); client != nil {
 		e.HTTPClient = client
 	}
-	authEnvCache = e
 	return e, nil
+}
+
+// sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab title.
+func sameAuthorization(a, b *service.AuthorizationEnvironment) bool {
+	return urlString(a.ServiceURI) == urlString(b.ServiceURI) && urlString(a.Issuer) == urlString(b.Issuer) &&
+		a.PlayFabTitleID == b.PlayFabTitleID
+}
+
+// urlString returns u as a string, or "" if u is nil.
+func urlString(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
 }
 
 // oidcVerifier returns the OpenID token verifier that could be used for

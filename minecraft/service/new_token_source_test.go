@@ -88,7 +88,7 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 func TestNewTokenSourceBuildsStandardWorkflow(t *testing.T) {
 	discoveryCacheMu.Lock()
 	oldURL, oldCache := discoveryURL, discoveryCache
-	discoveryURL, discoveryCache = &url.URL{Scheme: "https", Host: "discovery.test"}, make(map[string]*Discovery)
+	discoveryURL, discoveryCache = &url.URL{Scheme: "https", Host: "discovery.test"}, make(map[string]discoveryEntry)
 	discoveryCacheMu.Unlock()
 	t.Cleanup(func() {
 		discoveryCacheMu.Lock()

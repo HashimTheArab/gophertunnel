@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -66,13 +67,23 @@ var (
 		Host:   "client.discovery.minecraft-services.net",
 	}
 
-	// discoveryCache is a map where keys are the string composed of <appType>-<version>
-	// and the values are the result of [Discover], cached to reduce network time.
-	discoveryCache   = make(map[string]*Discovery)
+	// discoveryCache holds the result of [Discover] for each request URL, so services resolve their
+	// environments without waiting on the network each time.
+	discoveryCache   = make(map[string]discoveryEntry)
 	discoveryCacheMu sync.Mutex
 	// discoveryRequests shares one request between callers discovering the same URL with the same client.
 	discoveryRequests singleflight.Group
 )
+
+// discoveryTTL is how long a Discovery is reused before Discover fetches it again. Vanilla discovers once
+// per launch; a long-running process refreshes so services Microsoft moves are picked up.
+const discoveryTTL = time.Hour
+
+// discoveryEntry is a cached Discovery and when it was fetched.
+type discoveryEntry struct {
+	d       *Discovery
+	fetched time.Time
+}
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
 // using [Environment.ServiceName] as the key, then decodes the nested
@@ -109,28 +120,30 @@ func Default(ctx context.Context) (*Discovery, error) {
 // to specify [protocol.CurrentVersion] to keep up the compatibility with the
 // `protocol` package.
 //
-// Discover caches the result and can be called multiple times by various
-// services without waiting for network latency each time if cache was hit.
+// Discover caches the result for an hour, so it can be called by various services without waiting for
+// the network each time. When a refresh fails, the last result is returned instead of the error.
 func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
 	requestURL := discoveryURL.JoinPath("/api/v1.0/discovery", appType, "builds", version).String()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if d, ok := cachedDiscovery(requestURL); ok {
+	d, fresh := cachedDiscovery(requestURL)
+	if fresh {
 		return d, nil
 	}
+	stale := d
 	client := auth.ContextClient(ctx)
 	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
 	key := fmt.Sprintf("%p %s", client, requestURL)
 	ch := discoveryRequests.DoChan(key, func() (any, error) {
-		if d, ok := cachedDiscovery(requestURL); ok {
+		if d, fresh := cachedDiscovery(requestURL); fresh {
 			return d, nil
 		}
 		// The shared request outlives callers that stop waiting, bounded by its call deadline.
 		d, err := discover(context.WithoutCancel(ctx), client, requestURL)
 		if err == nil {
 			discoveryCacheMu.Lock()
-			discoveryCache[requestURL] = d
+			discoveryCache[requestURL] = discoveryEntry{d: d, fetched: time.Now()}
 			discoveryCacheMu.Unlock()
 		}
 		return d, err
@@ -140,18 +153,22 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return nil, ctx.Err()
 	case res := <-ch:
 		if res.Err != nil {
+			if stale != nil {
+				return stale, nil
+			}
 			return nil, res.Err
 		}
 		return res.Val.(*Discovery), nil
 	}
 }
 
-// cachedDiscovery returns the cached result of an earlier discovery of requestURL.
+// cachedDiscovery returns the cached result of an earlier discovery of requestURL, if any, and whether it
+// is younger than discoveryTTL.
 func cachedDiscovery(requestURL string) (*Discovery, bool) {
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
-	d, ok := discoveryCache[requestURL]
-	return d, ok
+	e, ok := discoveryCache[requestURL]
+	return e.d, ok && time.Since(e.fetched) < discoveryTTL
 }
 
 // discover bounds one service lookup and retries transient HTTP failures.
