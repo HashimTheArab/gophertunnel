@@ -61,7 +61,13 @@ func issuerServerWith(t *testing.T, gate <-chan struct{}, withKeys bool) *httpte
 // discoveryWithIssuer returns a Discovery whose auth service is issuer.
 func discoveryWithIssuer(t *testing.T, issuer string) *service.Discovery {
 	t.Helper()
-	auth, err := json.Marshal(map[string]any{"serviceUri": issuer, "issuer": issuer, "playfabTitleId": "20CA2"})
+	return discoveryWithService(t, issuer, issuer)
+}
+
+// discoveryWithService returns a Discovery whose auth service is at serviceURI, with issuer.
+func discoveryWithService(t *testing.T, serviceURI, issuer string) *service.Discovery {
+	t.Helper()
+	auth, err := json.Marshal(map[string]any{"serviceUri": serviceURI, "issuer": issuer, "playfabTitleId": "20CA2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,6 +308,29 @@ func TestAuthVerifierUsesItsHTTPClient(t *testing.T) {
 	_, _ = authVerifier{client: client}.Verify(context.Background(), tokenFrom(server.URL))
 	if used != client {
 		t.Fatal("discovery did not use the verifier's HTTP client")
+	}
+}
+
+// A swap that keeps the issuer, such as a moved service URI, keeps trusting the issuer replaced before it.
+func TestConfigurationSwapKeepsPreviousIssuer(t *testing.T) {
+	first, moved := issuerServer(t), issuerServer(t)
+	current := discoveryWithIssuer(t, first.URL)
+	installAuthDiscovery(t, &current)
+	for _, d := range []*service.Discovery{
+		discoveryWithIssuer(t, first.URL),
+		discoveryWithIssuer(t, moved.URL),
+		discoveryWithService(t, moved.URL+"/v2", moved.URL),
+	} {
+		current = d
+		_, _ = authEnv(context.Background())
+		waitPreloadSettled(t)
+	}
+	e, _ := authEnv(context.Background())
+	if e.ServiceURI.String() != moved.URL+"/v2" {
+		t.Fatalf("environment service = %v, want the moved %s/v2", e.ServiceURI, moved.URL)
+	}
+	if prev, _ := issuingAuthEnv(tokenFrom(first.URL)); !sameIssuer(first.URL, prev.Issuer) {
+		t.Fatalf("token from the first issuer matched %v after a configuration swap", prev.Issuer)
 	}
 }
 

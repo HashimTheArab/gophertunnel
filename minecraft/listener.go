@@ -465,7 +465,10 @@ func preloadAuthEnv(e *service.AuthorizationEnvironment) {
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
 	default:
-		authState.prev, authState.prevUntil = authState.env, time.Now().Add(authPrevGrace)
+		if !sameIssuer(urlString(e.Issuer), authState.env.Issuer) {
+			// Only a new issuer leaves clients on the replaced one; a configuration change keeps its grace.
+			authState.prev, authState.prevUntil = authState.env, time.Now().Add(authPrevGrace)
+		}
 		authState.env, authState.want = e, nil
 	}
 }
@@ -491,7 +494,9 @@ func (v authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDTo
 		}
 		authState.Unlock()
 	}
-	ctx = auth.WithContextClient(ctx, client)
+	// login.Parse passes a context without a deadline; loading a new issuer must not hang the login.
+	ctx, cancel := context.WithTimeout(auth.WithContextClient(ctx, client), 15*time.Second)
+	defer cancel()
 	if _, err := authEnv(ctx); err != nil {
 		return nil, err
 	}

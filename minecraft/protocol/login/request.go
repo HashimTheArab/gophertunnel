@@ -77,6 +77,14 @@ type TokenVerifier interface {
 	Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error)
 }
 
+// nilVerifier returns nil for a nil *oidc.IDTokenVerifier, which callers pass to skip verification.
+func nilVerifier(v TokenVerifier) TokenVerifier {
+	if o, ok := v.(*oidc.IDTokenVerifier); ok && o == nil {
+		return nil
+	}
+	return v
+}
+
 // Parse parses and verifies the login request passed. The AuthResult returned holds the ecdsa.PublicKey that
 // was parsed (which is used for encryption) and a bool specifying if the request was authenticated by XBOX
 // Live.
@@ -100,6 +108,7 @@ func Parse(request []byte, verifier TokenVerifier) (IdentityData, ClientData, Au
 		authenticated bool
 		t             = time.Now()
 	)
+	verifier = nilVerifier(verifier)
 	switch {
 	case verifier != nil && req.Token != "":
 		// The verifier may fetch its issuer's configuration or signing keys the first time it sees one.
@@ -291,7 +300,7 @@ func parseLoginRequest(requestData []byte) (*request, error) {
 // If verifier is non-nil, the token is verified before its claims are used.
 func ParseTokenIdentityData(ctx context.Context, token string, verifier TokenVerifier) (IdentityData, error) {
 	var claims tokenClaims
-	if verifier != nil {
+	if verifier = nilVerifier(verifier); verifier != nil {
 		idt, err := verifier.Verify(ctx, token)
 		if err != nil {
 			return IdentityData{}, fmt.Errorf("verify ID token: %w", err)
