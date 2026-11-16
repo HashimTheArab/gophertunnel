@@ -24,8 +24,9 @@ import (
 
 // Dialer specifies options for connecting to the signaling service.
 type Dialer struct {
-	// Environment is the environment used for connecting to the signaling service.
-	// If nil, it will be derived from [service.Default].
+	// Environment is the environment used for connecting to the signaling service. If nil, it is resolved
+	// from [service.Default] as vanilla does: the 'signaling-afd' configuration, falling back to the
+	// discovered 'signaling' service when that fails.
 	Environment ConfigurationProvider
 	// HTTPClient is the HTTP client used for WebSocket handshake messages and [Environment] discovery.
 	HTTPClient *http.Client
@@ -221,7 +222,7 @@ func (ch requestChannel) Recv() ([]byte, error) {
 func serverRequestOf(m map[string]json.RawMessage) (serverRequest, bool) {
 	var r serverRequest
 	_, result := m["result"]
-	_, failure := m["error"]
+	failure := m["error"] != nil && string(bytes.TrimSpace(m["error"])) != "null"
 	if result || failure || json.Unmarshal(m["method"], &r.method) != nil || r.method == "" {
 		return r, false
 	}

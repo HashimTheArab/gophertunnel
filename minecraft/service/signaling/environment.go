@@ -18,8 +18,8 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
-// DefaultPingFrequency is used when the signaling service does not provide a
-// positive ping interval.
+// DefaultPingFrequency is the ping interval used when the signaling service gives no usable one of at least
+// a second, or when the dial falls back to the discovered 'signaling' service.
 const DefaultPingFrequency = time.Second * 15
 
 // AFDEnvironment represents an environment for the signaling AFD (Azure Front Door) service,
@@ -186,7 +186,7 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 }
 
 // timeSpan matches a non-negative interval in .NET's TimeSpan format, [d.]hh:mm:ss[.fffffff].
-var timeSpan = regexp.MustCompile(`^(?:(\d{1,5})\.)?(\d{1,2}):(\d{1,2}):(\d{1,2})(\.\d{1,7})?$`)
+var timeSpan = regexp.MustCompile(`^(?:(\d{1,5})\.)?([01]?\d|2[0-3]):([0-5]?\d):([0-5]?\d)(\.\d{1,7})?$`)
 
 // parseTimeSpan parses an interval in .NET's TimeSpan format, as the signaling service writes pingFrequency.
 func parseTimeSpan(s string) (time.Duration, bool) {

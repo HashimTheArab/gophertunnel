@@ -103,6 +103,8 @@ func TestConfigurationPingFrequency(t *testing.T) {
 		`"00:00:Inf"`:        DefaultPingFrequency,
 		`"00:00:1e12"`:       DefaultPingFrequency,
 		`"00:00:00.5000000"`: DefaultPingFrequency,
+		`"00:00:75"`:         DefaultPingFrequency,
+		`"24:00:00"`:         DefaultPingFrequency,
 	}
 	for value, want := range tests {
 		var cfg Configuration

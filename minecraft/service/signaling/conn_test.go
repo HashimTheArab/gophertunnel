@@ -678,6 +678,7 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`[{"jsonrpc":"2.0","id":2,"result":{},"traceId":"x"},{"jsonrpc":"2.0","method":"` + MethodSystemPong + `"}]`,
 		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
 		`{"jsonrpc":"2.0","id":4,"result":{}}`,
+		`{"jsonrpc":"2.0","method":"` + MethodSystemPong + `","error":null}`,
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(net.ErrClosed)
@@ -694,8 +695,11 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 			t.Fatalf("Recv() = %s, %v, want %s", got, err, want)
 		}
 	}
-	if len(conn.requests) != 2 {
-		t.Fatalf("requests handed to the Conn = %d, want 2", len(conn.requests))
+	if _, err := ch.Recv(); err == nil {
+		t.Fatal("Recv() returned a frame after the last reply")
+	}
+	if len(conn.requests) != 3 {
+		t.Fatalf("requests handed to the Conn = %d, want 3", len(conn.requests))
 	}
 }
 
