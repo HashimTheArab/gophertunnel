@@ -152,6 +152,10 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return nil, ctx.Err()
 	case res := <-discoveryRequests.DoChan(key, refresh):
 		if res.Err != nil {
+			// A fetch with another client may have cached a result meanwhile.
+			if d, _ := cachedDiscovery(requestURL); d != nil {
+				return d, nil
+			}
 			return nil, res.Err
 		}
 		return res.Val.(*Discovery), nil

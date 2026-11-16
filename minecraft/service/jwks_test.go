@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 )
 
@@ -58,7 +59,10 @@ func TestVerifierContextSharesConfigurationFetch(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		configurations.Add(1)
+		if configurations.Add(1) > 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		<-gate
 		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": server.URL, "jwks_uri": server.URL + "/keys", "id_token_signing_alg_values_supported": []string{"ES256"}})
 	}))
@@ -95,6 +99,23 @@ func TestVerifierContextSharesConfigurationFetch(t *testing.T) {
 	}
 	if n := configurations.Load(); n != 1 {
 		t.Fatalf("configuration fetches = %d, want 1", n)
+	}
+}
+
+// A build started by a caller that found no verifier returns one cached since, without fetching again.
+func TestBuildVerifierReturnsVerifierCachedSince(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	issuer, _ := url.Parse(server.URL)
+	cached := &oidc.IDTokenVerifier{}
+	env := &AuthorizationEnvironment{Issuer: issuer, HTTPClient: server.Client(), verifier: cached}
+	got, err := env.buildVerifier(t.Context())
+	if err != nil || got != cached || requests.Load() != 0 {
+		t.Fatalf("buildVerifier = %p, %v after %d requests; want the cached verifier and no request", got, err, requests.Load())
 	}
 }
 

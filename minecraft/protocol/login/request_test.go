@@ -237,7 +237,7 @@ func readAuthJSON(t *testing.T, encoded []byte) string {
 	return string(buf.Next(int(chainLength)))
 }
 
-// A nil *oidc.IDTokenVerifier still skips verification, as before TokenVerifier.
+// A nil *oidc.IDTokenVerifier skips verification.
 func TestNilIDTokenVerifierSkipsVerification(t *testing.T) {
 	var v *oidc.IDTokenVerifier
 	if got := nilVerifier(v); got != nil {

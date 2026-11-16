@@ -23,6 +23,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -401,11 +402,7 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
 	}
 	e := new(service.AuthorizationEnvironment)
-	err = discovery.Environment(e)
-	if err == nil && (e.ServiceURI == nil || e.Issuer == nil) {
-		err = errors.New("no service URI or issuer")
-	}
-	if err != nil {
+	if err = discovery.Environment(e); err != nil {
 		if cached == nil {
 			return nil, fmt.Errorf("decode environment for auth: %w", err)
 		}
@@ -445,38 +442,39 @@ func (s *authEnvState) preloadLocked() {
 		return
 	}
 	s.pending = true
-	go preloadAuthEnv(s.want)
+	go s.preload(s.want)
 }
 
-// preloadAuthEnv makes e the authorization environment once its verifier and signing keys are loaded,
+// preload makes e the authorization environment once its verifier and signing keys are loaded,
 // unless discovery has moved on from e meanwhile.
-func preloadAuthEnv(e *service.AuthorizationEnvironment) {
-	// Nothing waits on the preload, so it outlasts the requests it makes rather than discarding them.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+func (s *authEnvState) preload(e *service.AuthorizationEnvironment) {
+	// Nothing waits on the preload, so it outlasts its configuration and key requests rather than
+	// discarding them.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*authclient.DefaultCallTimeout)
 	defer cancel()
 	err := e.PreloadVerifier(ctx)
 
-	authState.Lock()
-	defer authState.Unlock()
-	authState.pending = false
+	s.Lock()
+	defer s.Unlock()
+	s.pending = false
 	switch {
-	case authState.want != e:
-		authState.preloadLocked() // load what discovery describes now
+	case s.want != e:
+		s.preloadLocked() // load what discovery describes now
 	case err != nil:
-		authState.retryAt = time.Now().Add(authEnvRetry)
+		s.retryAt = time.Now().Add(authEnvRetry)
 		// The retry starts from a fresh environment, which reads the OpenID configuration again.
-		if fresh := new(service.AuthorizationEnvironment); authState.seen.Environment(fresh) == nil && sameAuthorization(fresh, e) {
+		if fresh := new(service.AuthorizationEnvironment); s.seen.Environment(fresh) == nil && sameAuthorization(fresh, e) {
 			fresh.HTTPClient = e.HTTPClient
-			authState.want = fresh
+			s.want = fresh
 		}
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
 	default:
-		if !sameIssuer(urlString(e.Issuer), authState.env.Issuer) {
+		if !sameIssuer(urlString(e.Issuer), s.env.Issuer) {
 			// Only a new issuer leaves clients on the replaced one; a configuration change keeps its grace.
-			authState.prev, authState.prevUntil = authState.env, time.Now().Add(authPrevGrace)
+			s.prev, s.prevUntil = s.env, time.Now().Add(authPrevGrace)
 		}
-		authState.env, authState.want = e, nil
+		s.env, s.want = e, nil
 	}
 }
 

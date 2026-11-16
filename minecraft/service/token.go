@@ -72,8 +72,8 @@ type AuthorizationEnvironment struct {
 	keySet *refreshingKeySet
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
-	// configFetch shares one OpenID configuration fetch between callers building the verifier.
-	configFetch singleflight.Group
+	// verifierBuild shares one verifier build between callers that find none cached.
+	verifierBuild singleflight.Group
 }
 
 // httpClient returns the HTTP client used for requests made by AuthorizationEnvironment.
@@ -190,38 +190,48 @@ func (e *AuthorizationEnvironment) Verifier() (*oidc.IDTokenVerifier, error) {
 // token sent from clients in the Login packet to authenticate themselves with a remote
 // OpenID configuration.
 func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.IDTokenVerifier, error) {
-	e.verifierMu.Lock()
-	verifier := e.verifier
-	e.verifierMu.Unlock()
-	if verifier != nil {
+	if verifier := e.cachedVerifier(); verifier != nil {
 		return verifier, nil
 	}
-
-	// Concurrent callers share one fetch, bounded by the call timeout, and each stops waiting at its own
+	// Concurrent callers share one build, bounded by the call timeout, and each stops waiting at its own
 	// deadline.
-	fetch := e.configFetch.DoChan("", func() (any, error) {
-		return e.configuration(context.WithoutCancel(ctx))
+	build := e.verifierBuild.DoChan("", func() (any, error) {
+		return e.buildVerifier(context.WithoutCancel(ctx))
 	})
-	var config *oidc.ProviderConfig
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("obtain OpenID configuration: %w", ctx.Err())
-	case res := <-fetch:
+	case res := <-build:
 		if res.Err != nil {
-			return nil, fmt.Errorf("obtain OpenID configuration: %w", res.Err)
+			return nil, res.Err
 		}
-		config = res.Val.(*oidc.ProviderConfig)
+		return res.Val.(*oidc.IDTokenVerifier), nil
 	}
+}
+
+// cachedVerifier returns the verifier built earlier, if any.
+func (e *AuthorizationEnvironment) cachedVerifier() *oidc.IDTokenVerifier {
 	e.verifierMu.Lock()
 	defer e.verifierMu.Unlock()
-	if e.verifier != nil {
-		return e.verifier, nil
-	}
+	return e.verifier
+}
 
+// buildVerifier fetches the OpenID configuration and caches the verifier it describes, unless one was
+// cached since the caller looked.
+func (e *AuthorizationEnvironment) buildVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
+	if verifier := e.cachedVerifier(); verifier != nil {
+		return verifier, nil
+	}
+	config, err := e.configuration(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("obtain OpenID configuration: %w", err)
+	}
 	refreshInterval := e.KeyRefreshInterval
 	if refreshInterval <= 0 {
 		refreshInterval = 30 * time.Minute
 	}
+	e.verifierMu.Lock()
+	defer e.verifierMu.Unlock()
 	e.keySet = newRefreshingKeySet(ctx, e, config.JWKSURL, refreshInterval, config.Algorithms)
 
 	// We need to append '/' on the issuer if not present.

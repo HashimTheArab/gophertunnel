@@ -112,7 +112,8 @@ func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
 	})
 }
 
-// Callers using different HTTP clients must not share one request, so one client's failure is not another's.
+// Callers using different HTTP clients must not share one request, so one client's failure is not another's;
+// a failed request falls back to what another client cached meanwhile.
 func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
@@ -134,8 +135,8 @@ func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 			t.Fatalf("working client got %v", err)
 		}
 		close(release)
-		if err := <-failed; err == nil {
-			t.Fatal("failing client unexpectedly succeeded")
+		if err := <-failed; err != nil {
+			t.Fatalf("failing client got %v, want the result the working client cached", err)
 		}
 	})
 }
