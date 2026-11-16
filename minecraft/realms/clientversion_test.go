@@ -25,6 +25,9 @@ func stubRealms(t *testing.T, acceptedVersion string) (*Client, *[]string) {
 	var mu sync.Mutex
 	var versions []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Charset"); got != "utf-8" {
+			t.Errorf("%s Charset = %q", r.URL.Path, got)
+		}
 		if strings.HasSuffix(r.URL.Path, "/join") {
 			if got := r.UserAgent(); got != "libhttpclient/1.0.0.0" {
 				t.Errorf("User-Agent = %q", got)
@@ -43,7 +46,7 @@ func stubRealms(t *testing.T, acceptedVersion string) (*Client, *[]string) {
 
 		if r.URL.Path == compatiblePath {
 			if version == acceptedVersion {
-				_, _ = w.Write([]byte(compatibleResponse))
+				_, _ = w.Write([]byte(compatibleShowInfoResponse))
 			} else {
 				_, _ = w.Write([]byte("OUTDATED"))
 			}
@@ -189,5 +192,21 @@ func TestUnknownClientVersion(t *testing.T) {
 	}
 	if unknownClientVersion(http.StatusBadRequest, []byte("not json")) {
 		t.Fatal("a non-JSON 400 must not trigger negotiation")
+	}
+}
+
+// Only the two COMPATIBLE answers accept a version.
+func TestCompatibleAnswer(t *testing.T) {
+	for answer, want := range map[string]bool{
+		"COMPATIBLE":           true,
+		"COMPATIBLE_SHOW_INFO": true,
+		" compatible\n":        true,
+		"OUTDATED":             false,
+		"ALPHA_ENDED":          false,
+		"":                     false,
+	} {
+		if got := compatibleAnswer(answer); got != want {
+			t.Errorf("compatibleAnswer(%q) = %v, want %v", answer, got, want)
+		}
 	}
 }

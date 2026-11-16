@@ -434,6 +434,7 @@ func (r *Client) sendWithOptions(ctx context.Context, method, path string, reque
 			return nil, err
 		}
 		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("Charset", "utf-8")
 		req.Header.Set("Client-Version", clientVersion)
 		req.Header.Set("X-ClientPlatform", "Android")
 		req.Header.Set("X-NetworkProtocolVersion", strconv.Itoa(protocol.CurrentProtocol))

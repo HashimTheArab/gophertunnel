@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	// compatiblePath answers COMPATIBLE or OUTDATED for the Client-Version sent
-	// with the request. The vanilla client checks it before offering Realms play.
+	// compatiblePath answers COMPATIBLE, COMPATIBLE_SHOW_INFO, OUTDATED or ALPHA_ENDED for the
+	// Client-Version sent with the request. The vanilla client checks it before offering Realms play.
 	compatiblePath = "/mco/client/compatible"
-	// compatibleResponse is the body returned for a version Realms still accepts.
+	// compatibleResponse accepts the version with no notice.
 	compatibleResponse = "COMPATIBLE"
+	// compatibleShowInfoResponse also accepts the version; vanilla shows the player a notice with it.
+	compatibleShowInfoResponse = "COMPATIBLE_SHOW_INFO"
 	// unknownClientVersionReason is the reason Realms returns when Client-Version
 	// is not one of the builds it accepts.
 	unknownClientVersionReason = "unknown_client_version"
@@ -125,7 +127,14 @@ func (c *Client) versionCompatible(ctx context.Context, version string) (bool, e
 	if status != http.StatusOK {
 		return false, fmt.Errorf("realms compatibility check: unexpected status %d", status)
 	}
-	return strings.EqualFold(strings.TrimSpace(string(body)), compatibleResponse), nil
+	return compatibleAnswer(string(body)), nil
+}
+
+// compatibleAnswer reports whether a compatibility answer accepts the version. Vanilla plays on both; the notice
+// COMPATIBLE_SHOW_INFO asks for has no screen in a proxy.
+func compatibleAnswer(body string) bool {
+	answer := strings.TrimSpace(body)
+	return strings.EqualFold(answer, compatibleResponse) || strings.EqualFold(answer, compatibleShowInfoResponse)
 }
 
 // versionCandidates lists versions to try, starting at version and walking its
