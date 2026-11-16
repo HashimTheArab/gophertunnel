@@ -217,9 +217,8 @@ type Listener struct {
 	close    chan struct{}
 
 	key *ecdsa.PrivateKey
-	// verifier is used to verify the OpenID token issued by the authorization service
-	// for authenticating incoming connections. It will be nil if authentication is
-	// disabled on ListenConfig.
+	// verifier is the multiplayer token verifier the Listener started with, used when currentVerifier
+	// cannot get the current one. It is nil if authentication is disabled on ListenConfig.
 	verifier *oidc.IDTokenVerifier
 }
 
@@ -370,37 +369,39 @@ func Listen(network, address string) (*Listener, error) {
 	return lc.Listen(network, address)
 }
 
-// authEnvCache holds the authorization environment used to issue or verify the multiplayer token for
-// OpenID authentication, and the Discovery it was decoded from. It is maintained by authEnv.
-var (
-	authEnvCache     *service.AuthorizationEnvironment
-	authEnvDiscovery *service.Discovery
-	authEnvCacheMu   sync.Mutex
-)
+// authState is the authorization environment authEnv maintains.
+var authState struct {
+	sync.Mutex
+	env       *service.AuthorizationEnvironment
+	discovery *service.Discovery // the Discovery env was last checked against
+	pending   bool               // a changed environment is being preloaded
+	retryAt   time.Time          // when a failed preload may be tried again
+}
+
+// authEnvRetry is how long a changed environment whose verifier failed to load waits before another try.
+const authEnvRetry = 5 * time.Minute
 
 // authEnvDiscover returns the current Discovery; tests replace it.
 var authEnvDiscover = service.Default
 
-// authEnv returns the authorization environment that can be used for issuing or verifying the multiplayer
-// token for OpenID authentication, built with the HTTP client of the first caller's context
-// (oauth2.HTTPClient). It follows discovery: when the authorization service, issuer or PlayFab titles
-// change, a new environment replaces the cached one once its verifier is ready. Until then, or if
-// discovery fails, the cached environment is returned.
+// authEnv returns the authorization environment for issuing and verifying multiplayer tokens, using the
+// HTTP client (oauth2.HTTPClient) of the first caller's context. It follows discovery, swapping to a
+// changed service or issuer once that one's verifier is ready.
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	discovery, err := authEnvDiscover(ctx)
-	authEnvCacheMu.Lock()
-	cached, cachedFrom := authEnvCache, authEnvDiscovery
-	authEnvCacheMu.Unlock()
+	authState.Lock()
+	cached, checked := authState.env, authState.discovery
+	authState.Unlock()
 	if err != nil {
 		if cached != nil {
 			return cached, nil
 		}
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
 	}
-	if cached != nil && discovery == cachedFrom {
+	if cached != nil && discovery == checked {
 		return cached, nil
 	}
 	e := new(service.AuthorizationEnvironment)
@@ -410,38 +411,41 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		}
 		return nil, fmt.Errorf("decode environment for auth: %w", err)
 	}
-	if client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); client != nil {
-		e.HTTPClient = client
-	}
+
+	authState.Lock()
+	defer authState.Unlock()
 	switch {
-	case cached == nil:
-		storeAuthEnv(e, discovery)
-		return e, nil
-	case sameAuthorization(cached, e):
-		storeAuthEnv(cached, discovery)
-	default:
-		// Verification keeps using the cached environment until the new one's verifier is ready. A failed
-		// preload keeps it until discovery changes again.
-		storeAuthEnv(cached, discovery)
-		go func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-			defer cancel()
-			if err := e.PreloadVerifier(ctx); err != nil {
-				slog.Warn("minecraft: authorization service changed, keeping the previous one",
-					slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
-				return
-			}
-			storeAuthEnv(e, discovery)
-		}()
+	case authState.env == nil:
+		e.HTTPClient, _ = ctx.Value(oauth2.HTTPClient).(*http.Client)
+		authState.env, authState.discovery = e, discovery
+	case authState.discovery == discovery:
+	case sameAuthorization(authState.env, e):
+		authState.discovery = discovery
+	case !authState.pending && time.Now().After(authState.retryAt):
+		e.HTTPClient = authState.env.HTTPClient
+		authState.pending = true
+		go preloadAuthEnv(e, discovery)
 	}
-	return cached, nil
+	return authState.env, nil
 }
 
-// storeAuthEnv caches e as the authorization environment decoded from discovery.
-func storeAuthEnv(e *service.AuthorizationEnvironment, discovery *service.Discovery) {
-	authEnvCacheMu.Lock()
-	defer authEnvCacheMu.Unlock()
-	authEnvCache, authEnvDiscovery = e, discovery
+// preloadAuthEnv makes e the authorization environment once its verifier and signing keys are loaded, so
+// verification never waits on them.
+func preloadAuthEnv(e *service.AuthorizationEnvironment, discovery *service.Discovery) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := e.PreloadVerifier(ctx)
+
+	authState.Lock()
+	defer authState.Unlock()
+	authState.pending = false
+	if err != nil {
+		authState.retryAt = time.Now().Add(authEnvRetry)
+		slog.Warn("minecraft: authorization service changed, keeping the previous one",
+			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
+		return
+	}
+	authState.env, authState.discovery = e, discovery
 }
 
 // sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab titles.
