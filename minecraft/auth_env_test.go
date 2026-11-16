@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
@@ -355,30 +354,6 @@ func TestConfigurationSwapKeepsPreviousIssuer(t *testing.T) {
 	}
 	if prev, _ := issuingAuthEnv(tokenFrom(first.URL)); !sameIssuer(first.URL, prev.Issuer) {
 		t.Fatalf("token from the first issuer matched %v after a configuration swap", prev.Issuer)
-	}
-}
-
-// A verifier wait keeps its caller's deadline while another caller's configuration fetch is still running.
-func TestVerifierWaitHonoursDeadline(t *testing.T) {
-	gate := make(chan struct{})
-	server := issuerServerWith(t, gate, true)
-	t.Cleanup(func() { close(gate) })
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := &service.AuthorizationEnvironment{ServiceURI: u, Issuer: u}
-	go func() { _, _ = e.VerifierContext(context.Background()) }()
-	time.Sleep(50 * time.Millisecond)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	if _, err := e.VerifierContext(ctx); err == nil {
-		t.Fatal("VerifierContext succeeded while the issuer was unreachable")
-	}
-	if waited := time.Since(start); waited > 2*time.Second {
-		t.Fatalf("VerifierContext waited %v past a 200ms deadline", waited)
 	}
 }
 

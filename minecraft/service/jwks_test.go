@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,56 @@ func TestPreloadVerifierFetchesConfigurationAndKeysOnce(t *testing.T) {
 	}
 	if cached, _ := env.keySet.keysFromCache(); len(cached) != 1 || configurations.Load() != 1 || keys.Load() != 1 {
 		t.Fatalf("keys=%d configuration fetches=%d key fetches=%d, want 1 each", len(cached), configurations.Load(), keys.Load())
+	}
+}
+
+// Concurrent verifier builds share one configuration fetch, and a caller stops waiting at its own deadline.
+func TestVerifierContextSharesConfigurationFetch(t *testing.T) {
+	gate := make(chan struct{})
+	var configurations atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		configurations.Add(1)
+		<-gate
+		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": server.URL, "jwks_uri": server.URL + "/keys", "id_token_signing_alg_values_supported": []string{"ES256"}})
+	}))
+	defer server.Close()
+	issuer, _ := url.Parse(server.URL)
+	env := &AuthorizationEnvironment{Issuer: issuer, HTTPClient: server.Client()}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := env.VerifierContext(ctx); err == nil {
+		t.Fatal("VerifierContext succeeded while the configuration was held")
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Fatalf("VerifierContext waited %v past a 200ms deadline", waited)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			_, err := env.VerifierContext(t.Context())
+			errs <- err
+		})
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := configurations.Load(); n != 1 {
+		t.Fatalf("configuration fetches = %d, want 1", n)
 	}
 }
 

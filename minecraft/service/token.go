@@ -23,6 +23,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/text/language"
 )
 
@@ -71,6 +72,8 @@ type AuthorizationEnvironment struct {
 	keySet *refreshingKeySet
 	// verifierMu is a mutex that should be held when verifier is in access.
 	verifierMu sync.Mutex
+	// configFetch shares one OpenID configuration fetch between callers building the verifier.
+	configFetch singleflight.Group
 }
 
 // httpClient returns the HTTP client used for requests made by AuthorizationEnvironment.
@@ -194,11 +197,20 @@ func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.I
 		return verifier, nil
 	}
 
-	// The configuration is fetched without the lock, so a caller never waits past its deadline on another
-	// caller's fetch; the first verifier built is kept.
-	config, err := e.configuration(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("obtain OpenID configuration: %w", err)
+	// Concurrent callers share one fetch, bounded by the call timeout, and each stops waiting at its own
+	// deadline.
+	fetch := e.configFetch.DoChan("", func() (any, error) {
+		return e.configuration(context.WithoutCancel(ctx))
+	})
+	var config *oidc.ProviderConfig
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("obtain OpenID configuration: %w", ctx.Err())
+	case res := <-fetch:
+		if res.Err != nil {
+			return nil, fmt.Errorf("obtain OpenID configuration: %w", res.Err)
+		}
+		config = res.Val.(*oidc.ProviderConfig)
 	}
 	e.verifierMu.Lock()
 	defer e.verifierMu.Unlock()

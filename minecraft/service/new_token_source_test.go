@@ -45,8 +45,8 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 	for i := 0; i < value.NumField(); i++ {
 		field := value.Type().Field(i)
 		switch field.Name {
-		case "verifier", "keySet", "verifierMu":
-			// Cached verifier state and its lock belong to the original environment.
+		case "verifier", "keySet", "verifierMu", "configFetch":
+			// Cached verifier state, its lock and its in-flight fetch belong to the original environment.
 			continue
 		}
 		if !field.IsExported() || value.Field(i).IsZero() {
