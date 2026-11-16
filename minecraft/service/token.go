@@ -188,14 +188,22 @@ func (e *AuthorizationEnvironment) Verifier() (*oidc.IDTokenVerifier, error) {
 // OpenID configuration.
 func (e *AuthorizationEnvironment) VerifierContext(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	e.verifierMu.Lock()
-	defer e.verifierMu.Unlock()
-	if e.verifier != nil {
-		return e.verifier, nil
+	verifier := e.verifier
+	e.verifierMu.Unlock()
+	if verifier != nil {
+		return verifier, nil
 	}
 
+	// The configuration is fetched without the lock, so a caller never waits past its deadline on another
+	// caller's fetch; the first verifier built is kept.
 	config, err := e.configuration(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("obtain OpenID configuration: %w", err)
+	}
+	e.verifierMu.Lock()
+	defer e.verifierMu.Unlock()
+	if e.verifier != nil {
+		return e.verifier, nil
 	}
 
 	refreshInterval := e.KeyRefreshInterval

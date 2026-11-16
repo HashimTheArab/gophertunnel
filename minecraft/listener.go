@@ -530,6 +530,8 @@ func issuingAuthEnv(token string) (*service.AuthorizationEnvironment, bool) {
 	}
 	if time.Now().Before(authState.prevUntil) {
 		trusted = append(trusted, authState.prev)
+	} else {
+		authState.prev = nil // its grace is over
 	}
 	for _, e := range trusted {
 		if e != nil && iss != "" && sameIssuer(iss, e.Issuer) {
