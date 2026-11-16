@@ -135,13 +135,11 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		return nil, err
 	}
 	client := auth.ContextClient(ctx)
-	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
-	key := fmt.Sprintf("%p %s", client, requestURL)
-	// A request outlives callers that stop waiting, bounded by its call deadline.
-	reqCtx := context.WithoutCancel(ctx)
 	if d, fresh := cachedDiscovery(requestURL); d != nil {
 		if !fresh && startRefresh(requestURL) {
-			// The cached result is served while one request refreshes it in the background.
+			// The cached result is served while one request refreshes it in the background, bounded by its
+			// call deadline.
+			reqCtx := context.WithoutCancel(ctx)
 			go func() {
 				defer endRefresh(requestURL)
 				_, _ = refreshDiscovery(reqCtx, client, requestURL)
@@ -149,8 +147,11 @@ func Discover(ctx context.Context, appType, version string) (*Discovery, error) 
 		}
 		return d, nil
 	}
+	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
+	key := fmt.Sprintf("%p %s", client, requestURL)
 	refresh := func() (any, error) {
-		return refreshDiscovery(reqCtx, client, requestURL)
+		// The shared request outlives callers that stop waiting, bounded by its call deadline.
+		return refreshDiscovery(context.WithoutCancel(ctx), client, requestURL)
 	}
 	select {
 	case <-ctx.Done():
