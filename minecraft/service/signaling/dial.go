@@ -151,9 +151,15 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 // websocketChannel is an implementation of [channel.Channel] over [websocket.Conn].
 type websocketChannel struct{ *websocket.Conn }
 
+// writeTimeout bounds one WebSocket write; a write that stalls this long closes the connection.
+const writeTimeout = 15 * time.Second
+
 // Send writes the provided bytes to the WebSocket connection.
 func (ch *websocketChannel) Send(b []byte) error {
-	return ch.Write(context.Background(), websocket.MessageText, b)
+	// jrpc2 holds its client lock while sending, so a stalled write must not block Close forever.
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	return ch.Write(ctx, websocket.MessageText, b)
 }
 
 // Recv blocks until a new data is received in the WebSocket connection
@@ -169,7 +175,7 @@ func (ch *websocketChannel) Close() error {
 }
 
 // requestChannel reads a Conn's connection leniently, as vanilla does, and hands the service's requests to
-// the Conn in arrival order. Only replies to the client's own calls reach jrpc2.
+// the Conn in arrival order. Only replies to the client's own calls reach jrpc2; other objects are skipped.
 type requestChannel struct {
 	channel.Channel
 	conn *Conn
@@ -191,7 +197,11 @@ func (ch requestChannel) Recv() ([]byte, error) {
 		for _, m := range objects {
 			r, ok := serverRequestOf(m)
 			if !ok {
-				replies = append(replies, m)
+				if _, result := m["result"]; result || m["error"] != nil {
+					replies = append(replies, m)
+				} else {
+					changed = true // neither a request nor a reply
+				}
 				continue
 			}
 			changed = true

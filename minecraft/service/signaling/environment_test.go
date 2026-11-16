@@ -61,6 +61,8 @@ func TestDiscoveredConfiguration(t *testing.T) {
 			fallback: fallback, wantURI: "wss://fallback.example", wantPing: DefaultPingFrequency, wantCalls: 1},
 		{name: "unusable answer", statuses: []int{200}, bodies: []string{`{"result":{"signalingUri":""}}`},
 			fallback: fallback, wantURI: "wss://fallback.example", wantPing: DefaultPingFrequency, wantCalls: 1},
+		{name: "endpoint without a host", statuses: []int{200}, bodies: []string{`{"result":{"signalingUri":"/"}}`},
+			fallback: fallback, wantURI: "wss://fallback.example", wantPing: DefaultPingFrequency, wantCalls: 1},
 		{name: "rejected without fallback", statuses: []int{404}, bodies: []string{""}, wantCalls: 1, wantErr: true},
 	}
 	for _, tt := range tests {

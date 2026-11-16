@@ -174,6 +174,9 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	if err != nil {
 		return fmt.Errorf("service/signaling: parse Configuration.ServiceURI: %w", err)
 	}
+	if cfg.ServiceURI.Host == "" {
+		return fmt.Errorf("service/signaling: Configuration.ServiceURI %q has no host", data.ServiceURI)
+	}
 	// An interval that is missing or does not parse falls back to the default instead of failing the dial.
 	cfg.PingFrequency = DefaultPingFrequency
 	var frequency string

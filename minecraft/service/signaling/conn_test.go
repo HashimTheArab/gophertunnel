@@ -667,7 +667,8 @@ func TestRequestsAreHandledInOrder(t *testing.T) {
 	}
 }
 
-// Unknown members and non-objects are dropped, requests are split from replies, and unchanged frames pass as they are.
+// Unknown members, non-objects and objects that are neither request nor reply are dropped, requests are split
+// from replies, and unchanged frames pass as they are.
 func TestRequestChannelReadsLeniently(t *testing.T) {
 	frames := []string{
 		`not json`,
@@ -679,6 +680,8 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
 		`{"jsonrpc":"2.0","id":4,"result":{}}`,
 		`{"jsonrpc":"2.0","method":"` + MethodSystemPong + `","error":null}`,
+		`{"id":5,"event":"keepalive"}`,
+		`[{"jsonrpc":"2.0","id":6,"result":{}},{"id":7}]`,
 	}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(net.ErrClosed)
@@ -689,6 +692,7 @@ func TestRequestChannelReadsLeniently(t *testing.T) {
 		`[{"id":2,"jsonrpc":"2.0","result":{}}]`,
 		`{"jsonrpc":"2.0","id":3,"method":"m","result":{}}`,
 		`{"jsonrpc":"2.0","id":4,"result":{}}`,
+		`[{"id":6,"jsonrpc":"2.0","result":{}}]`,
 	} {
 		got, err := ch.Recv()
 		if err != nil || string(got) != want {
