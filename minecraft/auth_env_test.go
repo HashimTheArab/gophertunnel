@@ -212,7 +212,16 @@ func TestAuthEnvKeepsEnvironmentWithoutSigningKeys(t *testing.T) {
 	}
 	current = discoveryWithIssuer(t, keyless.URL)
 	_, _ = authEnv(context.Background())
+	authState.Lock()
+	firstTry := authState.want
+	authState.Unlock()
 	waitPreloadSettled(t)
+	authState.Lock()
+	retry := authState.want
+	authState.Unlock()
+	if retry == nil || retry == firstTry {
+		t.Fatal("failed preload is not retried with a fresh environment")
+	}
 	if e, _ := authEnv(context.Background()); e != initial {
 		t.Fatalf("environment issuer = %v, want the working %s", e.Issuer, first.URL)
 	}

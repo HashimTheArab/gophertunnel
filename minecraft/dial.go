@@ -314,17 +314,19 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
-		// The token may come from a caller's token source still on an issuer discovery has moved on from.
-		if issuing, ok := issuingAuthEnv(token); ok {
-			e = issuing
-		}
-		identityProvider = netherNetIdentityProvider(e.Issuer)
 		verifier = authVerifier{client: d.HTTPClient}
 		identityData, err := login.ParseTokenIdentityData(ctx, token, verifier)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
 		d.IdentityData = identityData
+		// The NetherNet identity names the issuer the token was verified against, which may not be e's when
+		// a caller's token source is on an issuer discovery has moved on from.
+		issuer := e.Issuer
+		if u, err := url.Parse(tokenIssuer(token)); err == nil && u.Host != "" {
+			issuer = u
+		}
+		identityProvider = netherNetIdentityProvider(issuer)
 	}
 
 	// A network that picks its transport per address picks it now, so the login can name the server

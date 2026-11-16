@@ -460,8 +460,14 @@ func preloadAuthEnv(e *service.AuthorizationEnvironment) {
 	authState.pending = false
 	switch {
 	case authState.want != e:
+		authState.preloadLocked() // load what discovery describes now
 	case err != nil:
 		authState.retryAt = time.Now().Add(authEnvRetry)
+		// The retry starts from a fresh environment, which reads the OpenID configuration again.
+		if fresh := new(service.AuthorizationEnvironment); authState.seen.Environment(fresh) == nil && sameAuthorization(fresh, e) {
+			fresh.HTTPClient = e.HTTPClient
+			authState.want = fresh
+		}
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
 	default:

@@ -174,14 +174,19 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 		return d, nil
 	}
 	d, err := discover(ctx, client, requestURL)
-	if cached, _ := cachedDiscovery(requestURL); err == nil && cached != nil && len(d.ServiceEnvironments) == 0 {
+	cached, _ := cachedDiscovery(requestURL)
+	if err == nil && cached != nil && len(d.ServiceEnvironments) == 0 {
 		err = errors.New("minecraft/service: refreshed discovery lists no services")
 	}
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
 	if err == nil {
 		d.Fetched = time.Now()
-		discoveryCache[requestURL] = discoveryEntry{d: d, checked: d.Fetched}
+		checked := d.Fetched
+		if len(d.ServiceEnvironments) == 0 {
+			checked = checked.Add(discoveryRetry - discoveryTTL) // a first answer listing nothing is fetched again soon
+		}
+		discoveryCache[requestURL] = discoveryEntry{d: d, checked: checked}
 		return d, nil
 	}
 	if e, ok := discoveryCache[requestURL]; ok && time.Since(e.checked) >= discoveryTTL {

@@ -301,3 +301,24 @@ func TestRefreshReleasesItsClaimWhenFresh(t *testing.T) {
 		t.Fatal("claim not released after a refresh that found the result fresh")
 	}
 }
+
+// A first discovery that lists no services is returned but fetched again after discoveryRetry.
+func TestEmptyFirstDiscoveryIsFetchedAgainSoon(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+		})})
+		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(discoveryRetry)
+		_, _ = Discover(ctx, t.Name(), "1.0.0")
+		synctest.Wait()
+		if calls != 2 {
+			t.Fatalf("requests = %d, want the empty answer fetched again after discoveryRetry", calls)
+		}
+	})
+}
