@@ -84,10 +84,11 @@ var (
 // per launch; a long-running process refreshes so services Microsoft moves are picked up.
 const discoveryTTL = time.Hour
 
-// discoveryEntry is a cached Discovery and when it was fetched.
+// discoveryEntry is a cached Discovery and when it was last checked: fetched, or moved forward by a failed
+// refresh so the next attempt waits for discoveryRetry.
 type discoveryEntry struct {
 	d       *Discovery
-	fetched time.Time
+	checked time.Time
 }
 
 // Environment looks up for a value in [Discovery.ServiceEnvironments]
@@ -164,6 +165,11 @@ const discoveryRetry = 5 * time.Minute
 // refreshDiscovery fetches requestURL and caches the result. When the request fails, a cached result is
 // kept and refreshed again after discoveryRetry.
 func refreshDiscovery(ctx context.Context, client *http.Client, requestURL string) (*Discovery, error) {
+	defer func() {
+		discoveryCacheMu.Lock()
+		delete(discoveryRefreshing, requestURL)
+		discoveryCacheMu.Unlock()
+	}()
 	if d, fresh := cachedDiscovery(requestURL); fresh {
 		return d, nil
 	}
@@ -173,14 +179,13 @@ func refreshDiscovery(ctx context.Context, client *http.Client, requestURL strin
 	}
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
-	delete(discoveryRefreshing, requestURL)
 	if err == nil {
 		d.Fetched = time.Now()
-		discoveryCache[requestURL] = discoveryEntry{d: d, fetched: d.Fetched}
+		discoveryCache[requestURL] = discoveryEntry{d: d, checked: d.Fetched}
 		return d, nil
 	}
-	if e, ok := discoveryCache[requestURL]; ok && time.Since(e.fetched) >= discoveryTTL {
-		e.fetched = time.Now().Add(discoveryRetry - discoveryTTL)
+	if e, ok := discoveryCache[requestURL]; ok && time.Since(e.checked) >= discoveryTTL {
+		e.checked = time.Now().Add(discoveryRetry - discoveryTTL)
 		discoveryCache[requestURL] = e
 		slog.Warn("minecraft/service: refresh discovery failed, keeping the cached result",
 			slog.String("url", requestURL), slog.Any("error", err))
@@ -208,7 +213,7 @@ func cachedDiscovery(requestURL string) (*Discovery, bool) {
 	discoveryCacheMu.Lock()
 	defer discoveryCacheMu.Unlock()
 	e, ok := discoveryCache[requestURL]
-	return e.d, ok && time.Since(e.fetched) < discoveryTTL
+	return e.d, ok && time.Since(e.checked) < discoveryTTL
 }
 
 // discover bounds one service lookup and retries transient HTTP failures.

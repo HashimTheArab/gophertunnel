@@ -279,11 +279,6 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
 		}
-		identityProvider = netherNetIdentityProvider(e.Issuer)
-		verifier, err = e.VerifierContext(ctx)
-		if err != nil {
-			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
-		}
 
 		m, ok := d.TokenSource.(MultiplayerTokenSource)
 		if !ok {
@@ -320,6 +315,12 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
+		var issuer *url.URL
+		verifier, issuer, err = tokenVerifier(ctx, e, token)
+		if err != nil {
+			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
+		}
+		identityProvider = netherNetIdentityProvider(issuer)
 		identityData, err := login.ParseTokenIdentityData(ctx, token, verifier)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}

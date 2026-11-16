@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -241,9 +242,33 @@ func TestAuthEnvIgnoresOlderDiscovery(t *testing.T) {
 	}
 }
 
+// After a swap, a token from the replaced issuer is verified against it, and one from the new issuer against the new one.
+func TestTokenVerifierFollowsTheTokenIssuer(t *testing.T) {
+	first, moved := issuerServer(t), issuerServer(t)
+	current := discoveryWithIssuer(t, first.URL)
+	installAuthDiscovery(t, &current)
+	if _, err := authEnv(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current = discoveryWithIssuer(t, moved.URL)
+	_, _ = authEnv(context.Background())
+	waitPreloadSettled(t)
+	e, _ := authEnv(context.Background())
+	if e.Issuer.String() != moved.URL {
+		t.Fatalf("environment issuer = %v, want the swapped %s", e.Issuer, moved.URL)
+	}
+	for _, iss := range []string{first.URL, moved.URL + "/"} {
+		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + iss + `"}`))
+		_, issuer, err := tokenVerifier(context.Background(), e, "h."+payload+".s")
+		if err != nil || !sameIssuer(iss, issuer) {
+			t.Fatalf("token from %s: verifier issuer = %v, %v", iss, issuer, err)
+		}
+	}
+}
+
 // resetAuthState empties the authorization environment authEnv maintains.
 func resetAuthState() {
 	authState.Lock()
 	defer authState.Unlock()
-	authState.env, authState.seen, authState.want, authState.pending, authState.retryAt = nil, nil, nil, false, time.Time{}
+	authState.env, authState.prev, authState.seen, authState.want, authState.pending, authState.retryAt = nil, nil, nil, nil, false, time.Time{}
 }

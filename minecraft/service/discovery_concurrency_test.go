@@ -260,7 +260,7 @@ func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
 		const requestURL = "https://discovery.test/fresh"
 		stale, fresh := &Discovery{}, &Discovery{}
 		discoveryCacheMu.Lock()
-		discoveryCache[requestURL] = discoveryEntry{d: stale, fetched: time.Now().Add(-discoveryTTL)}
+		discoveryCache[requestURL] = discoveryEntry{d: stale, checked: time.Now().Add(-discoveryTTL)}
 		discoveryCacheMu.Unlock()
 		release := make(chan struct{})
 		client := &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
@@ -274,7 +274,7 @@ func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
 		}()
 		synctest.Wait()
 		discoveryCacheMu.Lock()
-		discoveryCache[requestURL] = discoveryEntry{d: fresh, fetched: time.Now()}
+		discoveryCache[requestURL] = discoveryEntry{d: fresh, checked: time.Now()}
 		discoveryCacheMu.Unlock()
 		close(release)
 		<-done
@@ -282,4 +282,22 @@ func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
 			t.Fatalf("cached discovery fresh = %v, same = %v, want the fresh result kept", isFresh, d == fresh)
 		}
 	})
+}
+
+// A refresh that finds the result already fresh still releases the URL for later refreshes.
+func TestRefreshReleasesItsClaimWhenFresh(t *testing.T) {
+	isolateDiscoveryCache(t)
+	const requestURL = "https://discovery.test/claim"
+	discoveryCacheMu.Lock()
+	discoveryCache[requestURL] = discoveryEntry{d: &Discovery{}, checked: time.Now()}
+	discoveryCacheMu.Unlock()
+	if !startRefresh(requestURL) {
+		t.Fatal("first claim refused")
+	}
+	if _, err := refreshDiscovery(context.Background(), http.DefaultClient, requestURL); err != nil {
+		t.Fatal(err)
+	}
+	if !startRefresh(requestURL) {
+		t.Fatal("claim not released after a refresh that found the result fresh")
+	}
 }

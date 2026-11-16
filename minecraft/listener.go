@@ -5,6 +5,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -373,6 +376,7 @@ func Listen(network, address string) (*Listener, error) {
 type authEnvState struct {
 	sync.Mutex
 	env     *service.AuthorizationEnvironment
+	prev    *service.AuthorizationEnvironment // the environment the last swap replaced
 	seen    *service.Discovery                // the latest Discovery authEnv decoded
 	want    *service.AuthorizationEnvironment // the environment seen describes, once loaded
 	pending bool                              // want is being preloaded
@@ -414,6 +418,11 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	}
 	if err != nil {
 		if cached != nil {
+			authState.Lock()
+			if newerDiscovery(discovery, authState.seen) {
+				authState.seen = discovery // decoded once; later calls take the fast path
+			}
+			authState.Unlock()
 			return cached, nil
 		}
 		return nil, fmt.Errorf("decode environment for auth: %w", err)
@@ -422,7 +431,7 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 	authState.Lock()
 	defer authState.Unlock()
 	// A caller holding an older Discovery than one already seen must not roll the state back.
-	if authState.seen != discovery && (authState.seen == nil || !discovery.Fetched.Before(authState.seen.Fetched)) {
+	if newerDiscovery(discovery, authState.seen) {
 		authState.seen = discovery
 		switch {
 		case authState.env == nil:
@@ -466,8 +475,51 @@ func preloadAuthEnv(e *service.AuthorizationEnvironment) {
 		slog.Warn("minecraft: authorization service changed, keeping the previous one",
 			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
 	default:
-		authState.env, authState.want = e, nil
+		authState.prev, authState.env, authState.want = authState.env, e, nil
 	}
+}
+
+// newerDiscovery reports whether d is a different Discovery fetched no earlier than seen.
+func newerDiscovery(d, seen *service.Discovery) bool {
+	return d != seen && (seen == nil || !d.Fetched.Before(seen.Fetched))
+}
+
+// tokenVerifier returns the verifier and issuer for a multiplayer token from e's service. A token issued
+// by the environment the last swap replaced, as a caller's own token source may still request, is
+// verified against that environment instead of e.
+func tokenVerifier(ctx context.Context, e *service.AuthorizationEnvironment, token string) (*oidc.IDTokenVerifier, *url.URL, error) {
+	authState.Lock()
+	prev := authState.prev
+	authState.Unlock()
+	if iss := tokenIssuer(token); prev != nil && iss != "" && sameIssuer(iss, prev.Issuer) && !sameIssuer(iss, e.Issuer) {
+		e = prev
+	}
+	v, err := e.VerifierContext(ctx)
+	return v, e.Issuer, err
+}
+
+// tokenIssuer returns the unverified iss claim of a JWT, or "" if it cannot be read.
+func tokenIssuer(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Issuer string `json:"iss"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	return claims.Issuer
+}
+
+// sameIssuer reports whether iss names issuer, ignoring a trailing slash.
+func sameIssuer(iss string, issuer *url.URL) bool {
+	return issuer != nil && strings.TrimSuffix(iss, "/") == strings.TrimSuffix(issuer.String(), "/")
 }
 
 // sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab titles.
