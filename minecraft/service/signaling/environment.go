@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -47,7 +48,7 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
 		token.SetAuthHeader(req)
 		return req, nil
-	}, authclient.CallOptions{Retry: authclient.RetryOptions{Attempts: 1}})
+	}, authclient.CallOptions{Retry: configurationRetry})
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +66,45 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 	default:
 		return nil, service.NewResponseError(resp)
 	}
+}
+
+// configurationRetry retries a configuration request that failed transiently, doubling the delay from
+// one second up to 30 seconds as vanilla does, for as long as the dial's context allows.
+var configurationRetry = authclient.RetryOptions{Attempts: 6, MinDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
+
+// Environment is the signaling service discovery lists as 'signaling'. Vanilla connects to it directly
+// when the configuration from [AFDEnvironment] cannot be fetched.
+type Environment struct {
+	internal.ServiceEnvironment
+}
+
+// ServiceName implements [service.Environment]. It always returns 'signaling'.
+func (e *Environment) ServiceName() string {
+	return "signaling"
+}
+
+// discoveredConfiguration resolves the signaling service as vanilla does: from the [AFDEnvironment]
+// configuration, or the discovered [Environment] with [DefaultPingFrequency] when that request fails.
+type discoveredConfiguration struct {
+	afd      *AFDEnvironment // nil when discovery has no 'signaling-afd' service
+	fallback *url.URL        // nil when discovery has no 'signaling' service
+	log      *slog.Logger
+}
+
+// Configuration implements [ConfigurationProvider].
+func (p discoveredConfiguration) Configuration(ctx context.Context, client *http.Client, src service.TokenSource) (*Configuration, error) {
+	err := errors.New("service/signaling: discovery has no signaling-afd service")
+	if p.afd != nil {
+		var cfg *Configuration
+		if cfg, err = p.afd.Configuration(ctx, client, src); err == nil {
+			return cfg, nil
+		}
+	}
+	if p.fallback == nil || ctx.Err() != nil {
+		return nil, err
+	}
+	p.log.Warn("signaling configuration unavailable, connecting to the discovered signaling service", slog.Any("error", err))
+	return &Configuration{ServiceURI: p.fallback, PingFrequency: DefaultPingFrequency}, nil
 }
 
 // ConfigurationProvider resolves the signaling service a [Dialer] connects to, such as [AFDEnvironment].
@@ -107,34 +147,35 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	if err != nil {
 		return fmt.Errorf("service/signaling: parse Configuration.ServiceURI: %w", err)
 	}
-	if data.PingFrequency == "" {
-		cfg.PingFrequency = DefaultPingFrequency
-		return nil
-	}
-	parts := strings.Split(data.PingFrequency, ":")
-	if len(parts) != 3 {
-		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency: invalid value %q", data.PingFrequency)
-	}
-	h, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency hours: %w", err)
-	}
-	m, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency minutes: %w", err)
-	}
-	s, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return fmt.Errorf("service/signaling: parse Configuration.PingFrequency seconds: %w", err)
-	}
-	if h < 0 || m < 0 || s < 0 {
-		return fmt.Errorf("service/signaling: Configuration.PingFrequency cannot be negative: %q", data.PingFrequency)
-	}
-	cfg.PingFrequency = time.Duration(h)*time.Hour +
-		time.Duration(m)*time.Minute +
-		time.Duration(s)*time.Second
-	if cfg.PingFrequency <= 0 {
-		return fmt.Errorf("service/signaling: Configuration.PingFrequency must be positive: %q", data.PingFrequency)
+	// An interval that is missing or does not parse falls back to the default instead of failing the dial.
+	cfg.PingFrequency = DefaultPingFrequency
+	if d, ok := parseTimeSpan(data.PingFrequency); ok && d > 0 {
+		cfg.PingFrequency = d
 	}
 	return nil
+}
+
+// parseTimeSpan parses an interval in .NET's TimeSpan format, [d.]hh:mm:ss[.fffffff], as the signaling
+// service writes pingFrequency.
+func parseTimeSpan(s string) (time.Duration, bool) {
+	var days int
+	if day, rest, ok := strings.Cut(s, "."); ok && !strings.Contains(day, ":") {
+		n, err := strconv.Atoi(day)
+		if err != nil || n < 0 {
+			return 0, false
+		}
+		days, s = n, rest
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	h, errH := strconv.Atoi(parts[0])
+	m, errM := strconv.Atoi(parts[1])
+	sec, errS := strconv.ParseFloat(parts[2], 64)
+	if errH != nil || errM != nil || errS != nil || h < 0 || m < 0 || sec < 0 {
+		return 0, false
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(h)*time.Hour + time.Duration(m)*time.Minute +
+		time.Duration(sec*float64(time.Second)), true
 }

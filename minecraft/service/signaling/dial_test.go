@@ -137,3 +137,31 @@ func TestDialContextRequestsCredentialsOnConnect(t *testing.T) {
 		t.Fatal("no TURN request after connecting")
 	}
 }
+
+// Members JSON-RPC does not define are dropped, which jrpc2 would otherwise reject, and a frame that is
+// not a JSON-RPC message is skipped.
+func TestJSONRPCMessageIsReadLeniently(t *testing.T) {
+	tests := []struct {
+		frame string
+		want  string // "" when the frame is skipped
+	}{
+		{frame: `{"jsonrpc":"2.0","id":1,"result":{}}`, want: `{"jsonrpc":"2.0","id":1,"result":{}}`},
+		{frame: `{"jsonrpc":"2.0","id":1,"result":{},"traceId":"x"}`, want: `{"id":1,"jsonrpc":"2.0","result":{}}`},
+		{frame: `[{"jsonrpc":"2.0","method":"m","extra":1}]`, want: `[{"jsonrpc":"2.0","method":"m"}]`},
+		{frame: `not json`},
+		{frame: `null`},
+		{frame: `"text"`},
+	}
+	for _, tt := range tests {
+		got, ok := jsonRPCMessage([]byte(tt.frame))
+		if tt.want == "" {
+			if ok {
+				t.Errorf("jsonRPCMessage(%s) = %s, want it skipped", tt.frame, got)
+			}
+			continue
+		}
+		if !ok || string(got) != tt.want {
+			t.Errorf("jsonRPCMessage(%s) = %s, %v, want %s", tt.frame, got, ok, tt.want)
+		}
+	}
+}

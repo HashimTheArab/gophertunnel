@@ -512,3 +512,67 @@ func TestAwaitCredentialsStopsWaiting(t *testing.T) {
 		}
 	})
 }
+
+// signalNotifier reports each accepted signal on a channel.
+type signalNotifier chan *nethernet.Signal
+
+func (n signalNotifier) NotifySignal(signal *nethernet.Signal) bool {
+	n <- signal
+	return true
+}
+
+// A message the service sends without an ID is handled by method, like one with an ID, and the
+// handler may call the service, as a delivery receipt does, without deadlocking the client.
+func TestNotificationIsHandledByMethod(t *testing.T) {
+	delivered := make(chan struct{}, 1)
+	clientChannel, serverChannel := channel.Direct()
+	server := jrpc2.NewServer(handler.Map{
+		MethodSignalingSendMessage: handler.New(func(context.Context, map[string]any) error {
+			delivered <- struct{}{}
+			return nil
+		}),
+	}, &jrpc2.ServerOptions{AllowPush: true}).Start(serverChannel)
+	defer server.Stop()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(net.ErrClosed)
+	signals := make(signalNotifier, 1)
+	conn := &Conn{
+		ctx: ctx, cancel: cancel,
+		d:             Dialer{Log: slog.New(slog.DiscardHandler)},
+		notifiers:     map[uint32]nethernet.Notifier{0: signals},
+		notifications: make(chan *jrpc2.Request, notificationQueueSize),
+	}
+	conn.client = jrpc2.NewClient(clientChannel, &jrpc2.ClientOptions{OnNotify: conn.queueNotification})
+	defer conn.client.Close()
+	go conn.handleNotifications()
+
+	signal := &nethernet.Signal{Type: nethernet.SignalTypeOffer, ConnectionID: 42, Data: "offer"}
+	inner, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"method":  MethodSignalingWebRTC,
+		"params":  map[string]any{"netherNetId": "network", "message": signal.String()},
+	})
+	if err != nil {
+		t.Fatalf("marshal inner message: %v", err)
+	}
+	if err := server.Notify(context.Background(), MethodSignalingReceiveMessage, []map[string]any{{
+		"From": uuid.New(), "Id": uuid.New(), "Message": string(inner),
+	}}); err != nil {
+		t.Fatalf("push notification: %v", err)
+	}
+
+	select {
+	case got := <-signals:
+		if got.ConnectionID != signal.ConnectionID || got.Data != signal.Data {
+			t.Fatalf("signal = %+v, want %+v", got, signal)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("notification was not handled")
+	}
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delivery receipt was not sent")
+	}
+}

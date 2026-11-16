@@ -41,6 +41,10 @@ type Conn struct {
 
 	pending *pendingMap
 
+	// notifications holds messages the service sent without an ID, handled in order by
+	// handleNotifications.
+	notifications chan *jrpc2.Request
+
 	// credentials is the last answer to a TURN request, nil before one or after a failed request.
 	credentials *nethernet.Credentials
 	// credentialsExpiry is the expiry of the credentials, estimated from [nethernet.Credentials.ExpirationInSeconds].
@@ -307,8 +311,56 @@ func (conn *Conn) stopCredentialsRefreshLocked() {
 	}
 }
 
-// handleCallback handles an JSON-RPC request method called by the server.
-// It is used as the [jrpc2.ClientOptions.OnCallback] handler in the client.
+// notificationQueueSize bounds the notifications waiting for handleNotifications.
+const notificationQueueSize = 64
+
+// queueNotification hands a message the service sent without an ID to handleNotifications. It must not
+// block: jrpc2 calls it holding its client lock.
+func (conn *Conn) queueNotification(request *jrpc2.Request) {
+	select {
+	case conn.notifications <- request:
+	default:
+		conn.d.Log.Warn("dropping signaling notification, too many waiting", slog.String("method", request.Method()))
+	}
+}
+
+// handleNotifications dispatches queued notifications in order until the Conn closes.
+func (conn *Conn) handleNotifications() {
+	for {
+		select {
+		case <-conn.ctx.Done():
+			return
+		case request := <-conn.notifications:
+			conn.dispatch(conn.ctx, request)
+		}
+	}
+}
+
+// dispatch handles a message from the service, whether or not it has an ID, and logs a failure
+// instead of returning it.
+func (conn *Conn) dispatch(ctx context.Context, request *jrpc2.Request) (v any) {
+	defer func() {
+		if err := recover(); err != nil {
+			conn.d.Log.Error("callback handler panicked", slog.Any("error", err))
+			v = nil
+		}
+	}()
+	v, err := conn.handleCallback(ctx, request)
+	if err != nil {
+		conn.d.Log.Error("error handling server message",
+			slog.GroupAttrs("request",
+				slog.String("id", request.ID()),
+				slog.String("method", request.Method()),
+				slog.String("params", request.ParamString()),
+			),
+			slog.Any("error", err),
+		)
+		return nil
+	}
+	return v
+}
+
+// handleCallback handles a JSON-RPC method called by the server, with or without an ID.
 func (conn *Conn) handleCallback(ctx context.Context, request *jrpc2.Request) (any, error) {
 	switch request.Method() {
 	case MethodSystemPong:
