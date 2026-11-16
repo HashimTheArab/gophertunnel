@@ -203,7 +203,7 @@ func TestDiscoveryFinishesSharedRequestWithoutWaiters(t *testing.T) {
 	})
 }
 
-// A discovery is reused for discoveryTTL, fetched again after it, and kept when the refresh fails.
+// After discoveryTTL a discovery is served while it refreshes in the background, and kept with a backoff when that fails.
 func TestDiscoveryRefreshesAfterTTL(t *testing.T) {
 	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
@@ -216,21 +216,38 @@ func TestDiscoveryRefreshesAfterTTL(t *testing.T) {
 			}
 			return discoveryOK(), nil
 		})})
-		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil {
-			t.Fatal(err)
+		discover := func() *Discovery {
+			t.Helper()
+			d, err := Discover(ctx, t.Name(), "1.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			return d
 		}
-		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil || calls != 1 {
-			t.Fatalf("within the TTL: requests = %d, error = %v, want 1 request", calls, err)
+		first := discover()
+		if discover() != first || calls != 1 {
+			t.Fatalf("within the TTL: %d requests, want 1 and the cached discovery", calls)
 		}
 		time.Sleep(discoveryTTL)
-		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil || calls != 2 {
-			t.Fatalf("after the TTL: requests = %d, error = %v, want 2 requests", calls, err)
+		if discover() != first || calls != 2 {
+			t.Fatalf("after the TTL: %d requests, want the cached discovery while one refresh runs", calls)
+		}
+		refreshed := discover()
+		if refreshed == first || calls != 2 {
+			t.Fatalf("after the refresh: %d requests, refreshed = %v", calls, refreshed != first)
 		}
 		failing = true
 		time.Sleep(discoveryTTL)
-		d, err := Discover(ctx, t.Name(), "1.0.0")
-		if err != nil || d == nil || calls != 3 {
-			t.Fatalf("failed refresh: discovery = %v, requests = %d, error = %v, want the cached discovery", d, calls, err)
+		if discover() != refreshed || calls != 3 {
+			t.Fatalf("failed refresh: %d requests, want 3 and the cached discovery", calls)
+		}
+		if discover() != refreshed || calls != 3 {
+			t.Fatalf("after a failed refresh: %d requests, want no retry before discoveryRetry", calls)
+		}
+		time.Sleep(discoveryRetry)
+		if discover() != refreshed || calls != 4 {
+			t.Fatalf("after discoveryRetry: %d requests, want a retry", calls)
 		}
 	})
 }

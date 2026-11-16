@@ -223,6 +223,22 @@ type Listener struct {
 	verifier *oidc.IDTokenVerifier
 }
 
+// currentVerifier returns the verifier of the authorization environment authEnv holds now, so a
+// long-running Listener follows discovery, or the one the Listener started with if it cannot be had.
+func (listener *Listener) currentVerifier() *oidc.IDTokenVerifier {
+	if listener.verifier == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if listener.cfg.HTTPClient != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, listener.cfg.HTTPClient)
+	}
+	if v, err := oidcVerifier(ctx); err == nil {
+		return v
+	}
+	return listener.verifier
+}
+
 // ListenerGroup shares the active player count between listeners serving one logical server.
 type ListenerGroup struct {
 	playerCount atomic.Int32
@@ -355,68 +371,83 @@ func Listen(network, address string) (*Listener, error) {
 }
 
 // authEnvCache holds the authorization environment used to issue or verify the multiplayer token for
-// OpenID authentication, cached by authEnv.
+// OpenID authentication, and the Discovery it was decoded from. It is maintained by authEnv.
 var (
-	authEnvCache   *service.AuthorizationEnvironment
-	authEnvChecked time.Time // when authEnvCache was last compared with discovery
-	authEnvCacheMu sync.Mutex
+	authEnvCache     *service.AuthorizationEnvironment
+	authEnvDiscovery *service.Discovery
+	authEnvCacheMu   sync.Mutex
 )
 
-// authEnvTTL is how long authEnv reuses its environment before comparing it with discovery again, so a
-// long-running process follows an authorization service that moves or changes its issuer.
-const authEnvTTL = time.Hour
+// authEnvDiscover returns the current Discovery; tests replace it.
+var authEnvDiscover = service.Default
 
 // authEnv returns the authorization environment that can be used for issuing or verifying the multiplayer
-// token for OpenID authentication. It is cached globally with the HTTP client from the context
-// (oauth2.HTTPClient) of the caller that built it. While discovery lists the same service and issuer, the
-// cached environment and its verifier are kept; if discovery fails, the cached environment is used.
+// token for OpenID authentication, built with the HTTP client of the first caller's context
+// (oauth2.HTTPClient). It follows discovery: when the authorization service, issuer or PlayFab titles
+// change, a new environment replaces the cached one once its verifier is ready. Until then, or if
+// discovery fails, the cached environment is returned.
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
-	authEnvCacheMu.Lock()
-	defer authEnvCacheMu.Unlock()
-	if authEnvCache != nil && time.Since(authEnvChecked) < authEnvTTL {
-		return authEnvCache, nil
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	e, err := authEnvDiscover(ctx)
+	discovery, err := authEnvDiscover(ctx)
+	authEnvCacheMu.Lock()
+	cached, cachedFrom := authEnvCache, authEnvDiscovery
+	authEnvCacheMu.Unlock()
 	if err != nil {
-		if authEnvCache != nil {
-			return authEnvCache, nil
+		if cached != nil {
+			return cached, nil
 		}
-		return nil, err
-	}
-	authEnvChecked = time.Now()
-	if authEnvCache == nil || !sameAuthorization(authEnvCache, e) {
-		authEnvCache = e
-	}
-	return authEnvCache, nil
-}
-
-// authEnvDiscover decodes the authorization environment from discovery; tests replace it.
-var authEnvDiscover = discoverAuthEnv
-
-// discoverAuthEnv decodes the authorization environment from discovery.
-func discoverAuthEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
-	discovery, err := service.Default(ctx)
-	if err != nil {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
+	}
+	if cached != nil && discovery == cachedFrom {
+		return cached, nil
 	}
 	e := new(service.AuthorizationEnvironment)
 	if err := discovery.Environment(e); err != nil {
+		if cached != nil {
+			return cached, nil
+		}
 		return nil, fmt.Errorf("decode environment for auth: %w", err)
 	}
 	if client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); client != nil {
 		e.HTTPClient = client
 	}
-	return e, nil
+	switch {
+	case cached == nil:
+		storeAuthEnv(e, discovery)
+		return e, nil
+	case sameAuthorization(cached, e):
+		storeAuthEnv(cached, discovery)
+	default:
+		// Verification keeps using the cached environment until the new one's verifier is ready. A failed
+		// preload keeps it until discovery changes again.
+		storeAuthEnv(cached, discovery)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			if err := e.PreloadVerifier(ctx); err != nil {
+				slog.Warn("minecraft: authorization service changed, keeping the previous one",
+					slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
+				return
+			}
+			storeAuthEnv(e, discovery)
+		}()
+	}
+	return cached, nil
 }
 
-// sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab title.
+// storeAuthEnv caches e as the authorization environment decoded from discovery.
+func storeAuthEnv(e *service.AuthorizationEnvironment, discovery *service.Discovery) {
+	authEnvCacheMu.Lock()
+	defer authEnvCacheMu.Unlock()
+	authEnvCache, authEnvDiscovery = e, discovery
+}
+
+// sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab titles.
 func sameAuthorization(a, b *service.AuthorizationEnvironment) bool {
 	return urlString(a.ServiceURI) == urlString(b.ServiceURI) && urlString(a.Issuer) == urlString(b.Issuer) &&
-		a.PlayFabTitleID == b.PlayFabTitleID
+		a.PlayFabTitleID == b.PlayFabTitleID && a.EduPlayFabTitleID == b.EduPlayFabTitleID
 }
 
 // urlString returns u as a string, or "" if u is nil.
@@ -614,7 +645,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	conn.prepareResourcePackOffer = listener.cfg.PrepareResourcePackOffer
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
-	conn.verifier = listener.verifier
+	conn.verifier = listener.currentVerifier()
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.handoff = listener.cfg.Handoff

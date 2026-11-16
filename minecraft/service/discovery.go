@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -120,46 +121,62 @@ func Default(ctx context.Context) (*Discovery, error) {
 // to specify [protocol.CurrentVersion] to keep up the compatibility with the
 // `protocol` package.
 //
-// Discover caches the result for an hour, so it can be called by various services without waiting for
-// the network each time. When a refresh fails, the last result is returned instead of the error.
+// Discover caches the result, so it can be called by various services without waiting for the network
+// each time. After discoveryTTL the cached result is still returned while it is refreshed in the background.
 func Discover(ctx context.Context, appType, version string) (*Discovery, error) {
 	requestURL := discoveryURL.JoinPath("/api/v1.0/discovery", appType, "builds", version).String()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, fresh := cachedDiscovery(requestURL)
-	if fresh {
-		return d, nil
-	}
-	stale := d
 	client := auth.ContextClient(ctx)
 	// The request keeps client reachable, so no other client can reuse its address while the key is in use.
 	key := fmt.Sprintf("%p %s", client, requestURL)
-	ch := discoveryRequests.DoChan(key, func() (any, error) {
-		if d, fresh := cachedDiscovery(requestURL); fresh {
-			return d, nil
-		}
+	refresh := func() (any, error) {
 		// The shared request outlives callers that stop waiting, bounded by its call deadline.
-		d, err := discover(context.WithoutCancel(ctx), client, requestURL)
-		if err == nil {
-			discoveryCacheMu.Lock()
-			discoveryCache[requestURL] = discoveryEntry{d: d, fetched: time.Now()}
-			discoveryCacheMu.Unlock()
+		return refreshDiscovery(context.WithoutCancel(ctx), client, requestURL)
+	}
+	if d, fresh := cachedDiscovery(requestURL); d != nil {
+		if !fresh {
+			// The cached result is served while one request refreshes it in the background.
+			discoveryRequests.DoChan(key, refresh)
 		}
-		return d, err
-	})
+		return d, nil
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case res := <-ch:
+	case res := <-discoveryRequests.DoChan(key, refresh):
 		if res.Err != nil {
-			if stale != nil {
-				return stale, nil
-			}
 			return nil, res.Err
 		}
 		return res.Val.(*Discovery), nil
 	}
+}
+
+// discoveryRetry is how long a cached Discovery is served again after a refresh failed, before the next
+// refresh is tried.
+const discoveryRetry = 5 * time.Minute
+
+// refreshDiscovery fetches requestURL and caches the result. When the request fails, a cached result is
+// kept and refreshed again after discoveryRetry.
+func refreshDiscovery(ctx context.Context, client *http.Client, requestURL string) (*Discovery, error) {
+	if d, fresh := cachedDiscovery(requestURL); fresh {
+		return d, nil
+	}
+	d, err := discover(ctx, client, requestURL)
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	if err == nil {
+		discoveryCache[requestURL] = discoveryEntry{d: d, fetched: time.Now()}
+		return d, nil
+	}
+	if e, ok := discoveryCache[requestURL]; ok {
+		e.fetched = time.Now().Add(discoveryRetry - discoveryTTL)
+		discoveryCache[requestURL] = e
+		slog.Warn("minecraft/service: refresh discovery failed, keeping the cached result",
+			slog.String("url", requestURL), slog.Any("error", err))
+	}
+	return nil, err
 }
 
 // cachedDiscovery returns the cached result of an earlier discovery of requestURL, if any, and whether it
