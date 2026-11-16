@@ -19,7 +19,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
@@ -268,7 +267,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	var (
 		token            string
 		identityProvider string
-		verifier         *oidc.IDTokenVerifier
+		verifier         login.TokenVerifier
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -315,12 +314,12 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
-		var issuer *url.URL
-		verifier, issuer, err = tokenVerifier(ctx, e, token)
-		if err != nil {
-			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
+		// The token may come from a caller's token source still on an issuer discovery has moved on from.
+		if issuing, ok := issuingAuthEnv(token); ok {
+			e = issuing
 		}
-		identityProvider = netherNetIdentityProvider(issuer)
+		identityProvider = netherNetIdentityProvider(e.Issuer)
+		verifier = authVerifier{}
 		identityData, err := login.ParseTokenIdentityData(ctx, token, verifier)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}

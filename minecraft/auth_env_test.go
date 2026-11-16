@@ -242,27 +242,36 @@ func TestAuthEnvIgnoresOlderDiscovery(t *testing.T) {
 	}
 }
 
-// After a swap, a token from the replaced issuer is verified against it, and one from the new issuer against the new one.
-func TestTokenVerifierFollowsTheTokenIssuer(t *testing.T) {
-	first, moved := issuerServer(t), issuerServer(t)
+// tokenFrom returns an unsigned token whose iss claim is iss; issuingAuthEnv reads it without verifying.
+func tokenFrom(iss string) string {
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc([]byte(`{"iss":"`+iss+`"}`)) + "." + enc([]byte("sig"))
+}
+
+// A token is matched to the environment of its issuer: current, being loaded, or replaced by the last swap.
+func TestIssuingAuthEnvFollowsTheTokenIssuer(t *testing.T) {
+	gate := make(chan struct{})
+	first, moved, loading := issuerServer(t), issuerServer(t), issuerServerWith(t, gate, true)
 	current := discoveryWithIssuer(t, first.URL)
 	installAuthDiscovery(t, &current)
+	t.Cleanup(func() { close(gate) })
 	if _, err := authEnv(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	current = discoveryWithIssuer(t, moved.URL)
 	_, _ = authEnv(context.Background())
 	waitPreloadSettled(t)
-	e, _ := authEnv(context.Background())
-	if e.Issuer.String() != moved.URL {
-		t.Fatalf("environment issuer = %v, want the swapped %s", e.Issuer, moved.URL)
-	}
-	for _, iss := range []string{first.URL, moved.URL + "/"} {
-		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + iss + `"}`))
-		_, issuer, err := tokenVerifier(context.Background(), e, "h."+payload+".s")
-		if err != nil || !sameIssuer(iss, issuer) {
-			t.Fatalf("token from %s: verifier issuer = %v, %v", iss, issuer, err)
+	current = discoveryWithIssuer(t, loading.URL)
+	_, _ = authEnv(context.Background())
+
+	for _, iss := range []string{first.URL, moved.URL + "/", loading.URL} {
+		e, ok := issuingAuthEnv(tokenFrom(iss))
+		if !ok || !sameIssuer(iss, e.Issuer) {
+			t.Errorf("token from %s matched environment %v", iss, e.Issuer)
 		}
+	}
+	if e, _ := issuingAuthEnv(tokenFrom("https://untrusted.example")); e.Issuer.String() != moved.URL {
+		t.Errorf("token from an untrusted issuer matched %v, want the current %s", e.Issuer, moved.URL)
 	}
 }
 

@@ -22,7 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
@@ -301,7 +300,7 @@ type Conn struct {
 	// verifier verifies the OpenID token encapsulated in the first chain of
 	// the Login packet sent from the connection. If nil, the legacy chain will
 	// be instead used for authentication.
-	verifier *oidc.IDTokenVerifier
+	verifier login.TokenVerifier
 
 	// packets is a channel of byte slices containing serialised packets that are coming in from the other
 	// side of the connection.

@@ -5,8 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +19,8 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
@@ -220,25 +220,9 @@ type Listener struct {
 	close    chan struct{}
 
 	key *ecdsa.PrivateKey
-	// verifier is the multiplayer token verifier the Listener started with, used when currentVerifier
-	// cannot get the current one. It is nil if authentication is disabled on ListenConfig.
-	verifier *oidc.IDTokenVerifier
-}
-
-// currentVerifier returns the verifier of the authorization environment authEnv holds now, so a
-// long-running Listener follows discovery, or the one the Listener started with if it cannot be had.
-func (listener *Listener) currentVerifier() *oidc.IDTokenVerifier {
-	if listener.verifier == nil {
-		return nil
-	}
-	ctx := context.Background()
-	if listener.cfg.HTTPClient != nil {
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, listener.cfg.HTTPClient)
-	}
-	if v, err := oidcVerifier(ctx); err == nil {
-		return v
-	}
-	return listener.verifier
+	// verifier verifies the multiplayer tokens of incoming connections. It is nil if authentication is
+	// disabled on ListenConfig.
+	verifier login.TokenVerifier
 }
 
 // ListenerGroup shares the active player count between listeners serving one logical server.
@@ -323,17 +307,16 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		cfg.CompressionThreshold = 0
 	}
 
-	var verifier *oidc.IDTokenVerifier
+	var verifier login.TokenVerifier
 	if !cfg.AuthenticationDisabled {
-		var err error
 		ctx := context.Background()
 		if cfg.HTTPClient != nil {
 			ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
 		}
-		verifier, err = oidcVerifier(ctx)
-		if err != nil {
+		if _, err := oidcVerifier(ctx); err != nil {
 			return nil, fmt.Errorf("create default OIDC verifier: %w", err)
 		}
+		verifier = authVerifier{}
 	}
 
 	netListener, err := network.Listen(address)
@@ -417,15 +400,16 @@ func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
 		err = errors.New("no service URI or issuer")
 	}
 	if err != nil {
-		if cached != nil {
-			authState.Lock()
-			if newerDiscovery(discovery, authState.seen) {
-				authState.seen = discovery // decoded once; later calls take the fast path
-			}
-			authState.Unlock()
-			return cached, nil
+		if cached == nil {
+			return nil, fmt.Errorf("decode environment for auth: %w", err)
 		}
-		return nil, fmt.Errorf("decode environment for auth: %w", err)
+		authState.Lock()
+		defer authState.Unlock()
+		if newerDiscovery(discovery, authState.seen) {
+			// Decoded once, so later calls take the fast path; it describes no environment to swap to.
+			authState.seen, authState.want = discovery, nil
+		}
+		return authState.env, nil
 	}
 
 	authState.Lock()
@@ -484,34 +468,48 @@ func newerDiscovery(d, seen *service.Discovery) bool {
 	return d != seen && (seen == nil || !d.Fetched.Before(seen.Fetched))
 }
 
-// tokenVerifier returns the verifier and issuer for a multiplayer token from e's service. A token issued
-// by the environment the last swap replaced, as a caller's own token source may still request, is
-// verified against that environment instead of e.
-func tokenVerifier(ctx context.Context, e *service.AuthorizationEnvironment, token string) (*oidc.IDTokenVerifier, *url.URL, error) {
-	authState.Lock()
-	prev := authState.prev
-	authState.Unlock()
-	if iss := tokenIssuer(token); prev != nil && iss != "" && sameIssuer(iss, prev.Issuer) && !sameIssuer(iss, e.Issuer) {
-		e = prev
+// authVerifier verifies a multiplayer token against the trusted authorization environment that issued it,
+// following discovery: the current one, one being loaded, or the one the last swap replaced.
+type authVerifier struct{}
+
+// Verify implements [login.TokenVerifier].
+func (authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+	if _, err := authEnv(ctx); err != nil {
+		return nil, err
+	}
+	e, ok := issuingAuthEnv(rawIDToken)
+	if !ok {
+		return nil, errors.New("minecraft: no authorization environment")
 	}
 	v, err := e.VerifierContext(ctx)
-	return v, e.Issuer, err
+	if err != nil {
+		return nil, fmt.Errorf("obtain verifier: %w", err)
+	}
+	return v.Verify(ctx, rawIDToken)
 }
 
-// tokenIssuer returns the unverified iss claim of a JWT, or "" if it cannot be read.
-func tokenIssuer(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return ""
+// issuingAuthEnv returns the trusted authorization environment whose issuer issued token, or the current
+// one if none did.
+func issuingAuthEnv(token string) (*service.AuthorizationEnvironment, bool) {
+	iss := tokenIssuer(token)
+	authState.Lock()
+	defer authState.Unlock()
+	for _, e := range []*service.AuthorizationEnvironment{authState.env, authState.want, authState.prev} {
+		if e != nil && iss != "" && sameIssuer(iss, e.Issuer) {
+			return e, true
+		}
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	return authState.env, authState.env != nil
+}
+
+// tokenIssuer returns the unverified iss claim of a multiplayer token, or "" if it cannot be read.
+func tokenIssuer(token string) string {
+	tok, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES384, jose.RS256})
 	if err != nil {
 		return ""
 	}
-	var claims struct {
-		Issuer string `json:"iss"`
-	}
-	if json.Unmarshal(payload, &claims) != nil {
+	var claims jwt.Claims
+	if tok.UnsafeClaimsWithoutVerification(&claims) != nil {
 		return ""
 	}
 	return claims.Issuer
@@ -723,7 +721,7 @@ func (listener *Listener) createConn(netConn net.Conn) *Conn {
 	conn.prepareResourcePackOffer = listener.cfg.PrepareResourcePackOffer
 	conn.gameData.WorldName = listener.status().ServerName
 	conn.authEnabled = !listener.cfg.AuthenticationDisabled
-	conn.verifier = listener.currentVerifier()
+	conn.verifier = listener.verifier
 	conn.disconnectOnUnknownPacket = !listener.cfg.AllowUnknownPackets
 	conn.disconnectOnInvalidPacket = !listener.cfg.AllowInvalidPackets
 	conn.handoff = listener.cfg.Handoff
