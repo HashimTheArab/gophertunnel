@@ -258,10 +258,24 @@ func TestAuthEnvIgnoresOlderDiscovery(t *testing.T) {
 	}
 }
 
-// tokenFrom returns an unsigned token whose iss claim is iss; issuingAuthEnv reads it without verifying.
+// tokenFrom returns an unsigned RS256 token whose iss claim is iss; issuingAuthEnv reads it without verifying.
 func tokenFrom(iss string) string {
+	return tokenWithAlgorithm("RS256", iss)
+}
+
+// tokenWithAlgorithm returns an unsigned token with the alg header alg and the iss claim iss.
+func tokenWithAlgorithm(alg, iss string) string {
 	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc([]byte(`{"iss":"`+iss+`"}`)) + "." + enc([]byte("sig"))
+	return enc([]byte(`{"alg":"`+alg+`"}`)) + "." + enc([]byte(`{"iss":"`+iss+`"}`)) + "." + enc([]byte("sig"))
+}
+
+// The issuer is read whichever asymmetric algorithm signed the token.
+func TestTokenIssuerReadsAllAlgorithms(t *testing.T) {
+	for _, alg := range tokenAlgorithms {
+		if got := tokenIssuer(tokenWithAlgorithm(string(alg), "https://issuer.example")); got != "https://issuer.example" {
+			t.Errorf("tokenIssuer(%s token) = %q", alg, got)
+		}
+	}
 }
 
 // A token is matched to the environment of its issuer: current, being loaded, or replaced by the last swap.

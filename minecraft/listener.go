@@ -451,7 +451,8 @@ func (s *authEnvState) preloadLocked() {
 // preloadAuthEnv makes e the authorization environment once its verifier and signing keys are loaded,
 // unless discovery has moved on from e meanwhile.
 func preloadAuthEnv(e *service.AuthorizationEnvironment) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Nothing waits on the preload, so it outlasts the requests it makes rather than discarding them.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	err := e.PreloadVerifier(ctx)
 
@@ -538,9 +539,16 @@ func issuingAuthEnv(token string) (*service.AuthorizationEnvironment, bool) {
 	return authState.env, authState.env != nil
 }
 
+// tokenAlgorithms are the asymmetric algorithms an issuer may sign multiplayer tokens with. Reading a token's
+// issuer verifies nothing, so it accepts any of them; the issuer's verifier checks the signature.
+var tokenAlgorithms = []jose.SignatureAlgorithm{
+	jose.RS256, jose.RS384, jose.RS512, jose.PS256, jose.PS384, jose.PS512,
+	jose.ES256, jose.ES384, jose.ES512, jose.EdDSA,
+}
+
 // tokenIssuer returns the unverified iss claim of a multiplayer token, or "" if it cannot be read.
 func tokenIssuer(token string) string {
-	tok, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES384, jose.RS256})
+	tok, err := jwt.ParseSigned(token, tokenAlgorithms)
 	if err != nil {
 		return ""
 	}
