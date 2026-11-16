@@ -15,8 +15,7 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/service/internal"
 )
 
-// configurationServer answers signaling-afd configuration requests with the given statuses and bodies, one per
-// request, repeating the last.
+// configurationServer answers configuration requests with statuses[i] and bodies[i], repeating the last.
 func configurationServer(t *testing.T, statuses []int, bodies []string) (*AFDEnvironment, *atomic.Int32) {
 	t.Helper()
 	calls := new(atomic.Int32)
@@ -40,8 +39,7 @@ var testTokenSource = staticTokenSource{token: &service.Token{AuthorizationHeade
 
 const validConfiguration = `{"result":{"signalingUri":"wss://signaling.example","pingFrequency":"00:00:30"}}`
 
-// Like vanilla, a configuration request is retried after a transient failure, and a request that fails
-// for good falls back to the discovered signaling service with the default ping interval.
+// A transient failure is retried, and one that persists falls back to the discovered signaling service.
 func TestDiscoveredConfiguration(t *testing.T) {
 	fallback, err := url.Parse("wss://fallback.example")
 	if err != nil {
@@ -90,8 +88,7 @@ func TestDiscoveredConfiguration(t *testing.T) {
 	}
 }
 
-// An interval in any TimeSpan form is read; one that is missing or does not parse keeps the default
-// instead of failing the dial.
+// pingFrequency is read in TimeSpan form, and any other value keeps the default instead of failing the dial.
 func TestConfigurationPingFrequency(t *testing.T) {
 	tests := map[string]time.Duration{
 		`"00:00:15"`:         15 * time.Second,
@@ -100,6 +97,11 @@ func TestConfigurationPingFrequency(t *testing.T) {
 		`"PT15S"`:            DefaultPingFrequency,
 		`"00:00:00"`:         DefaultPingFrequency,
 		`""`:                 DefaultPingFrequency,
+		`15000`:              DefaultPingFrequency,
+		`null`:               DefaultPingFrequency,
+		`"-00:00:15"`:        DefaultPingFrequency,
+		`"00:00:Inf"`:        DefaultPingFrequency,
+		`"00:00:1e12"`:       DefaultPingFrequency,
 	}
 	for value, want := range tests {
 		var cfg Configuration
@@ -109,5 +111,33 @@ func TestConfigurationPingFrequency(t *testing.T) {
 		if cfg.PingFrequency != want {
 			t.Errorf("pingFrequency %s = %v, want %v", value, cfg.PingFrequency, want)
 		}
+	}
+}
+
+// A configuration request that hangs leaves the fallback time to connect within the dial's deadline.
+func TestDiscoveredConfigurationFallsBackWhenTheRequestHangs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(server.Close)
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := url.Parse("wss://fallback.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := discoveredConfiguration{
+		afd:      &AFDEnvironment{ServiceEnvironment: internal.ServiceEnvironment{ServiceURI: u}},
+		fallback: fallback,
+		log:      slog.New(slog.DiscardHandler),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cfg, err := p.Configuration(ctx, http.DefaultClient, testTokenSource)
+	if err != nil {
+		t.Fatalf("Configuration() error = %v, want the fallback", err)
+	}
+	if cfg.ServiceURI != fallback || ctx.Err() != nil {
+		t.Fatalf("configuration = %s, dial context error = %v, want the fallback with time left", cfg.ServiceURI, ctx.Err())
 	}
 }

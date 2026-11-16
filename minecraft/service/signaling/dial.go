@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -79,7 +80,7 @@ func (d Dialer) DialContext(ctx context.Context, src service.TokenSource) (*Conn
 		if afdErr != nil {
 			p.afd = nil
 		}
-		var direct Environment
+		var direct directEnvironment
 		if discovery.Environment(&direct) == nil {
 			p.fallback = direct.ServiceURI
 		}
@@ -191,29 +192,30 @@ func jsonRPCMember(key string) bool {
 // not define. It reports false if msg is not a JSON object or array of objects.
 func jsonRPCMessage(msg []byte) ([]byte, bool) {
 	trimmed := bytes.TrimSpace(msg)
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		var batch []map[string]json.RawMessage
-		if json.Unmarshal(trimmed, &batch) != nil {
-			return nil, false
-		}
-		changed := false
-		for _, m := range batch {
-			changed = dropUnknownMembers(m) || changed
-		}
-		if !changed {
-			return msg, true
-		}
-		b, err := json.Marshal(batch)
-		return b, err == nil
+	batch := len(trimmed) > 0 && trimmed[0] == '['
+	if !batch {
+		// A single object is read as a batch of one.
+		trimmed = slices.Concat([]byte("["), trimmed, []byte("]"))
 	}
-	var m map[string]json.RawMessage
-	if json.Unmarshal(trimmed, &m) != nil || m == nil {
+	var objects []map[string]json.RawMessage
+	if json.Unmarshal(trimmed, &objects) != nil || len(objects) == 0 {
 		return nil, false
 	}
-	if !dropUnknownMembers(m) {
+	changed := false
+	for _, m := range objects {
+		if m == nil {
+			return nil, false
+		}
+		changed = dropUnknownMembers(m) || changed
+	}
+	if !changed {
 		return msg, true
 	}
-	b, err := json.Marshal(m)
+	var v any = objects
+	if !batch {
+		v = objects[0]
+	}
+	b, err := json.Marshal(v)
 	return b, err == nil
 }
 

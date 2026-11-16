@@ -506,15 +506,9 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			return nil
 		}
 
-		if err := conn.send(ctx, uuid.New(), map[string]any{
-			"params": map[string]any{
-				"messageId": envelope.ID,
-			},
-			"jsonrpc": "2.0",
-			"method":  MethodSignalingDeliveryNotification,
-		}, envelope.From); err != nil {
-			return fmt.Errorf("acknowledge message: %w", err)
-		}
+		// The receipt is sent in the background, so a service that never answers it cannot hold up the
+		// messages that follow.
+		go conn.acknowledge(envelope.ID, envelope.From)
 		return nil
 	default:
 		if envelope.RawMessage != "" {
@@ -529,6 +523,24 @@ func (conn *Conn) handleInnerMessage(ctx context.Context, envelope *envelope) er
 			}
 		}
 		return fmt.Errorf("unknown inner request method: %q", envelope.Message.Method)
+	}
+}
+
+// deliveryReceiptTimeout bounds sending one delivery receipt.
+const deliveryReceiptTimeout = 15 * time.Second
+
+// acknowledge sends the delivery receipt for messageID to the player that sent it.
+func (conn *Conn) acknowledge(messageID, to uuid.UUID) {
+	ctx, cancel := context.WithTimeout(conn.ctx, deliveryReceiptTimeout)
+	defer cancel()
+	if err := conn.send(ctx, uuid.New(), map[string]any{
+		"params": map[string]any{
+			"messageId": messageID,
+		},
+		"jsonrpc": "2.0",
+		"method":  MethodSignalingDeliveryNotification,
+	}, to); err != nil {
+		conn.d.Log.Debug("delivery receipt not sent", slog.String("message_id", messageID.String()), slog.Any("error", err))
 	}
 }
 

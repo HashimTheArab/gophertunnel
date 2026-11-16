@@ -138,8 +138,7 @@ func TestDialContextRequestsCredentialsOnConnect(t *testing.T) {
 	}
 }
 
-// Members JSON-RPC does not define are dropped, which jrpc2 would otherwise reject, and a frame that is
-// not a JSON-RPC message is skipped.
+// Unknown top-level members are dropped and frames that are not JSON-RPC are skipped.
 func TestJSONRPCMessageIsReadLeniently(t *testing.T) {
 	tests := []struct {
 		frame string
@@ -151,6 +150,8 @@ func TestJSONRPCMessageIsReadLeniently(t *testing.T) {
 		{frame: `not json`},
 		{frame: `null`},
 		{frame: `"text"`},
+		{frame: `[]`},
+		{frame: `[{"jsonrpc":"2.0","id":1,"result":{}},null]`},
 	}
 	for _, tt := range tests {
 		got, ok := jsonRPCMessage([]byte(tt.frame))

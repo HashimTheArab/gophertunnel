@@ -1,6 +1,7 @@
 package signaling
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,8 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
@@ -68,18 +69,22 @@ func (e *AFDEnvironment) Configuration(ctx context.Context, client *http.Client,
 	}
 }
 
-// configurationRetry retries a configuration request that failed transiently, doubling the delay from
-// one second up to 30 seconds as vanilla does, for as long as the dial's context allows.
+// configurationRetry retries a configuration request that failed transiently with delays of 1, 2, 4, 8
+// and 16 seconds, as vanilla doubles its delay from one second, while the request's context allows.
 var configurationRetry = authclient.RetryOptions{Attempts: 6, MinDelay: 500 * time.Millisecond, MaxDelay: 30 * time.Second}
 
-// Environment is the signaling service discovery lists as 'signaling'. Vanilla connects to it directly
-// when the configuration from [AFDEnvironment] cannot be fetched.
-type Environment struct {
+// maxConfigurationWait bounds the configuration request when a fallback exists; it also takes at most
+// half of the dial's remaining time, so the fallback can still connect.
+const maxConfigurationWait = 10 * time.Second
+
+// directEnvironment is the signaling service discovery lists as 'signaling'. Vanilla connects to it
+// directly when the configuration from [AFDEnvironment] cannot be fetched.
+type directEnvironment struct {
 	internal.ServiceEnvironment
 }
 
 // ServiceName implements [service.Environment]. It always returns 'signaling'.
-func (e *Environment) ServiceName() string {
+func (e *directEnvironment) ServiceName() string {
 	return "signaling"
 }
 
@@ -95,8 +100,18 @@ type discoveredConfiguration struct {
 func (p discoveredConfiguration) Configuration(ctx context.Context, client *http.Client, src service.TokenSource) (*Configuration, error) {
 	err := errors.New("service/signaling: discovery has no signaling-afd service")
 	if p.afd != nil {
+		afdCtx := ctx
+		if p.fallback != nil {
+			wait := maxConfigurationWait
+			if deadline, ok := ctx.Deadline(); ok {
+				wait = min(wait, time.Until(deadline)/2)
+			}
+			var cancel context.CancelFunc
+			afdCtx, cancel = context.WithTimeout(ctx, wait)
+			defer cancel()
+		}
 		var cfg *Configuration
-		if cfg, err = p.afd.Configuration(ctx, client, src); err == nil {
+		if cfg, err = p.afd.Configuration(afdCtx, client, src); err == nil {
 			return cfg, nil
 		}
 	}
@@ -132,8 +147,8 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	type Alias Configuration
 	data := struct {
 		*Alias
-		ServiceURI    string `json:"signalingUri"`
-		PingFrequency string `json:"pingFrequency"`
+		ServiceURI    string          `json:"signalingUri"`
+		PingFrequency json.RawMessage `json:"pingFrequency"`
 	}{Alias: (*Alias)(cfg)}
 	if err = json.Unmarshal(b, &data); err != nil {
 		return err
@@ -149,33 +164,28 @@ func (cfg *Configuration) UnmarshalJSON(b []byte) (err error) {
 	}
 	// An interval that is missing or does not parse falls back to the default instead of failing the dial.
 	cfg.PingFrequency = DefaultPingFrequency
-	if d, ok := parseTimeSpan(data.PingFrequency); ok && d > 0 {
-		cfg.PingFrequency = d
+	var frequency string
+	if json.Unmarshal(data.PingFrequency, &frequency) == nil {
+		if d, ok := parseTimeSpan(frequency); ok && d > 0 {
+			cfg.PingFrequency = d
+		}
 	}
 	return nil
 }
 
-// parseTimeSpan parses an interval in .NET's TimeSpan format, [d.]hh:mm:ss[.fffffff], as the signaling
-// service writes pingFrequency.
+// timeSpan matches a non-negative interval in .NET's TimeSpan format, [d.]hh:mm:ss[.fffffff].
+var timeSpan = regexp.MustCompile(`^(?:(\d{1,5})\.)?(\d{1,2}):(\d{1,2}):(\d{1,2})(\.\d{1,7})?$`)
+
+// parseTimeSpan parses an interval in .NET's TimeSpan format, as the signaling service writes pingFrequency.
 func parseTimeSpan(s string) (time.Duration, bool) {
-	var days int
-	if day, rest, ok := strings.Cut(s, "."); ok && !strings.Contains(day, ":") {
-		n, err := strconv.Atoi(day)
-		if err != nil || n < 0 {
-			return 0, false
-		}
-		days, s = n, rest
-	}
-	parts := strings.Split(s, ":")
-	if len(parts) != 3 {
+	m := timeSpan.FindStringSubmatch(s)
+	if m == nil {
 		return 0, false
 	}
-	h, errH := strconv.Atoi(parts[0])
-	m, errM := strconv.Atoi(parts[1])
-	sec, errS := strconv.ParseFloat(parts[2], 64)
-	if errH != nil || errM != nil || errS != nil || h < 0 || m < 0 || sec < 0 {
-		return 0, false
-	}
-	return time.Duration(days)*24*time.Hour + time.Duration(h)*time.Hour + time.Duration(m)*time.Minute +
-		time.Duration(sec*float64(time.Second)), true
+	days, _ := strconv.Atoi(cmp.Or(m[1], "0"))
+	h, _ := strconv.Atoi(m[2])
+	mins, _ := strconv.Atoi(m[3])
+	secs, _ := strconv.ParseFloat(m[4]+m[5], 64)
+	return time.Duration(days)*24*time.Hour + time.Duration(h)*time.Hour + time.Duration(mins)*time.Minute +
+		time.Duration(secs*float64(time.Second)), true
 }

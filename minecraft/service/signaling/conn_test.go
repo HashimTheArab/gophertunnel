@@ -343,8 +343,11 @@ func TestConnHandleInnerMessageAcknowledgesAcceptedSignal(t *testing.T) {
 		t.Fatalf("marshal params: %v", err)
 	}
 	messageID, senderID := uuid.New(), uuid.New()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(net.ErrClosed)
 	conn := &Conn{
 		client:    client,
+		ctx:       ctx,
 		d:         Dialer{Log: slog.Default()},
 		notifiers: map[uint32]nethernet.Notifier{0: acceptingNotifier{}},
 	}
@@ -521,8 +524,7 @@ func (n signalNotifier) NotifySignal(signal *nethernet.Signal) bool {
 	return true
 }
 
-// A message the service sends without an ID is handled by method, like one with an ID, and the
-// handler may call the service, as a delivery receipt does, without deadlocking the client.
+// An ID-less message is handled by method, and its delivery receipt goes out without deadlocking the client.
 func TestNotificationIsHandledByMethod(t *testing.T) {
 	delivered := make(chan struct{}, 1)
 	clientChannel, serverChannel := channel.Direct()
