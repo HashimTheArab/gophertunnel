@@ -44,8 +44,9 @@ type SubChunkEntry struct {
 // bottom, and a lower boundary observed in another band is more precise. Heights
 // above the band, missing maps and copied maps cannot establish an upper bound
 // independently, and report ok false. subChunkY is absolute, and x/z are
-// coordinates within the column.
-func (x SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (y int32, clamped, ok bool) {
+// coordinates within the column. Callers read every column of an entry, so it
+// takes a pointer and reads the height map in place rather than copying either.
+func (x *SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (y int32, clamped, ok bool) {
 	if blockX >= 16 || blockZ >= 16 || (x.Result != SubChunkResultSuccess && x.Result != SubChunkResultSuccessAllAir) {
 		return 0, false, false
 	}
@@ -54,10 +55,10 @@ func (x SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (y int32,
 	case HeightMapDataTooLow:
 		return base, true, true
 	case HeightMapDataHasData:
-		if heights, ok := x.RenderHeightMapData.Value(); ok {
+		if x.RenderHeightMapData.set {
 			// -1 marks a column whose surface lies below this band, like
 			// HeightMapDataTooLow for the whole map.
-			switch h := heights[blockZ][blockX]; {
+			switch h := x.RenderHeightMapData.val[blockZ][blockX]; {
 			case h == -1:
 				return base, true, true
 			case h >= 0 && h < 16:

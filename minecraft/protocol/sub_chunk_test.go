@@ -30,3 +30,17 @@ func TestSubChunkEntry_SkyStart(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkSubChunkEntry_SkyStart reads every column of an entry, as callers
+// merging sky boundaries do.
+func BenchmarkSubChunkEntry_SkyStart(b *testing.B) {
+	var heights HeightMap
+	entry := SubChunkEntry{Result: SubChunkResultSuccess, RawPayload: Option(make([]byte, 4096)), RenderHeightMapType: HeightMapDataHasData, RenderHeightMapData: Option(heights)}
+	for b.Loop() {
+		for z := range uint8(16) {
+			for x := range uint8(16) {
+				entry.SkyStart(3, x, z)
+			}
+		}
+	}
+}
