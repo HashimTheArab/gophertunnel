@@ -1416,23 +1416,56 @@ func TestDialContextSpawnsWhenServerNeverSendsChunkRadiusUpdated(t *testing.T) {
 	}
 }
 
-func TestDialContextTakesALateChunkRadiusUpdatedAfterSpawning(t *testing.T) {
+func TestDialContextIgnoresPlayerSpawnBeforeStartGame(t *testing.T) {
 	network := newScriptedDialNetwork(func(conn net.Conn) error {
-		decoder, encoder, err := startScriptedLogin(conn)
-		if err != nil {
-			return err
+		decoder := packet.NewDecoder(conn)
+		encoder := packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read RequestNetworkSettings: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+			CompressionThreshold: math.MaxUint16,
+			CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+		}); err != nil {
+			return fmt.Errorf("write NetworkSettings: %w", err)
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read Login: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+			return fmt.Errorf("write login success: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read ClientCacheStatus: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ResourcePacksInfo{},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("write ResourcePacksInfo with an early PlayerSpawn: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read ResourcePackClientResponse: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{EntityRuntimeID: 7}); err != nil {
+			return fmt.Errorf("write StartGame: %w", err)
+		}
+		for range 2 {
+			if _, err := decoder.Decode(); err != nil {
+				return fmt.Errorf("read StartGame responses: %w", err)
+			}
 		}
 		if err := encodeScriptedPackets(encoder,
 			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 8},
 			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
 		); err != nil {
-			return fmt.Errorf("finish login before ChunkRadiusUpdated: %w", err)
+			return fmt.Errorf("finish login: %w", err)
 		}
 		if _, err := decoder.Decode(); err != nil {
 			return fmt.Errorf("read login acknowledgement: %w", err)
-		}
-		if err := encodeScriptedPackets(encoder, &packet.ChunkRadiusUpdated{ChunkRadius: 8}); err != nil {
-			return fmt.Errorf("send late ChunkRadiusUpdated: %w", err)
 		}
 		return expectScriptedClose(conn, decoder)
 	})
@@ -1441,25 +1474,13 @@ func TestDialContextTakesALateChunkRadiusUpdatedAfterSpawning(t *testing.T) {
 	defer cancel()
 	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
 	if err != nil {
-		t.Fatalf("DialContextNetwork before ChunkRadiusUpdated: %v", err)
+		t.Fatalf("DialContextNetwork with an early PlayerSpawn: %v", err)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		t.Fatalf("SetReadDeadline: %v", err)
-	}
-	for {
-		pk, err := conn.ReadPacket()
-		if err != nil {
-			t.Fatalf("ReadPacket before the late ChunkRadiusUpdated: %v", err)
-		}
-		if update, ok := pk.(*packet.ChunkRadiusUpdated); ok {
-			if update.ChunkRadius != 8 {
-				t.Fatalf("delivered ChunkRadiusUpdated = %d, want 8", update.ChunkRadius)
-			}
-			break
-		}
+	if got := conn.GameData().EntityRuntimeID; got != 7 {
+		t.Errorf("GameData().EntityRuntimeID = %d, want 7 from StartGame", got)
 	}
 	if got := conn.ChunkRadius(); got != 8 {
-		t.Errorf("ChunkRadius() = %d, want the server's late 8", got)
+		t.Errorf("ChunkRadius() = %d, want the server's 8", got)
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

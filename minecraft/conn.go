@@ -287,12 +287,8 @@ type Conn struct {
 	identityData login.IdentityData
 	clientData   login.ClientData
 
-	gameDataMu       sync.RWMutex
-	gameData         GameData
-	gameDataReceived atomic.Bool
-	// chunkRadiusAssumed is set while the game data holds the requested chunk radius because the spawn
-	// finished before the server sent ChunkRadiusUpdated. The first late update replaces it.
-	chunkRadiusAssumed atomic.Bool
+	gameDataMu sync.RWMutex
+	gameData   GameData
 
 	// privateKey is the private key of this end of the connection. Each connection, regardless of which side
 	// the connection is on, server or client, has a unique private key generated.
@@ -591,9 +587,6 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 // the client to finish spawning. Most callers should use StartGame instead, which waits until the client sends
 // its spawn acknowledgement.
 func (conn *Conn) SendStartGame(data GameData) error {
-	if conn.gameDataReceived.Load() {
-		panic("(*Conn).SendStartGame must only be called on Listener connections")
-	}
 	if data.WorldName == "" {
 		data.WorldName = conn.GameData().WorldName
 	}
@@ -1466,7 +1459,6 @@ func (conn *Conn) receive(data []byte) error {
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
-		conn.observeLateChunkRadius(pkData)
 		if !conn.collectPacket(pkData) {
 			conn.queuePacket(pkData)
 		}
@@ -2703,6 +2695,11 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 
 	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
 	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: requestedChunkRadius, MaxChunkRadius: requestedChunkRadius})
+	// Like vanilla, use the requested radius until the server answers: some servers never do.
+	conn.gameDataMu.Lock()
+	conn.gameData.ChunkRadius = requestedChunkRadius
+	conn.gameDataMu.Unlock()
+	conn.waitingForSpawn.Store(true)
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
 }
@@ -2837,9 +2834,6 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	conn.gameDataMu.Lock()
 	conn.gameData.ChunkRadius = pk.ChunkRadius
 	conn.gameDataMu.Unlock()
-	conn.gameDataReceived.Store(true)
-
-	conn.tryFinaliseClientConn()
 	return nil
 }
 
@@ -2869,14 +2863,10 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 		_ = conn.close(conn.closeErr("server outdated"))
 		return fmt.Errorf("server outdated")
 	case packet.PlayStatusPlayerSpawn:
-		// We've spawned and can send the last packet in the spawn sequence.
-		conn.waitingForSpawn.Store(true)
-		// The vanilla client spawns on PlayerSpawn and keeps the radius it requested until the server
-		// updates it. Some servers never answer RequestChunkRadius, so waiting for ChunkRadiusUpdated here
-		// would leave the dial hanging. A ChunkRadiusUpdated that arrives later still replaces the radius
-		// (see observeLateChunkRadius).
-		conn.assumeRequestedChunkRadius()
-		conn.tryFinaliseClientConn()
+		// Like vanilla, PlayerSpawn alone completes the spawn, and only once StartGame has been handled.
+		if conn.waitingForSpawn.CompareAndSwap(true, false) {
+			conn.finaliseClientSpawn()
+		}
 		return nil
 	case packet.PlayStatusLoginFailedInvalidTenant:
 		_ = conn.close(conn.closeErr("invalid edu edition game owner"))
@@ -2916,56 +2906,12 @@ func (conn *Conn) handleLoginSuccess() error {
 	return conn.Flush()
 }
 
-// tryFinaliseClientConn attempts to finalise the client connection by sending
-// the SetLocalPlayerAsInitialised packet when if the ChunkRadiusUpdated and
-// PlayStatus packets have been sent.
-func (conn *Conn) tryFinaliseClientConn() {
-	if conn.waitingForSpawn.Load() && conn.gameDataReceived.Load() {
-		conn.waitingForSpawn.Store(false)
-		conn.gameDataReceived.Store(false)
-
-		close(conn.spawn)
-		conn.loggedIn = true
-		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
-		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
-	}
-}
-
-// assumeRequestedChunkRadius records the chunk radius requested after StartGame as the connection's radius
-// when the server has not sent ChunkRadiusUpdated.
-func (conn *Conn) assumeRequestedChunkRadius() {
-	if conn.gameDataReceived.Load() {
-		return
-	}
-	conn.gameDataMu.Lock()
-	if conn.gameData.ChunkRadius == 0 {
-		conn.gameData.ChunkRadius = requestedChunkRadius
-	}
-	conn.gameDataMu.Unlock()
-	conn.chunkRadiusAssumed.Store(true)
-	conn.gameDataReceived.Store(true)
-}
-
-// observeLateChunkRadius records the first ChunkRadiusUpdated that arrives after a spawn finished on an
-// assumed chunk radius, so GameData reports the radius the server chose. The packet is still delivered
-// to the caller like any other packet received after login.
-func (conn *Conn) observeLateChunkRadius(pkData *packetData) {
-	if pkData.h.PacketID != packet.IDChunkRadiusUpdated || !conn.chunkRadiusAssumed.Load() {
-		return
-	}
-	pks, err := pkData.probe(conn)
-	if err != nil {
-		return
-	}
-	for _, pk := range pks {
-		if update, ok := pk.(*packet.ChunkRadiusUpdated); ok && update.ChunkRadius >= 1 {
-			conn.gameDataMu.Lock()
-			conn.gameData.ChunkRadius = update.ChunkRadius
-			conn.gameDataMu.Unlock()
-			conn.chunkRadiusAssumed.Store(false)
-			return
-		}
-	}
+// finaliseClientSpawn marks a client connection as spawned and sends the last packets of the spawn sequence.
+func (conn *Conn) finaliseClientSpawn() {
+	close(conn.spawn)
+	conn.loggedIn = true
+	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
+	_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
 }
 
 // enableEncryption enables encryption on the server side over the connection. It sends an unencrypted
