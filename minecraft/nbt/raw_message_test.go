@@ -39,6 +39,63 @@ func TestRawMessage_DecodeFieldsSkipsUnselectedPayloads(t *testing.T) {
 	}
 }
 
+func TestRawMessage_DecodeFieldsFlatKeepsOnlyFlatValues(t *testing.T) {
+	t.Parallel()
+
+	pages := make([]any, 50)
+	for i := range pages {
+		pages[i] = map[string]any{"text": "a long page of writing", "photoname": ""}
+	}
+	data := map[string]any{
+		"hasBook": uint8(1),
+		"book": map[string]any{
+			"Name": "minecraft:written_book", "Count": uint8(1), "Damage": int16(0),
+			"Weight": float32(0.5), "Age": int64(7), "Scale": float64(2), "Slot": int32(3),
+			"Bytes": []byte{1, 2}, "Ints": []int32{1}, "Longs": []int64{1},
+			"tag":        map[string]any{"pages": pages, "title": "Base"},
+			"CanPlaceOn": []any{"minecraft:stone"},
+		},
+		"CustomName": "flat fields only change compounds",
+	}
+	var buf bytes.Buffer
+	if err := NewEncoderWithEncoding(&buf, NetworkLittleEndian).Encode(data); err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	message := NewRawMessage(buf.Bytes())
+
+	got, err := message.DecodeFieldsFlat(NetworkLittleEndian, []string{"hasBook", "book", "CustomName"}, []string{"book", "CustomName"})
+	if err != nil {
+		t.Fatalf("DecodeFieldsFlat() error = %v", err)
+	}
+	want := map[string]any{
+		"hasBook": uint8(1),
+		"book": map[string]any{
+			"Name": "minecraft:written_book", "Count": uint8(1), "Damage": int16(0),
+			"Weight": float32(0.5), "Age": int64(7), "Scale": float64(2), "Slot": int32(3),
+		},
+		"CustomName": "flat fields only change compounds",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DecodeFieldsFlat() = %#v, want %#v", got, want)
+	}
+
+	var full map[string]any
+	if err := message.Unmarshal(&full, NetworkLittleEndian); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if flat := FlatCompound(full["book"].(map[string]any)); !reflect.DeepEqual(flat, got["book"]) {
+		t.Fatalf("FlatCompound() = %#v, want what DecodeFieldsFlat kept, %#v", flat, got["book"])
+	}
+
+	unselected, err := message.DecodeFieldsFlat(NetworkLittleEndian, []string{"hasBook"}, []string{"book"})
+	if err != nil {
+		t.Fatalf("DecodeFieldsFlat() error = %v", err)
+	}
+	if _, ok := unselected["book"]; ok {
+		t.Fatal("DecodeFieldsFlat() decoded a flat field that was not selected")
+	}
+}
+
 func TestRawMessage_UnmarshalMaterialisesCompleteCompound(t *testing.T) {
 	t.Parallel()
 

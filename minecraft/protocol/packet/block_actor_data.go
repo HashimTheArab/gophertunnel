@@ -1,6 +1,8 @@
 package packet
 
 import (
+	"slices"
+
 	"github.com/sandertv/gophertunnel/minecraft/nbt"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
@@ -36,19 +38,33 @@ func NewLazyBlockActorData() *BlockActorData {
 // materialised NBTData map. Call MaterialiseNBT and mutate NBTData directly to
 // change data that should be encoded.
 func (pk *BlockActorData) NBTFields(fields ...string) (map[string]any, error) {
+	return pk.NBTFieldsFlat(fields, nil)
+}
+
+// NBTFieldsFlat returns the requested top-level NBT fields like NBTFields,
+// except that a requested field also named in flat that holds a compound keeps
+// only that compound's scalar and string values, as nbt.FlatCompound does.
+// When the packet was decoded lazily, the rest of such a compound is skipped
+// without being materialised.
+func (pk *BlockActorData) NBTFieldsFlat(fields, flat []string) (map[string]any, error) {
 	if pk.NBTData != nil {
 		selected := make(map[string]any, len(fields))
 		for _, field := range fields {
-			if value, ok := pk.NBTData[field]; ok {
-				selected[field] = value
+			value, ok := pk.NBTData[field]
+			if !ok {
+				continue
 			}
+			if compound, isCompound := value.(map[string]any); isCompound && slices.Contains(flat, field) {
+				value = nbt.FlatCompound(compound)
+			}
+			selected[field] = value
 		}
 		return selected, nil
 	}
 	if !pk.decodeNBTLazily {
 		return map[string]any{}, nil
 	}
-	return pk.rawNBTData.DecodeFields(nbt.NetworkLittleEndian, fields...)
+	return pk.rawNBTData.DecodeFieldsFlat(nbt.NetworkLittleEndian, fields, flat)
 }
 
 // MaterialiseNBT decodes the complete raw NBT value into NBTData. Subsequent

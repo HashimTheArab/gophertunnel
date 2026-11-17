@@ -226,3 +226,40 @@ func representativeBlockActorDataWire(tb testing.TB) []byte {
 	pk.Marshal(protocol.NewWriter(&buf, 0))
 	return buf.Bytes()
 }
+
+func TestBlockActorData_NBTFieldsFlatMatchesLazyAndDecoded(t *testing.T) {
+	t.Parallel()
+
+	data := map[string]any{
+		"hasBook": uint8(1),
+		"book": map[string]any{
+			"Name": "minecraft:written_book", "Count": uint8(1), "Damage": int16(0),
+			"tag": map[string]any{"pages": []any{map[string]any{"text": "page"}}},
+		},
+		"page": int32(0),
+	}
+	var wire bytes.Buffer
+	(&BlockActorData{Position: protocol.BlockPos{1, 2, 3}, NBTData: data}).Marshal(protocol.NewWriter(&wire, 0))
+	lazy := NewLazyBlockActorData()
+	lazy.Marshal(protocol.NewReader(bytes.NewBuffer(wire.Bytes()), 0, true))
+
+	want := map[string]any{
+		"hasBook": uint8(1),
+		"book":    map[string]any{"Name": "minecraft:written_book", "Count": uint8(1), "Damage": int16(0)},
+	}
+	for name, pk := range map[string]*BlockActorData{"lazy": lazy, "decoded": {NBTData: data}} {
+		got, err := pk.NBTFieldsFlat([]string{"hasBook", "book"}, []string{"book"})
+		if err != nil {
+			t.Fatalf("%s: NBTFieldsFlat() error = %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: NBTFieldsFlat() = %#v, want %#v", name, got, want)
+		}
+	}
+	if lazy.NBTData != nil {
+		t.Fatal("NBTFieldsFlat() materialised the lazy packet")
+	}
+	if _, ok := data["book"].(map[string]any)["tag"]; !ok {
+		t.Fatal("NBTFieldsFlat() changed the decoded packet's NBTData")
+	}
+}

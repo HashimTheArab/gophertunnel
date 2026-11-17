@@ -62,6 +62,15 @@ func (m RawMessage) Unmarshal(v any, encoding Encoding) error {
 // selected fields are decoded normally; every other value is validated and
 // skipped without building its Go representation.
 func (m RawMessage) DecodeFields(encoding Encoding, fields ...string) (map[string]any, error) {
+	return m.DecodeFieldsFlat(encoding, fields, nil)
+}
+
+// DecodeFieldsFlat decodes the named top-level compound fields like
+// DecodeFields, except that a selected field also named in flat that holds a
+// compound keeps only that compound's own values FlatCompound keeps. Its
+// lists, arrays and nested compounds are validated and skipped, so an item
+// compound, for example, decodes to its identity without its tag payload.
+func (m RawMessage) DecodeFieldsFlat(encoding Encoding, fields, flat []string) (map[string]any, error) {
 	decoder := NewDecoderWithEncoding(bytes.NewBuffer(m.data), encoding)
 	decoder.AllowZero = true
 	t, _, err := decoder.tag()
@@ -88,6 +97,14 @@ func (m RawMessage) DecodeFields(encoding Encoding, fields ...string) (map[strin
 		}
 		if nestedType == tagEnd {
 			return values, nil
+		}
+		if nestedType == tagStruct && rawMessageFieldSelected(name, fields) && rawMessageFieldSelected(name, flat) {
+			value, err := decoder.flatCompound()
+			if err != nil {
+				return nil, err
+			}
+			values[name] = value
+			continue
 		}
 		if rawMessageFieldSelected(name, fields) {
 			var value any
@@ -139,6 +156,51 @@ func (d *Decoder) Skip() error {
 		return nil
 	}
 	return d.skipTag(t)
+}
+
+// flatCompound decodes the payload of a compound tag, keeping the values
+// FlatCompound keeps and validating and skipping every other one.
+func (d *Decoder) flatCompound() (map[string]any, error) {
+	d.depth++
+	defer func() { d.depth-- }()
+	values := make(map[string]any)
+	for {
+		t, name, err := d.tag()
+		if err != nil {
+			return nil, err
+		}
+		if !t.IsValid() {
+			return nil, UnknownTagError{Off: d.r.off, Op: "Flat", TagType: t}
+		}
+		switch t {
+		case tagEnd:
+			return values, nil
+		case tagByte, tagInt16, tagInt32, tagInt64, tagFloat32, tagFloat64, tagString:
+			var value any
+			if err := d.unmarshalTag(reflect.ValueOf(&value).Elem(), t, name); err != nil {
+				return nil, err
+			}
+			values[name] = value
+		default:
+			if err := d.skipTag(t); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
+// FlatCompound returns the values of m that hold a byte, short, int, long,
+// float, double or string, as they decode into Go, without its lists, arrays
+// and nested compounds. RawMessage.DecodeFieldsFlat keeps the same values.
+func FlatCompound(m map[string]any) map[string]any {
+	values := make(map[string]any, len(m))
+	for name, value := range m {
+		switch value.(type) {
+		case uint8, int16, int32, int64, float32, float64, string:
+			values[name] = value
+		}
+	}
+	return values
 }
 
 // skipTag validates and consumes the payload of t without retaining it.
