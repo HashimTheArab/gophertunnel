@@ -1380,3 +1380,112 @@ type unbatchedConn struct{ net.Conn }
 
 func (unbatchedConn) BatchHeader() []byte     { return nil }
 func (unbatchedConn) DisableEncryption() bool { return true }
+
+func TestDialContextSpawnsWhenServerNeverSendsChunkRadiusUpdated(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login without ChunkRadiusUpdated: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork without ChunkRadiusUpdated: %v", err)
+	}
+	if got := conn.ChunkRadius(); got != requestedChunkRadius {
+		t.Errorf("ChunkRadius() = %d, want the requested %d", got, requestedChunkRadius)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}
+
+func TestDialContextIgnoresPlayerSpawnBeforeStartGame(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder := packet.NewDecoder(conn)
+		encoder := packet.NewEncoder(conn)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read RequestNetworkSettings: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.NetworkSettings{
+			CompressionThreshold: math.MaxUint16,
+			CompressionAlgorithm: packet.CompressionAlgorithmFlate,
+		}); err != nil {
+			return fmt.Errorf("write NetworkSettings: %w", err)
+		}
+		decoder.EnableCompression(packet.FlateCompression, math.MaxInt)
+		encoder.EnableCompression(packet.FlateCompression, math.MaxUint16)
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read Login: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.PlayStatus{Status: packet.PlayStatusLoginSuccess}); err != nil {
+			return fmt.Errorf("write login success: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read ClientCacheStatus: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ResourcePacksInfo{},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("write ResourcePacksInfo with an early PlayerSpawn: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read ResourcePackClientResponse: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.ResourcePackStack{}, &packet.StartGame{EntityRuntimeID: 7}); err != nil {
+			return fmt.Errorf("write StartGame: %w", err)
+		}
+		for range 2 {
+			if _, err := decoder.Decode(); err != nil {
+				return fmt.Errorf("read StartGame responses: %w", err)
+			}
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.ChunkRadiusUpdated{ChunkRadius: 8},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork with an early PlayerSpawn: %v", err)
+	}
+	if got := conn.GameData().EntityRuntimeID; got != 7 {
+		t.Errorf("GameData().EntityRuntimeID = %d, want 7 from StartGame", got)
+	}
+	if got := conn.ChunkRadius(); got != 8 {
+		t.Errorf("ChunkRadius() = %d, want the server's 8", got)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}

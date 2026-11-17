@@ -287,9 +287,8 @@ type Conn struct {
 	identityData login.IdentityData
 	clientData   login.ClientData
 
-	gameDataMu       sync.RWMutex
-	gameData         GameData
-	gameDataReceived atomic.Bool
+	gameDataMu sync.RWMutex
+	gameData   GameData
 
 	// privateKey is the private key of this end of the connection. Each connection, regardless of which side
 	// the connection is on, server or client, has a unique private key generated.
@@ -588,9 +587,6 @@ func (conn *Conn) StartGameContext(ctx context.Context, data GameData) error {
 // the client to finish spawning. Most callers should use StartGame instead, which waits until the client sends
 // its spawn acknowledgement.
 func (conn *Conn) SendStartGame(data GameData) error {
-	if conn.gameDataReceived.Load() {
-		panic("(*Conn).SendStartGame must only be called on Listener connections")
-	}
 	if data.WorldName == "" {
 		data.WorldName = conn.GameData().WorldName
 	}
@@ -2685,6 +2681,9 @@ func (conn *Conn) handleDimensionData(pk *packet.DimensionData) error {
 
 var hiveRegex = regexp.MustCompile(`.*\.hivebedrock\.network.*`)
 
+// requestedChunkRadius is the chunk radius a client connection asks the server for after StartGame.
+const requestedChunkRadius = 16
+
 // handleStartGame handles an incoming StartGame packet. It is the signal that the player has been added to a
 // world, and it obtains most of its dedicated properties.
 func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
@@ -2695,7 +2694,12 @@ func (conn *Conn) handleStartGame(pk *packet.StartGame) error {
 	conn.observeStartGame(pk)
 
 	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeStart})
-	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: 16, MaxChunkRadius: 16})
+	_ = conn.WritePacket(&packet.RequestChunkRadius{ChunkRadius: requestedChunkRadius, MaxChunkRadius: requestedChunkRadius})
+	// Like vanilla, use the requested radius until the server answers: some servers never do.
+	conn.gameDataMu.Lock()
+	conn.gameData.ChunkRadius = requestedChunkRadius
+	conn.gameDataMu.Unlock()
+	conn.waitingForSpawn.Store(true)
 	conn.expect(packet.IDItemRegistry, packet.IDResourcePackStack)
 	return nil
 }
@@ -2830,9 +2834,6 @@ func (conn *Conn) handleChunkRadiusUpdated(pk *packet.ChunkRadiusUpdated) error 
 	conn.gameDataMu.Lock()
 	conn.gameData.ChunkRadius = pk.ChunkRadius
 	conn.gameDataMu.Unlock()
-	conn.gameDataReceived.Store(true)
-
-	conn.tryFinaliseClientConn()
 	return nil
 }
 
@@ -2862,9 +2863,10 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 		_ = conn.close(conn.closeErr("server outdated"))
 		return fmt.Errorf("server outdated")
 	case packet.PlayStatusPlayerSpawn:
-		// We've spawned and can send the last packet in the spawn sequence.
-		conn.waitingForSpawn.Store(true)
-		conn.tryFinaliseClientConn()
+		// Like vanilla, PlayerSpawn alone completes the spawn, and only once StartGame has been handled.
+		if conn.waitingForSpawn.CompareAndSwap(true, false) {
+			conn.finaliseClientSpawn()
+		}
 		return nil
 	case packet.PlayStatusLoginFailedInvalidTenant:
 		_ = conn.close(conn.closeErr("invalid edu edition game owner"))
@@ -2904,19 +2906,12 @@ func (conn *Conn) handleLoginSuccess() error {
 	return conn.Flush()
 }
 
-// tryFinaliseClientConn attempts to finalise the client connection by sending
-// the SetLocalPlayerAsInitialised packet when if the ChunkRadiusUpdated and
-// PlayStatus packets have been sent.
-func (conn *Conn) tryFinaliseClientConn() {
-	if conn.waitingForSpawn.Load() && conn.gameDataReceived.Load() {
-		conn.waitingForSpawn.Store(false)
-		conn.gameDataReceived.Store(false)
-
-		close(conn.spawn)
-		conn.loggedIn = true
-		_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
-		_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
-	}
+// finaliseClientSpawn marks a client connection as spawned and sends the last packets of the spawn sequence.
+func (conn *Conn) finaliseClientSpawn() {
+	close(conn.spawn)
+	conn.loggedIn = true
+	_ = conn.WritePacket(&packet.ServerBoundLoadingScreen{Type: packet.LoadingScreenTypeEnd})
+	_ = conn.WritePacket(&packet.SetLocalPlayerAsInitialised{EntityRuntimeID: conn.GameData().EntityRuntimeID})
 }
 
 // enableEncryption enables encryption on the server side over the connection. It sends an unencrypted
