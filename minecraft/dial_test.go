@@ -1415,3 +1415,56 @@ func TestDialContextSpawnsWhenServerNeverSendsChunkRadiusUpdated(t *testing.T) {
 		t.Fatalf("scripted server: %v", scriptErr)
 	}
 }
+
+func TestDialContextTakesALateChunkRadiusUpdatedAfterSpawning(t *testing.T) {
+	network := newScriptedDialNetwork(func(conn net.Conn) error {
+		decoder, encoder, err := startScriptedLogin(conn)
+		if err != nil {
+			return err
+		}
+		if err := encodeScriptedPackets(encoder,
+			&packet.ItemRegistry{},
+			&packet.PlayStatus{Status: packet.PlayStatusPlayerSpawn},
+		); err != nil {
+			return fmt.Errorf("finish login before ChunkRadiusUpdated: %w", err)
+		}
+		if _, err := decoder.Decode(); err != nil {
+			return fmt.Errorf("read login acknowledgement: %w", err)
+		}
+		if err := encodeScriptedPackets(encoder, &packet.ChunkRadiusUpdated{ChunkRadius: 8}); err != nil {
+			return fmt.Errorf("send late ChunkRadiusUpdated: %w", err)
+		}
+		return expectScriptedClose(conn, decoder)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := (Dialer{FlushRate: -1}).DialContextNetwork(ctx, network, "example.com:19132")
+	if err != nil {
+		t.Fatalf("DialContextNetwork before ChunkRadiusUpdated: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	for {
+		pk, err := conn.ReadPacket()
+		if err != nil {
+			t.Fatalf("ReadPacket before the late ChunkRadiusUpdated: %v", err)
+		}
+		if update, ok := pk.(*packet.ChunkRadiusUpdated); ok {
+			if update.ChunkRadius != 8 {
+				t.Fatalf("delivered ChunkRadiusUpdated = %d, want 8", update.ChunkRadius)
+			}
+			break
+		}
+	}
+	if got := conn.ChunkRadius(); got != 8 {
+		t.Errorf("ChunkRadius() = %d, want the server's late 8", got)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if scriptErr := <-network.done; scriptErr != nil {
+		t.Fatalf("scripted server: %v", scriptErr)
+	}
+}

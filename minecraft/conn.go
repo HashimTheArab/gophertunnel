@@ -290,6 +290,9 @@ type Conn struct {
 	gameDataMu       sync.RWMutex
 	gameData         GameData
 	gameDataReceived atomic.Bool
+	// chunkRadiusAssumed is set while the game data holds the requested chunk radius because the spawn
+	// finished before the server sent ChunkRadiusUpdated. The first late update replaces it.
+	chunkRadiusAssumed atomic.Bool
 
 	// privateKey is the private key of this end of the connection. Each connection, regardless of which side
 	// the connection is on, server or client, has a unique private key generated.
@@ -1463,6 +1466,7 @@ func (conn *Conn) receive(data []byte) error {
 		}
 	}
 	if conn.loggedIn && !conn.waitingForSpawn.Load() {
+		conn.observeLateChunkRadius(pkData)
 		if !conn.collectPacket(pkData) {
 			conn.queuePacket(pkData)
 		}
@@ -2869,7 +2873,8 @@ func (conn *Conn) handlePlayStatus(pk *packet.PlayStatus) error {
 		conn.waitingForSpawn.Store(true)
 		// The vanilla client spawns on PlayerSpawn and keeps the radius it requested until the server
 		// updates it. Some servers never answer RequestChunkRadius, so waiting for ChunkRadiusUpdated here
-		// would leave the dial hanging. A ChunkRadiusUpdated that arrives later still replaces the radius.
+		// would leave the dial hanging. A ChunkRadiusUpdated that arrives later still replaces the radius
+		// (see observeLateChunkRadius).
 		conn.assumeRequestedChunkRadius()
 		conn.tryFinaliseClientConn()
 		return nil
@@ -2937,7 +2942,30 @@ func (conn *Conn) assumeRequestedChunkRadius() {
 		conn.gameData.ChunkRadius = requestedChunkRadius
 	}
 	conn.gameDataMu.Unlock()
+	conn.chunkRadiusAssumed.Store(true)
 	conn.gameDataReceived.Store(true)
+}
+
+// observeLateChunkRadius records the first ChunkRadiusUpdated that arrives after a spawn finished on an
+// assumed chunk radius, so GameData reports the radius the server chose. The packet is still delivered
+// to the caller like any other packet received after login.
+func (conn *Conn) observeLateChunkRadius(pkData *packetData) {
+	if pkData.h.PacketID != packet.IDChunkRadiusUpdated || !conn.chunkRadiusAssumed.Load() {
+		return
+	}
+	pks, err := pkData.probe(conn)
+	if err != nil {
+		return
+	}
+	for _, pk := range pks {
+		if update, ok := pk.(*packet.ChunkRadiusUpdated); ok && update.ChunkRadius >= 1 {
+			conn.gameDataMu.Lock()
+			conn.gameData.ChunkRadius = update.ChunkRadius
+			conn.gameDataMu.Unlock()
+			conn.chunkRadiusAssumed.Store(false)
+			return
+		}
+	}
 }
 
 // enableEncryption enables encryption on the server side over the connection. It sends an unencrypted
