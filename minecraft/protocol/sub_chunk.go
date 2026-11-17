@@ -55,8 +55,12 @@ func (x SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (y int32,
 		return base, true, true
 	case HeightMapDataHasData:
 		if heights, ok := x.RenderHeightMapData.Value(); ok {
-			h := heights[blockZ][blockX]
-			if h >= -1 && h < 16 {
+			// -1 marks a column whose surface lies below this band, like
+			// HeightMapDataTooLow for the whole map.
+			switch h := heights[blockZ][blockX]; {
+			case h == -1:
+				return base, true, true
+			case h >= 0 && h < 16:
 				return base + int32(h) + 1, false, true
 			}
 		}
