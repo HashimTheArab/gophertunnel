@@ -7,6 +7,7 @@ func TestSubChunkEntry_SkyStart(t *testing.T) {
 	var heights HeightMap
 	heights[2][1] = 5
 	heights[0][0] = 16
+	heights[3][3] = -1
 	for _, test := range []struct {
 		name        string
 		entry       SubChunkEntry
@@ -15,6 +16,7 @@ func TestSubChunkEntry_SkyStart(t *testing.T) {
 		clamped, ok bool
 	}{
 		{"exact height", SubChunkEntry{Result: SubChunkResultSuccess, RenderHeightMapType: HeightMapDataHasData, RenderHeightMapData: Option(heights)}, 1, 2, 3*16 + 6, false, true},
+		{"column surface below band", SubChunkEntry{Result: SubChunkResultSuccess, RenderHeightMapType: HeightMapDataHasData, RenderHeightMapData: Option(heights)}, 3, 3, 3 * 16, true, true},
 		{"height above band", SubChunkEntry{Result: SubChunkResultSuccess, RenderHeightMapType: HeightMapDataHasData, RenderHeightMapData: Option(heights)}, 0, 0, 0, false, false},
 		{"surface below band", SubChunkEntry{Result: SubChunkResultSuccessAllAir, RenderHeightMapType: HeightMapDataTooLow}, 4, 4, 3 * 16, true, true},
 		{"surface above band", SubChunkEntry{Result: SubChunkResultSuccess, RenderHeightMapType: HeightMapDataTooHigh}, 4, 4, 0, false, false},
