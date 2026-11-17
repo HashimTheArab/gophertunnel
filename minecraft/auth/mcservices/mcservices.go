@@ -165,7 +165,7 @@ func fetch(ctx context.Context, client *http.Client, msToken *oauth2.Token, ep e
 
 	requestID := uuid.New()
 	var license struct {
-		Items []struct {
+		Items *[]struct { // nil when absent or null, which is malformed, not "not owned"
 			Name   string `json:"name"`
 			Source string `json:"source"`
 		} `json:"items"`
@@ -180,8 +180,11 @@ func fetch(ctx context.Context, client *http.Client, msToken *oauth2.Token, ep e
 		return nil, ErrRequestIDMismatch
 	}
 
+	if license.Items == nil {
+		return nil, fmt.Errorf("%w: license without items", ErrMalformedResponse)
+	}
 	e := &Entitlements{RequestID: license.RequestID}
-	for _, it := range license.Items {
+	for _, it := range *license.Items {
 		e.Items = append(e.Items, Item{Name: it.Name, Source: it.Source})
 	}
 	if license.Signature == "" {

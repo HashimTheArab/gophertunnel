@@ -252,6 +252,12 @@ func TestFetchErrors(t *testing.T) {
 		{"garbage signature", map[string]http.HandlerFunc{"/entitlements/license": sameID(func(id string) string {
 			return fmt.Sprintf(`{"items":[{"name":"game_minecraft"}],"signature":"a.b","requestId":%q}`, id)
 		})}, ErrMalformedResponse, 0},
+		{"license without items", map[string]http.HandlerFunc{"/entitlements/license": sameID(func(id string) string {
+			return fmt.Sprintf(`{"requestId":%q}`, id)
+		})}, ErrMalformedResponse, 0},
+		{"license null items", map[string]http.HandlerFunc{"/entitlements/license": sameID(func(id string) string {
+			return fmt.Sprintf(`{"items":null,"requestId":%q}`, id)
+		})}, ErrMalformedResponse, 0},
 		{"unsigned items", map[string]http.HandlerFunc{"/entitlements/license": sameID(func(id string) string {
 			return fmt.Sprintf(`{"items":[{"name":"game_minecraft"}],"requestId":%q}`, id)
 		})}, ErrMalformedResponse, 0},
