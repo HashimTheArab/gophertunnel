@@ -185,6 +185,9 @@ func (d *Decoder) flatCompound() (map[string]any, error) {
 			if err := d.skipTag(t); err != nil {
 				return nil, err
 			}
+			// A later tag replaces an earlier one of the same name, as in a
+			// full decode, so a skipped tag drops a value kept before it.
+			delete(values, name)
 		}
 	}
 }
