@@ -71,7 +71,7 @@ func (m RawMessage) DecodeFields(encoding Encoding, fields ...string) (map[strin
 // lists, arrays and nested compounds are validated and skipped, so an item
 // compound, for example, decodes to its identity without its tag payload.
 func (m RawMessage) DecodeFieldsFlat(encoding Encoding, fields, flat []string) (map[string]any, error) {
-	decoder := NewDecoderWithEncoding(bytes.NewBuffer(m.data), encoding)
+	decoder := newBufferDecoder(m.data, encoding)
 	decoder.AllowZero = true
 	t, _, err := decoder.tag()
 	if err != nil {
@@ -84,7 +84,9 @@ func (m RawMessage) DecodeFieldsFlat(encoding Encoding, fields, flat []string) (
 		return nil, UnexpectedTagError{Off: decoder.r.off, TagType: t}
 	}
 
-	values := make(map[string]any, len(fields))
+	values := make(map[string]any)
+	var value any
+	valueVal := reflect.ValueOf(&value).Elem()
 	decoder.depth++
 	defer func() { decoder.depth-- }()
 	for {
@@ -107,8 +109,8 @@ func (m RawMessage) DecodeFieldsFlat(encoding Encoding, fields, flat []string) (
 			continue
 		}
 		if rawMessageFieldSelected(name, fields) {
-			var value any
-			if err := decoder.unmarshalTag(reflect.ValueOf(&value).Elem(), nestedType, name); err != nil {
+			value = nil
+			if err := decoder.unmarshalTag(valueVal, nestedType, name); err != nil {
 				return nil, err
 			}
 			values[name] = value
@@ -164,6 +166,8 @@ func (d *Decoder) flatCompound() (map[string]any, error) {
 	d.depth++
 	defer func() { d.depth-- }()
 	values := make(map[string]any)
+	var value any
+	valueVal := reflect.ValueOf(&value).Elem()
 	for {
 		t, name, err := d.tag()
 		if err != nil {
@@ -176,8 +180,8 @@ func (d *Decoder) flatCompound() (map[string]any, error) {
 		case tagEnd:
 			return values, nil
 		case tagByte, tagInt16, tagInt32, tagInt64, tagFloat32, tagFloat64, tagString:
-			var value any
-			if err := d.unmarshalTag(reflect.ValueOf(&value).Elem(), t, name); err != nil {
+			value = nil
+			if err := d.unmarshalTag(valueVal, t, name); err != nil {
 				return nil, err
 			}
 			values[name] = value

@@ -86,3 +86,26 @@ func writeAll[T any](w *offsetWriter, write func(*offsetWriter, T) error, values
 	}
 	return nil
 }
+
+// The offset counts every byte read, whether the reader has its own ReadByte
+// and Next or offsetReader falls back to Read.
+func TestOffsetReader_CountsBytesRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    io.Reader
+	}{
+		{"buffer", bytes.NewBuffer([]byte{1, 2, 3, 4})},
+		{"plain reader", struct{ io.Reader }{bytes.NewReader([]byte{1, 2, 3, 4})}},
+	} {
+		r := newOffsetReader(tc.r)
+		if b, err := r.ReadByte(); err != nil || b != 1 {
+			t.Fatalf("%s: ReadByte() = %v, %v, want 1, nil", tc.name, b, err)
+		}
+		if got := r.Next(2); !bytes.Equal(got, []byte{2, 3}) {
+			t.Fatalf("%s: Next(2) = %v, want [2 3]", tc.name, got)
+		}
+		if r.off != 3 {
+			t.Fatalf("%s: offset = %d after reading 3 bytes", tc.name, r.off)
+		}
+	}
+}

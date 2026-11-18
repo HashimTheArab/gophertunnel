@@ -281,3 +281,31 @@ func TestRawMessage_DecodeFieldsFlatLastDuplicateWins(t *testing.T) {
 		})
 	}
 }
+
+// Selecting fields a message doesn't hold costs nothing: the result is sized
+// by the fields found, not by how many were asked for.
+func TestRawMessage_DecodeFieldsFlatAllocatesForFieldsFound(t *testing.T) {
+	message, err := ReadRaw(bytes.NewBuffer(encodeRawMessageFixture(t)), NetworkLittleEndian, true)
+	if err != nil {
+		t.Fatalf("ReadRaw() error = %v", err)
+	}
+	absent := make([]string, 0, 21)
+	for i := range 20 {
+		absent = append(absent, string(rune('A'+i))+"Absent")
+	}
+	bytesPerOp := func(fields []string) int64 {
+		return testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := message.DecodeFieldsFlat(NetworkLittleEndian, fields, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}).AllocedBytesPerOp()
+	}
+	one := bytesPerOp([]string{"pairx"})
+	many := bytesPerOp(append(absent, "pairx"))
+	if many != one {
+		t.Fatalf("DecodeFieldsFlat() allocated %d bytes with 20 absent fields selected, want %d as with none", many, one)
+	}
+}

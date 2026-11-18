@@ -111,12 +111,23 @@ func Unmarshal(data []byte, v any) error {
 // UnmarshalEncoding decodes a slice of NBT data into a pointer to a Go values passed using the NBT encoding
 // passed. Its functionality is identical to that of Unmarshal, except that it allows a specific encoding.
 func UnmarshalEncoding(data []byte, v any, encoding Encoding) error {
-	buf := bytes.NewBuffer(data)
-	return (&Decoder{Encoding: encoding, r: &offsetReader{
-		Reader:   buf,
-		ReadByte: buf.ReadByte,
-		Next:     buf.Next,
-	}}).Decode(v)
+	return newBufferDecoder(data, encoding).Decode(v)
+}
+
+// bufferDecoder holds a Decoder reading a byte slice together with its reader,
+// so newBufferDecoder needs one allocation for all of them.
+type bufferDecoder struct {
+	buf bytes.Buffer
+	r   offsetReader
+	d   Decoder
+}
+
+// newBufferDecoder returns a Decoder reading data with the encoding passed.
+func newBufferDecoder(data []byte, encoding Encoding) *Decoder {
+	b := &bufferDecoder{buf: *bytes.NewBuffer(data)}
+	b.r = offsetReader{Reader: &b.buf, byteReader: &b.buf, nexter: &b.buf}
+	b.d = Decoder{Encoding: encoding, r: &b.r}
+	return &b.d
 }
 
 // These types are initialised once and re-used for each Unmarshal call.

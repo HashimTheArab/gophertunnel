@@ -11,44 +11,42 @@ type offsetReader struct {
 	off int64
 	buf [8]byte
 
-	// ReadByte is a function provided by offsetReader if the io.Reader does not implement io.ByteReader.
-	ReadByte func() (byte, error)
-	// Next is a function provided by offsetReader if the io.Reader does not have a Next method.
-	Next func(n int) []byte
+	// byteReader is the io.Reader as an io.ByteReader, or nil if it is not one.
+	byteReader io.ByteReader
+	// nexter is the io.Reader if it has a Next method, or nil if it does not.
+	nexter interface{ Next(n int) []byte }
 }
 
-// newOffsetReader returns a new offset reader for the io.Reader passed, setting the ReadByte and Next
-// functions as appropriate for that particular reader.
+// newOffsetReader returns a new offset reader for the io.Reader passed, reading
+// bytes through its ReadByte and Next methods when it has them.
 func newOffsetReader(r io.Reader) *offsetReader {
 	reader := &offsetReader{Reader: r}
-	if byteReader, ok := r.(io.ByteReader); ok {
-		reader.ReadByte = func() (byte, error) {
-			reader.off++
-			return byteReader.ReadByte()
-		}
-	} else {
-		reader.ReadByte = func() (byte, error) {
-			data := make([]byte, 1)
-			_, err := io.ReadAtLeast(reader, data, 1)
-			return data[0], err
-		}
-	}
-	if r, ok := r.(interface {
-		Next(n int) []byte
-	}); ok {
-		reader.Next = func(n int) []byte {
-			data := r.Next(n)
-			reader.off += int64(len(data))
-			return data
-		}
-	} else {
-		reader.Next = func(n int) []byte {
-			data := make([]byte, n)
-			read, _ := io.ReadFull(reader, data)
-			return data[:read]
-		}
-	}
+	reader.byteReader, _ = r.(io.ByteReader)
+	reader.nexter, _ = r.(interface{ Next(n int) []byte })
 	return reader
+}
+
+// ReadByte reads one byte and increases the reader's offset by one.
+func (b *offsetReader) ReadByte() (byte, error) {
+	if b.byteReader != nil {
+		b.off++
+		return b.byteReader.ReadByte()
+	}
+	data := make([]byte, 1)
+	_, err := io.ReadAtLeast(b, data, 1)
+	return data[0], err
+}
+
+// Next reads up to n bytes and increases the reader's offset by the amount read.
+func (b *offsetReader) Next(n int) []byte {
+	if b.nexter != nil {
+		data := b.nexter.Next(n)
+		b.off += int64(len(data))
+		return data
+	}
+	data := make([]byte, n)
+	read, _ := io.ReadFull(b, data)
+	return data[:read]
 }
 
 // Read reads from the io.Reader and increases the reader's offset by exactly n.
