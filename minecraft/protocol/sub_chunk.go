@@ -39,34 +39,66 @@ type SubChunkEntry struct {
 	BlobHash Optional[uint64]
 }
 
-// SkyStart returns a conservative first block Y above the column's render
-// surface. clamped reports a surface below this band: y is then only the band's
-// bottom, and a lower boundary observed in another band is more precise. Heights
-// above the band, missing maps and copied maps cannot establish an upper bound
-// independently, and report ok false. subChunkY is absolute, and x/z are
-// coordinates within the column. Callers read every column of an entry, so it
-// takes a pointer and reads the height map in place rather than copying either.
-func (x *SubChunkEntry) SkyStart(subChunkY int32, blockX, blockZ uint8) (y int32, clamped, ok bool) {
-	if blockX >= 16 || blockZ >= 16 || (x.Result != SubChunkResultSuccess && x.Result != SubChunkResultSuccessAllAir) {
-		return 0, false, false
+// SkyBoundary is the conservative sky boundary a sub-chunk entry's render height
+// map establishes for its block columns: the first block Y above each column's
+// render surface. It reads the entry's height map in place, so it is valid only
+// while the entry is unchanged.
+type SkyBoundary struct {
+	base int16
+	// heights is nil when every column's surface lies below the band.
+	heights *HeightMap
+}
+
+// SkyBoundary returns the sky boundary the entry establishes. subChunkY is
+// absolute and must lie within the world's height. ok is false when the entry
+// establishes no column's boundary: a failed entry, a surface above the band, or
+// a missing or copied map. Callers can then skip the entry without reading any
+// column.
+func (x *SubChunkEntry) SkyBoundary(subChunkY int32) (b SkyBoundary, ok bool) {
+	if x.Result != SubChunkResultSuccess && x.Result != SubChunkResultSuccessAllAir {
+		return SkyBoundary{}, false
 	}
-	base := subChunkY * 16
 	switch x.RenderHeightMapType {
 	case HeightMapDataTooLow:
-		return base, true, true
+		return SkyBoundary{base: int16(subChunkY * 16)}, true
 	case HeightMapDataHasData:
 		if x.RenderHeightMapData.set {
-			// -1 marks a column whose surface lies below this band, like
-			// HeightMapDataTooLow for the whole map.
-			switch h := x.RenderHeightMapData.val[blockZ][blockX]; {
-			case h == -1:
-				return base, true, true
-			case h >= 0 && h < 16:
-				return base + int32(h) + 1, false, true
-			}
+			return SkyBoundary{base: int16(subChunkY * 16), heights: &x.RenderHeightMapData.val}, true
 		}
 	}
-	return 0, false, false
+	return SkyBoundary{}, false
+}
+
+// Floor reports a band above every column's surface, whose boundaries are all
+// bounded only by y, the band's bottom. A lower boundary observed in another
+// band is more precise.
+func (b SkyBoundary) Floor() (y int16, ok bool) { return b.base, b.heights == nil }
+
+// Merge folds this band's boundaries into starts, one per column indexed
+// z*16+x. A surface inside the band gives the column's exact boundary, which
+// replaces the one in starts. A surface below the band bounds the column only
+// by the band's bottom, which lowers a boundary in starts but adds no precision
+// to a lower one observed in another band. A height above the band cannot
+// establish an upper bound on its own and leaves the column unchanged.
+func (b SkyBoundary) Merge(starts *[256]int16) {
+	if b.heights == nil {
+		for i := range starts {
+			starts[i] = min(starts[i], b.base)
+		}
+		return
+	}
+	for i := range starts {
+		h, v := b.heights[i>>4][i&15], starts[i]
+		// -1 marks a column whose surface lies below this band, like
+		// HeightMapDataTooLow for the whole map.
+		if h == -1 {
+			v = min(v, b.base)
+		}
+		if uint8(h) < 16 {
+			v = b.base + int16(h) + 1
+		}
+		starts[i] = v
+	}
 }
 
 // Marshal encodes/decodes a SubChunkEntry.
