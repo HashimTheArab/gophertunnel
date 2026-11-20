@@ -44,7 +44,7 @@ func TestDialContextLogsServiceVersion(t *testing.T) {
 			PingFrequency: time.Hour,
 		}},
 		Log: slog.New(slog.NewJSONHandler(&logs, nil)),
-	}).DialContext(context.Background(), staticTokenSource{token: &service.Token{
+	}).DialContext(context.Background(), fixedTokenSource{token: &service.Token{
 		AuthorizationHeader: "test-token",
 		Claims: service.Claims{
 			PlayerMessagingID: uuid.New(),
@@ -76,14 +76,6 @@ type staticConfigurationProvider struct {
 
 func (p staticConfigurationProvider) Configuration(context.Context, *http.Client, service.TokenSource) (*Configuration, error) {
 	return p.configuration, nil
-}
-
-type staticTokenSource struct {
-	token *service.Token
-}
-
-func (s staticTokenSource) ServiceToken(context.Context) (*service.Token, error) {
-	return s.token, nil
 }
 
 // TURN credentials are requested as soon as the Conn connects, before any dial asks for them.
@@ -119,7 +111,7 @@ func TestDialContextRequestsCredentialsOnConnect(t *testing.T) {
 			PingFrequency: time.Hour,
 		}},
 		Log: slog.New(slog.DiscardHandler),
-	}).DialContext(context.Background(), staticTokenSource{token: &service.Token{
+	}).DialContext(context.Background(), fixedTokenSource{token: &service.Token{
 		AuthorizationHeader: "test-token",
 		Claims:              service.Claims{PlayerMessagingID: uuid.New()},
 	}})
