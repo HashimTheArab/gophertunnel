@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4/jwt"
 )
 
@@ -234,4 +235,12 @@ func readAuthJSON(t *testing.T, encoded []byte) string {
 		t.Fatalf("read auth JSON length: %v", err)
 	}
 	return string(buf.Next(int(chainLength)))
+}
+
+// A nil *oidc.IDTokenVerifier skips verification.
+func TestNilIDTokenVerifierSkipsVerification(t *testing.T) {
+	var v *oidc.IDTokenVerifier
+	if got := nilVerifier(v); got != nil {
+		t.Fatalf("nilVerifier(nil *oidc.IDTokenVerifier) = %v, want nil", got)
+	}
 }

@@ -19,7 +19,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/df-mc/go-nethernet/endpoint"
 	"github.com/df-mc/go-playfab/v2"
 	"github.com/df-mc/go-xsapi/v2"
@@ -268,7 +267,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 	var (
 		token            string
 		identityProvider string
-		verifier         *oidc.IDTokenVerifier
+		verifier         login.TokenVerifier
 	)
 	if d.PlayFabClient != nil && d.TokenSource == nil && d.XBLClient == nil {
 		return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: errors.New("PlayFabClient requires XBLClient or TokenSource for authenticated login")}
@@ -278,11 +277,6 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		e, err := authEnv(ctx)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("request authorization environment: %w", err)}
-		}
-		identityProvider = netherNetIdentityProvider(e.Issuer)
-		verifier, err = e.VerifierContext(ctx)
-		if err != nil {
-			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: fmt.Errorf("create OIDC verifier: %w", err)}
 		}
 
 		m, ok := d.TokenSource.(MultiplayerTokenSource)
@@ -320,11 +314,19 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
+		verifier = authVerifier{client: d.HTTPClient}
 		identityData, err := login.ParseTokenIdentityData(ctx, token, verifier)
 		if err != nil {
 			return nil, &net.OpError{Op: "dial", Net: "minecraft", Err: err}
 		}
 		d.IdentityData = identityData
+		// The NetherNet identity names the issuer the token was verified against, which may not be e's when
+		// a caller's token source is on an issuer discovery has moved on from.
+		issuer := e.Issuer
+		if u, err := url.Parse(tokenIssuer(token)); err == nil && u.Host != "" {
+			issuer = u
+		}
+		identityProvider = netherNetIdentityProvider(issuer)
 	}
 
 	// A network that picks its transport per address picks it now, so the login can name the server

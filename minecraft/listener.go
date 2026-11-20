@@ -11,13 +11,19 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/sandertv/gophertunnel/minecraft/auth"
+	"github.com/sandertv/gophertunnel/minecraft/auth/authclient"
 	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/login"
@@ -216,10 +222,9 @@ type Listener struct {
 	close    chan struct{}
 
 	key *ecdsa.PrivateKey
-	// verifier is used to verify the OpenID token issued by the authorization service
-	// for authenticating incoming connections. It will be nil if authentication is
+	// verifier verifies the multiplayer tokens of incoming connections. It is nil if authentication is
 	// disabled on ListenConfig.
-	verifier *oidc.IDTokenVerifier
+	verifier login.TokenVerifier
 }
 
 // ListenerGroup shares the active player count between listeners serving one logical server.
@@ -304,17 +309,16 @@ func (cfg ListenConfig) ListenNetwork(network Network, address string) (*Listene
 		cfg.CompressionThreshold = 0
 	}
 
-	var verifier *oidc.IDTokenVerifier
+	var verifier login.TokenVerifier
 	if !cfg.AuthenticationDisabled {
-		var err error
 		ctx := context.Background()
 		if cfg.HTTPClient != nil {
 			ctx = context.WithValue(ctx, oauth2.HTTPClient, cfg.HTTPClient)
 		}
-		verifier, err = oidcVerifier(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("create default OIDC verifier: %w", err)
+		if err := warmAuthVerifier(ctx); err != nil {
+			return nil, fmt.Errorf("load OIDC verifier: %w", err)
 		}
+		verifier = authVerifier{client: cfg.HTTPClient}
 	}
 
 	netListener, err := network.Listen(address)
@@ -353,55 +357,239 @@ func Listen(network, address string) (*Listener, error) {
 	return lc.Listen(network, address)
 }
 
-// authEnvCache holds authorization environment used to issue or verify
-// the multiplayer token for OpenID authentication. It is cached by authEnv.
-var (
-	authEnvCache   *service.AuthorizationEnvironment
-	authEnvCacheMu sync.Mutex
-)
+// authEnvState is the authorization environment authEnv maintains.
+type authEnvState struct {
+	sync.Mutex
+	env       *service.AuthorizationEnvironment
+	prev      *service.AuthorizationEnvironment // the environment the last swap replaced
+	prevUntil time.Time                         // until when tokens from prev are still accepted
+	seen      *service.Discovery                // the latest Discovery authEnv decoded
+	want      *service.AuthorizationEnvironment // the environment seen describes, once loaded
+	pending   bool                              // want is being preloaded
+	retryAt   time.Time                         // when a failed preload may be tried again
+}
 
-// authEnv returns the authorization environment that can be used for issuing
-// or verifying the multiplayer token for OpenID authentication.
-// This method is only called once and cached globally which means it will
-// use the HTTP client from the first caller's context (oauth2.HTTPClient).
+// authState is the process-wide authorization environment.
+var authState authEnvState
+
+// authPrevGrace is how long after a swap tokens from the replaced issuer are still accepted, for clients
+// and token sources that discovered before it.
+const authPrevGrace = 24 * time.Hour
+
+// authEnvRetry is how long a changed environment whose verifier failed to load waits before another try.
+const authEnvRetry = 5 * time.Minute
+
+// authEnvDiscover returns the current Discovery; tests replace it.
+var authEnvDiscover = service.Default
+
+// authEnv returns the authorization environment for issuing and verifying multiplayer tokens, using the
+// HTTP client (oauth2.HTTPClient) of the first caller's context. It follows discovery, swapping to a
+// changed service or issuer once that one's verifier is ready.
 func authEnv(ctx context.Context) (*service.AuthorizationEnvironment, error) {
-	authEnvCacheMu.Lock()
-	defer authEnvCacheMu.Unlock()
-	if authEnvCache != nil {
-		return authEnvCache, nil
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	discovery, err := service.Default(ctx)
+	discovery, err := authEnvDiscover(ctx)
+	authState.Lock()
+	cached, seen := authState.env, authState.seen
+	if cached != nil && (err != nil || discovery == seen) {
+		authState.preloadLocked()
+		authState.Unlock()
+		return cached, nil
+	}
+	authState.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("discover service endpoints: %w", err)
 	}
 	e := new(service.AuthorizationEnvironment)
-	if err := discovery.Environment(e); err != nil {
-		return nil, fmt.Errorf("decode environment for auth: %w", err)
+	if err = discovery.Environment(e); err != nil {
+		authState.Lock()
+		defer authState.Unlock()
+		if authState.env == nil {
+			return nil, fmt.Errorf("decode environment for auth: %w", err)
+		}
+		if newerDiscovery(discovery, authState.seen) {
+			// Decoded once, so later calls take the fast path; it describes no environment to swap to.
+			authState.seen, authState.want = discovery, nil
+		}
+		return authState.env, nil
 	}
-	if client, _ := ctx.Value(oauth2.HTTPClient).(*http.Client); client != nil {
-		e.HTTPClient = client
+
+	authState.Lock()
+	defer authState.Unlock()
+	// A caller holding an older Discovery than one already seen must not roll the state back.
+	if newerDiscovery(discovery, authState.seen) {
+		authState.seen = discovery
+		switch {
+		case authState.env == nil:
+			e.HTTPClient, _ = ctx.Value(oauth2.HTTPClient).(*http.Client)
+			authState.env = e
+		case sameAuthorization(authState.env, e):
+			authState.want = nil
+		case authState.want == nil || !sameAuthorization(authState.want, e):
+			e.HTTPClient = authState.env.HTTPClient
+			authState.want, authState.retryAt = e, time.Time{}
+		}
 	}
-	authEnvCache = e
-	return e, nil
+	authState.preloadLocked()
+	return authState.env, nil
 }
 
-// oidcVerifier returns the OpenID token verifier that could be used for
-// authenticating new multiplayer tokens issued by the authorization service
-// of Minecraft.
-func oidcVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
+// preloadLocked starts loading the environment discovery now describes, unless one is loading or a failed
+// attempt is backing off. s must be locked.
+func (s *authEnvState) preloadLocked() {
+	if s.want == nil || s.pending || time.Now().Before(s.retryAt) {
+		return
+	}
+	s.pending = true
+	go s.preload(s.want)
+}
+
+// preload makes e the authorization environment once its verifier and signing keys are loaded,
+// unless discovery has moved on from e meanwhile.
+func (s *authEnvState) preload(e *service.AuthorizationEnvironment) {
+	// Nothing waits on the preload, so it outlasts its configuration and key requests rather than
+	// discarding them.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*authclient.DefaultCallTimeout)
+	defer cancel()
+	err := e.PreloadVerifier(ctx)
+
+	s.Lock()
+	defer s.Unlock()
+	s.pending = false
+	switch {
+	case s.want != e:
+		s.preloadLocked() // load what discovery describes now
+	case err != nil:
+		s.retryAt = time.Now().Add(authEnvRetry)
+		// The retry starts from a fresh environment, which reads the OpenID configuration again.
+		if fresh := new(service.AuthorizationEnvironment); s.seen.Environment(fresh) == nil && sameAuthorization(fresh, e) {
+			fresh.HTTPClient = e.HTTPClient
+			s.want = fresh
+		}
+		slog.Warn("minecraft: authorization service changed, keeping the previous one",
+			slog.String("issuer", urlString(e.Issuer)), slog.Any("error", err))
+	default:
+		if !sameIssuer(urlString(e.Issuer), s.env.Issuer) {
+			// Only a new issuer leaves clients on the replaced one; a configuration change keeps its grace.
+			s.prev, s.prevUntil = s.env, time.Now().Add(authPrevGrace)
+		}
+		s.env, s.want = e, nil
+	}
+}
+
+// newerDiscovery reports whether d is a different Discovery fetched no earlier than seen.
+func newerDiscovery(d, seen *service.Discovery) bool {
+	return d != seen && (seen == nil || !d.Fetched.Before(seen.Fetched))
+}
+
+// authVerifier verifies a multiplayer token against the trusted authorization environment that issued it,
+// following discovery: the current one, one being loaded, or the one the last swap replaced.
+type authVerifier struct {
+	client *http.Client // the Dialer's or Listener's client, else the one the environment was built with
+}
+
+// Verify implements [login.TokenVerifier].
+func (v authVerifier) Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+	client := v.client
+	if client == nil {
+		authState.Lock()
+		if authState.env != nil {
+			client = authState.env.HTTPClient
+		}
+		authState.Unlock()
+	}
+	// login.Parse passes a context without a deadline; loading a new issuer must not hang the login.
+	ctx, cancel := context.WithTimeout(auth.WithContextClient(ctx, client), 15*time.Second)
+	defer cancel()
+	if _, err := authEnv(ctx); err != nil {
+		return nil, err
+	}
+	e, ok := issuingAuthEnv(rawIDToken)
+	if !ok {
+		return nil, errors.New("minecraft: no authorization environment")
+	}
+	verifier, err := e.VerifierContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("obtain verifier: %w", err)
+	}
+	return verifier.Verify(ctx, rawIDToken)
+}
+
+// issuingAuthEnv returns the trusted authorization environment whose issuer issued token, or the current
+// one if none did.
+func issuingAuthEnv(token string) (*service.AuthorizationEnvironment, bool) {
+	iss := tokenIssuer(token)
+	authState.Lock()
+	defer authState.Unlock()
+	trusted := []*service.AuthorizationEnvironment{authState.env}
+	if time.Now().After(authState.retryAt) {
+		trusted = append(trusted, authState.want) // not while a failed load backs off
+	}
+	if time.Now().Before(authState.prevUntil) {
+		trusted = append(trusted, authState.prev)
+	} else {
+		authState.prev = nil // its grace is over
+	}
+	for _, e := range trusted {
+		if e != nil && iss != "" && sameIssuer(iss, e.Issuer) {
+			return e, true
+		}
+	}
+	return authState.env, authState.env != nil
+}
+
+// tokenAlgorithms are the asymmetric algorithms an issuer may sign multiplayer tokens with. Reading a token's
+// issuer verifies nothing, so it accepts any of them; the issuer's verifier checks the signature.
+var tokenAlgorithms = []jose.SignatureAlgorithm{
+	jose.RS256, jose.RS384, jose.RS512, jose.PS256, jose.PS384, jose.PS512,
+	jose.ES256, jose.ES384, jose.ES512, jose.EdDSA,
+}
+
+// tokenIssuer returns the unverified iss claim of a multiplayer token, or "" if it cannot be read.
+func tokenIssuer(token string) string {
+	tok, err := jwt.ParseSigned(token, tokenAlgorithms)
+	if err != nil {
+		return ""
+	}
+	var claims jwt.Claims
+	if tok.UnsafeClaimsWithoutVerification(&claims) != nil {
+		return ""
+	}
+	return claims.Issuer
+}
+
+// sameIssuer reports whether iss names issuer, ignoring a trailing slash.
+func sameIssuer(iss string, issuer *url.URL) bool {
+	return issuer != nil && strings.TrimSuffix(iss, "/") == strings.TrimSuffix(issuer.String(), "/")
+}
+
+// sameAuthorization reports whether a and b name the same authorization service, issuer and PlayFab titles.
+func sameAuthorization(a, b *service.AuthorizationEnvironment) bool {
+	return urlString(a.ServiceURI) == urlString(b.ServiceURI) && urlString(a.Issuer) == urlString(b.Issuer) &&
+		a.PlayFabTitleID == b.PlayFabTitleID && a.EduPlayFabTitleID == b.EduPlayFabTitleID
+}
+
+// urlString returns u as a string, or "" if u is nil.
+func urlString(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
+}
+
+// warmAuthVerifier caches the authorization environment and its multiplayer token verifier, so a Listener
+// starts only once logins can be verified.
+func warmAuthVerifier(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	e, err := authEnv(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("obtain environment for authorization: %w", err)
+		return fmt.Errorf("obtain environment for authorization: %w", err)
 	}
-	// Verifier already caches the *oidc.IDTokenVerifier so we don't need to cache it here.
-	return e.VerifierContext(ctx)
+	_, err = e.VerifierContext(ctx)
+	return err
 }
 
 // PreloadAuthEnvironment resolves and caches the authorization environment used for issuing and verifying
