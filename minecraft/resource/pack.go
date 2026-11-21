@@ -499,6 +499,13 @@ func compileZipPath(p string) (*Pack, error) {
 	}, nil
 }
 
+// maxManifestSize bounds manifest.json, which is a few KiB in real packs.
+const maxManifestSize = 1 << 20
+
+// maxNestedSize bounds an unwrapped nested pack. Its content is already compressed, so it barely
+// shrinks in the outer archive; a far larger declared size is a decompression bomb.
+func maxNestedSize(outer int) uint64 { return 4*uint64(outer) + 1<<20 }
+
 // compile compiles the resource pack from the bytes passed, either a zip archive or a directory, and returns a
 // resource pack if successful.
 func compile(data []byte, unwrapNested bool) (*Pack, error) {
@@ -510,15 +517,20 @@ func compile(data []byte, unwrapNested bool) (*Pack, error) {
 	// Check if this is a nested zip (only contains a single .zip file)
 	// We only unwrap one level to avoid recursive nesting issues
 	if unwrapNested && len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
-		nestedFile, err := zr.File[0].Open()
+		nested := zr.File[0]
+		// archive/zip fails a read past the declared size, so checking it bounds the read.
+		if limit := maxNestedSize(len(data)); nested.UncompressedSize64 > limit {
+			return nil, fmt.Errorf("nested zip %s: %d bytes exceeds limit %d", nested.Name, nested.UncompressedSize64, limit)
+		}
+		nestedFile, err := nested.Open()
 		if err != nil {
-			return nil, fmt.Errorf("open nested zip %s: %w", zr.File[0].Name, err)
+			return nil, fmt.Errorf("open nested zip %s: %w", nested.Name, err)
 		}
 		defer nestedFile.Close()
 
 		nestedData, err := io.ReadAll(nestedFile)
 		if err != nil {
-			return nil, fmt.Errorf("read nested zip %s: %w", zr.File[0].Name, err)
+			return nil, fmt.Errorf("read nested zip %s: %w", nested.Name, err)
 		}
 
 		// Replace data with the unwrapped nested zip and re-open it
@@ -685,10 +697,12 @@ func readManifest(pr packReader) (*Manifest, string, error) {
 	}
 	defer manifestFile.Close()
 
-	// Read all data from the manifest file so that we can decode it into a Manifest struct.
-	allData, err := io.ReadAll(manifestFile)
+	allData, err := io.ReadAll(io.LimitReader(manifestFile, maxManifestSize+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("read manifest file: %w", err)
+	}
+	if len(allData) > maxManifestSize {
+		return nil, "", fmt.Errorf("manifest file exceeds %d bytes", maxManifestSize)
 	}
 	manifest := &Manifest{}
 	if err := jsonc.UnmarshalLenient(allData, manifest); err != nil {
