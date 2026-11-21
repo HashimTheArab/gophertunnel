@@ -62,7 +62,16 @@ func ReadPath(path string) (*Pack, error) {
 }
 
 func ReadBytes(data []byte) (*Pack, error) {
-	return compile(data, true)
+	return compile(data, maxNestedPackSize)
+}
+
+// ReadBytesLimit is ReadBytes for a pack of at most maxSize bytes, both as passed and once a nested
+// pack is unwrapped.
+func ReadBytesLimit(data []byte, maxSize uint64) (*Pack, error) {
+	if uint64(len(data)) > maxSize {
+		return nil, fmt.Errorf("resource pack: %d bytes exceeds limit %d", len(data), maxSize)
+	}
+	return compile(data, maxSize)
 }
 
 type progressReader struct {
@@ -144,7 +153,7 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 	if maxSize > 0 && int64(len(data)) > maxSize {
 		return nil, fmt.Errorf("download resource pack: response size exceeds limit %d", maxSize)
 	}
-	pack, err := compile(data, false)
+	pack, err := compile(data, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +202,7 @@ func Read(r io.Reader) (*Pack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read resource pack: %w", err)
 	}
-	return compile(data, true)
+	return compile(data, maxNestedPackSize)
 }
 
 // Name returns the name of the resource pack.
@@ -502,13 +511,12 @@ func compileZipPath(p string) (*Pack, error) {
 // maxManifestSize bounds manifest.json, which is a few KiB in real packs.
 const maxManifestSize = 1 << 20
 
-// maxNestedSize bounds an unwrapped nested pack. Its content is already compressed, so it barely
-// shrinks in the outer archive; a far larger declared size is a decompression bomb.
-func maxNestedSize(outer int) uint64 { return 4*uint64(outer) + 1<<20 }
+// maxNestedPackSize bounds the nested pack Read and ReadBytes unwrap; real packs stay far below it.
+const maxNestedPackSize = 1 << 30
 
 // compile compiles the resource pack from the bytes passed, either a zip archive or a directory, and returns a
-// resource pack if successful.
-func compile(data []byte, unwrapNested bool) (*Pack, error) {
+// resource pack if successful. A lone nested pack of at most maxNested bytes is unwrapped; 0 unwraps none.
+func compile(data []byte, maxNested uint64) (*Pack, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
@@ -516,11 +524,11 @@ func compile(data []byte, unwrapNested bool) (*Pack, error) {
 
 	// Check if this is a nested zip (only contains a single .zip file)
 	// We only unwrap one level to avoid recursive nesting issues
-	if unwrapNested && len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
+	if maxNested > 0 && len(zr.File) == 1 && strings.HasSuffix(strings.ToLower(zr.File[0].Name), ".zip") {
 		nested := zr.File[0]
 		// archive/zip fails a read past the declared size, so checking it bounds the read.
-		if limit := maxNestedSize(len(data)); nested.UncompressedSize64 > limit {
-			return nil, fmt.Errorf("nested zip %s: %d bytes exceeds limit %d", nested.Name, nested.UncompressedSize64, limit)
+		if nested.UncompressedSize64 > maxNested {
+			return nil, fmt.Errorf("nested zip %s: %d bytes exceeds limit %d", nested.Name, nested.UncompressedSize64, maxNested)
 		}
 		nestedFile, err := nested.Open()
 		if err != nil {

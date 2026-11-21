@@ -278,7 +278,7 @@ func TestReadBytesSkipsNonRegularManifest(t *testing.T) {
 	}
 }
 
-// TestReadBytesBoundsDecompression refuses a nested pack or manifest whose declared size would expand far past its archive.
+// TestReadBytesBoundsDecompression refuses a nested pack or manifest declared past its byte limit, however well it compresses.
 func TestReadBytesBoundsDecompression(t *testing.T) {
 	t.Parallel()
 
@@ -298,10 +298,6 @@ func TestReadBytesBoundsDecompression(t *testing.T) {
 		return buf.Bytes()
 	}
 
-	if _, err := ReadBytes(nest(testPackArchive(t))); err != nil {
-		t.Fatalf("ReadBytes(nested pack) = %v, want success", err)
-	}
-
 	// Stored, not deflated, so the 8 MiB inner pack shrinks to a few KiB in the outer archive.
 	inner := new(bytes.Buffer)
 	zw := zip.NewWriter(inner)
@@ -317,9 +313,19 @@ func TestReadBytesBoundsDecompression(t *testing.T) {
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	padded := inner.Bytes()
-	if _, err := ReadBytes(nest(padded)); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
-		t.Fatalf("ReadBytes(nested bomb) error = %v, want size limit error", err)
+	stored := nest(inner.Bytes())
+
+	if _, err := ReadBytes(stored); err != nil {
+		t.Fatalf("ReadBytes(well-compressed nested pack) = %v, want success", err)
+	}
+	if _, err := ReadBytesLimit(stored, 16<<20); err != nil {
+		t.Fatalf("ReadBytesLimit(nested pack under limit) = %v, want success", err)
+	}
+	if _, err := ReadBytesLimit(stored, 4<<20); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadBytesLimit(nested pack over limit) error = %v, want size limit error", err)
+	}
+	if _, err := ReadBytesLimit(stored, uint64(len(stored))-1); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadBytesLimit(archive over limit) error = %v, want size limit error", err)
 	}
 
 	bigManifest := packArchive(t, map[string]string{"manifest.json": testManifest + strings.Repeat(" ", maxManifestSize)})
