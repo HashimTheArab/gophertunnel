@@ -546,14 +546,10 @@ func compile(data []byte, maxNested uint64) (*Pack, error) {
 		}
 		defer nestedFile.Close()
 
-		// Sized to the checked declaration, so the read never grows past it.
-		nestedData := make([]byte, nested.UncompressedSize64)
-		if _, err := io.ReadFull(nestedFile, nestedData); err != nil {
+		// Grows with the bytes actually decoded, so a truncated archive can't claim the limit up front.
+		nestedData, err := io.ReadAll(nestedFile)
+		if err != nil {
 			return nil, fmt.Errorf("read nested zip %s: %w", nested.Name, err)
-		}
-		// The checksum is verified at EOF, and a read past the declared size fails.
-		if n, err := nestedFile.Read(make([]byte, 1)); n != 0 || err != io.EOF {
-			return nil, fmt.Errorf("read nested zip %s: data past declared size or bad checksum: %v", nested.Name, err)
 		}
 
 		// Replace data with the unwrapped nested zip and re-open it
