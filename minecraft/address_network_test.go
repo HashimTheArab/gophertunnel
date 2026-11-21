@@ -1187,6 +1187,117 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 	}
 }
 
+// NetherNetHTTP with Probes asks only the endpoint it remembers for an address, ignoring a
+// remembered RakNet answer.
+func TestNetherNetHTTPReusesRememberedEndpoint(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
+	t.Cleanup(server.Close)
+	address := closedTCPAddress(t)
+	key := defaultProbeKey(address)
+	cache := &ProbeCache{}
+	cache.store(key, server.URL, true)
+
+	selected, err := NetherNetHTTP{Probes: cache}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the remembered %q", n.URL, server.URL)
+	}
+
+	direct := server.Listener.Addr().String()
+	directKey := defaultProbeKey(direct)
+	cache.store(directKey, "", false)
+	if selected, err = (NetherNetHTTP{Probes: cache}).Select(t.Context(), direct); err != nil {
+		t.Fatalf("Select with a remembered RakNet answer: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
+	}
+	if entry := cache.lookup(directKey); entry == nil || entry.endpoint != server.URL {
+		t.Fatalf("remembered answer = %#v, want the probed endpoint", entry)
+	}
+}
+
+// A failed NetherNetHTTP dial forgets the endpoint, and a server nothing answers for is never
+// remembered and fails with ErrNoNetherNetEndpoint.
+func TestNetherNetHTTPRemembersOnlyWorkingEndpoints(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			answerStatus(w)
+			return
+		}
+		http.Error(w, "no session", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	cache := &ProbeCache{}
+	network := NetherNetHTTP{Probes: cache, NetherNet: openNetherNet}
+	address := server.Listener.Addr().String()
+	key := defaultProbeKey(address)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if conn, err := network.DialContext(ctx, address); err == nil {
+		_ = conn.Close()
+		t.Fatal("dial succeeded, want the signaling failure")
+	}
+	if entry := cache.lookup(key); entry != nil {
+		t.Fatalf("failed dial kept %#v, want the endpoint forgotten", entry)
+	}
+
+	missing := closedTCPAddress(t)
+	_, err := (Dialer{}).DialContextNetwork(ctx, network, missing)
+	if !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("dial error = %v, want ErrNoNetherNetEndpoint", err)
+	}
+	if entry := cache.lookup(defaultProbeKey(missing)); entry != nil {
+		t.Fatalf("server without an endpoint remembered as %#v", entry)
+	}
+}
+
+// Status reads the status from the probe answer, by address or by URL, and names a server without
+// an endpoint or without a status.
+func TestNetherNetHTTPStatus(t *testing.T) {
+	t.Parallel()
+	const body = `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":1}`
+	want := endpoint.Status{ServerName: "Unstable world", Protocol: 2225, Version: "1.26.60", LevelName: "2", PlayerCount: 4, MaxPlayerCount: 50, GameType: endpoint.GameTypeCreative}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+	t.Cleanup(server.Close)
+	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(empty.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	cache := &ProbeCache{}
+	address := server.Listener.Addr().String()
+	if got, err := (NetherNetHTTP{Probes: cache}).Status(ctx, address); err != nil || got != want {
+		t.Fatalf("Status by address = %+v, %v; want %+v", got, err, want)
+	}
+	if entry := cache.lookup(defaultProbeKey(address)); entry == nil || entry.endpoint != server.URL {
+		t.Fatalf("remembered answer = %#v, want %q kept for the join", entry, server.URL)
+	}
+	if got, err := (NetherNetHTTP{URL: server.URL}).Status(ctx, "unused:1"); err != nil || got != want {
+		t.Fatalf("Status by URL = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := (NetherNetHTTP{}).Status(ctx, closedTCPAddress(t)); !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a server without an endpoint = %v, want ErrNoNetherNetEndpoint", err)
+	}
+	if _, err := (NetherNetHTTP{URL: "http://" + closedTCPAddress(t)}).Status(ctx, ""); !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a URL that does not answer = %v, want ErrNoNetherNetEndpoint", err)
+	}
+	if _, err := (NetherNetHTTP{}).Status(ctx, empty.Listener.Addr().String()); !errors.Is(err, errNoStatus) {
+		t.Fatalf("Status of an endpoint without a status = %v, want errNoStatus", err)
+	}
+}
+
+// defaultProbeKey returns the key a probe of address with the default client info is remembered by.
+func defaultProbeKey(address string) probeKey {
+	host, port := splitServerAddress(address)
+	return rememberedChoice(nil, host, port, defaultProbeClientInfo()).key
+}
+
 // rakNetPongServer returns the address of a RakNet listener that answers pings with pong.
 func rakNetPongServer(t *testing.T, pong string) string {
 	t.Helper()
