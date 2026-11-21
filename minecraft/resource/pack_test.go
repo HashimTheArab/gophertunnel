@@ -327,6 +327,15 @@ func TestReadBytesBoundsDecompression(t *testing.T) {
 	if _, err := ReadBytesLimit(stored, uint64(len(stored))-1); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("ReadBytesLimit(archive over limit) error = %v, want size limit error", err)
 	}
+	if _, err := ReadLimit(bytes.NewReader(stored), 16<<20); err != nil {
+		t.Fatalf("ReadLimit(nested pack under limit) = %v, want success", err)
+	}
+	if _, err := ReadLimit(bytes.NewReader(stored), 4<<20); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadLimit(nested pack over limit) error = %v, want size limit error", err)
+	}
+	if _, err := ReadLimit(bytes.NewReader(stored), uint64(len(stored))-1); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadLimit(archive over limit) error = %v, want size limit error", err)
+	}
 
 	bigManifest := packArchive(t, map[string]string{"manifest.json": testManifest + strings.Repeat(" ", maxManifestSize)})
 	if _, err := ReadBytes(bigManifest); err == nil || !strings.Contains(err.Error(), "manifest file exceeds") {

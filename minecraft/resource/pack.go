@@ -205,6 +205,16 @@ func Read(r io.Reader) (*Pack, error) {
 	return compile(data, maxNestedPackSize)
 }
 
+// ReadLimit is Read for a pack of at most maxSize bytes, both as read and once a nested pack is
+// unwrapped.
+func ReadLimit(r io.Reader, maxSize uint64) (*Pack, error) {
+	data, err := io.ReadAll(io.LimitReader(r, int64(min(maxSize, math.MaxInt64-1))+1))
+	if err != nil {
+		return nil, fmt.Errorf("read resource pack: %w", err)
+	}
+	return ReadBytesLimit(data, maxSize)
+}
+
 // Name returns the name of the resource pack.
 func (pack *Pack) Name() string {
 	return pack.manifest.Header.Name
@@ -536,9 +546,14 @@ func compile(data []byte, maxNested uint64) (*Pack, error) {
 		}
 		defer nestedFile.Close()
 
-		nestedData, err := io.ReadAll(nestedFile)
-		if err != nil {
+		// Sized to the checked declaration, so the read never grows past it.
+		nestedData := make([]byte, nested.UncompressedSize64)
+		if _, err := io.ReadFull(nestedFile, nestedData); err != nil {
 			return nil, fmt.Errorf("read nested zip %s: %w", nested.Name, err)
+		}
+		// The checksum is verified at EOF, and a read past the declared size fails.
+		if n, err := nestedFile.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+			return nil, fmt.Errorf("read nested zip %s: data past declared size or bad checksum: %v", nested.Name, err)
 		}
 
 		// Replace data with the unwrapped nested zip and re-open it
