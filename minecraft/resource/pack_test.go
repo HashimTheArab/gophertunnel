@@ -277,3 +277,68 @@ func TestReadBytesSkipsNonRegularManifest(t *testing.T) {
 		t.Fatalf("UUID = %s, want %s", got, want)
 	}
 }
+
+// TestReadBytesBoundsDecompression refuses a nested pack or manifest declared past its byte limit, however well it compresses.
+func TestReadBytesBoundsDecompression(t *testing.T) {
+	t.Parallel()
+
+	nest := func(inner []byte) []byte {
+		buf := new(bytes.Buffer)
+		zw := zip.NewWriter(buf)
+		w, err := zw.Create("pack.zip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(inner); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+
+	// Stored, not deflated, so the 8 MiB inner pack shrinks to a few KiB in the outer archive.
+	inner := new(bytes.Buffer)
+	zw := zip.NewWriter(inner)
+	for name, content := range map[string]string{"manifest.json": testManifest, "pad.bin": strings.Repeat("\x00", 8<<20)} {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stored := nest(inner.Bytes())
+
+	if _, err := ReadBytes(stored); err != nil {
+		t.Fatalf("ReadBytes(well-compressed nested pack) = %v, want success", err)
+	}
+	if _, err := ReadBytesLimit(stored, 16<<20); err != nil {
+		t.Fatalf("ReadBytesLimit(nested pack under limit) = %v, want success", err)
+	}
+	if _, err := ReadBytesLimit(stored, 4<<20); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadBytesLimit(nested pack over limit) error = %v, want size limit error", err)
+	}
+	if _, err := ReadBytesLimit(stored, uint64(len(stored))-1); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadBytesLimit(archive over limit) error = %v, want size limit error", err)
+	}
+	if _, err := ReadLimit(bytes.NewReader(stored), 16<<20); err != nil {
+		t.Fatalf("ReadLimit(nested pack under limit) = %v, want success", err)
+	}
+	if _, err := ReadLimit(bytes.NewReader(stored), 4<<20); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadLimit(nested pack over limit) error = %v, want size limit error", err)
+	}
+	if _, err := ReadLimit(bytes.NewReader(stored), uint64(len(stored))-1); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("ReadLimit(archive over limit) error = %v, want size limit error", err)
+	}
+
+	bigManifest := packArchive(t, map[string]string{"manifest.json": testManifest + strings.Repeat(" ", maxManifestSize)})
+	if _, err := ReadBytes(bigManifest); err == nil || !strings.Contains(err.Error(), "manifest file exceeds") {
+		t.Fatalf("ReadBytes(large manifest) error = %v, want manifest limit error", err)
+	}
+}
