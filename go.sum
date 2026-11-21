@@ -30,8 +30,8 @@ github.com/hashimthearab/go-nethernet v0.0.0-20261111133013-1a61b926deac h1:oZEo
 github.com/hashimthearab/go-nethernet v0.0.0-20261111133013-1a61b926deac/go.mod h1:i7ARmxFlDs8EYEYOmtFplsZo0v059C+bsGVFrScxY08=
 github.com/hashimthearab/go-raknet v1.15.1-0.20261108113906-d4f2a990a702 h1:iXA/TjdMo+4vx3mLNQEOoXsR02id74k6aavfpSbWLX0=
 github.com/hashimthearab/go-raknet v1.15.1-0.20261108113906-d4f2a990a702/go.mod h1:/yysjwfCXm2+2OY8mBazLzcxJ3irnylKCyG3FLgUPVU=
-github.com/klauspost/compress v1.18.1 h1:bcSGx7UbpBqMChDtsF28Lw6v/G94LPrrbMbdC3JH2co=
-github.com/klauspost/compress v1.18.1/go.mod h1:ZQFFVG+MdnR0P+l6wpXgIL4NTtwiKIdBnrBd8Nrxr+0=
+github.com/klauspost/compress v1.20.5 h1:rJj5VjH4xQxbnLphg6eqUcDxRFCw1jpMdDY9qXlrwSs=
+github.com/klauspost/compress v1.20.5/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
 github.com/pelletier/go-toml v1.9.5/go.mod h1:u1nR/EPcESfeI/szUZKdtJ0xRNbUoANCkoOuaOx1Y+c=
 github.com/pion/datachannel v1.6.3 h1:HZAYLpunVI0xi057ZiANl558d0uSpomcWw4UEPz3qXs=
