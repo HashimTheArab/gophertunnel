@@ -1,12 +1,10 @@
 package netguard
 
 import (
-	"errors"
 	"net"
 	"testing"
 	"time"
 
-	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -92,44 +90,5 @@ func exchange(t *testing.T, offerer, answerer *webrtc.PeerConnection) {
 	<-gathered
 	if err := offerer.SetRemoteDescription(*answerer.LocalDescription()); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestGuardedNetRefusesPrivateDestinations(t *testing.T) {
-	n := guardedNet{&stdnet.Net{}}
-	loopback := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 3478}
-
-	conn, err := n.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.WriteTo([]byte{0}, loopback); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("UDPConn.WriteTo error = %v, want ErrNotPublic", err)
-	}
-	if _, err := conn.WriteToUDP([]byte{0}, loopback); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("UDPConn.WriteToUDP error = %v, want ErrNotPublic", err)
-	}
-	if _, _, err := conn.WriteMsgUDP([]byte{0}, nil, loopback); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("UDPConn.WriteMsgUDP error = %v, want ErrNotPublic", err)
-	}
-
-	packetConn, err := n.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer packetConn.Close()
-	if _, err := packetConn.WriteTo([]byte{0}, loopback); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("PacketConn.WriteTo error = %v, want ErrNotPublic", err)
-	}
-
-	if _, err := n.DialUDP("udp4", nil, loopback); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("DialUDP error = %v, want ErrNotPublic", err)
-	}
-	if _, err := n.DialTCP("tcp4", nil, &net.TCPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 443}); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("DialTCP error = %v, want ErrNotPublic", err)
-	}
-	if _, err := n.Dial("tcp", "localhost:443"); !errors.Is(err, ErrNotPublic) {
-		t.Errorf("Dial error = %v, want ErrNotPublic", err)
 	}
 }

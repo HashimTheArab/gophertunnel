@@ -81,6 +81,31 @@ func TestPublic(t *testing.T) {
 	}
 }
 
+// The host's own addresses are refused even when public: with host networking they reach services
+// listening on every interface.
+func TestCheckRefusesHostAddresses(t *testing.T) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, assigned := range addrs {
+		prefix, ok := assigned.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		addr, _ := netip.AddrFromSlice(prefix.IP)
+		if !local(addr) {
+			t.Errorf("local(%s) = false for an address of this host", addr)
+		}
+		if Check(addr) == nil {
+			t.Errorf("Check(%s) allowed an address of this host", addr)
+		}
+	}
+	if local(netip.MustParseAddr("1.1.1.1")) {
+		t.Error("local(1.1.1.1) = true")
+	}
+}
+
 // A dialer with Control refuses a private destination, including one reached through a host name.
 func TestControlRefusesResolvedPrivateAddress(t *testing.T) {
 	dialer := &net.Dialer{Control: Control, Timeout: time.Second}

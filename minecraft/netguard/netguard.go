@@ -1,5 +1,5 @@
 // Package netguard keeps outbound connections on public internet addresses, so a remote peer cannot
-// aim a server-side client at the host's loopback, private networks or cloud metadata services.
+// aim a server-side client at the host itself, its private networks or cloud metadata services.
 // Checks run on the resolved address at connect or send time, which DNS rebinding cannot bypass.
 package netguard
 
@@ -82,27 +82,32 @@ func containsAny(prefixes []netip.Prefix, addr netip.Addr) bool {
 	return false
 }
 
-// Check returns a *BlockedError unless addr is public.
+// Check returns a *BlockedError unless addr is public and not assigned to this host, whose own
+// public address reaches services listening on every interface. It fails closed if the host's
+// addresses cannot be listed.
 func Check(addr netip.Addr) error {
-	if !Public(addr) {
+	if !Public(addr) || local(addr) {
 		return &BlockedError{Addr: addr}
 	}
 	return nil
 }
 
-// checkAddr checks the IP of a *net.UDPAddr, *net.TCPAddr or *net.IPAddr; any other address is refused.
-func checkAddr(addr net.Addr) error {
-	var ip net.IP
-	switch addr := addr.(type) {
-	case *net.UDPAddr:
-		ip = addr.IP
-	case *net.TCPAddr:
-		ip = addr.IP
-	case *net.IPAddr:
-		ip = addr.IP
+// local reports whether addr is assigned to one of this host's interfaces, listed afresh so a
+// changed address is never missed.
+func local(addr netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return true
 	}
-	parsed, _ := netip.AddrFromSlice(ip)
-	return Check(parsed)
+	addr = addr.Unmap().WithZone("")
+	for _, assigned := range addrs {
+		if prefix, ok := assigned.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(prefix.IP); ok && ip.Unmap() == addr {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Control is a net.Dialer Control function refusing non-public addresses. The dialer calls it with
