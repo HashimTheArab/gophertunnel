@@ -998,13 +998,14 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	}
 }
 
-// A remembered NetherNet URL that no longer answers joins over RakNet and is remembered as RakNet.
+// A remembered NetherNet URL that no longer answers joins over RakNet and stays remembered.
 func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T) {
 	t.Parallel()
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "http://"+closedTCPAddress(t), false)
+	dead := "http://" + closedTCPAddress(t)
+	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, dead, false)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1013,8 +1014,8 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	if _, ok := selected.(probedRakNet); !ok {
 		t.Fatalf("Select = %#v, want RakNet", selected)
 	}
-	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry == nil || entry.endpoint != "" {
-		t.Fatalf("remembered answer = %#v, want RakNet in place of the dead endpoint", entry)
+	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry == nil || entry.endpoint != dead {
+		t.Fatalf("remembered answer = %#v, want the endpoint kept", entry)
 	}
 }
 
@@ -1318,6 +1319,56 @@ func TestNetherNetHTTPReprobesRememberedEndpointThatStopsAnswering(t *testing.T)
 	}
 	if entry := cache.lookup(key); entry == nil || entry.endpoint != server.URL {
 		t.Fatalf("remembered answer = %#v, want the probed endpoint", entry)
+	}
+}
+
+// A stalled remembered endpoint and the fresh probe after it share one probe timeout.
+func TestNetherNetHTTPReprobeSharesOneProbeTimeout(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
+	t.Cleanup(server.Close)
+	address := server.Listener.Addr().String()
+	cache := &ProbeCache{}
+	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
+	const budget = 2 * time.Second
+	start := time.Now()
+	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: budget}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
+	}
+	if elapsed := time.Since(start); elapsed >= budget {
+		t.Fatalf("Select took %v, want under one probe timeout of %v", elapsed, budget)
+	}
+}
+
+// A fresh probe after a remembered endpoint fails keeps an answer another Select stored meanwhile.
+func TestNetherNetHTTPReprobeKeepsNewerAnswer(t *testing.T) {
+	t.Parallel()
+	const newer = "http://newer.invalid"
+	cache := &ProbeCache{}
+	var key probeKey
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		cache.store(key, newer, true)
+		answerStatus(w)
+	}))
+	address := server.Listener.Addr().String()
+	key = defaultProbeKey(address)
+	server.Start()
+	t.Cleanup(server.Close)
+	cache.store(key, "http://"+closedTCPAddress(t), true)
+
+	selected, err := NetherNetHTTP{Probes: cache}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
+	}
+	if entry := cache.lookup(key); entry == nil || entry.endpoint != newer {
+		t.Fatalf("remembered answer = %#v, want the newer %q", entry, newer)
 	}
 }
 

@@ -127,9 +127,11 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 
 // resolveProbe returns the endpoint to dial by: the one Probes remembers, asked again first, or a
 // fresh probe it stores, with the body and the client whose network ID the offer must reuse. It
-// fails with ErrNoNetherNetEndpoint when nothing answers. With rakNet set, that answer is remembered
-// as RakNet, as is a remembered endpoint that stops answering, and a remembered RakNet answer skips
-// the probe; otherwise only endpoints are remembered and one that stops answering is probed afresh.
+// fails with ErrNoNetherNetEndpoint when nothing answers. With rakNet set, a fresh probe's failure is
+// remembered as RakNet, a remembered endpoint that does not answer is kept until a dial fails, and a
+// remembered RakNet answer skips the probe; otherwise only endpoints are remembered and one that does
+// not answer is probed afresh. The remembered endpoint gets half of one probe timeout, the rest any
+// fresh probe after it.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet bool) (choice probeChoice, body []byte, probeClient *endpoint.Client, err error) {
 	info := n.probeClientInfo()
 	host, port := splitServerAddress(address)
@@ -146,7 +148,13 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 	}
 	client := probeHTTPClient(n.HTTPClient)
 	probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: info}.New()
-	found, body, status, err := n.probe(ctx, client, batches, probeClient)
+	budget := cmp.Or(n.probeTimeout, netherNetProbeTimeout)
+	deadline, timeout := time.Now().Add(budget), budget
+	if choice.entry != nil {
+		timeout = budget / 2
+	}
+	found, body, status, err := n.probe(ctx, client, batches, timeout, probeClient)
+	retried := false
 	switch {
 	case choice.entry == nil:
 	case err == nil && status && !choice.entry.status:
@@ -154,8 +162,8 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status || err != nil && !rakNet && ctx.Err() == nil:
 		// The remembered endpoint answers with less than it did, such as a website's page, or, with
 		// no RakNet to fall back to, not at all.
-		choice = choice.replace(nil)
-		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), probeClient)
+		choice, retried = choice.replace(nil), true
+		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), time.Until(deadline), probeClient)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -165,14 +173,12 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 		case !rakNet:
 			choice = choice.replace(nil)
 		case choice.entry == nil:
-			choice.entry = n.Probes.store(choice.key, "", false)
-		default:
-			choice = choice.replace(&probeEntry{expires: time.Now().Add(probeCacheTTL)})
+			choice = choice.publish("", false, retried)
 		}
 		return choice, nil, nil, fmt.Errorf("%w at %s: %w", ErrNoNetherNetEndpoint, address, err)
 	}
 	if choice.entry == nil {
-		choice.entry = n.Probes.store(choice.key, found, status)
+		choice = choice.publish(found, status, retried)
 	}
 	return choice, body, probeClient, nil
 }
@@ -186,9 +192,9 @@ func rememberedChoice(cache *ProbeCache, host string, port uint16, info endpoint
 	return choice
 }
 
-// probe runs probeNetherNet with the package timings unless a test overrides them.
-func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches [][]string, probeClient *endpoint.Client) (string, []byte, bool, error) {
-	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), cmp.Or(n.probeTimeout, netherNetProbeTimeout), probeClient)
+// probe runs probeNetherNet within timeout, with the package head start unless a test overrides it.
+func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches [][]string, timeout time.Duration, probeClient *endpoint.Client) (string, []byte, bool, error) {
+	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), timeout, probeClient)
 }
 
 // probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport
@@ -296,6 +302,16 @@ func (p probeChoice) replace(next *probeEntry) probeChoice {
 		p.cache.mu.Unlock()
 	}
 	p.entry = next
+	return p
+}
+
+// publish stores a probe answer as p's. After a retry it is stored only while the cache holds no
+// answer, so one another Select stored meanwhile is kept.
+func (p probeChoice) publish(endpoint string, status bool, retried bool) probeChoice {
+	if retried {
+		return p.replace(&probeEntry{endpoint: endpoint, status: status, expires: time.Now().Add(probeCacheTTL)})
+	}
+	p.entry = p.cache.store(p.key, endpoint, status)
 	return p
 }
 
