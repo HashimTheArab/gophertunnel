@@ -1019,6 +1019,30 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	}
 }
 
+// AddressNetwork gives a remembered NetherNet URL the whole probe timeout before joining over RakNet.
+func TestAddressNetworkGivesCachedEndpointWholeProbeTimeout(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(700 * time.Millisecond):
+			answerStatus(w)
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+	address := closedTCPAddress(t)
+	cache := &ProbeCache{}
+	cache.store(defaultProbeKey(address), server.URL, true)
+
+	selected, err := AddressNetwork{Probes: cache, probeTimeout: time.Second}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
+		t.Fatalf("Select = %#v, want NetherNet at the cached %q", selected, server.URL)
+	}
+}
+
 // A Dialer joining by address names the endpoint the probe chose in its login, as vanilla does.
 func TestDialerSendsChosenEndpointAsServerAddress(t *testing.T) {
 	t.Parallel()

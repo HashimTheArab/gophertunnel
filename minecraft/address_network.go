@@ -130,8 +130,7 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 // fails with ErrNoNetherNetEndpoint when nothing answers. With rakNet set, a fresh probe's failure is
 // remembered as RakNet, a remembered endpoint that does not answer is kept until a dial fails, and a
 // remembered RakNet answer skips the probe; otherwise only endpoints are remembered and one that does
-// not answer is probed afresh. The remembered endpoint gets half of one probe timeout, the rest any
-// fresh probe after it.
+// not answer is probed afresh, within one probe timeout of which the remembered endpoint gets half.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet bool) (choice probeChoice, body []byte, probeClient *endpoint.Client, err error) {
 	info := n.probeClientInfo()
 	host, port := splitServerAddress(address)
@@ -149,9 +148,10 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 	client := probeHTTPClient(n.HTTPClient)
 	probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: info}.New()
 	budget := cmp.Or(n.probeTimeout, netherNetProbeTimeout)
-	deadline, timeout := time.Now().Add(budget), budget
-	if choice.entry != nil {
-		timeout = budget / 2
+	timeout, rest := budget, func() time.Duration { return budget }
+	if choice.entry != nil && !rakNet {
+		deadline := time.Now().Add(budget)
+		timeout, rest = budget/2, func() time.Duration { return time.Until(deadline) }
 	}
 	found, body, status, err := n.probe(ctx, client, batches, timeout, probeClient)
 	retried := false
@@ -163,7 +163,7 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 		// The remembered endpoint answers with less than it did, such as a website's page, or, with
 		// no RakNet to fall back to, not at all.
 		choice, retried = choice.replace(nil), true
-		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), time.Until(deadline), probeClient)
+		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), rest(), probeClient)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
