@@ -129,8 +129,8 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 // fresh probe it stores, with the body and the client whose network ID the offer must reuse. It
 // fails with ErrNoNetherNetEndpoint when nothing answers. With rakNet set, a fresh probe's failure is
 // remembered as RakNet, a remembered endpoint that does not answer is kept until a dial fails, and a
-// remembered RakNet answer skips the probe; otherwise only endpoints are remembered and one that does
-// not answer is probed afresh, within one probe timeout of which the remembered endpoint gets half.
+// remembered RakNet answer skips the probe; otherwise only endpoints are remembered and the remembered
+// one races a fresh probe.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet bool) (choice probeChoice, body []byte, probeClient *endpoint.Client, err error) {
 	info := n.probeClientInfo()
 	host, port := splitServerAddress(address)
@@ -141,29 +141,25 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 		}
 		choice.entry = nil
 	}
+	client := probeHTTPClient(n.HTTPClient)
+	probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: info}.New()
+	if choice.entry != nil && !rakNet {
+		return n.raceRemembered(ctx, address, choice, client, probeClient)
+	}
 	batches := probeBatches(host, port)
 	if choice.entry != nil {
 		batches = [][]string{{choice.entry.endpoint}}
 	}
-	client := probeHTTPClient(n.HTTPClient)
-	probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: info}.New()
-	budget := cmp.Or(n.probeTimeout, netherNetProbeTimeout)
-	timeout, rest := budget, func() time.Duration { return budget }
-	if choice.entry != nil && !rakNet {
-		deadline := time.Now().Add(budget)
-		timeout, rest = budget/2, func() time.Duration { return time.Until(deadline) }
-	}
-	found, body, status, err := n.probe(ctx, client, batches, timeout, probeClient)
+	found, body, status, err := n.probe(ctx, client, batches, probeClient)
 	retried := false
 	switch {
 	case choice.entry == nil:
 	case err == nil && status && !choice.entry.status:
 		choice = choice.replace(&probeEntry{endpoint: found, status: true, expires: choice.entry.expires})
-	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status || err != nil && !rakNet && ctx.Err() == nil:
-		// The remembered endpoint answers with less than it did, such as a website's page, or, with
-		// no RakNet to fall back to, not at all.
+	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status:
+		// The remembered endpoint answers with less than it did, such as a website's page.
 		choice, retried = choice.replace(nil), true
-		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), rest(), probeClient)
+		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), probeClient)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -183,6 +179,103 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 	return choice, body, probeClient, nil
 }
 
+// rememberedProbeHeadStart is how long a remembered endpoint is asked alone at most before the fresh
+// probe racing it starts.
+const rememberedProbeHeadStart = 300 * time.Millisecond
+
+// raceRemembered resolves a remembered endpoint without RakNet to fall back to: the endpoint races a
+// fresh probe that starts after a head start, or once the endpoint fails, within one deadline. The
+// answer replaces the remembered one if it differs and the cache still holds what choice saw.
+func (n AddressNetwork) raceRemembered(ctx context.Context, address string, choice probeChoice, client *http.Client, probeClient *endpoint.Client) (probeChoice, []byte, *endpoint.Client, error) {
+	found, body, status, err := n.race(ctx, address, choice.entry, client, probeClient)
+	if err != nil {
+		if ctx.Err() != nil {
+			return choice, nil, nil, ctx.Err()
+		}
+		return choice.replace(nil), nil, nil, fmt.Errorf("%w at %s: %w", ErrNoNetherNetEndpoint, address, err)
+	}
+	if found != choice.entry.endpoint || status != choice.entry.status {
+		expires := time.Now().Add(probeCacheTTL)
+		if found == choice.entry.endpoint {
+			expires = choice.entry.expires
+		}
+		choice = choice.replace(&probeEntry{endpoint: found, status: status, expires: expires})
+	}
+	return choice, body, probeClient, nil
+}
+
+// race returns the first status that remembered or the fresh probe answers with, or remembered's
+// answer once it answers as well as it did. A 2xx without a status wins only once both are done,
+// remembered's first. The fresh probe's HTTPS head start is scaled so HTTP gets a turn by the deadline.
+func (n AddressNetwork) race(ctx context.Context, address string, remembered *probeEntry, client *http.Client, probeClient *endpoint.Client) (string, []byte, bool, error) {
+	budget := cmp.Or(n.probeTimeout, netherNetProbeTimeout)
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline))
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	headStart := min(rememberedProbeHeadStart, budget/10)
+	httpsHeadStart := min(cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), (budget-headStart)/2)
+
+	type answer struct {
+		found  string
+		body   []byte
+		status bool
+		err    error
+	}
+	cached, fresh := make(chan answer, 1), make(chan answer, 1)
+	start := make(chan struct{})
+	startFresh := sync.OnceFunc(func() { close(start) })
+	go func() {
+		var a answer
+		a.found, a.body, a.status, a.err = probeNetherNet(ctx, client, [][]string{{remembered.endpoint}}, httpsHeadStart, budget, probeClient)
+		cached <- a
+	}()
+	go func() {
+		timer := time.NewTimer(headStart)
+		defer timer.Stop()
+		select {
+		case <-start:
+		case <-timer.C:
+		case <-ctx.Done():
+			fresh <- answer{err: ctx.Err()}
+			return
+		}
+		var a answer
+		a.found, a.body, a.status, a.err = probeNetherNet(ctx, client, probeBatches(splitServerAddress(address)), httpsHeadStart, budget, probeClient)
+		fresh <- a
+	}()
+	var fallbacks [2]*answer // 2xx answers without a status: remembered's, then the fresh probe's
+	var errs []error
+	for range 2 {
+		var a answer
+		var i int
+		select {
+		case a = <-cached:
+			startFresh()
+			if a.err == nil && (a.status || !remembered.status) {
+				return a.found, a.body, a.status, nil
+			}
+		case a = <-fresh:
+			i = 1
+		}
+		switch {
+		case a.err != nil:
+			errs = append(errs, a.err)
+		case a.status:
+			return a.found, a.body, true, nil
+		default:
+			fallbacks[i] = &a
+		}
+	}
+	for _, a := range fallbacks {
+		if a != nil {
+			return a.found, a.body, false, nil
+		}
+	}
+	return "", nil, false, errors.Join(errs...)
+}
+
 // rememberedChoice returns the answer cache remembers for host and port probed with info, with a
 // nil entry when it has none. Vanilla keys its probe cache by the lower-cased host and the port
 // exactly as given; the protocol is part of the key because a server may refuse outdated ones.
@@ -192,9 +285,9 @@ func rememberedChoice(cache *ProbeCache, host string, port uint16, info endpoint
 	return choice
 }
 
-// probe runs probeNetherNet within timeout, with the package head start unless a test overrides it.
-func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches [][]string, timeout time.Duration, probeClient *endpoint.Client) (string, []byte, bool, error) {
-	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), timeout, probeClient)
+// probe runs probeNetherNet with the package timings unless a test overrides them.
+func (n AddressNetwork) probe(ctx context.Context, client *http.Client, batches [][]string, probeClient *endpoint.Client) (string, []byte, bool, error) {
+	return probeNetherNet(ctx, client, batches, cmp.Or(n.probeHeadStart, HTTPProbeHeadStart), cmp.Or(n.probeTimeout, netherNetProbeTimeout), probeClient)
 }
 
 // probeCacheTTL bounds how long a probe answer is reused, so a server that changes transport

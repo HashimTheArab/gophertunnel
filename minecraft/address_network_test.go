@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -1366,6 +1367,103 @@ func TestNetherNetHTTPReprobeSharesOneProbeTimeout(t *testing.T) {
 	if elapsed := time.Since(start); elapsed >= budget {
 		t.Fatalf("Select took %v, want under one probe timeout of %v", elapsed, budget)
 	}
+}
+
+// A stalled remembered endpoint and stalled HTTPS still leave HTTP its turn before the deadline.
+func TestNetherNetHTTPRaceReachesHTTPPastStalledEndpoints(t *testing.T) {
+	t.Parallel()
+	address := httpOnlyServer(t)
+	cache := &ProbeCache{}
+	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
+	const budget = 2 * time.Second
+	start := time.Now()
+	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: budget}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != "http://"+address {
+		t.Fatalf("Select chose %q, want http://%s", n.URL, address)
+	}
+	if elapsed := time.Since(start); elapsed >= budget {
+		t.Fatalf("Select took %v, want under %v", elapsed, budget)
+	}
+}
+
+// A remembered endpoint that answers slowly within the probe timeout still wins.
+func TestNetherNetHTTPRaceKeepsSlowRememberedEndpoint(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(700 * time.Millisecond):
+			answerStatus(w)
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+	address := closedTCPAddress(t)
+	cache := &ProbeCache{}
+	cache.store(defaultProbeKey(address), server.URL, true)
+
+	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: time.Second}.Select(t.Context(), address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the remembered %q", n.URL, server.URL)
+	}
+}
+
+// A caller deadline shorter than the probe timeout still leaves the fresh probe time to run.
+func TestNetherNetHTTPRaceRunsFreshProbeUnderShortDeadline(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
+	t.Cleanup(server.Close)
+	address := server.Listener.Addr().String()
+	cache := &ProbeCache{}
+	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	selected, err := NetherNetHTTP{Probes: cache}.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
+	}
+}
+
+// httpOnlyServer returns the address of a server that answers HTTP probes with a status and leaves
+// TLS handshakes unanswered.
+func httpOnlyServer(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				r := bufio.NewReader(conn)
+				if first, err := r.Peek(1); err != nil || first[0] == 0x16 {
+					_, _ = io.Copy(io.Discard, r)
+					return
+				}
+				if _, err := http.ReadRequest(r); err != nil {
+					return
+				}
+				const body = `{"name":"server","protocol":2232}`
+				_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+			}()
+		}
+	}()
+	return listener.Addr().String()
 }
 
 // A fresh probe after a remembered endpoint fails keeps an answer another Select stored meanwhile.
