@@ -26,7 +26,7 @@ func connectLoopbackPeers(t *testing.T, restrict bool) webrtc.ICEConnectionState
 	newPeer := func(restricted bool) *webrtc.PeerConnection {
 		var settings webrtc.SettingEngine
 		if restricted {
-			RestrictWebRTC(&settings)
+			Policy{}.RestrictWebRTC(&settings)
 		}
 		settings.SetIncludeLoopbackCandidate(true)
 		settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })

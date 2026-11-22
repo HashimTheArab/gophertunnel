@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/wlynxg/anet"
 )
 
 func TestPublic(t *testing.T) {
@@ -57,6 +59,8 @@ func TestPublic(t *testing.T) {
 		{"::ffff:169.254.169.254", false},
 		{"::ffff:100.64.0.1", false},
 		{"64:ff9b::a00:1", false},
+		{"64:ff9b::7f00:1", false},
+		{"64:ff9b::101:101", true},
 		{"64:ff9b:1::1", false},
 		{"100::1", false},
 		{"2001::1", false},
@@ -81,50 +85,45 @@ func TestPublic(t *testing.T) {
 	}
 }
 
-// The host's own addresses are refused even when public: with host networking they reach services
-// listening on every interface.
+// The host's own addresses, its subnets' network and broadcast addresses, and Deny are refused even
+// when public: with host networking they reach services listening on every interface.
 func TestCheckRefusesHostAddresses(t *testing.T) {
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := anet.InterfaceAddrs()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, assigned := range addrs {
-		prefix, ok := assigned.(*net.IPNet)
+		subnet, ok := assigned.(*net.IPNet)
 		if !ok {
 			continue
 		}
-		addr, _ := netip.AddrFromSlice(prefix.IP)
-		if !local(addr) {
-			t.Errorf("local(%s) = false for an address of this host", addr)
+		addr, _ := netip.AddrFromSlice(subnet.IP)
+		refused := []netip.Addr{addr}
+		if ones, bits := subnet.Mask.Size(); addr.Unmap().Is4() && bits == 32 && ones < 31 {
+			prefix := netip.PrefixFrom(addr.Unmap(), ones).Masked()
+			refused = append(refused, prefix.Addr(), lastAddr(prefix))
 		}
-		if Check(addr) == nil {
-			t.Errorf("Check(%s) allowed an address of this host", addr)
-		}
-	}
-	for _, assigned := range addrs {
-		subnet, ok := assigned.(*net.IPNet)
-		if !ok || subnet.IP.To4() == nil {
-			continue
-		}
-		if ones, bits := subnet.Mask.Size(); bits != 32 || ones >= 31 {
-			continue
-		}
-		broadcast := make(net.IP, 4)
-		for i := range broadcast {
-			broadcast[i] = subnet.IP.To4()[i] | ^subnet.Mask[i]
-		}
-		if addr, _ := netip.AddrFromSlice(broadcast); !local(addr) {
-			t.Errorf("local(%s) = false for the broadcast of %s", addr, subnet)
+		for _, addr := range refused {
+			if (Policy{}).Check(addr) == nil {
+				t.Errorf("Check(%s) allowed an address of this host's subnet %s", addr, subnet)
+			}
 		}
 	}
 	if local(netip.MustParseAddr("1.1.1.1")) {
 		t.Error("local(1.1.1.1) = true")
 	}
+	deny := Policy{Deny: []netip.Prefix{netip.MustParsePrefix("203.0.114.7/32")}}
+	if deny.Check(netip.MustParseAddr("203.0.114.7")) == nil || deny.Check(netip.MustParseAddr("::ffff:203.0.114.7")) == nil {
+		t.Error("Check allowed a denied address")
+	}
+	if err := deny.Check(netip.MustParseAddr("1.1.1.1")); err != nil {
+		t.Errorf("Check(1.1.1.1) = %v with an unrelated deny list", err)
+	}
 }
 
 // A dialer with Control refuses a private destination, including one reached through a host name.
 func TestControlRefusesResolvedPrivateAddress(t *testing.T) {
-	dialer := &net.Dialer{Control: Control, Timeout: time.Second}
+	dialer := &net.Dialer{Control: Policy{}.Control, Timeout: time.Second}
 	addresses := []string{"127.0.0.1:19132", "localhost:19132", "[::ffff:127.0.0.1]:19132"}
 	if probe, err := net.ListenPacket("udp6", "[::1]:0"); err == nil {
 		_ = probe.Close()
@@ -155,7 +154,7 @@ func TestHTTPTransportRefusesPrivateServer(t *testing.T) {
 	} else {
 		_ = response.Body.Close()
 	}
-	client := &http.Client{Transport: HTTPTransport()}
+	client := &http.Client{Transport: Policy{}.HTTPTransport()}
 	response, err := client.Get(server.URL)
 	if err == nil {
 		_ = response.Body.Close()
@@ -169,7 +168,7 @@ func TestHTTPTransportRefusesPrivateServer(t *testing.T) {
 func TestHTTPTransportIgnoresProxyEnvironment(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
-	if HTTPTransport().Proxy != nil {
+	if (Policy{}).HTTPTransport().Proxy != nil {
 		t.Fatal("HTTPTransport uses a proxy, whose address would be checked in place of the server's")
 	}
 }

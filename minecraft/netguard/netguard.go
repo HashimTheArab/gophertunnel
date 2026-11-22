@@ -51,8 +51,10 @@ var blockedV4 = []netip.Prefix{
 	netip.MustParsePrefix("168.63.129.16/32"), // Azure's host-local platform endpoint
 }
 
-// globalV6 is the only IPv6 range allocated for global unicast; blockedV6 are the special ranges in it.
+// globalV6 is the only IPv6 range allocated for global unicast; blockedV6 are the special ranges in
+// it. nat64 is the well-known NAT64 prefix, judged by the IPv4 address it embeds.
 var (
+	nat64     = netip.MustParsePrefix("64:ff9b::/96")
 	globalV6  = netip.MustParsePrefix("2000::/3")
 	blockedV6 = []netip.Prefix{
 		netip.MustParsePrefix("2001::/23"),     // IETF protocol assignments, including Teredo
@@ -62,10 +64,10 @@ var (
 	}
 )
 
-// Public reports whether addr is a globally routable unicast address. IPv4-mapped IPv6 addresses
-// are judged as the IPv4 address they carry.
+// Public reports whether addr is a globally routable unicast address. IPv4-mapped and well-known
+// NAT64 addresses are judged as the IPv4 address they carry.
 func Public(addr netip.Addr) bool {
-	addr = addr.Unmap().WithZone("")
+	addr = canonical(addr)
 	switch {
 	case addr.Is4():
 		return !containsAny(blockedV4, addr)
@@ -73,6 +75,16 @@ func Public(addr netip.Addr) bool {
 		return globalV6.Contains(addr) && !containsAny(blockedV6, addr)
 	}
 	return false
+}
+
+// canonical returns addr without a zone, as the IPv4 address it carries if it is IPv4-mapped or NAT64.
+func canonical(addr netip.Addr) netip.Addr {
+	addr = addr.Unmap().WithZone("")
+	if nat64.Contains(addr) {
+		b := addr.As16()
+		return netip.AddrFrom4([4]byte(b[12:]))
+	}
+	return addr
 }
 
 func containsAny(prefixes []netip.Prefix, addr netip.Addr) bool {
@@ -84,43 +96,52 @@ func containsAny(prefixes []netip.Prefix, addr netip.Addr) bool {
 	return false
 }
 
-// Check returns a *BlockedError unless addr is public and not assigned to this host, whose own
-// public address reaches services listening on every interface. It fails closed if the host's
-// addresses cannot be listed.
-func Check(addr netip.Addr) error {
-	if !Public(addr) || local(addr) {
+// Policy refuses destinations that are not public, that belong to the host, or that Deny lists. The
+// zero value is ready to use.
+type Policy struct {
+	// Deny lists more refused ranges, for host addresses no local interface holds: a 1:1 NAT public
+	// address, the host seen from a bridged container, or other cluster nodes.
+	Deny []netip.Prefix
+}
+
+// Check returns a *BlockedError for an address the policy refuses. The host's addresses are listed on
+// each call, and an address is refused if they cannot be listed.
+func (p Policy) Check(addr netip.Addr) error {
+	addr = canonical(addr)
+	if !Public(addr) || containsAny(p.Deny, addr) || local(addr) {
 		return &BlockedError{Addr: addr}
 	}
 	return nil
 }
 
-// local reports whether addr is assigned to one of this host's interfaces or is the directed
-// broadcast of an attached IPv4 subnet. Addresses are listed afresh, through anet so Android's
-// netlink restrictions do not fail every check.
+// local reports whether addr is assigned to one of this host's interfaces, or is the network or
+// broadcast address of an attached IPv4 subnet (Linux before 5.14 broadcasts to both). Addresses
+// are listed through anet, so Android's netlink restrictions do not fail every check.
 func local(addr netip.Addr) bool {
 	addrs, err := anet.InterfaceAddrs()
 	if err != nil {
 		return true
 	}
-	addr = addr.Unmap().WithZone("")
 	for _, assigned := range addrs {
-		subnet, ok := assigned.(*net.IPNet)
+		var ip net.IP
+		var mask net.IPMask
+		switch assigned := assigned.(type) {
+		case *net.IPNet:
+			ip, mask = assigned.IP, assigned.Mask
+		case *net.IPAddr:
+			ip = assigned.IP
+		}
+		host, ok := netip.AddrFromSlice(ip)
 		if !ok {
 			continue
 		}
-		ip, ok := netip.AddrFromSlice(subnet.IP)
-		if !ok {
-			continue
-		}
-		if ip.Unmap() == addr {
+		host = canonical(host)
+		if host == addr {
 			return true
 		}
-		if ones, bits := subnet.Mask.Size(); bits == 32 && ones < 31 && ip.Unmap().Is4() {
-			broadcast := ip.Unmap().As4()
-			for i, b := range net.CIDRMask(ones, 32) {
-				broadcast[i] |= ^b
-			}
-			if netip.AddrFrom4(broadcast) == addr {
+		if ones, bits := mask.Size(); host.Is4() && bits == 32 && ones < 31 {
+			subnet := netip.PrefixFrom(host, ones).Masked()
+			if addr == subnet.Addr() || addr == lastAddr(subnet) {
 				return true
 			}
 		}
@@ -128,22 +149,32 @@ func local(addr netip.Addr) bool {
 	return false
 }
 
-// Control is a net.Dialer Control function refusing non-public addresses. The dialer calls it with
-// each resolved address, so a host name that resolves to both kinds still connects to a public one.
-func Control(_, address string, _ syscall.RawConn) error {
+// lastAddr returns the highest address of an IPv4 prefix.
+func lastAddr(prefix netip.Prefix) netip.Addr {
+	b := prefix.Addr().As4()
+	mask := net.CIDRMask(prefix.Bits(), 32)
+	for i := range b {
+		b[i] |= ^mask[i]
+	}
+	return netip.AddrFrom4(b)
+}
+
+// Control is a net.Dialer Control function refusing what p refuses. The dialer calls it with each
+// resolved address, so a host name that resolves to both kinds still connects to a public one.
+func (p Policy) Control(_, address string, _ syscall.RawConn) error {
 	addrPort, err := netip.ParseAddrPort(address)
 	if err != nil {
 		return fmt.Errorf("netguard: parse dial address: %w", err)
 	}
-	return Check(addrPort.Addr())
+	return p.Check(addrPort.Addr())
 }
 
-// HTTPTransport returns a transport with http.DefaultTransport's settings that connects only to
-// public addresses. It uses no proxy, whose address would be checked in place of the server's, and
-// is built afresh so hooks set on http.DefaultTransport cannot bypass the check.
-func HTTPTransport() *http.Transport {
+// HTTPTransport returns a transport with http.DefaultTransport's settings that connects only where p
+// allows. It uses no proxy, whose address would be checked in place of the server's, and is built
+// afresh so hooks set on http.DefaultTransport cannot bypass the check.
+func (p Policy) HTTPTransport() *http.Transport {
 	return &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: Control}).DialContext,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: p.Control}).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
