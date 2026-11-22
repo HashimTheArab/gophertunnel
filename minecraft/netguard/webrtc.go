@@ -16,12 +16,9 @@ import (
 // addresses, whatever candidates or servers the peer signals. It replaces any Net, remote IP filter,
 // muxes and proxy dialer already set, and turns off mDNS and active ICE-TCP, which open sockets
 // outside the Net.
-func RestrictWebRTC(settings *webrtc.SettingEngine) error {
-	base, err := stdnet.NewNet()
-	if err != nil {
-		return err
-	}
-	settings.SetNet(guardedNet{base})
+func RestrictWebRTC(settings *webrtc.SettingEngine) {
+	// Sockets need no interface list, and guardedNet lists interfaces itself.
+	settings.SetNet(guardedNet{&stdnet.Net{}})
 	// A TURN relay sends to remote candidates on our behalf, so they are filtered before any check.
 	settings.SetRemoteIPFilter(func(ip net.IP) bool {
 		addr, _ := netip.AddrFromSlice(ip)
@@ -32,7 +29,6 @@ func RestrictWebRTC(settings *webrtc.SettingEngine) error {
 	settings.SetICEProxyDialer(nil)
 	settings.DisableActiveTCP(true)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
-	return nil
 }
 
 // guardedNet checks every destination before a socket connects to it or a datagram is sent to it.

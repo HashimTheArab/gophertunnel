@@ -28,9 +28,7 @@ func connectLoopbackPeers(t *testing.T, restrict bool) webrtc.ICEConnectionState
 	newPeer := func(restricted bool) *webrtc.PeerConnection {
 		var settings webrtc.SettingEngine
 		if restricted {
-			if err := RestrictWebRTC(&settings); err != nil {
-				t.Fatal(err)
-			}
+			RestrictWebRTC(&settings)
 		}
 		settings.SetIncludeLoopbackCandidate(true)
 		settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
@@ -98,11 +96,7 @@ func exchange(t *testing.T, offerer, answerer *webrtc.PeerConnection) {
 }
 
 func TestGuardedNetRefusesPrivateDestinations(t *testing.T) {
-	base, err := stdnet.NewNet()
-	if err != nil {
-		t.Fatal(err)
-	}
-	n := guardedNet{base}
+	n := guardedNet{&stdnet.Net{}}
 	loopback := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 3478}
 
 	conn, err := n.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
