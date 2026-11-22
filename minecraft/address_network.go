@@ -435,15 +435,11 @@ func ProbeNetherNet(ctx context.Context, client *http.Client, host string, port 
 
 // probeNetherNet returns the winning endpoint, the start of its body and whether that is a status. A
 // status wins at once, a 2xx with errNoStatus only once nothing better can answer, and errNotStatus
-// is no answer. The head start is cut to half the time the probe has, ctx's deadline included, so
-// HTTP gets a turn.
+// is no answer.
 func probeNetherNet(ctx context.Context, client *http.Client, batches [][]string, headStart, timeout time.Duration, probe *endpoint.Client) (string, []byte, bool, error) {
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if deadline, ok := ctx.Deadline(); ok {
-		headStart = min(headStart, time.Until(deadline)/2)
-	}
 	total := 0
 	for _, endpoints := range batches {
 		total += len(endpoints)
@@ -670,7 +666,12 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	// The offer reuses the probe's client, so its POST carries the network ID the GET announced.
 	client := probeHTTPClient(n.HTTPClient)
 	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())}.New()
-	found, body, _, err := probeNetherNet(ctx, client, probeBatches(host, port), HTTPProbeHeadStart, netherNetProbeTimeout, n.probeClient)
+	// Nothing is remembered, so HTTP may get a turn sooner under a short deadline.
+	headStart := HTTPProbeHeadStart
+	if deadline, ok := ctx.Deadline(); ok {
+		headStart = min(headStart, min(netherNetProbeTimeout, time.Until(deadline))/2)
+	}
+	found, body, _, err := probeNetherNet(ctx, client, probeBatches(host, port), headStart, netherNetProbeTimeout, n.probeClient)
 	if err != nil {
 		if ctx.Err() != nil {
 			return n, nil, ctx.Err()

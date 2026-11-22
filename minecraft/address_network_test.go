@@ -1240,6 +1240,22 @@ func TestNetherNetHTTPProbeReachesHTTPUnderShortDeadline(t *testing.T) {
 	}
 }
 
+// AddressNetwork keeps the full HTTPS head start under a short deadline rather than remember HTTP.
+func TestAddressNetworkKeepsHTTPSHeadStartUnderShortDeadline(t *testing.T) {
+	t.Parallel()
+	address := httpOnlyServer(t)
+	cache := &ProbeCache{}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if network, err := (AddressNetwork{Probes: cache}).Select(ctx, address); err == nil {
+		t.Fatalf("Select = %#v, want the deadline to end the HTTPS head start", network)
+	}
+	host, port := splitServerAddress(address)
+	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry != nil {
+		t.Fatalf("remembered %#v, want nothing", entry)
+	}
+}
+
 // httpOnlyServer returns the address of a server that answers HTTP probes with a status and leaves
 // TLS handshakes unanswered.
 func httpOnlyServer(t *testing.T) string {
