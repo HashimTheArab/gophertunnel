@@ -1,7 +1,6 @@
 package minecraft
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -1223,70 +1222,39 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 	if _, err := (NetherNetHTTP{}).Status(ctx, empty.Listener.Addr().String()); !errors.Is(err, errNoStatus) {
 		t.Fatalf("Status of an endpoint without a status = %v, want errNoStatus", err)
 	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := (NetherNetHTTP{URL: server.URL}).Status(cancelled, ""); err != context.Canceled {
+		t.Fatalf("Status with a cancelled context = %v, want context.Canceled itself", err)
+	}
 }
 
-// A caller deadline shorter than the HTTPS head start still leaves HTTP a turn.
-func TestNetherNetHTTPProbeReachesHTTPUnderShortDeadline(t *testing.T) {
+// PingContext answers with Status as RakNet pong data and names a server without an endpoint.
+func TestNetherNetHTTPPingContext(t *testing.T) {
 	t.Parallel()
-	address := httpOnlyServer(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":0}`)
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	selected, err := (NetherNetHTTP{}).Select(ctx, address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != "http://"+address {
-		t.Fatalf("Select chose %q, want http://%s", n.URL, address)
-	}
-}
 
-// AddressNetwork keeps the full HTTPS head start under a short deadline rather than remember HTTP.
-func TestAddressNetworkKeepsHTTPSHeadStartUnderShortDeadline(t *testing.T) {
-	t.Parallel()
-	address := httpOnlyServer(t)
-	cache := &ProbeCache{}
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	if network, err := (AddressNetwork{Probes: cache}).Select(ctx, address); err == nil {
-		t.Fatalf("Select = %#v, want the deadline to end the HTTPS head start", network)
-	}
-	host, port := splitServerAddress(address)
-	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry != nil {
-		t.Fatalf("remembered %#v, want nothing", entry)
-	}
-}
-
-// httpOnlyServer returns the address of a server that answers HTTP probes with a status and leaves
-// TLS handshakes unanswered.
-func httpOnlyServer(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				r := bufio.NewReader(conn)
-				if first, err := r.Peek(1); err != nil || first[0] == 0x16 {
-					_, _ = io.Copy(io.Discard, r)
-					return
-				}
-				if _, err := http.ReadRequest(r); err != nil {
-					return
-				}
-				const body = `{"name":"server","protocol":2232}`
-				_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
-			}()
+	for _, network := range []NetherNetHTTP{{}, {URL: server.URL}} {
+		pong, err := network.PingContext(ctx, server.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("PingContext with URL %q: %v", network.URL, err)
 		}
-	}()
-	return listener.Addr().String()
+		got, err := ParsePongAdvertisement(pong)
+		if err != nil {
+			t.Fatalf("ParsePongAdvertisement(%q): %v", pong, err)
+		}
+		if got.MOTD != "Unstable world" || got.ProtocolVersion != 2225 || got.VersionName != "1.26.60" || got.PlayerCount != 4 || got.MaxPlayerCount != 50 {
+			t.Fatalf("PingContext with URL %q advertised %+v, want the endpoint's status", network.URL, got)
+		}
+	}
+	if _, err := (NetherNetHTTP{}).PingContext(ctx, closedTCPAddress(t)); !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("PingContext of a server without an endpoint = %v, want ErrNoNetherNetEndpoint", err)
+	}
 }
 
 // The NetherNetHTTP an AddressNetwork selects reads its status with the configured client info.

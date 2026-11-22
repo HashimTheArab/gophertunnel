@@ -377,7 +377,8 @@ func (n AddressNetwork) PingContext(ctx context.Context, address string) ([]byte
 }
 
 // ErrNoNetherNetEndpoint is the failure of a probe that found no NetherNet HTTP signaling endpoint
-// for a server, which is down or reachable over RakNet only.
+// for a server, which is down or reachable over RakNet only. A probe ended by the caller's context
+// fails with the context's error instead.
 var ErrNoNetherNetEndpoint = errors.New("minecraft: no NetherNet HTTP signaling endpoint answered")
 
 // pingNetherNet returns the status the probed NetherNet endpoint answered with, as RakNet pong data.
@@ -389,11 +390,20 @@ func (n AddressNetwork) pingNetherNet(ctx context.Context, address string) ([]by
 	if probeClient == nil {
 		return nil, ErrNoNetherNetEndpoint
 	}
-	status, err := parseProbeStatus(body)
+	status, err := endpointStatus(choice.entry.endpoint, body)
 	if err != nil {
-		return nil, fmt.Errorf("%s: read status: %w", choice.entry.endpoint, err)
+		return nil, err
 	}
 	return status.RakNet(), nil
+}
+
+// endpointStatus reads the status the endpoint at base answered its probe with.
+func endpointStatus(base string, body []byte) (endpoint.Status, error) {
+	status, err := parseProbeStatus(body)
+	if err != nil {
+		return status, fmt.Errorf("%s: read status: %w", base, err)
+	}
+	return status, nil
 }
 
 // parseProbeStatus reads the server status a NetherNet endpoint answers the probe with. An empty body
@@ -620,7 +630,7 @@ func splitServerAddress(address string) (string, uint16) {
 // as ProbeNetherNet does, and a server without one fails with ErrNoNetherNetEndpoint.
 type NetherNetHTTP struct {
 	// URL is the endpoint's base URL, such as https://play.example.com:19132. When set, the dial
-	// address is ignored and nothing is probed.
+	// address is ignored and dials probe nothing; Status still asks URL.
 	URL string
 	// NetherNet configures the dial; its Signaling and DialSignaling are replaced by the endpoint's.
 	NetherNet NetherNet
@@ -640,8 +650,7 @@ type NetherNetHTTP struct {
 	probeClient        *endpoint.Client // the probe's client, reused for the offer so both carry one network ID
 }
 
-// withProbeClientInfo returns n reporting info in the unset fields of the probe it sends when URL is
-// empty.
+// withProbeClientInfo returns n reporting info in the unset fields of the probes it sends.
 func (n NetherNetHTTP) withProbeClientInfo(info endpoint.ClientInfo) transportSelector {
 	n.ProbeClientInfo = fillClientInfo(n.ProbeClientInfo, info)
 	return n
@@ -665,13 +674,8 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	host, port := splitServerAddress(address)
 	// The offer reuses the probe's client, so its POST carries the network ID the GET announced.
 	client := probeHTTPClient(n.HTTPClient)
-	n.probeClient = endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())}.New()
-	// Nothing is remembered, so HTTP may get a turn sooner under a short deadline.
-	headStart := HTTPProbeHeadStart
-	if deadline, ok := ctx.Deadline(); ok {
-		headStart = min(headStart, min(netherNetProbeTimeout, time.Until(deadline))/2)
-	}
-	found, body, _, err := probeNetherNet(ctx, client, probeBatches(host, port), headStart, netherNetProbeTimeout, n.probeClient)
+	n.probeClient = n.newProbeClient(client)
+	found, body, _, err := probeNetherNet(ctx, client, probeBatches(host, port), HTTPProbeHeadStart, netherNetProbeTimeout, n.probeClient)
 	if err != nil {
 		if ctx.Err() != nil {
 			return n, nil, ctx.Err()
@@ -682,28 +686,35 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 	return n, body, nil
 }
 
-// Status returns the server status the endpoint answers the probe with: URL's, or that of the
-// endpoint a probe of address finds, failing with ErrNoNetherNetEndpoint when none answers. Set
-// ProbeClientInfo to the join's, which only a Dialer fills, so the server answers as it would the join.
+// newProbeClient returns the endpoint client n probes through, reporting ProbeClientInfo.
+func (n NetherNetHTTP) newProbeClient(client *http.Client) *endpoint.Client {
+	return endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())}.New()
+}
+
+// Status returns the server status the endpoint answers the probe with: URL's, failing as URL does,
+// or that of the endpoint a probe of address finds, failing with ErrNoNetherNetEndpoint when none
+// answers. The caller's context ending fails it with the context's error. Set ProbeClientInfo to the
+// join's, which only a Dialer fills, so the server answers as it would the join. It never updates the
+// ProbeCache of an AddressNetwork that selected n.
 func (n NetherNetHTTP) Status(ctx context.Context, address string) (endpoint.Status, error) {
-	resolved, body, err := n.resolve(ctx, address)
-	if err != nil {
-		return endpoint.Status{}, err
-	}
-	if n.URL != "" {
-		ctx, cancel := context.WithTimeout(ctx, netherNetProbeTimeout)
+	var body []byte
+	var err error
+	if n.URL == "" {
+		if n, body, err = n.resolve(ctx, address); err != nil {
+			return endpoint.Status{}, err
+		}
+	} else {
+		probeCtx, cancel := context.WithTimeout(ctx, netherNetProbeTimeout)
 		defer cancel()
 		client := probeHTTPClient(n.HTTPClient)
-		probe := endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())}.New()
-		if body, err = probeEndpoint(ctx, client, n.URL, probe); err != nil {
+		if body, err = probeEndpoint(probeCtx, client, n.URL, n.newProbeClient(client)); err != nil {
+			if ctx.Err() != nil {
+				return endpoint.Status{}, ctx.Err()
+			}
 			return endpoint.Status{}, err
 		}
 	}
-	status, err := parseProbeStatus(body)
-	if err != nil {
-		return endpoint.Status{}, fmt.Errorf("%s: read status: %w", resolved.URL, err)
-	}
-	return status, nil
+	return endpointStatus(n.URL, body)
 }
 
 // trustRedialAfter is how long a trust decision may keep a fresh connection idle before it is
@@ -842,9 +853,13 @@ func (n NetherNetHTTP) DialContextIdentityProvider(ctx context.Context, address,
 	})
 }
 
-// PingContext ...
-func (NetherNetHTTP) PingContext(context.Context, string) ([]byte, error) {
-	return nil, errors.New("minecraft: NetherNet HTTP signaling: ping not supported")
+// PingContext returns Status as RakNet pong data via [endpoint.Status.RakNet].
+func (n NetherNetHTTP) PingContext(ctx context.Context, address string) ([]byte, error) {
+	status, err := n.Status(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	return status.RakNet(), nil
 }
 
 // Listen ...
