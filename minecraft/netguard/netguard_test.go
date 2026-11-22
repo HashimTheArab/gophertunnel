@@ -99,9 +99,13 @@ func TestCheckRefusesHostAddresses(t *testing.T) {
 		}
 		addr, _ := netip.AddrFromSlice(subnet.IP)
 		refused := []netip.Addr{addr}
-		if ones, bits := subnet.Mask.Size(); addr.Unmap().Is4() && bits == 32 && ones < 31 {
+		ones, bits := subnet.Mask.Size()
+		if addr.Unmap().Is4() && bits == 32 && ones < 31 {
 			prefix := netip.PrefixFrom(addr.Unmap(), ones).Masked()
 			refused = append(refused, prefix.Addr(), lastAddr(prefix))
+		}
+		if addr.Is6() && !addr.Is4In6() && bits == 128 && ones < 127 {
+			refused = append(refused, netip.PrefixFrom(addr, ones).Masked().Addr())
 		}
 		for _, addr := range refused {
 			if (Policy{}).Check(addr) == nil {
@@ -115,6 +119,10 @@ func TestCheckRefusesHostAddresses(t *testing.T) {
 	deny := Policy{Deny: []netip.Prefix{netip.MustParsePrefix("203.0.114.7/32")}}
 	if deny.Check(netip.MustParseAddr("203.0.114.7")) == nil || deny.Check(netip.MustParseAddr("::ffff:203.0.114.7")) == nil {
 		t.Error("Check allowed a denied address")
+	}
+	nat64 := Policy{Deny: []netip.Prefix{netip.MustParsePrefix("64:ff9b::/96")}}
+	if nat64.Check(netip.MustParseAddr("64:ff9b::101:101")) == nil {
+		t.Error("Check allowed an address inside a denied IPv6 prefix")
 	}
 	if err := deny.Check(netip.MustParseAddr("1.1.1.1")); err != nil {
 		t.Errorf("Check(1.1.1.1) = %v with an unrelated deny list", err)

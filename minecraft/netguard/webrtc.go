@@ -9,7 +9,8 @@ import (
 )
 
 // RestrictWebRTC makes connections built from settings ignore remote ICE candidates that p refuses,
-// including peer-reflexive ones, so no check or relayed packet is sent to them. It replaces any remote
+// including peer-reflexive ones, so no check or relayed packet is sent to them. Candidates are
+// judged once, when admitted. It replaces any remote
 // IP filter and turns mDNS off, so .local candidates are never resolved. STUN and TURN servers stay
 // the caller's choice.
 func (p Policy) RestrictWebRTC(settings *webrtc.SettingEngine) {

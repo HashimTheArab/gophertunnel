@@ -87,6 +87,7 @@ func canonical(addr netip.Addr) netip.Addr {
 	return addr
 }
 
+// containsAny reports whether any of prefixes contains addr.
 func containsAny(prefixes []netip.Prefix, addr netip.Addr) bool {
 	for _, prefix := range prefixes {
 		if prefix.Contains(addr) {
@@ -107,15 +108,16 @@ type Policy struct {
 // Check returns a *BlockedError for an address the policy refuses. The host's addresses are listed on
 // each call, and an address is refused if they cannot be listed.
 func (p Policy) Check(addr netip.Addr) error {
-	addr = canonical(addr)
-	if !Public(addr) || containsAny(p.Deny, addr) || local(addr) {
+	original, addr := addr.WithZone(""), canonical(addr)
+	if !Public(addr) || containsAny(p.Deny, original) || containsAny(p.Deny, addr) || local(addr) {
 		return &BlockedError{Addr: addr}
 	}
 	return nil
 }
 
-// local reports whether addr is assigned to one of this host's interfaces, or is the network or
-// broadcast address of an attached IPv4 subnet (Linux before 5.14 broadcasts to both). Addresses
+// local reports whether addr is assigned to one of this host's interfaces, is the network or
+// broadcast address of an attached IPv4 subnet (Linux before 5.14 broadcasts to both), or is the
+// subnet-router anycast address of an attached IPv6 subnet. Addresses
 // are listed through anet, so Android's netlink restrictions do not fail every check.
 func local(addr netip.Addr) bool {
 	addrs, err := anet.InterfaceAddrs()
@@ -139,9 +141,15 @@ func local(addr netip.Addr) bool {
 		if host == addr {
 			return true
 		}
-		if ones, bits := mask.Size(); host.Is4() && bits == 32 && ones < 31 {
+		ones, bits := mask.Size()
+		switch {
+		case host.Is4() && bits == 32 && ones < 31:
 			subnet := netip.PrefixFrom(host, ones).Masked()
 			if addr == subnet.Addr() || addr == lastAddr(subnet) {
+				return true
+			}
+		case host.Is6() && bits == 128 && ones < 127:
+			if addr == netip.PrefixFrom(host, ones).Masked().Addr() {
 				return true
 			}
 		}
