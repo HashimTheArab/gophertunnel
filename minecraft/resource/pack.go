@@ -61,6 +61,10 @@ func ReadPath(path string) (*Pack, error) {
 	return compileZipPath(path)
 }
 
+// ErrTooLarge is wrapped by every error for a pack that exceeds its byte limit, as passed or once a
+// nested pack is unwrapped.
+var ErrTooLarge = errors.New("resource pack too large")
+
 func ReadBytes(data []byte) (*Pack, error) {
 	return compile(data, maxNestedPackSize)
 }
@@ -69,7 +73,7 @@ func ReadBytes(data []byte) (*Pack, error) {
 // pack is unwrapped.
 func ReadBytesLimit(data []byte, maxSize uint64) (*Pack, error) {
 	if uint64(len(data)) > maxSize {
-		return nil, fmt.Errorf("resource pack: %d bytes exceeds limit %d", len(data), maxSize)
+		return nil, fmt.Errorf("%w: %d bytes exceeds limit %d", ErrTooLarge, len(data), maxSize)
 	}
 	return compile(data, maxSize)
 }
@@ -139,7 +143,7 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 	var r io.Reader = resp.Body
 	if maxSize > 0 {
 		if resp.ContentLength > maxSize {
-			return nil, fmt.Errorf("download resource pack: response size %d exceeds limit %d", resp.ContentLength, maxSize)
+			return nil, fmt.Errorf("download resource pack: %w: response size %d exceeds limit %d", ErrTooLarge, resp.ContentLength, maxSize)
 		}
 		r = io.LimitReader(resp.Body, maxSize+1)
 	}
@@ -151,7 +155,7 @@ func readURLContext(ctx context.Context, client *http.Client, url string, maxSiz
 		return nil, fmt.Errorf("read resource pack: %w", err)
 	}
 	if maxSize > 0 && int64(len(data)) > maxSize {
-		return nil, fmt.Errorf("download resource pack: response size exceeds limit %d", maxSize)
+		return nil, fmt.Errorf("download resource pack: %w: response size exceeds limit %d", ErrTooLarge, maxSize)
 	}
 	pack, err := compile(data, 0)
 	if err != nil {
@@ -538,7 +542,7 @@ func compile(data []byte, maxNested uint64) (*Pack, error) {
 		nested := zr.File[0]
 		// archive/zip fails a read past the declared size, so checking it bounds the read.
 		if nested.UncompressedSize64 > maxNested {
-			return nil, fmt.Errorf("nested zip %s: %d bytes exceeds limit %d", nested.Name, nested.UncompressedSize64, maxNested)
+			return nil, fmt.Errorf("%w: nested zip %s: %d bytes exceeds limit %d", ErrTooLarge, nested.Name, nested.UncompressedSize64, maxNested)
 		}
 		nestedFile, err := nested.Open()
 		if err != nil {
