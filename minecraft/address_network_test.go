@@ -998,7 +998,7 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	}
 }
 
-// A remembered NetherNet URL that no longer answers joins over RakNet, as vanilla does.
+// A remembered NetherNet URL that no longer answers joins over RakNet and is remembered as RakNet.
 func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T) {
 	t.Parallel()
 	address := closedTCPAddress(t)
@@ -1012,6 +1012,9 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	}
 	if _, ok := selected.(probedRakNet); !ok {
 		t.Fatalf("Select = %#v, want RakNet", selected)
+	}
+	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry == nil || entry.endpoint != "" {
+		t.Fatalf("remembered answer = %#v, want RakNet in place of the dead endpoint", entry)
 	}
 }
 
@@ -1187,8 +1190,7 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 	}
 }
 
-// NetherNetHTTP with Probes asks only the endpoint it remembers for an address, ignoring a
-// remembered RakNet answer.
+// NetherNetHTTP with Probes asks only the endpoint it remembers and ignores a remembered RakNet answer.
 func TestNetherNetHTTPReusesRememberedEndpoint(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
@@ -1220,8 +1222,7 @@ func TestNetherNetHTTPReusesRememberedEndpoint(t *testing.T) {
 	}
 }
 
-// A failed NetherNetHTTP dial forgets the endpoint, and a server nothing answers for is never
-// remembered and fails with ErrNoNetherNetEndpoint.
+// A failed dial forgets the endpoint, and a server without one fails unremembered.
 func TestNetherNetHTTPRemembersOnlyWorkingEndpoints(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1257,8 +1258,7 @@ func TestNetherNetHTTPRemembersOnlyWorkingEndpoints(t *testing.T) {
 	}
 }
 
-// Status reads the status from the probe answer, by address or by URL, and names a server without
-// an endpoint or without a status.
+// Status reads the probe answer by address or URL and names a missing endpoint or status.
 func TestNetherNetHTTPStatus(t *testing.T) {
 	t.Parallel()
 	const body = `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":1}`
@@ -1267,6 +1267,8 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(empty.Close)
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html></html>") }))
+	t.Cleanup(page.Close)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
@@ -1276,7 +1278,7 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 		t.Fatalf("Status by address = %+v, %v; want %+v", got, err, want)
 	}
 	if entry := cache.lookup(defaultProbeKey(address)); entry == nil || entry.endpoint != server.URL {
-		t.Fatalf("remembered answer = %#v, want %q kept for the join", entry, server.URL)
+		t.Fatalf("remembered answer = %#v, want %q", entry, server.URL)
 	}
 	if got, err := (NetherNetHTTP{URL: server.URL}).Status(ctx, "unused:1"); err != nil || got != want {
 		t.Fatalf("Status by URL = %+v, %v; want %+v", got, err, want)
@@ -1284,11 +1286,63 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 	if _, err := (NetherNetHTTP{}).Status(ctx, closedTCPAddress(t)); !errors.Is(err, ErrNoNetherNetEndpoint) {
 		t.Fatalf("Status of a server without an endpoint = %v, want ErrNoNetherNetEndpoint", err)
 	}
-	if _, err := (NetherNetHTTP{URL: "http://" + closedTCPAddress(t)}).Status(ctx, ""); !errors.Is(err, ErrNoNetherNetEndpoint) {
-		t.Fatalf("Status of a URL that does not answer = %v, want ErrNoNetherNetEndpoint", err)
+	if _, err := (NetherNetHTTP{URL: "http://" + closedTCPAddress(t)}).Status(ctx, ""); err == nil || errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a URL that does not answer = %v, want its own failure", err)
+	}
+	if _, err := (NetherNetHTTP{URL: page.URL}).Status(ctx, ""); !errors.Is(err, errNotStatus) || errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a URL serving a page = %v, want errNotStatus alone", err)
 	}
 	if _, err := (NetherNetHTTP{}).Status(ctx, empty.Listener.Addr().String()); !errors.Is(err, errNoStatus) {
 		t.Fatalf("Status of an endpoint without a status = %v, want errNoStatus", err)
+	}
+}
+
+// NetherNetHTTP with Probes probes afresh when the endpoint it remembers stops answering.
+func TestNetherNetHTTPReprobesRememberedEndpointThatStopsAnswering(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
+	t.Cleanup(server.Close)
+	address := server.Listener.Addr().String()
+	key := defaultProbeKey(address)
+	cache := &ProbeCache{}
+	cache.store(key, "http://"+closedTCPAddress(t), true)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	selected, err := NetherNetHTTP{Probes: cache}.Select(ctx, address)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if n := selected.(NetherNetHTTP); n.URL != server.URL {
+		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
+	}
+	if entry := cache.lookup(key); entry == nil || entry.endpoint != server.URL {
+		t.Fatalf("remembered answer = %#v, want the probed endpoint", entry)
+	}
+}
+
+// The NetherNetHTTP an AddressNetwork selects reads its status with the configured client info.
+func TestAddressNetworkSelectCarriesProbeClientInfo(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("protocol") != "2300" {
+			http.NotFound(w, r)
+			return
+		}
+		answerStatus(w)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{ProbeClientInfo: endpoint.ClientInfo{Version: "1.26.70", Protocol: 2300, Platform: 1}}
+	selected, err := network.Select(t.Context(), server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	n, ok := selected.(NetherNetHTTP)
+	if !ok {
+		t.Fatalf("Select = %T, want NetherNetHTTP", selected)
+	}
+	if _, err := n.Status(t.Context(), ""); err != nil {
+		t.Fatalf("Status: %v", err)
 	}
 }
 

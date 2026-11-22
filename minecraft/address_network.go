@@ -122,13 +122,14 @@ func (n AddressNetwork) Select(ctx context.Context, address string) (Network, er
 	if err != nil {
 		return nil, err
 	}
-	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, trustRedialAfter: n.trustRedialAfter, choice: choice, rakNetAfterFailure: n.RakNetAfterNetherNetFailure, probeClient: probeClient}, nil
+	return NetherNetHTTP{URL: choice.entry.endpoint, NetherNet: n.NetherNet, HTTPClient: n.HTTPClient, ServerTrust: n.ServerTrust, ProbeClientInfo: n.ProbeClientInfo, trustRedialAfter: n.trustRedialAfter, choice: choice, rakNetAfterFailure: n.RakNetAfterNetherNetFailure, probeClient: probeClient}, nil
 }
 
 // resolveProbe returns the endpoint to dial by: the one Probes remembers, asked again first, or a
 // fresh probe it stores, with the body and the client whose network ID the offer must reuse. It
 // fails with ErrNoNetherNetEndpoint when nothing answers. With rakNet set, that answer is remembered
-// as RakNet and a remembered RakNet answer skips the probe; otherwise only endpoints are remembered.
+// as RakNet, as is a remembered endpoint that stops answering, and a remembered RakNet answer skips
+// the probe; otherwise only endpoints are remembered and one that stops answering is probed afresh.
 func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet bool) (choice probeChoice, body []byte, probeClient *endpoint.Client, err error) {
 	info := n.probeClientInfo()
 	host, port := splitServerAddress(address)
@@ -150,8 +151,9 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 	case choice.entry == nil:
 	case err == nil && status && !choice.entry.status:
 		choice = choice.replace(&probeEntry{endpoint: found, status: true, expires: choice.entry.expires})
-	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status:
-		// The remembered endpoint answers with less than it did, such as a website's page.
+	case errors.Is(err, errNotStatus) || err == nil && !status && choice.entry.status || err != nil && !rakNet && ctx.Err() == nil:
+		// The remembered endpoint answers with less than it did, such as a website's page, or, with
+		// no RakNet to fall back to, not at all.
 		choice = choice.replace(nil)
 		found, body, status, err = n.probe(ctx, client, probeBatches(host, port), probeClient)
 	}
@@ -164,6 +166,8 @@ func (n AddressNetwork) resolveProbe(ctx context.Context, address string, rakNet
 			choice = choice.replace(nil)
 		case choice.entry == nil:
 			choice.entry = n.Probes.store(choice.key, "", false)
+		default:
+			choice = choice.replace(&probeEntry{expires: time.Now().Add(probeCacheTTL)})
 		}
 		return choice, nil, nil, fmt.Errorf("%w at %s: %w", ErrNoNetherNetEndpoint, address, err)
 	}
@@ -691,7 +695,8 @@ func (n NetherNetHTTP) resolve(ctx context.Context, address string) (NetherNetHT
 }
 
 // Status returns the server status the endpoint answers the probe with: URL's, or that of the
-// endpoint a probe of address finds. A server without an endpoint fails with ErrNoNetherNetEndpoint.
+// endpoint a probe of address finds, failing with ErrNoNetherNetEndpoint when none answers. Set
+// ProbeClientInfo to the join's, which only a Dialer fills, so Probes keeps the answer for the join.
 func (n NetherNetHTTP) Status(ctx context.Context, address string) (endpoint.Status, error) {
 	if n.URL == "" {
 		resolved, body, err := n.resolve(ctx, address)
@@ -700,14 +705,13 @@ func (n NetherNetHTTP) Status(ctx context.Context, address string) (endpoint.Sta
 		}
 		return endpointStatus(resolved.URL, body)
 	}
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(n.probeTimeout, netherNetProbeTimeout))
+	defer cancel()
 	client := probeHTTPClient(n.HTTPClient)
 	probe := endpoint.ClientConfig{HTTPClient: client, Logger: n.NetherNet.Log, ClientInfo: fillClientInfo(n.ProbeClientInfo, defaultProbeClientInfo())}.New()
-	_, body, _, err := probeNetherNet(ctx, client, [][]string{{n.URL}}, HTTPProbeHeadStart, cmp.Or(n.probeTimeout, netherNetProbeTimeout), probe)
+	body, err := probeEndpoint(ctx, client, n.URL, probe)
 	if err != nil {
-		if ctx.Err() != nil {
-			return endpoint.Status{}, ctx.Err()
-		}
-		return endpoint.Status{}, fmt.Errorf("%w at %s: %w", ErrNoNetherNetEndpoint, n.URL, err)
+		return endpoint.Status{}, err
 	}
 	return endpointStatus(n.URL, body)
 }
