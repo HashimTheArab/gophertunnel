@@ -31,20 +31,22 @@ func (e *BlockedError) Is(target error) bool { return target == ErrNotPublic }
 
 // blockedV4 lists the IANA special-purpose IPv4 ranges a public server never uses.
 var blockedV4 = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
-	netip.MustParsePrefix("10.0.0.0/8"),      // private
-	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT
-	netip.MustParsePrefix("127.0.0.0/8"),     // loopback
-	netip.MustParsePrefix("169.254.0.0/16"),  // link-local, including cloud metadata
-	netip.MustParsePrefix("172.16.0.0/12"),   // private
-	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
-	netip.MustParsePrefix("192.0.2.0/24"),    // documentation
-	netip.MustParsePrefix("192.168.0.0/16"),  // private
-	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
-	netip.MustParsePrefix("198.51.100.0/24"), // documentation
-	netip.MustParsePrefix("203.0.113.0/24"),  // documentation
-	netip.MustParsePrefix("224.0.0.0/4"),     // multicast
-	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, including broadcast
+	netip.MustParsePrefix("0.0.0.0/8"),        // "this network"
+	netip.MustParsePrefix("10.0.0.0/8"),       // private
+	netip.MustParsePrefix("100.64.0.0/10"),    // carrier-grade NAT
+	netip.MustParsePrefix("127.0.0.0/8"),      // loopback
+	netip.MustParsePrefix("169.254.0.0/16"),   // link-local, including cloud metadata
+	netip.MustParsePrefix("172.16.0.0/12"),    // private
+	netip.MustParsePrefix("192.0.0.0/24"),     // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),     // documentation
+	netip.MustParsePrefix("192.88.99.0/24"),   // deprecated 6to4 and 6a44 relay anycast
+	netip.MustParsePrefix("192.168.0.0/16"),   // private
+	netip.MustParsePrefix("198.18.0.0/15"),    // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"),  // documentation
+	netip.MustParsePrefix("203.0.113.0/24"),   // documentation
+	netip.MustParsePrefix("224.0.0.0/4"),      // multicast
+	netip.MustParsePrefix("240.0.0.0/4"),      // reserved, including broadcast
+	netip.MustParsePrefix("168.63.129.16/32"), // Azure's host-local platform endpoint
 }
 
 // globalV6 is the only IPv6 range allocated for global unicast; blockedV6 are the special ranges in it.
@@ -113,11 +115,16 @@ func Control(_, address string, _ syscall.RawConn) error {
 	return Check(addrPort.Addr())
 }
 
-// HTTPTransport returns a transport like http.DefaultTransport that connects only to public
-// addresses and ignores proxy environment variables, whose proxy address would be checked instead.
+// HTTPTransport returns a transport with http.DefaultTransport's settings that connects only to
+// public addresses. It uses no proxy, whose address would be checked in place of the server's, and
+// is built afresh so hooks set on http.DefaultTransport cannot bypass the check.
 func HTTPTransport() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: Control}).DialContext
-	return transport
+	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: Control}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }

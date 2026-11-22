@@ -3,6 +3,7 @@ package netguard
 import (
 	"context"
 	"net"
+	"net/netip"
 	"syscall"
 
 	"github.com/pion/ice/v4"
@@ -12,22 +13,57 @@ import (
 )
 
 // RestrictWebRTC limits the ICE, STUN and TURN traffic of connections built from settings to public
-// addresses, whatever candidates or servers the peer signals. It replaces any Net already set and
-// turns off mDNS and active ICE-TCP, which open sockets outside the Net.
+// addresses, whatever candidates or servers the peer signals. It replaces any Net, remote IP filter,
+// muxes and proxy dialer already set, and turns off mDNS and active ICE-TCP, which open sockets
+// outside the Net.
 func RestrictWebRTC(settings *webrtc.SettingEngine) error {
 	base, err := stdnet.NewNet()
 	if err != nil {
 		return err
 	}
 	settings.SetNet(guardedNet{base})
+	// A TURN relay sends to remote candidates on our behalf, so they are filtered before any check.
+	settings.SetRemoteIPFilter(func(ip net.IP) bool {
+		addr, _ := netip.AddrFromSlice(ip)
+		return Public(addr)
+	})
+	settings.SetICEUDPMux(nil)
+	settings.SetICETCPMux(nil)
+	settings.SetICEProxyDialer(nil)
 	settings.DisableActiveTCP(true)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	return nil
 }
 
 // guardedNet checks every destination before a socket connects to it or a datagram is sent to it.
+// Interfaces are listed afresh on each call, as pion does with a Net per agent, so a long-lived
+// API sees addresses that change.
 type guardedNet struct {
 	transport.Net
+}
+
+func (guardedNet) Interfaces() ([]*transport.Interface, error) {
+	current, err := stdnet.NewNet()
+	if err != nil {
+		return nil, err
+	}
+	return current.Interfaces()
+}
+
+func (guardedNet) InterfaceByIndex(index int) (*transport.Interface, error) {
+	current, err := stdnet.NewNet()
+	if err != nil {
+		return nil, err
+	}
+	return current.InterfaceByIndex(index)
+}
+
+func (guardedNet) InterfaceByName(name string) (*transport.Interface, error) {
+	current, err := stdnet.NewNet()
+	if err != nil {
+		return nil, err
+	}
+	return current.InterfaceByName(name)
 }
 
 func (n guardedNet) ListenPacket(network, address string) (net.PacketConn, error) {
