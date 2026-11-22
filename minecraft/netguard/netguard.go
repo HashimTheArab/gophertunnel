@@ -11,6 +11,8 @@ import (
 	"net/netip"
 	"syscall"
 	"time"
+
+	"github.com/wlynxg/anet"
 )
 
 // ErrNotPublic is matched by errors.Is on every error this package returns for a refused address.
@@ -92,17 +94,33 @@ func Check(addr netip.Addr) error {
 	return nil
 }
 
-// local reports whether addr is assigned to one of this host's interfaces, listed afresh so a
-// changed address is never missed.
+// local reports whether addr is assigned to one of this host's interfaces or is the directed
+// broadcast of an attached IPv4 subnet. Addresses are listed afresh, through anet so Android's
+// netlink restrictions do not fail every check.
 func local(addr netip.Addr) bool {
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := anet.InterfaceAddrs()
 	if err != nil {
 		return true
 	}
 	addr = addr.Unmap().WithZone("")
 	for _, assigned := range addrs {
-		if prefix, ok := assigned.(*net.IPNet); ok {
-			if ip, ok := netip.AddrFromSlice(prefix.IP); ok && ip.Unmap() == addr {
+		subnet, ok := assigned.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(subnet.IP)
+		if !ok {
+			continue
+		}
+		if ip.Unmap() == addr {
+			return true
+		}
+		if ones, bits := subnet.Mask.Size(); bits == 32 && ones < 31 && ip.Unmap().Is4() {
+			broadcast := ip.Unmap().As4()
+			for i, b := range net.CIDRMask(ones, 32) {
+				broadcast[i] |= ^b
+			}
+			if netip.AddrFrom4(broadcast) == addr {
 				return true
 			}
 		}

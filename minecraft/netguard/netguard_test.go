@@ -101,6 +101,22 @@ func TestCheckRefusesHostAddresses(t *testing.T) {
 			t.Errorf("Check(%s) allowed an address of this host", addr)
 		}
 	}
+	for _, assigned := range addrs {
+		subnet, ok := assigned.(*net.IPNet)
+		if !ok || subnet.IP.To4() == nil {
+			continue
+		}
+		if ones, bits := subnet.Mask.Size(); bits != 32 || ones >= 31 {
+			continue
+		}
+		broadcast := make(net.IP, 4)
+		for i := range broadcast {
+			broadcast[i] = subnet.IP.To4()[i] | ^subnet.Mask[i]
+		}
+		if addr, _ := netip.AddrFromSlice(broadcast); !local(addr) {
+			t.Errorf("local(%s) = false for the broadcast of %s", addr, subnet)
+		}
+	}
 	if local(netip.MustParseAddr("1.1.1.1")) {
 		t.Error("local(1.1.1.1) = true")
 	}
@@ -109,7 +125,12 @@ func TestCheckRefusesHostAddresses(t *testing.T) {
 // A dialer with Control refuses a private destination, including one reached through a host name.
 func TestControlRefusesResolvedPrivateAddress(t *testing.T) {
 	dialer := &net.Dialer{Control: Control, Timeout: time.Second}
-	for _, address := range []string{"127.0.0.1:19132", "[::1]:19132", "localhost:19132", "[::ffff:127.0.0.1]:19132"} {
+	addresses := []string{"127.0.0.1:19132", "localhost:19132", "[::ffff:127.0.0.1]:19132"}
+	if probe, err := net.ListenPacket("udp6", "[::1]:0"); err == nil {
+		_ = probe.Close()
+		addresses = append(addresses, "[::1]:19132")
+	}
+	for _, address := range addresses {
 		for _, network := range []string{"udp", "tcp"} {
 			conn, err := dialer.DialContext(context.Background(), network, address)
 			if err == nil {
