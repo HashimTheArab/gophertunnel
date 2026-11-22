@@ -999,14 +999,13 @@ func TestAddressNetworkProbesCachedEndpointBeforeJoin(t *testing.T) {
 	}
 }
 
-// A remembered NetherNet URL that no longer answers joins over RakNet and stays remembered.
+// A remembered NetherNet URL that no longer answers joins over RakNet, as vanilla does.
 func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T) {
 	t.Parallel()
 	address := closedTCPAddress(t)
 	host, port := splitServerAddress(address)
 	cache := &ProbeCache{}
-	dead := "http://" + closedTCPAddress(t)
-	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, dead, false)
+	cache.store(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}, "http://"+closedTCPAddress(t), false)
 
 	selected, err := AddressNetwork{Probes: cache}.Select(t.Context(), address)
 	if err != nil {
@@ -1014,33 +1013,6 @@ func TestAddressNetworkJoinsRakNetWhenCachedEndpointStopsAnswering(t *testing.T)
 	}
 	if _, ok := selected.(probedRakNet); !ok {
 		t.Fatalf("Select = %#v, want RakNet", selected)
-	}
-	if entry := cache.lookup(probeKey{host: host, port: port, protocol: int(DefaultProtocol.ID())}); entry == nil || entry.endpoint != dead {
-		t.Fatalf("remembered answer = %#v, want the endpoint kept", entry)
-	}
-}
-
-// AddressNetwork gives a remembered NetherNet URL the whole probe timeout before joining over RakNet.
-func TestAddressNetworkGivesCachedEndpointWholeProbeTimeout(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-time.After(700 * time.Millisecond):
-			answerStatus(w)
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(server.Close)
-	address := closedTCPAddress(t)
-	cache := &ProbeCache{}
-	cache.store(defaultProbeKey(address), server.URL, true)
-
-	selected, err := AddressNetwork{Probes: cache, probeTimeout: time.Second}.Select(t.Context(), address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n, ok := selected.(NetherNetHTTP); !ok || n.URL != server.URL {
-		t.Fatalf("Select = %#v, want NetherNet at the cached %q", selected, server.URL)
 	}
 }
 
@@ -1213,74 +1185,9 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 		if _, ok := transportErr.Network.(NetherNetHTTP); !ok || IsRakNet(transportErr.Network) {
 			t.Fatalf("%T: failed transport = %T, want NetherNetHTTP", network, transportErr.Network)
 		}
-	}
-}
-
-// NetherNetHTTP with Probes asks only the endpoint it remembers and ignores a remembered RakNet answer.
-func TestNetherNetHTTPReusesRememberedEndpoint(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
-	t.Cleanup(server.Close)
-	address := closedTCPAddress(t)
-	key := defaultProbeKey(address)
-	cache := &ProbeCache{}
-	cache.store(key, server.URL, true)
-
-	selected, err := NetherNetHTTP{Probes: cache}.Select(t.Context(), address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the remembered %q", n.URL, server.URL)
-	}
-
-	direct := server.Listener.Addr().String()
-	directKey := defaultProbeKey(direct)
-	cache.store(directKey, "", false)
-	if selected, err = (NetherNetHTTP{Probes: cache}).Select(t.Context(), direct); err != nil {
-		t.Fatalf("Select with a remembered RakNet answer: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
-	}
-	if entry := cache.lookup(directKey); entry == nil || entry.endpoint != server.URL {
-		t.Fatalf("remembered answer = %#v, want the probed endpoint", entry)
-	}
-}
-
-// A failed dial forgets the endpoint, and a server without one fails unremembered.
-func TestNetherNetHTTPRemembersOnlyWorkingEndpoints(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			answerStatus(w)
-			return
+		if !errors.Is(err, ErrNoNetherNetEndpoint) {
+			t.Fatalf("%T: dial error = %v, want ErrNoNetherNetEndpoint", network, err)
 		}
-		http.Error(w, "no session", http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-	cache := &ProbeCache{}
-	network := NetherNetHTTP{Probes: cache, NetherNet: openNetherNet}
-	address := server.Listener.Addr().String()
-	key := defaultProbeKey(address)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	if conn, err := network.DialContext(ctx, address); err == nil {
-		_ = conn.Close()
-		t.Fatal("dial succeeded, want the signaling failure")
-	}
-	if entry := cache.lookup(key); entry != nil {
-		t.Fatalf("failed dial kept %#v, want the endpoint forgotten", entry)
-	}
-
-	missing := closedTCPAddress(t)
-	_, err := (Dialer{}).DialContextNetwork(ctx, network, missing)
-	if !errors.Is(err, ErrNoNetherNetEndpoint) {
-		t.Fatalf("dial error = %v, want ErrNoNetherNetEndpoint", err)
-	}
-	if entry := cache.lookup(defaultProbeKey(missing)); entry != nil {
-		t.Fatalf("server without an endpoint remembered as %#v", entry)
 	}
 }
 
@@ -1298,13 +1205,8 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	cache := &ProbeCache{}
-	address := server.Listener.Addr().String()
-	if got, err := (NetherNetHTTP{Probes: cache}).Status(ctx, address); err != nil || got != want {
+	if got, err := (NetherNetHTTP{}).Status(ctx, server.Listener.Addr().String()); err != nil || got != want {
 		t.Fatalf("Status by address = %+v, %v; want %+v", got, err, want)
-	}
-	if entry := cache.lookup(defaultProbeKey(address)); entry == nil || entry.endpoint != server.URL {
-		t.Fatalf("remembered answer = %#v, want %q", entry, server.URL)
 	}
 	if got, err := (NetherNetHTTP{URL: server.URL}).Status(ctx, "unused:1"); err != nil || got != want {
 		t.Fatalf("Status by URL = %+v, %v; want %+v", got, err, want)
@@ -1323,113 +1225,18 @@ func TestNetherNetHTTPStatus(t *testing.T) {
 	}
 }
 
-// NetherNetHTTP with Probes probes afresh when the endpoint it remembers stops answering.
-func TestNetherNetHTTPReprobesRememberedEndpointThatStopsAnswering(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
-	t.Cleanup(server.Close)
-	address := server.Listener.Addr().String()
-	key := defaultProbeKey(address)
-	cache := &ProbeCache{}
-	cache.store(key, "http://"+closedTCPAddress(t), true)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-
-	selected, err := NetherNetHTTP{Probes: cache}.Select(ctx, address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
-	}
-	if entry := cache.lookup(key); entry == nil || entry.endpoint != server.URL {
-		t.Fatalf("remembered answer = %#v, want the probed endpoint", entry)
-	}
-}
-
-// A stalled remembered endpoint and the fresh probe after it share one probe timeout.
-func TestNetherNetHTTPReprobeSharesOneProbeTimeout(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
-	t.Cleanup(server.Close)
-	address := server.Listener.Addr().String()
-	cache := &ProbeCache{}
-	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
-	const budget = 2 * time.Second
-	start := time.Now()
-	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: budget}.Select(t.Context(), address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
-	}
-	if elapsed := time.Since(start); elapsed >= budget {
-		t.Fatalf("Select took %v, want under one probe timeout of %v", elapsed, budget)
-	}
-}
-
-// A stalled remembered endpoint and stalled HTTPS still leave HTTP its turn before the deadline.
-func TestNetherNetHTTPRaceReachesHTTPPastStalledEndpoints(t *testing.T) {
+// A caller deadline shorter than the HTTPS head start still leaves HTTP a turn.
+func TestNetherNetHTTPProbeReachesHTTPUnderShortDeadline(t *testing.T) {
 	t.Parallel()
 	address := httpOnlyServer(t)
-	cache := &ProbeCache{}
-	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
-	const budget = 2 * time.Second
-	start := time.Now()
-	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: budget}.Select(t.Context(), address)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	selected, err := (NetherNetHTTP{}).Select(ctx, address)
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
 	if n := selected.(NetherNetHTTP); n.URL != "http://"+address {
 		t.Fatalf("Select chose %q, want http://%s", n.URL, address)
-	}
-	if elapsed := time.Since(start); elapsed >= budget {
-		t.Fatalf("Select took %v, want under %v", elapsed, budget)
-	}
-}
-
-// A remembered endpoint that answers slowly within the probe timeout still wins.
-func TestNetherNetHTTPRaceKeepsSlowRememberedEndpoint(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-time.After(700 * time.Millisecond):
-			answerStatus(w)
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(server.Close)
-	address := closedTCPAddress(t)
-	cache := &ProbeCache{}
-	cache.store(defaultProbeKey(address), server.URL, true)
-
-	selected, err := NetherNetHTTP{Probes: cache, probeTimeout: time.Second}.Select(t.Context(), address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the remembered %q", n.URL, server.URL)
-	}
-}
-
-// A caller deadline shorter than the probe timeout still leaves the fresh probe time to run.
-func TestNetherNetHTTPRaceRunsFreshProbeUnderShortDeadline(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { answerStatus(w) }))
-	t.Cleanup(server.Close)
-	address := server.Listener.Addr().String()
-	cache := &ProbeCache{}
-	cache.store(defaultProbeKey(address), "http://"+silentTCPAddress(t), true)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	selected, err := NetherNetHTTP{Probes: cache}.Select(ctx, address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
 	}
 }
 
@@ -1466,34 +1273,6 @@ func httpOnlyServer(t *testing.T) string {
 	return listener.Addr().String()
 }
 
-// A fresh probe after a remembered endpoint fails keeps an answer another Select stored meanwhile.
-func TestNetherNetHTTPReprobeKeepsNewerAnswer(t *testing.T) {
-	t.Parallel()
-	const newer = "http://newer.invalid"
-	cache := &ProbeCache{}
-	var key probeKey
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		cache.store(key, newer, true)
-		answerStatus(w)
-	}))
-	address := server.Listener.Addr().String()
-	key = defaultProbeKey(address)
-	server.Start()
-	t.Cleanup(server.Close)
-	cache.store(key, "http://"+closedTCPAddress(t), true)
-
-	selected, err := NetherNetHTTP{Probes: cache}.Select(t.Context(), address)
-	if err != nil {
-		t.Fatalf("Select: %v", err)
-	}
-	if n := selected.(NetherNetHTTP); n.URL != server.URL {
-		t.Fatalf("Select chose %q, want the probed %q", n.URL, server.URL)
-	}
-	if entry := cache.lookup(key); entry == nil || entry.endpoint != newer {
-		t.Fatalf("remembered answer = %#v, want the newer %q", entry, newer)
-	}
-}
-
 // The NetherNetHTTP an AddressNetwork selects reads its status with the configured client info.
 func TestAddressNetworkSelectCarriesProbeClientInfo(t *testing.T) {
 	t.Parallel()
@@ -1517,12 +1296,6 @@ func TestAddressNetworkSelectCarriesProbeClientInfo(t *testing.T) {
 	if _, err := n.Status(t.Context(), ""); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-}
-
-// defaultProbeKey returns the key a probe of address with the default client info is remembered by.
-func defaultProbeKey(address string) probeKey {
-	host, port := splitServerAddress(address)
-	return rememberedChoice(nil, host, port, defaultProbeClientInfo()).key
 }
 
 // rakNetPongServer returns the address of a RakNet listener that answers pings with pong.
