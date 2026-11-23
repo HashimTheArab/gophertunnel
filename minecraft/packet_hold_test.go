@@ -293,3 +293,32 @@ func TestConn_PacketHoldAbortDropsHeldReferences(t *testing.T) {
 			len(conn.hold.packets), len(conn.hold.observers), len(conn.bufferedSend), len(conn.bufferedObservers))
 	}
 }
+
+func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	if err := conn.SetPacketHold(holdIDs(700), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700)
+	// A writer holds sendMu while Abort runs, so Abort cannot drop the held packets itself.
+	conn.sendMu.Lock()
+	if err := conn.Abort(); err != nil {
+		conn.sendMu.Unlock()
+		t.Fatalf("Abort: %v", err)
+	}
+	conn.sendMu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn.sendMu.Lock()
+		held, closed := len(conn.hold.packets), conn.hold.closed
+		conn.sendMu.Unlock()
+		if held == 0 && closed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after Abort with sendMu busy: %d packets still held, closed=%v", held, closed)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
