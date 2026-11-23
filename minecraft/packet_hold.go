@@ -74,20 +74,29 @@ func (h *packetHold) close() {
 	*h = packetHold{closed: true}
 }
 
-// dropHeld discards held packets for Abort, which must never wait, even when its own caller holds sendMu.
-// If sendMu is busy, a goroutine drops them as soon as the holder lets go, so a writer that passed its
-// context check before the abort cannot leave held packets behind.
+// dropHeld discards held packets for Abort, together with the pending batch, which no flush sends once
+// the connection is cancelled. Abort must never wait, even when its own caller holds sendMu, so if sendMu
+// is busy, a goroutine drops them as soon as the holder lets go. A writer that passed its context check
+// before the abort therefore cannot leave packets behind, including held packets it released into the
+// pending batch.
 func (conn *Conn) dropHeld() {
 	if conn.sendMu.TryLock() {
-		conn.hold.close()
+		conn.dropUnsentLocked()
 		conn.sendMu.Unlock()
 		return
 	}
 	go func() {
 		conn.sendMu.Lock()
-		conn.hold.close()
+		conn.dropUnsentLocked()
 		conn.sendMu.Unlock()
 	}()
+}
+
+// dropUnsentLocked closes the hold and clears the pending batch. The caller holds sendMu.
+func (conn *Conn) dropUnsentLocked() {
+	conn.hold.close()
+	clear(conn.bufferedSend)
+	conn.bufferedSend, conn.bufferedObservers = conn.bufferedSend[:0], nil
 }
 
 // dropPendingIfClosed clears the pending batch once the connection is cancelled, when no later flush can

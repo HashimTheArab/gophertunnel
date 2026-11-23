@@ -1959,7 +1959,10 @@ func TestWritePacketRawRejectsAbortWhileWaiting(t *testing.T) {
 	if observed.Load() {
 		t.Fatal("WritePacketRaw observed a packet after the connection aborted")
 	}
-	if n := len(conn.bufferedSend); n != 0 {
+	conn.sendMu.Lock()
+	n := len(conn.bufferedSend)
+	conn.sendMu.Unlock()
+	if n != 0 {
 		t.Fatalf("WritePacketRaw buffered %d packets after the connection aborted", n)
 	}
 }

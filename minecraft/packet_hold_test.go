@@ -334,25 +334,28 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 	if err := conn.SetPacketHold(holdIDs(700), 10); err != nil {
 		t.Fatalf("SetPacketHold: %v", err)
 	}
-	writeAll(t, conn, 700)
+	writeAll(t, conn, 700, 700)
 	// A writer holds sendMu while Abort runs, so Abort cannot drop the held packets itself.
 	conn.sendMu.Lock()
 	if err := conn.Abort(); err != nil {
 		conn.sendMu.Unlock()
 		t.Fatalf("Abort: %v", err)
 	}
+	// The writer passed its context check before the abort and released what was held into the pending
+	// batch, as a PacketHoldRelease decision or the limit does. No flush sends it any more.
+	conn.releaseHeldLocked()
 	conn.sendMu.Unlock()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		conn.sendMu.Lock()
-		held, closed := len(conn.hold.packets), conn.hold.closed
+		held, pending, closed := len(conn.hold.packets), len(conn.bufferedSend), conn.hold.closed
 		conn.sendMu.Unlock()
-		if held == 0 && closed {
+		if held == 0 && pending == 0 && closed {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after Abort with sendMu busy: %d packets still held, closed=%v", held, closed)
+			t.Fatalf("after Abort with sendMu busy: %d packets still held, %d pending, closed=%v", held, pending, closed)
 		}
 		time.Sleep(time.Millisecond)
 	}
