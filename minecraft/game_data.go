@@ -108,6 +108,9 @@ type GameData struct {
 	// PlayerPermissions is the permission level of the player. It is a value from 0-3, with 0 being visitor,
 	// 1 being member, 2 being operator and 3 being custom.
 	PlayerPermissions byte
+	// ServerChunkTickRadius is the radius in chunks around the player in which the server ticks chunks, as
+	// reported in StartGame. Zero means the server did not report one.
+	ServerChunkTickRadius int32
 	// ChunkRadius is the initial chunk radius that the connection gets. This can be changed later on using a
 	// packet.ChunkRadiusUpdated.
 	ChunkRadius int32
