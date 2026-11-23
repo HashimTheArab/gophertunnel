@@ -436,7 +436,8 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		conn.identityData = identityData
 	}
 
-	readyForLogin, connected := make(chan struct{}), make(chan struct{})
+	// readyForLogin holds its one signal, so listenConn never blocks on it once the dial has stopped waiting.
+	readyForLogin, connected := make(chan struct{}, 1), make(chan struct{})
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	go listenConn(conn, readyForLogin, connected, cancel)
