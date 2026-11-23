@@ -745,6 +745,8 @@ func (conn *Conn) queuePackets(dst *[][]byte, observers *[]packetCompletion, pks
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 	if conn.ctx.Err() != nil {
+		// Abort could not take sendMu to drop held packets, so the first writer after it does.
+		conn.hold.close()
 		return conn.closeErr("write packet")
 	}
 	conn.encodePacketsTo(dst, observers, pks...)
@@ -3018,9 +3020,13 @@ func (conn *Conn) close(cause error) error {
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
 		// Held packets go out with the final flush: the connection will not be around to release them.
+		// Closing the hold first stops a concurrent SetPacketHold from holding anything Close would
+		// never send.
 		conn.sendMu.Lock()
-		conn.hold.set(nil, 0)
-		conn.releaseHeldLocked()
+		if conn.ctx != nil && conn.ctx.Err() == nil {
+			conn.releaseHeldLocked()
+		}
+		conn.hold.close()
 		conn.sendMu.Unlock()
 		conn.gracefulCloseErr = conn.Flush()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
@@ -3052,6 +3058,7 @@ func (conn *Conn) release(cause error, closeTransport bool) error {
 	conn.abortOnce.Do(func() {
 		conn.cancel(cause)
 		conn.delay.drop()
+		conn.dropHeld()
 		if closeTransport && conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}

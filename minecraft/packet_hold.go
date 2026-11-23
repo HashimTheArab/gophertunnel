@@ -25,8 +25,8 @@ func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
 	conn.sendMu.Lock()
-	if conn.ctx == nil || conn.ctx.Err() != nil {
-		conn.hold = packetHold{}
+	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
+		conn.hold.close()
 		conn.sendMu.Unlock()
 		return net.ErrClosed
 	}
@@ -51,6 +51,22 @@ type packetHold struct {
 	observers []packetCompletion
 	// count is the number of logical packets held, which can be fewer than the wire packets in packets.
 	count int
+	// closed is set once the connection shuts down; a closed hold selects nothing.
+	closed bool
+}
+
+// close drops everything held and refuses later holds.
+func (h *packetHold) close() {
+	*h = packetHold{closed: true}
+}
+
+// dropHeld discards held packets for Abort without waiting: if a writer holds sendMu, the next writer to
+// find the connection closed drops them instead.
+func (conn *Conn) dropHeld() {
+	if conn.sendMu.TryLock() {
+		conn.hold.close()
+		conn.sendMu.Unlock()
+	}
 }
 
 // set replaces the selector and its limit without touching what is already held.

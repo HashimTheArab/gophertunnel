@@ -2,12 +2,15 @@ package minecraft
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/sandertv/gophertunnel/minecraft/internal"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -180,5 +183,113 @@ func TestConn_PacketHoldAbortDiscardsHeld(t *testing.T) {
 	}
 	if err := conn.SetPacketHold(holdIDs(700), 10); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("SetPacketHold after shutdown = %v, want net.ErrClosed", err)
+	}
+}
+
+func TestConn_PacketHoldRebasesCompletionsBehindPendingPackets(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var (
+		mu        sync.Mutex
+		completed []uint32
+	)
+	conn.SetWriteObserver(func(pk packet.Packet) func() {
+		id := pk.(*packet.Unknown).PacketID
+		return func() {
+			mu.Lock()
+			completed = append(completed, id)
+			mu.Unlock()
+		}
+	})
+	if err := conn.SetPacketHold(holdIDs(700, 702), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	// 701 and 703 stay pending, so the release lands behind them and its completions are rebased.
+	writeAll(t, conn, 700, 701, 702, 703)
+	if err := conn.SetPacketHold(nil, 0); err != nil {
+		t.Fatalf("SetPacketHold(nil): %v", err)
+	}
+	for _, want := range []uint32{701, 703, 700, 702} {
+		expectSent(t, ids, want, 2*time.Second)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(completed, []uint32{701, 703, 700, 702}) {
+		t.Fatalf("completions = %v, want each packet completed once, in wire order", completed)
+	}
+}
+
+func TestConn_PacketHoldLimitFromADirectWriteQueuesBehindPending(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	if err := conn.SetPacketHold(holdIDs(700), 1); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 701)
+	// The direct write's only packet is held and reaches the limit at once, so it is queued behind 701.
+	if err := conn.WritePacketDirect(testPacket(700), testPacket(702)); err != nil {
+		t.Fatalf("WritePacketDirect: %v", err)
+	}
+	expectSent(t, ids, 702, 2*time.Second)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	expectSent(t, ids, 701, 2*time.Second)
+	expectSent(t, ids, 700, 2*time.Second)
+}
+
+func TestConn_PacketHoldRefusedOnceCloseStarts(t *testing.T) {
+	client, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = peer.Close()
+	})
+	conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+	// A batch held by the send delay makes Close block on the unread pipe while it drains.
+	if err := conn.SetSendDelay(time.Hour); err != nil {
+		t.Fatalf("SetSendDelay: %v", err)
+	}
+	if err := conn.WritePacketImmediate(testPacket(701)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		_ = conn.Close()
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn.sendMu.Lock()
+		closing := conn.hold.closed
+		conn.sendMu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not close the hold before draining")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := conn.SetPacketHold(holdIDs(700), 10); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("SetPacketHold while closing = %v, want net.ErrClosed", err)
+	}
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	<-closed
+}
+
+func TestConn_PacketHoldAbortDropsHeldReferences(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	if err := conn.SetPacketHold(holdIDs(700), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	conn.SetWriteObserver(func(packet.Packet) func() { return func() {} })
+	writeAll(t, conn, 700)
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	_ = conn.Close()
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if len(conn.hold.packets) != 0 || len(conn.hold.observers) != 0 || len(conn.bufferedSend) != 0 || len(conn.bufferedObservers) != 0 {
+		t.Fatalf("after Abort and Close: %d held, %d held completions, %d pending, %d pending completions; want none retained",
+			len(conn.hold.packets), len(conn.hold.observers), len(conn.bufferedSend), len(conn.bufferedObservers))
 	}
 }
