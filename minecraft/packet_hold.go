@@ -62,7 +62,7 @@ func (h *packetHold) close() {
 
 // dropHeld discards held packets for Abort, which must never wait, even when its own caller holds sendMu.
 // If sendMu is busy, a goroutine drops them as soon as the holder lets go, so a writer that passed its
-// context check before Abort cancelled the context cannot leave held packets behind.
+// context check before the abort cannot leave held packets behind.
 func (conn *Conn) dropHeld() {
 	if conn.sendMu.TryLock() {
 		conn.hold.close()
@@ -76,30 +76,29 @@ func (conn *Conn) dropHeld() {
 	}()
 }
 
-// closeHold sends everything held as Close begins and stops holding, so a SetPacketHold racing the rest of
-// Close gets net.ErrClosed instead of holding packets nobody will send. With packets held on a live
-// connection, releasing and flushing happen under one encMu hold, so an Abort meanwhile cannot leave them
-// pending on the closed connection: the flush detaches them whether or not it can still write them. A
-// closing connection with nothing held, or one already cancelled, never waits for encMu.
-func (conn *Conn) closeHold() error {
-	conn.sendMu.Lock()
-	if conn.ctx == nil || conn.ctx.Err() != nil || len(conn.hold.packets) == 0 {
-		conn.hold.close()
-		conn.sendMu.Unlock()
-		return nil
+// dropPendingIfClosed clears the pending batch once the connection is cancelled, when no later flush can
+// send it. Close calls it after its final flush, so held packets it released just before an Abort are not
+// kept on the closed connection.
+func (conn *Conn) dropPendingIfClosed() {
+	if conn.ctx == nil || conn.ctx.Err() == nil {
+		return
 	}
+	conn.sendMu.Lock()
+	clear(conn.bufferedSend)
+	conn.bufferedSend, conn.bufferedObservers = conn.bufferedSend[:0], nil
 	conn.sendMu.Unlock()
+}
 
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
+// closeHold queues everything held for Close's final flush and stops holding, so a SetPacketHold racing
+// the rest of Close gets net.ErrClosed instead of holding packets nobody will send. A connection already
+// cancelled drops what it holds.
+func (conn *Conn) closeHold() {
 	conn.sendMu.Lock()
-	released := conn.releaseHeldLocked()
-	conn.hold.close()
-	conn.sendMu.Unlock()
-	if !released {
-		return nil
+	defer conn.sendMu.Unlock()
+	if conn.ctx != nil && conn.ctx.Err() == nil {
+		conn.releaseHeldLocked()
 	}
-	return conn.flushLocked()
+	conn.hold.close()
 }
 
 // set replaces the selector and its limit without touching what is already held.

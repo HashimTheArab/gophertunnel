@@ -3017,8 +3017,9 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
-		conn.gracefulCloseErr = conn.closeHold()
-		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.Flush())
+		conn.closeHold()
+		conn.gracefulCloseErr = conn.Flush()
+		conn.dropPendingIfClosed()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
 			return
 		}
