@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 )
 
 func TestPlayerAuthInput_NormalizeYaw(t *testing.T) {
@@ -42,6 +44,27 @@ func TestPlayerAuthInput_NormalizeYawCoversEveryYaw(t *testing.T) {
 	for i := 0; i < value.NumField(); i++ {
 		if strings.HasSuffix(value.Type().Field(i).Name, "Yaw") && value.Field(i).Float() != -90 {
 			t.Errorf("%s was not normalized", value.Type().Field(i).Name)
+		}
+	}
+}
+
+func TestPlayerAuthInput_CarriesActions(t *testing.T) {
+	for _, tc := range []struct {
+		flags []int
+		want  bool
+	}{
+		{nil, false},
+		{[]int{InputFlagJumping, InputFlagSprinting}, false},
+		{[]int{InputFlagPerformItemInteraction}, true},
+		{[]int{InputFlagPerformBlockActions}, true},
+		{[]int{InputFlagPerformItemStackRequest}, true},
+	} {
+		pk := PlayerAuthInput{InputData: protocol.NewInputFlags(InputFlagCount)}
+		for _, flag := range tc.flags {
+			pk.InputData.Set(flag)
+		}
+		if got := pk.CarriesActions(); got != tc.want {
+			t.Fatalf("flags %v: CarriesActions = %t, want %t", tc.flags, got, tc.want)
 		}
 	}
 }

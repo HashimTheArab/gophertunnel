@@ -14,11 +14,13 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// holdIDs returns a PacketHold selecting the test packets with the given IDs.
+// holdIDs returns a PacketHold keeping the test packets with the given IDs.
 func holdIDs(ids ...uint32) PacketHold {
-	return func(pk packet.Packet) bool {
-		unknown, ok := pk.(*packet.Unknown)
-		return ok && slices.Contains(ids, unknown.PacketID)
+	return func(pk packet.Packet) PacketHoldDecision {
+		if unknown, ok := pk.(*packet.Unknown); ok && slices.Contains(ids, unknown.PacketID) {
+			return PacketHoldKeep
+		}
+		return PacketHoldSend
 	}
 }
 
@@ -57,6 +59,39 @@ func TestConn_PacketHoldSendsOthersAndReleasesHeldInOrder(t *testing.T) {
 	}
 	expectSent(t, ids, 700, 2*time.Second)
 	expectSent(t, ids, 704, 2*time.Second)
+}
+
+func TestConn_PacketHoldReleaseSendsHeldFirstAndKeepsHolding(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	hold := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return PacketHoldKeep
+		case 701:
+			return PacketHoldRelease
+		default:
+			return PacketHoldSend
+		}
+	}
+	if err := conn.SetPacketHold(hold, 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700, 702, 700, 701, 700, 703)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	// 702 was sent as usual, so it went ahead of the 700s held before it; 701 waited for them instead.
+	expectSent(t, ids, 702, 2*time.Second)
+	expectSent(t, ids, 700, 2*time.Second)
+	expectSent(t, ids, 700, 2*time.Second)
+	expectSent(t, ids, 701, 2*time.Second)
+	expectSent(t, ids, 703, 2*time.Second)
+
+	// The 700 written after 701 is still held.
+	if err := conn.SetPacketHold(nil, 0); err != nil {
+		t.Fatalf("SetPacketHold(nil): %v", err)
+	}
+	expectSent(t, ids, 700, 2*time.Second)
 }
 
 func TestConn_PacketHoldLimitReleasesAndKeepsHolding(t *testing.T) {

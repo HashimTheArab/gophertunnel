@@ -340,7 +340,7 @@ type Conn struct {
 	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
-	// hold keeps the packets SetPacketHold selects out of the pending batch. Guarded by sendMu.
+	// hold keeps the packets SetPacketHold holds out of the pending batch. Guarded by sendMu.
 	hold packetHold
 	hdr  *packet.Header
 
@@ -766,7 +766,11 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 
 	for _, pk := range pks {
 		target, targetObservers := dst, observers
-		held := conn.hold.selects(pk)
+		decision := conn.hold.decide(pk)
+		if decision == PacketHoldRelease {
+			conn.releaseHeldLocked()
+		}
+		held := decision == PacketHoldKeep
 		if held {
 			target, targetObservers = &conn.hold.packets, &conn.hold.observers
 		}
@@ -791,8 +795,8 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		if held && len(*target) != before {
 			conn.hold.count++
 			if conn.hold.count >= conn.hold.limit {
-				// The limit queues everything held behind the packets already pending. The caller's next
-				// flush sends them; a direct write's batch goes first and overtakes nothing held before it.
+				// The limit queues everything held behind the packets already pending, and the caller's
+				// next flush sends them. A direct write's own batch goes out before the pending batch.
 				conn.releaseHeldLocked()
 			}
 		}

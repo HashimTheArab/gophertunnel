@@ -6,12 +6,26 @@ import (
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// PacketHold selects the packets SetPacketHold keeps from being sent. It runs synchronously under the
+// PacketHold decides what SetPacketHold does with each packet written. It runs synchronously under the
 // connection's packet write lock, once per logical packet, so it must be short and nonblocking, must not
 // write to or reconfigure the connection, and must not retain the packet.
-type PacketHold func(packet.Packet) bool
+type PacketHold func(packet.Packet) PacketHoldDecision
 
-// SetPacketHold holds each packet written afterwards that hold selects, marshaled exactly as it would be
+// PacketHoldDecision is what a PacketHold does with one packet.
+type PacketHoldDecision uint8
+
+const (
+	// PacketHoldSend sends the packet as usual, so it overtakes the packets already held.
+	PacketHoldSend PacketHoldDecision = iota
+	// PacketHoldKeep holds the packet behind the packets already held.
+	PacketHoldKeep
+	// PacketHoldRelease queues everything held, in order, behind the packets already pending, then the
+	// packet itself, and keeps holding. A packet that must not overtake held packets, but must not wait
+	// either, uses it. Written with WritePacketDirect, the packet's own batch still goes first.
+	PacketHoldRelease
+)
+
+// SetPacketHold holds each packet written afterwards that hold keeps, marshaled exactly as it would be
 // sent, while every other packet is sent as usual, so held packets end up behind packets written after
 // them. Once limit packets are held, all of them are queued, in the order they were written, behind the
 // packets already pending, and holding continues; a limit below one is treated as one. A nil hold queues
@@ -106,9 +120,12 @@ func (h *packetHold) set(hold PacketHold, limit int) {
 	h.selector, h.limit = hold, max(limit, 1)
 }
 
-// selects reports whether pk is held.
-func (h *packetHold) selects(pk packet.Packet) bool {
-	return h.selector != nil && h.selector(pk)
+// decide reports what happens to pk. A closed or unset hold sends everything.
+func (h *packetHold) decide(pk packet.Packet) PacketHoldDecision {
+	if h.selector == nil {
+		return PacketHoldSend
+	}
+	return h.selector(pk)
 }
 
 // releaseHeldLocked queues every held packet, in order, behind the pending batch and reports whether any
