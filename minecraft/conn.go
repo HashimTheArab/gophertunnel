@@ -334,7 +334,9 @@ type Conn struct {
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and batch submissions (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
-	encMu             sync.Mutex
+	encMu sync.Mutex
+	// holdMu serializes PacketHold rule changes. Lock order: holdMu → sendMu.
+	holdMu            sync.Mutex
 	writeObserver     WriteObserver
 	queueObserver     QueueObserver
 	bufferedObservers []packetCompletion
