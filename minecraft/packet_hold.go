@@ -33,7 +33,7 @@ const (
 // itself whenever it queues held packets, and then wait for any SendDelay like every other batch.
 //
 // The WriteObserver sees a held packet when it is written; its completion runs once the packet actually
-// reaches the transport. Close sends what is held, Abort discards it, and a hold set after shutdown holds
+// reaches the transport. A QueueObserver learns when the hold releases it into the send order. Close sends what is held, Abort discards it, and a hold set after shutdown holds
 // nothing. It returns any failure flushing the released packets, including an earlier send failure.
 func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
 	conn.encMu.Lock()
@@ -63,6 +63,8 @@ type packetHold struct {
 	// packets are the held wire packets, and observers their completions, indexed as in the pending batch.
 	packets   [][]byte
 	observers []packetCompletion
+	// released are the QueueObserver's functions for the held packets, in the order they were held.
+	released []func()
 	// count is the number of logical packets held, which can be fewer than the wire packets in packets.
 	count int
 	// closed is set once the connection shuts down; a closed hold selects nothing.
@@ -154,5 +156,11 @@ func (conn *Conn) releaseHeldLocked() bool {
 	clear(h.packets)
 	clear(h.observers)
 	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
+	// The packets are queued now, so whatever is written next goes out behind them.
+	for i, released := range h.released {
+		h.released[i] = nil
+		released()
+	}
+	h.released = h.released[:0]
 	return true
 }

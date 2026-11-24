@@ -330,12 +330,13 @@ type Conn struct {
 	readBatchLen  int
 	readDeadline  <-chan time.Time
 
-	// sendMu protects packet marshaling, writeObserver and the buffered packets and callbacks.
+	// sendMu protects packet marshaling, writeObserver, queueObserver and the buffered packets and callbacks.
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and batch submissions (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
 	encMu             sync.Mutex
 	writeObserver     WriteObserver
+	queueObserver     QueueObserver
 	bufferedObservers []packetCompletion
 	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
@@ -685,6 +686,26 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 	conn.sendMu.Unlock()
 }
 
+// QueueObserver sees each outgoing logical packet the WriteObserver sees, under the same lock and
+// conditions, and learns whether a PacketHold keeps it back. A packet not held joins the order packets
+// reach the transport in as it is written, behind everything queued before it; the function returned for
+// it is ignored. For a held packet, the returned function runs when the hold releases the packet into
+// that order, ahead of anything written after the release, which is before the WriteObserver's
+// completion when a SendDelay applies. It never runs for a held packet the connection discards.
+//
+// Both callbacks run synchronously under the connection's packet write lock, in queue order, and follow
+// the WriteObserver's rules: short, nonblocking, no writes to or reconfiguration of the connection, and
+// no retained packet data.
+type QueueObserver func(pk packet.Packet, held bool) (released func())
+
+// SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new
+// captures. Held packets already captured keep their release functions.
+func (conn *Conn) SetQueueObserver(observer QueueObserver) {
+	conn.sendMu.Lock()
+	conn.queueObserver = observer
+	conn.sendMu.Unlock()
+}
+
 // WritePacket marshals pk and appends it to the pending batch. The next Flush submits that batch,
 // respecting any configured SendDelay. The connection's WriteObserver observes the packet as usual.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
@@ -790,6 +811,11 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		if conn.writeObserver != nil && len(*target) != before {
 			if sent := conn.writeObserver(pk); sent != nil {
 				*targetObservers = append(*targetObservers, packetCompletion{after: len(*target), sent: sent})
+			}
+		}
+		if conn.queueObserver != nil && len(*target) != before {
+			if released := conn.queueObserver(pk, held); held && released != nil {
+				conn.hold.released = append(conn.hold.released, released)
 			}
 		}
 		if held && len(*target) != before {

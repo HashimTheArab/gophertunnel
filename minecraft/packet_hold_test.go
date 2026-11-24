@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -358,5 +359,88 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 			t.Fatalf("after Abort with sendMu busy: %d packets still held, %d pending, closed=%v", held, pending, closed)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// queueLog records what a QueueObserver sees: "w<id>" for a packet joining the send order as it is
+// written, "h<id>" for a held capture and "r<id>" for its release.
+type queueLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *queueLog) add(event string) {
+	l.mu.Lock()
+	l.events = append(l.events, event)
+	l.mu.Unlock()
+}
+
+func (l *queueLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.events)
+}
+
+func (l *queueLog) observer(pk packet.Packet, held bool) func() {
+	id := pk.(*packet.Unknown).PacketID
+	if !held {
+		l.add("w" + strconv.Itoa(int(id)))
+		return func() { l.add("ignored") }
+	}
+	l.add("h" + strconv.Itoa(int(id)))
+	return func() { l.add("r" + strconv.Itoa(int(id))) }
+}
+
+// A QueueObserver learns when each packet joins the send order: as it is written, or for a held packet
+// when the hold releases it, in order and before anything written after the release.
+func TestConn_QueueObserverSeesHeldPacketsJoinTheSendOrder(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	hold := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return PacketHoldKeep
+		case 701:
+			return PacketHoldRelease
+		default:
+			return PacketHoldSend
+		}
+	}
+	if err := conn.SetPacketHold(hold, 3); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	// 702 overtakes the held 700; 701 releases it first; the third held 700 hits the limit.
+	writeAll(t, conn, 700, 702, 700, 701, 700, 700, 700)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	for range 7 {
+		select {
+		case <-ids:
+		case <-time.After(2 * time.Second):
+			t.Fatal("packets were not sent")
+		}
+	}
+	want := []string{"h700", "w702", "h700", "r700", "r700", "w701", "h700", "h700", "h700", "r700", "r700", "r700"}
+	if got := log.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("queue events = %v, want %v", got, want)
+	}
+}
+
+// A held packet the connection discards never joins the send order.
+func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	if err := conn.SetPacketHold(holdIDs(700), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700)
+	if err := conn.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if got := log.snapshot(); !slices.Equal(got, []string{"h700"}) {
+		t.Fatalf("queue events = %v, want only the held capture", got)
 	}
 }
