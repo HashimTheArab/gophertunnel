@@ -9,23 +9,12 @@ import (
 	"time"
 )
 
-// SetSendDelay adds latency d to everything the Conn sends. Packets are encoded exactly as without a delay;
-// only the encoded bytes wait d before they reach the network, in the order they were sent. A new d applies
-// to what is sent afterwards and never reorders, so after lowering it new packets still wait for those held
-// before them. A d of zero or less stops delaying and sends everything held immediately. Close sends what is
-// held without waiting; Abort discards it. It returns any failure while releasing held batches, including
-// an earlier send failure. The delay setting is applied even when a failure is returned.
-func (conn *Conn) SetSendDelay(d time.Duration) error {
-	return conn.delay.set(d)
-}
-
-// SendDelay returns the latency SetSendDelay last added to everything the Conn sends.
-func (conn *Conn) SendDelay() time.Duration {
-	return time.Duration(conn.delay.delay.Load())
-}
-
-// delayWriter sits between the packet encoder and the network, holding each encoded batch for the send
-// delay before writing it to w.
+// delayWriter sits between the packet encoder and the network, holding each encoded batch for the largest
+// PacketHold delay before writing it to w. Packets are encoded exactly as without a delay; only the encoded
+// bytes wait before they reach the network, in the order they were sent. A new delay applies to what is
+// sent afterwards and never reorders, so after lowering it new packets still wait for those held before
+// them. A delay of zero stops delaying and sends everything held immediately. Close sends what is held
+// without waiting; Abort discards it.
 type delayWriter struct {
 	w     io.Writer
 	delay atomic.Int64
