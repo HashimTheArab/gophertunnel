@@ -94,10 +94,10 @@ func (conn *Conn) NewPacketHold() *PacketHold {
 
 // Set replaces the hold's rule. Packets the hold already keeps stay held while the new rule is manual
 // too, and are let go of otherwise; a manual limit at or below what the hold keeps lets go of all of
-// them. Packets let go of go out with the next Flush, which Set runs itself whenever it lets go of
-// packets. A lower largest Delay applies to what is sent afterwards; once no hold has a Delay, everything
-// delayed is sent. It returns any failure sending, including an earlier send failure, and net.ErrClosed
-// once the Conn shuts down.
+// them. Packets let go of are queued behind the packets already pending and go out with the next Flush:
+// Set never flushes, so its caller decides where the batch ends. A lower largest Delay applies to what is
+// sent afterwards; once no hold has a Delay, everything already delayed is sent. It returns any failure
+// sending delayed packets, including an earlier send failure, and net.ErrClosed once the Conn shuts down.
 func (h *PacketHold) Set(rule PacketHoldRule) error {
 	rule.Delay = max(rule.Delay, 0)
 	if rule.Delay > 0 && (rule.manual() || rule.Limit != 0 || rule.SelectableOnly) {
@@ -107,8 +107,9 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		return nil
 	}
 	conn := h.conn
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
+	// holdMu applies concurrent Sets to the delay in the order they changed the holds.
+	conn.holdMu.Lock()
+	defer conn.holdMu.Unlock()
 	conn.sendMu.Lock()
 	holds := &conn.holds
 	if conn.ctx == nil || conn.ctx.Err() != nil || holds.closed {
@@ -116,7 +117,6 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		conn.sendMu.Unlock()
 		return net.ErrClosed
 	}
-	released := false
 	switch {
 	case rule.manual() && h.bit == 0:
 		free := ^holds.used
@@ -128,7 +128,7 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		holds.used |= h.bit
 		holds.manual = append(holds.manual, h)
 	case !rule.manual() && h.bit != 0:
-		released = conn.releaseHeldLocked(h.bit)
+		conn.releaseHeldLocked(h.bit)
 		holds.used &^= h.bit
 		holds.manual = slices.DeleteFunc(holds.manual, func(other *PacketHold) bool { return other == h })
 		h.bit = 0
@@ -143,38 +143,30 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 	}
 	h.rule, h.limit = rule, max(rule.Limit, 1)
 	if h.bit != 0 && h.count >= h.limit {
-		released = conn.releaseHeldLocked(h.bit) || released
+		conn.releaseHeldLocked(h.bit)
 	}
 	delay := holds.delay()
 	conn.sendMu.Unlock()
-	var err error
-	if released {
-		err = conn.flushLocked()
-	}
-	return errors.Join(err, conn.delay.set(delay))
+	return conn.delay.set(delay)
 }
 
-// Release lets go of everything the hold keeps and keeps holding, like PacketHoldRelease, then flushes
-// the packets let go of. It returns any failure flushing them, including an earlier send failure, and
-// net.ErrClosed once the Conn shuts down.
+// Release lets go of everything the hold keeps and keeps holding, like PacketHoldRelease. The packets it
+// lets go of are queued behind the packets already pending and go out with the next Flush: Release never
+// flushes, so its caller decides where the batch ends. It returns net.ErrClosed once the Conn shuts down.
 func (h *PacketHold) Release() error {
 	if h == nil {
 		return nil
 	}
 	conn := h.conn
-	conn.encMu.Lock()
-	defer conn.encMu.Unlock()
 	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
 	if conn.ctx == nil || conn.ctx.Err() != nil || conn.holds.closed {
-		conn.sendMu.Unlock()
 		return net.ErrClosed
 	}
-	released := h.bit != 0 && conn.releaseHeldLocked(h.bit)
-	conn.sendMu.Unlock()
-	if !released {
-		return nil
+	if h.bit != 0 {
+		conn.releaseHeldLocked(h.bit)
 	}
-	return conn.flushLocked()
+	return nil
 }
 
 // Discard drops everything the hold keeps without sending it, including packets other holds keep too,

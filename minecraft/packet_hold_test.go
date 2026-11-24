@@ -464,12 +464,14 @@ func TestPacketHold_PacketKeptByTwoHoldsWaitsForBoth(t *testing.T) {
 	if err := first.Release(); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 700, 2*time.Second)
 	expectNothingSent(t, ids, 50*time.Millisecond)
 
 	if err := second.Set(PacketHoldRule{}); err != nil {
 		t.Fatalf("Set(zero): %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 701, 2*time.Second)
 	expectSent(t, ids, 702, 2*time.Second)
 }
@@ -496,6 +498,7 @@ func TestPacketHold_LimitsAreCountedPerHold(t *testing.T) {
 	if err := second.Release(); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 701, 2*time.Second)
 }
 
@@ -528,10 +531,12 @@ func TestPacketHold_DiscardDropsKeptPacketsAndKeepsHolding(t *testing.T) {
 	if err := hold.Set(PacketHoldRule{}); err != nil {
 		t.Fatalf("Set(zero): %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 700, 2*time.Second)
 	if err := other.Set(PacketHoldRule{}); err != nil {
 		t.Fatalf("Set(zero): %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 702, 2*time.Second)
 
 	conn.sendMu.Lock()
@@ -565,6 +570,9 @@ func TestPacketHold_SelectableOnlySeesSelectableWritesAlone(t *testing.T) {
 	if err := hold.Release(); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
+	// Release leaves the batch boundary to its caller.
+	expectNothingSent(t, ids, 50*time.Millisecond)
+	mustFlush(t, conn)
 	expectSent(t, ids, 700, 2*time.Second)
 }
 
@@ -596,6 +604,7 @@ func TestPacketHold_ReleasedPacketWaitsTheDelayBehindPacketsLetThrough(t *testin
 	if err := manual.Release(); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
+	mustFlush(t, conn)
 	expectSent(t, ids, 701, 2*time.Second)
 	expectSent(t, ids, 700, 2*time.Second)
 	if elapsed := time.Since(start); elapsed < d {
