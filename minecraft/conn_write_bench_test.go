@@ -64,3 +64,46 @@ func BenchmarkConn_WritePacket(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkConn_WritePacketHeld writes a 16-packet batch with no hold, and with a hold keeping half of
+// it, released every 64 held packets as a holding caller's limit releases them, so the steady state
+// includes the releases.
+func BenchmarkConn_WritePacketHeld(b *testing.B) {
+	for _, held := range []bool{false, true} {
+		b.Run(fmt.Sprintf("held=%t", held), func(b *testing.B) {
+			client, peer := net.Pipe()
+			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
+			conn.delay.w = io.Discard
+			b.Cleanup(func() {
+				_ = conn.Abort()
+				_ = peer.Close()
+			})
+			if held {
+				hold := func(pk packet.Packet) PacketHoldDecision {
+					if pk.ID()%2 == 0 {
+						return PacketHoldKeep
+					}
+					return PacketHoldSend
+				}
+				if err := conn.SetPacketHold(hold, 64); err != nil {
+					b.Fatal(err)
+				}
+			}
+			packets := make([]packet.Packet, 16)
+			for i := range packets {
+				packets[i] = testPacket(uint32(700 + i))
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, pk := range packets {
+					if err := conn.WritePacket(pk); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := conn.Flush(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

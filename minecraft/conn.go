@@ -340,7 +340,9 @@ type Conn struct {
 	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
-	hdr               *packet.Header
+	// hold keeps the packets SetPacketHold holds out of the pending batch. Guarded by sendMu.
+	hold packetHold
+	hdr  *packet.Header
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -763,7 +765,16 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	}()
 
 	for _, pk := range pks {
-		before := len(*dst)
+		target, targetObservers := dst, observers
+		decision := conn.hold.decide(pk)
+		if decision == PacketHoldRelease {
+			conn.releaseHeldLocked()
+		}
+		held := decision == PacketHoldKeep
+		if held {
+			target, targetObservers = &conn.hold.packets, &conn.hold.observers
+		}
+		before := len(*target)
 		if registry, ok := pk.(*packet.ItemRegistry); ok {
 			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
 			conn.observeShield(registry.Items)
@@ -774,11 +785,19 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 			if conn.observes(conn.hdr.PacketID) {
 				conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
-			*dst = append(*dst, append([]byte(nil), buf.Bytes()...))
+			*target = append(*target, append([]byte(nil), buf.Bytes()...))
 		}
-		if conn.writeObserver != nil && len(*dst) != before {
+		if conn.writeObserver != nil && len(*target) != before {
 			if sent := conn.writeObserver(pk); sent != nil {
-				*observers = append(*observers, packetCompletion{after: len(*dst), sent: sent})
+				*targetObservers = append(*targetObservers, packetCompletion{after: len(*target), sent: sent})
+			}
+		}
+		if held && len(*target) != before {
+			conn.hold.count++
+			if conn.hold.count >= conn.hold.limit {
+				// The limit queues everything held behind the packets already pending, and the caller's
+				// next flush sends them. A direct write's own batch goes out before the pending batch.
+				conn.releaseHeldLocked()
 			}
 		}
 	}
@@ -3004,7 +3023,9 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
+		conn.closeHold()
 		conn.gracefulCloseErr = conn.Flush()
+		conn.dropPendingIfClosed()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
 			return
 		}
@@ -3034,6 +3055,7 @@ func (conn *Conn) release(cause error, closeTransport bool) error {
 	conn.abortOnce.Do(func() {
 		conn.cancel(cause)
 		conn.delay.drop()
+		conn.dropHeld()
 		if closeTransport && conn.conn != nil {
 			conn.abortErr = conn.conn.Close()
 		}

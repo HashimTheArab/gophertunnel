@@ -202,6 +202,14 @@ func (pk *PlayerAuthInput) Marshal(io protocol.IO) {
 // CarriesInputTick reports whether this packet may carry a player input tick.
 func (*PlayerAuthInput) CarriesInputTick() bool { return true }
 
+// CarriesActions reports whether this input also carries an item interaction, block actions or an item
+// stack request, which the server handles as part of the tick rather than as movement.
+func (pk *PlayerAuthInput) CarriesActions() bool {
+	return pk.InputData.Load(InputFlagPerformItemInteraction) ||
+		pk.InputData.Load(InputFlagPerformBlockActions) ||
+		pk.InputData.Load(InputFlagPerformItemStackRequest)
+}
+
 // NormalizeYaw wraps body, head and interaction yaw into [-180, 180), returning
 // whether any value changed. Equivalent turns retain the same facing and movement
 // frame. Non-finite values are left intact so callers can reject invalid input.
