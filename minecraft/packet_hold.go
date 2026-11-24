@@ -1,54 +1,175 @@
 package minecraft
 
 import (
+	"errors"
 	"net"
+	"slices"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
-// PacketHold decides what SetPacketHold does with each packet written. It runs synchronously under the
-// connection's packet write lock, once per logical packet, so it must be short and nonblocking, must not
-// write to or reconfigure the connection, and must not retain the packet.
-type PacketHold func(packet.Packet) PacketHoldDecision
+// PacketSelector decides what a manual PacketHold does with each packet written. It runs synchronously
+// under the connection's packet write lock, once per logical packet, so it must be short and nonblocking,
+// must not write to or reconfigure the connection, and must not retain the packet.
+type PacketSelector func(packet.Packet) PacketHoldDecision
 
-// PacketHoldDecision is what a PacketHold does with one packet.
+// PacketHoldDecision is what a manual PacketHold does with one packet.
 type PacketHoldDecision uint8
 
 const (
-	// PacketHoldSend sends the packet as usual, so it overtakes the packets already held.
+	// PacketHoldSend lets the packet through this hold, so it overtakes the packets the hold keeps.
 	PacketHoldSend PacketHoldDecision = iota
-	// PacketHoldKeep holds the packet behind the packets already held.
+	// PacketHoldKeep keeps the packet behind the packets the hold already keeps.
 	PacketHoldKeep
-	// PacketHoldRelease queues everything held, in order, behind the packets already pending, then the
-	// packet itself, and keeps holding. A packet that must not overtake held packets, but must not wait
-	// either, uses it. Written with WritePacketDirect, the packet's own batch still goes first.
+	// PacketHoldRelease lets go of everything the hold keeps, in order, behind the packets already
+	// pending, then lets the packet itself through, and keeps holding. A packet that must not overtake
+	// held packets, but must not wait either, uses it. Written with WritePacketDirect, the packet's own
+	// batch still goes first.
 	PacketHoldRelease
 )
 
-// SetPacketHold holds each packet written afterwards that hold keeps, marshaled exactly as it would be
-// sent, while every other packet is sent as usual, so held packets end up behind packets written after
-// them. Once limit packets are held, all of them are queued, in the order they were written, behind the
-// packets already pending, and holding continues; a limit below one is treated as one. A nil hold queues
-// everything held and stops holding. Queued packets go out with the next Flush, which SetPacketHold runs
-// itself whenever it queues held packets, and then wait for any SendDelay like every other batch.
+// maxManualHolds is how many PacketHolds with a manual rule one Conn can have at a time.
+const maxManualHolds = 64
+
+// errTooManyHolds is returned by PacketHold.Set when a Conn already has maxManualHolds manual holds.
+var errTooManyHolds = errors.New("minecraft: too many manual packet holds on one connection")
+
+// PacketHoldRule configures a PacketHold. The zero rule holds nothing.
+//
+// A rule with a Select is manual: each packet written afterwards that Select keeps waits, marshaled
+// exactly as it would be sent, until the hold lets go of it, while every other packet goes on as usual, so
+// held packets end up behind packets written after them. A rule with a Delay holds every packet the Conn
+// sends, raw writes included, for Delay after the flush that submits it, in the order it was sent.
+type PacketHoldRule struct {
+	// Select chooses what a manual hold keeps.
+	Select PacketSelector
+	// Limit lets go of everything a manual hold keeps once it keeps Limit packets, and holding continues.
+	// A limit below one is treated as one.
+	Limit int
+	// SelectableOnly shows Select only the packets written with WritePacketSelectable. Every other packet
+	// goes on as if Select let it through.
+	SelectableOnly bool
+	// Delay adds latency to everything the Conn sends. It cannot be combined with a manual rule.
+	Delay time.Duration
+}
+
+// manual reports whether the rule keeps selected packets until they are let go of.
+func (r PacketHoldRule) manual() bool { return r.Select != nil }
+
+// PacketHold holds packets written to the Conn that created it according to its rule. Several holds can
+// be set on one Conn, each by its own owner:
+//
+//   - A packet waits while any manual hold keeps it. A hold letting go of a packet another hold still
+//     keeps leaves it held; once no hold keeps it, it is queued behind the packets already pending, with
+//     the other packets let go of at the same time, in the order they were written.
+//   - Packets no manual hold keeps, and packets let go of, then wait for the largest Delay of any hold,
+//     counted from the flush that submits them. The delay never reorders: after it is lowered, new
+//     packets still wait for those submitted before them. A delay applies to the packets as encoded, so
+//     a packet let go of waits the full delay from that flush.
 //
 // The WriteObserver sees a held packet when it is written; its completion runs once the packet actually
-// reaches the transport. A QueueObserver learns when the hold releases it into the send order. Close sends what is held, Abort discards it, and a hold set after shutdown holds
-// nothing. It returns any failure flushing the released packets, including an earlier send failure.
-func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
+// reaches the transport. A QueueObserver learns when a manual hold lets it go into the send order. Close
+// sends everything held, Abort discards it, and a hold set after shutdown holds nothing.
+//
+// A PacketHold is safe for concurrent use. Create one with NewPacketHold. A nil *PacketHold holds nothing
+// and its methods do nothing, so a stand-in for a Conn that cannot hold packets can return one.
+type PacketHold struct {
+	conn *Conn
+
+	// The fields below are guarded by conn.sendMu.
+
+	rule  PacketHoldRule
+	limit int
+	// bit marks the packets this hold keeps while its rule is manual, and is zero otherwise.
+	bit uint64
+	// count is the number of logical packets this hold keeps.
+	count int
+}
+
+// NewPacketHold returns a hold on conn that holds nothing until its rule is set.
+func (conn *Conn) NewPacketHold() *PacketHold {
+	return &PacketHold{conn: conn}
+}
+
+// Set replaces the hold's rule. Packets the hold already keeps stay held while the new rule is manual
+// too, and are let go of otherwise; a manual limit at or below what the hold keeps lets go of all of
+// them. Packets let go of go out with the next Flush, which Set runs itself whenever it lets go of
+// packets. A lower largest Delay applies to what is sent afterwards; once no hold has a Delay, everything
+// delayed is sent. It returns any failure sending, including an earlier send failure, and net.ErrClosed
+// once the Conn shuts down.
+func (h *PacketHold) Set(rule PacketHoldRule) error {
+	rule.Delay = max(rule.Delay, 0)
+	if rule.Delay > 0 && (rule.manual() || rule.Limit != 0 || rule.SelectableOnly) {
+		return errors.New("minecraft: a packet hold rule cannot both delay and select packets")
+	}
+	if h == nil {
+		return nil
+	}
+	conn := h.conn
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
 	conn.sendMu.Lock()
-	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
-		conn.hold.close()
+	holds := &conn.holds
+	if conn.ctx == nil || conn.ctx.Err() != nil || holds.closed {
+		holds.close()
 		conn.sendMu.Unlock()
 		return net.ErrClosed
 	}
-	conn.hold.set(hold, limit)
-	released := hold == nil || conn.hold.count >= conn.hold.limit
-	if released {
-		released = conn.releaseHeldLocked()
+	released := false
+	switch {
+	case rule.manual() && h.bit == 0:
+		free := ^holds.used
+		if free == 0 {
+			conn.sendMu.Unlock()
+			return errTooManyHolds
+		}
+		h.bit = free & -free
+		holds.used |= h.bit
+		holds.manual = append(holds.manual, h)
+	case !rule.manual() && h.bit != 0:
+		released = conn.releaseHeldLocked(h.bit)
+		holds.used &^= h.bit
+		holds.manual = slices.DeleteFunc(holds.manual, func(other *PacketHold) bool { return other == h })
+		h.bit = 0
 	}
+	wasDelayed, delayed := h.rule.Delay > 0, rule.Delay > 0
+	if wasDelayed != delayed {
+		if delayed {
+			holds.delayed = append(holds.delayed, h)
+		} else {
+			holds.delayed = slices.DeleteFunc(holds.delayed, func(other *PacketHold) bool { return other == h })
+		}
+	}
+	h.rule, h.limit = rule, max(rule.Limit, 1)
+	if h.bit != 0 && h.count >= h.limit {
+		released = conn.releaseHeldLocked(h.bit) || released
+	}
+	delay := holds.delay()
+	conn.sendMu.Unlock()
+	var err error
+	if released {
+		err = conn.flushLocked()
+	}
+	return errors.Join(err, conn.delay.set(delay))
+}
+
+// Release lets go of everything the hold keeps and keeps holding, like PacketHoldRelease, then flushes
+// the packets let go of. It returns any failure flushing them, including an earlier send failure, and
+// net.ErrClosed once the Conn shuts down.
+func (h *PacketHold) Release() error {
+	if h == nil {
+		return nil
+	}
+	conn := h.conn
+	conn.encMu.Lock()
+	defer conn.encMu.Unlock()
+	conn.sendMu.Lock()
+	if conn.ctx == nil || conn.ctx.Err() != nil || conn.holds.closed {
+		conn.sendMu.Unlock()
+		return net.ErrClosed
+	}
+	released := h.bit != 0 && conn.releaseHeldLocked(h.bit)
 	conn.sendMu.Unlock()
 	if !released {
 		return nil
@@ -56,24 +177,82 @@ func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
 	return conn.flushLocked()
 }
 
-// packetHold is the selector and the marshaled packets it holds. The connection's sendMu guards it.
-type packetHold struct {
-	selector PacketHold
-	limit    int
-	// packets are the held wire packets, and observers their completions, indexed as in the pending batch.
-	packets   [][]byte
-	observers []packetCompletion
-	// released are the QueueObserver's functions for the held packets, in the order they were held.
-	released []func()
-	// count is the number of logical packets held, which can be fewer than the wire packets in packets.
-	count int
-	// closed is set once the connection shuts down; a closed hold selects nothing.
+// Discard drops everything the hold keeps without sending it, including packets other holds keep too,
+// and keeps holding. Discarded packets never complete and never join the send order.
+func (h *PacketHold) Discard() {
+	if h == nil {
+		return
+	}
+	conn := h.conn
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if h.bit != 0 {
+		conn.holds.discard(h.bit)
+	}
+}
+
+// packetHolds is a Conn's holds and the packets its manual holds keep. The connection's sendMu guards it.
+type packetHolds struct {
+	// manual are the holds with a manual rule, in the order they became manual, and used their bits.
+	manual []*PacketHold
+	used   uint64
+	// delayed are the holds with a Delay.
+	delayed []*PacketHold
+	// parked are the held packets in the order they were written.
+	parked []parkedPacket
+	// scratch collects the wire packets of the logical packet being held.
+	scratch [][]byte
+	// closed is set once the connection shuts down; a closed Conn holds nothing.
 	closed bool
 }
 
+// parkedPacket is one held logical packet: its wire packets, its WriteObserver completion and
+// QueueObserver release, and the bits of the holds keeping it.
+type parkedPacket struct {
+	data     []byte
+	extra    [][]byte
+	sent     func()
+	released func()
+	keptBy   uint64
+}
+
+// delay returns the largest Delay of any hold.
+func (h *packetHolds) delay() time.Duration {
+	var delay time.Duration
+	for _, hold := range h.delayed {
+		delay = max(delay, hold.rule.Delay)
+	}
+	return delay
+}
+
 // close drops everything held and refuses later holds.
-func (h *packetHold) close() {
-	*h = packetHold{closed: true}
+func (h *packetHolds) close() {
+	for _, hold := range h.manual {
+		hold.bit, hold.count = 0, 0
+	}
+	clear(h.parked)
+	clear(h.scratch)
+	*h = packetHolds{closed: true}
+}
+
+// discard drops the packets any hold in mask keeps, and stops counting them for the other holds.
+func (h *packetHolds) discard(mask uint64) {
+	h.parked = slices.DeleteFunc(h.parked, func(p parkedPacket) bool {
+		if p.keptBy&mask == 0 {
+			return false
+		}
+		h.uncount(p.keptBy)
+		return true
+	})
+}
+
+// uncount stops counting one packet for each hold in mask.
+func (h *packetHolds) uncount(mask uint64) {
+	for _, hold := range h.manual {
+		if mask&hold.bit != 0 {
+			hold.count--
+		}
+	}
 }
 
 // dropHeld discards held packets for Abort, together with the pending batch, which no flush sends once
@@ -94,9 +273,9 @@ func (conn *Conn) dropHeld() {
 	}()
 }
 
-// dropUnsentLocked closes the hold and clears the pending batch. The caller holds sendMu.
+// dropUnsentLocked closes the holds and clears the pending batch. The caller holds sendMu.
 func (conn *Conn) dropUnsentLocked() {
-	conn.hold.close()
+	conn.holds.close()
 	clear(conn.bufferedSend)
 	conn.bufferedSend, conn.bufferedObservers = conn.bufferedSend[:0], nil
 }
@@ -114,53 +293,92 @@ func (conn *Conn) dropPendingIfClosed() {
 	conn.sendMu.Unlock()
 }
 
-// closeHold queues everything held for Close's final flush and stops holding, so a SetPacketHold racing
-// the rest of Close gets net.ErrClosed instead of holding packets nobody will send. A connection already
-// cancelled drops what it holds.
+// closeHold queues everything held for Close's final flush and stops holding, so a Set racing the rest of
+// Close gets net.ErrClosed instead of holding packets nobody will send. A connection already cancelled
+// drops what it holds.
 func (conn *Conn) closeHold() {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 	if conn.ctx != nil && conn.ctx.Err() == nil {
-		conn.releaseHeldLocked()
+		conn.releaseHeldLocked(^uint64(0))
 	}
-	conn.hold.close()
+	conn.holds.close()
 }
 
-// set replaces the selector and its limit without touching what is already held.
-func (h *packetHold) set(hold PacketHold, limit int) {
-	h.selector, h.limit = hold, max(limit, 1)
+// selectLocked asks every manual hold what to do with pk, letting go of what a hold releases, and returns
+// the bits of the holds keeping it. The caller holds sendMu.
+func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy uint64) {
+	for _, hold := range conn.holds.manual {
+		if hold.rule.SelectableOnly && !selectable {
+			continue
+		}
+		switch hold.rule.Select(pk) {
+		case PacketHoldKeep:
+			keptBy |= hold.bit
+		case PacketHoldRelease:
+			conn.releaseHeldLocked(hold.bit)
+		}
+	}
+	return keptBy
 }
 
-// decide reports what happens to pk. A closed or unset hold sends everything.
-func (h *packetHold) decide(pk packet.Packet) PacketHoldDecision {
-	if h.selector == nil {
-		return PacketHoldSend
+// parkLocked keeps the logical packet whose wire packets are in holds.scratch for the holds in keptBy,
+// and lets go of what reaches a hold's limit. The caller holds sendMu.
+func (conn *Conn) parkLocked(keptBy uint64, sent, released func()) {
+	holds := &conn.holds
+	p := parkedPacket{data: holds.scratch[0], sent: sent, released: released, keptBy: keptBy}
+	if len(holds.scratch) > 1 {
+		p.extra = slices.Clone(holds.scratch[1:])
 	}
-	return h.selector(pk)
+	clear(holds.scratch)
+	holds.scratch = holds.scratch[:0]
+	holds.parked = append(holds.parked, p)
+
+	var full uint64
+	for _, hold := range holds.manual {
+		if keptBy&hold.bit != 0 {
+			hold.count++
+			if hold.count >= hold.limit {
+				full |= hold.bit
+			}
+		}
+	}
+	if full != 0 {
+		// The limit queues everything held behind the packets already pending, and the caller's next
+		// flush sends them. A direct write's own batch goes out before the pending batch.
+		conn.releaseHeldLocked(full)
+	}
 }
 
-// releaseHeldLocked queues every held packet, in order, behind the pending batch and reports whether any
-// were queued. The caller holds sendMu.
-func (conn *Conn) releaseHeldLocked() bool {
-	h := &conn.hold
-	if len(h.packets) == 0 {
-		h.count = 0
-		return false
+// releaseHeldLocked lets go of everything the holds in mask keep. Packets no hold keeps any more are
+// queued, in the order they were written, behind the pending batch. It reports whether any were queued.
+// The caller holds sendMu.
+func (conn *Conn) releaseHeldLocked(mask uint64) bool {
+	holds := &conn.holds
+	for _, hold := range holds.manual {
+		if mask&hold.bit != 0 {
+			hold.count = 0
+		}
 	}
-	offset := len(conn.bufferedSend)
-	conn.bufferedSend = append(conn.bufferedSend, h.packets...)
-	for _, observer := range h.observers {
-		observer.after += offset
-		conn.bufferedObservers = append(conn.bufferedObservers, observer)
+	queued, kept := 0, 0
+	for _, p := range holds.parked {
+		if p.keptBy &^= mask; p.keptBy != 0 {
+			holds.parked[kept] = p
+			kept++
+			continue
+		}
+		conn.bufferedSend = append(conn.bufferedSend, p.data)
+		conn.bufferedSend = append(conn.bufferedSend, p.extra...)
+		if p.sent != nil {
+			conn.bufferedObservers = append(conn.bufferedObservers, packetCompletion{after: len(conn.bufferedSend), sent: p.sent})
+		}
+		// The packet is queued now, so whatever is written next goes out behind it.
+		if p.released != nil {
+			p.released()
+		}
+		queued++
 	}
-	clear(h.packets)
-	clear(h.observers)
-	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
-	// The packets are queued now, so whatever is written next goes out behind them.
-	for i, released := range h.released {
-		h.released[i] = nil
-		released()
-	}
-	h.released = h.released[:0]
-	return true
+	clear(holds.parked[kept:])
+	holds.parked = holds.parked[:kept]
+	return queued != 0
 }
