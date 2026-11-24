@@ -693,6 +693,10 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // that order, ahead of anything written after the release, which is before the WriteObserver's
 // completion when a SendDelay applies. It never runs for a held packet the connection discards.
 //
+// Queue order is the order of the pending batch. WritePacketDirect sends its own batch ahead of the
+// pending one, so a packet written with it overtakes packets already queued, held ones released before
+// it included.
+//
 // Both callbacks run synchronously under the connection's packet write lock, in queue order, and follow
 // the WriteObserver's rules: short, nonblocking, no writes to or reconfiguration of the connection, and
 // no retained packet data.
