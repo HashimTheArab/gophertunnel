@@ -343,8 +343,8 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 		conn.sendMu.Unlock()
 		t.Fatalf("Abort: %v", err)
 	}
-	// The writer passed its context check before the abort and released what was held into the pending
-	// batch, as a PacketHoldRelease decision or the limit does. No flush sends it any more.
+	// The writer passed its context check before the abort and releases what is held, as a
+	// PacketHoldRelease decision or the limit does. The connection is cancelled, so it stays held.
 	conn.releaseHeldLocked(^uint64(0))
 	conn.sendMu.Unlock()
 
@@ -431,6 +431,44 @@ func TestConn_QueueObserverSeesHeldPacketsJoinTheSendOrder(t *testing.T) {
 	want := []string{"h700", "w702", "h703", "r700", "r703", "w701", "h704", "h705", "h706", "r704", "r705", "r706"}
 	if got := log.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("queue events = %v, want %v", got, want)
+	}
+}
+
+// An Abort that lands while a write is under way, before the transport closes, leaves what is held for
+// the drop: the write's release neither sends the held packets nor reports them as queued.
+func TestConn_PacketHoldReleaseAfterCancelLeavesHeldPackets(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	hold := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return PacketHoldKeep
+		case 701:
+			// The write passed its context check; the Abort cancels the connection now.
+			conn.cancel(net.ErrClosed)
+			return PacketHoldRelease
+		default:
+			return PacketHoldSend
+		}
+	}
+	if err := setPacketHold(conn, hold, 10); err != nil {
+		t.Fatalf("setPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700)
+	if err := conn.WritePacketImmediate(testPacket(701)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	select {
+	case id := <-ids:
+		if id != 701 {
+			t.Fatalf("sent %d first, want 701 alone: the held packet was released after the cancellation", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the write was not sent")
+	}
+	if got := log.snapshot(); !slices.Equal(got, []string{"h700", "w701"}) {
+		t.Fatalf("queue events = %v, want the held capture and the write alone", got)
 	}
 }
 

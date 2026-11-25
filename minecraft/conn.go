@@ -694,7 +694,10 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // packets reach the transport in as it is written, behind everything queued before it; the function
 // returned for it is ignored. For a held packet, the returned function runs when no hold keeps the packet
 // any more and it joins that order, ahead of anything written after, which is before the WriteObserver's
-// completion when a PacketHold delay applies. It never runs for a held packet that is discarded.
+// completion when a PacketHold delay applies. It never runs for a packet discarded while it is held: by
+// Discard, by Abort, or by a release after the connection is cancelled. Like any queued packet, a released
+// one can still be dropped by an Abort before it is sent; the WriteObserver's completion reports that it
+// reached the transport.
 //
 // Queue order is the order of the pending batch. WritePacketDirect sends its own batch ahead of the
 // pending one, so a packet written with it overtakes packets already queued, held ones released before

@@ -365,17 +365,19 @@ func (conn *Conn) parkLocked(keptBy, release uint64, sent, released func()) {
 
 // releaseHeldLocked lets go of everything the holds in mask keep. Packets no hold keeps any more are
 // queued, in the order they were written, behind the pending batch. It reports whether any were queued.
-// The caller holds sendMu.
+// Once the connection is cancelled it releases nothing: a writer that passed its context check before an
+// Abort leaves what is held for the Abort to drop, so a held packet is never sent or reported as queued
+// after the cancellation. The caller holds sendMu.
 func (conn *Conn) releaseHeldLocked(mask uint64) bool {
+	if conn.ctx != nil && conn.ctx.Err() != nil {
+		return false
+	}
 	holds := &conn.holds
 	for _, hold := range holds.manual {
 		if mask&hold.bit != 0 {
 			hold.count = 0
 		}
 	}
-	// Once the connection is cancelled, nothing sends what is released any more: a writer that passed its
-	// context check before an Abort releases it only for the drop, so it never joins the send order.
-	cancelled := conn.ctx != nil && conn.ctx.Err() != nil
 	queued, kept := 0, 0
 	for _, p := range holds.parked {
 		if p.keptBy &^= mask; p.keptBy != 0 {
@@ -388,8 +390,9 @@ func (conn *Conn) releaseHeldLocked(mask uint64) bool {
 		if p.sent != nil {
 			conn.bufferedObservers = append(conn.bufferedObservers, packetCompletion{after: len(conn.bufferedSend), sent: p.sent})
 		}
-		// The packet is queued now, so whatever is written next goes out behind it.
-		if p.released != nil && !cancelled {
+		// The packet is queued now, so buffered writes that follow go out behind it; WritePacketDirect can
+		// still overtake it.
+		if p.released != nil {
 			p.released()
 		}
 		queued++
