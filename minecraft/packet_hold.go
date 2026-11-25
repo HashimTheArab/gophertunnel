@@ -316,10 +316,11 @@ func (conn *Conn) closeHold() {
 	conn.holds.close()
 }
 
-// selectLocked asks every manual hold what to do with pk, letting go of what the holds releasing on it
-// keep, and returns the bits of the holds keeping it. The caller holds sendMu.
-func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy uint64) {
-	var released uint64
+// selectLocked asks every manual hold what to do with pk, and returns the bits of the holds keeping it and
+// of the holds letting go of what they keep before pk. The caller lets go of those in one release, together
+// with any hold pk fills, so everything one write releases leaves in the order it was written. The caller
+// holds sendMu.
+func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy, released uint64) {
 	for _, hold := range conn.holds.manual {
 		if hold.rule.SelectableOnly && !selectable {
 			continue
@@ -331,16 +332,13 @@ func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy uint64
 			released |= hold.bit
 		}
 	}
-	if released != 0 {
-		// One release for every hold letting go keeps the packets they release in the order written.
-		conn.releaseHeldLocked(released)
-	}
-	return keptBy
+	return keptBy, released
 }
 
 // parkLocked keeps the logical packet whose wire packets are in holds.scratch for the holds in keptBy,
-// and lets go of what reaches a hold's limit. The caller holds sendMu.
-func (conn *Conn) parkLocked(keptBy uint64, sent, released func()) {
+// then lets go, in one release, of what the holds in release keep and of every hold it fills. The caller
+// holds sendMu.
+func (conn *Conn) parkLocked(keptBy, release uint64, sent, released func()) {
 	holds := &conn.holds
 	p := parkedPacket{data: holds.scratch[0], sent: sent, released: released, keptBy: keptBy}
 	if len(holds.scratch) > 1 {
@@ -350,19 +348,18 @@ func (conn *Conn) parkLocked(keptBy uint64, sent, released func()) {
 	holds.scratch = holds.scratch[:0]
 	holds.parked = append(holds.parked, p)
 
-	var full uint64
 	for _, hold := range holds.manual {
 		if keptBy&hold.bit != 0 {
 			hold.count++
 			if hold.count >= hold.limit {
-				full |= hold.bit
+				release |= hold.bit
 			}
 		}
 	}
-	if full != 0 {
-		// The limit queues everything held behind the packets already pending, and the caller's next
+	if release != 0 {
+		// The release queues what it lets go of behind the packets already pending, and the caller's next
 		// flush sends them. A direct write's own batch goes out before the pending batch.
-		conn.releaseHeldLocked(full)
+		conn.releaseHeldLocked(release)
 	}
 }
 

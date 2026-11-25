@@ -728,3 +728,36 @@ func TestPacketHold_SwitchingToADelayDelaysWhatItReleases(t *testing.T) {
 		t.Fatalf("released packet sent after %v, want at least the new %v delay", elapsed, d)
 	}
 }
+
+// A packet one hold releases on and another hold's limit releases leaves everything both let go of in the
+// order it was written.
+func TestPacketHold_ReleaseAndLimitOnOneWriteKeepWriteOrder(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	releasing := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 701:
+			return PacketHoldKeep
+		case 702:
+			return PacketHoldRelease
+		default:
+			return PacketHoldSend
+		}
+	}
+	// The releasing hold is asked first, so releasing it before the limit would send 701 before 700.
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releasing, Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 702), Limit: 2}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	writeAll(t, conn, 700, 701, 702)
+	mustFlush(t, conn)
+	for _, want := range []uint32{700, 701, 702} {
+		expectSent(t, ids, want, 2*time.Second)
+	}
+	if got, want := log.snapshot(), []string{"h700", "h701", "h702", "r700", "r701", "r702"}; !slices.Equal(got, want) {
+		t.Fatalf("queue events = %v, want %v", got, want)
+	}
+}
