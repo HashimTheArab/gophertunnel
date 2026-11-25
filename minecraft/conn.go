@@ -803,11 +803,16 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	}()
 
 	for _, pk := range pks {
-		var keptBy uint64
+		var keptBy, release uint64
 		if len(conn.holds.manual) != 0 {
-			keptBy = conn.selectLocked(pk, selectable)
+			keptBy, release = conn.selectLocked(pk, selectable)
 		}
 		held := keptBy != 0
+		if !held && release != 0 {
+			// The released packets go ahead of pk, which is not held.
+			conn.releaseHeldLocked(release)
+			release = 0
+		}
 		target := dst
 		if held {
 			target = &conn.holds.scratch
@@ -826,6 +831,9 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 			*target = append(*target, append([]byte(nil), buf.Bytes()...))
 		}
 		if len(*target) == before {
+			if release != 0 {
+				conn.releaseHeldLocked(release)
+			}
 			continue
 		}
 		var sent, released func()
@@ -836,7 +844,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 			released = conn.queueObserver(pk, held)
 		}
 		if held {
-			conn.parkLocked(keptBy, sent, released)
+			conn.parkLocked(keptBy, release, sent, released)
 		} else if sent != nil {
 			*observers = append(*observers, packetCompletion{after: len(*target), sent: sent})
 		}
