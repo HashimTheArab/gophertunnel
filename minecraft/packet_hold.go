@@ -140,9 +140,14 @@ func (h *packetHold) decide(pk packet.Packet) PacketHoldDecision {
 }
 
 // releaseHeldLocked queues every held packet, in order, behind the pending batch and reports whether any
-// were queued. The caller holds sendMu.
+// were queued. Once the connection is cancelled it releases nothing: a writer that passed its context
+// check before an Abort leaves what is held for the Abort to drop, so a held packet is never sent or
+// reported as queued after the cancellation. The caller holds sendMu.
 func (conn *Conn) releaseHeldLocked() bool {
 	h := &conn.hold
+	if conn.ctx != nil && conn.ctx.Err() != nil {
+		return false
+	}
 	if len(h.packets) == 0 {
 		h.count = 0
 		return false
@@ -156,15 +161,11 @@ func (conn *Conn) releaseHeldLocked() bool {
 	clear(h.packets)
 	clear(h.observers)
 	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
-	// The packets are queued now, so whatever is written next goes out behind them. Once the connection is
-	// cancelled, nothing sends them any more: a writer that passed its context check before an Abort
-	// releases them only for the drop, so they never join the send order.
-	cancelled := conn.ctx != nil && conn.ctx.Err() != nil
+	// The packets are queued now, so buffered writes that follow go out behind them; WritePacketDirect
+	// can still overtake them.
 	for i, released := range h.released {
 		h.released[i] = nil
-		if !cancelled {
-			released()
-		}
+		released()
 	}
 	h.released = h.released[:0]
 	return true
