@@ -373,6 +373,9 @@ func (conn *Conn) releaseHeldLocked(mask uint64) bool {
 			hold.count = 0
 		}
 	}
+	// Once the connection is cancelled, nothing sends what is released any more: a writer that passed its
+	// context check before an Abort releases it only for the drop, so it never joins the send order.
+	cancelled := conn.ctx != nil && conn.ctx.Err() != nil
 	queued, kept := 0, 0
 	for _, p := range holds.parked {
 		if p.keptBy &^= mask; p.keptBy != 0 {
@@ -386,7 +389,7 @@ func (conn *Conn) releaseHeldLocked(mask uint64) bool {
 			conn.bufferedObservers = append(conn.bufferedObservers, packetCompletion{after: len(conn.bufferedSend), sent: p.sent})
 		}
 		// The packet is queued now, so whatever is written next goes out behind it.
-		if p.released != nil {
+		if p.released != nil && !cancelled {
 			p.released()
 		}
 		queued++

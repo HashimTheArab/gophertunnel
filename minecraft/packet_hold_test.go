@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -399,49 +400,67 @@ func TestConn_QueueObserverSeesHeldPacketsJoinTheSendOrder(t *testing.T) {
 	conn.SetQueueObserver(log.observer)
 	hold := func(pk packet.Packet) PacketHoldDecision {
 		switch pk.(*packet.Unknown).PacketID {
-		case 700:
-			return PacketHoldKeep
 		case 701:
 			return PacketHoldRelease
-		default:
+		case 702:
 			return PacketHoldSend
+		default:
+			return PacketHoldKeep
 		}
 	}
 	if err := setPacketHold(conn, hold, 3); err != nil {
 		t.Fatalf("setPacketHold: %v", err)
 	}
-	// 702 overtakes the held 700; 701 releases it first; the third held 700 hits the limit.
-	writeAll(t, conn, 700, 702, 700, 701, 700, 700, 700)
+	// 702 overtakes the held 700; 701 releases 700 and 703 first; the third held packet, 706, hits the limit.
+	writeAll(t, conn, 700, 702, 703, 701, 704, 705, 706)
 	if err := conn.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
+	var sent []uint32
 	for range 7 {
 		select {
-		case <-ids:
+		case id := <-ids:
+			sent = append(sent, id)
 		case <-time.After(2 * time.Second):
 			t.Fatal("packets were not sent")
 		}
 	}
-	want := []string{"h700", "w702", "h700", "r700", "r700", "w701", "h700", "h700", "h700", "r700", "r700", "r700"}
+	if want := []uint32{702, 700, 703, 701, 704, 705, 706}; !slices.Equal(sent, want) {
+		t.Fatalf("sent %v, want %v", sent, want)
+	}
+	want := []string{"h700", "w702", "h703", "r700", "r703", "w701", "h704", "h705", "h706", "r704", "r705", "r706"}
 	if got := log.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("queue events = %v, want %v", got, want)
 	}
 }
 
-// A held packet the connection discards never joins the send order.
+// A held packet the connection discards never joins the send order, including one a writer that was
+// already past its context check releases after the Abort.
 func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
-	conn, _ := newSendDelayConn(t)
-	var log queueLog
-	conn.SetQueueObserver(log.observer)
-	if err := setPacketHold(conn, holdIDs(700), 10); err != nil {
-		t.Fatalf("setPacketHold: %v", err)
-	}
-	writeAll(t, conn, 700)
-	if err := conn.Abort(); err != nil {
-		t.Fatalf("Abort: %v", err)
-	}
-	if got := log.snapshot(); !slices.Equal(got, []string{"h700"}) {
-		t.Fatalf("queue events = %v, want only the held capture", got)
+	for _, writerBusy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("writerBusy=%t", writerBusy), func(t *testing.T) {
+			conn, _ := newSendDelayConn(t)
+			var log queueLog
+			conn.SetQueueObserver(log.observer)
+			if err := setPacketHold(conn, holdIDs(700), 10); err != nil {
+				t.Fatalf("setPacketHold: %v", err)
+			}
+			writeAll(t, conn, 700)
+			if writerBusy {
+				conn.sendMu.Lock()
+			}
+			if err := conn.Abort(); err != nil {
+				t.Fatalf("Abort: %v", err)
+			}
+			if writerBusy {
+				// The writer releases what is held, as a PacketHoldRelease decision or the limit does.
+				conn.releaseHeldLocked(^uint64(0))
+				conn.sendMu.Unlock()
+			}
+			if got := log.snapshot(); !slices.Equal(got, []string{"h700"}) {
+				t.Fatalf("queue events = %v, want only the held capture", got)
+			}
+		})
 	}
 }
 
