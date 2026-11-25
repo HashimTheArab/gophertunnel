@@ -697,8 +697,9 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // pending one, so a packet written with it overtakes packets already queued, held ones released before
 // it included.
 //
-// Both callbacks run synchronously under the connection's packet write lock, in queue order, and follow
-// the WriteObserver's rules: short, nonblocking, no writes to or reconfiguration of the connection, and
+// Both callbacks run synchronously under the connection's packet write lock: captures in write order,
+// release functions in the order their packets join the pending batch. They follow the WriteObserver's
+// rules: short, nonblocking, no writes to or reconfiguration of the connection, and
 // no retained packet data.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 

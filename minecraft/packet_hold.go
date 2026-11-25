@@ -156,10 +156,15 @@ func (conn *Conn) releaseHeldLocked() bool {
 	clear(h.packets)
 	clear(h.observers)
 	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
-	// The packets are queued now, so whatever is written next goes out behind them.
+	// The packets are queued now, so whatever is written next goes out behind them. Once the connection is
+	// cancelled, nothing sends them any more: a writer that passed its context check before an Abort
+	// releases them only for the drop, so they never join the send order.
+	cancelled := conn.ctx != nil && conn.ctx.Err() != nil
 	for i, released := range h.released {
 		h.released[i] = nil
-		released()
+		if !cancelled {
+			released()
+		}
 	}
 	h.released = h.released[:0]
 	return true
