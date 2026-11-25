@@ -107,23 +107,37 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		return nil
 	}
 	conn := h.conn
-	// holdMu applies concurrent Sets to the delay in the order they changed the holds.
+	// holdMu serializes Sets, so the delay published below stays the one the holds need until the rule is
+	// applied.
 	conn.holdMu.Lock()
 	defer conn.holdMu.Unlock()
 	conn.sendMu.Lock()
 	holds := &conn.holds
-	if conn.ctx == nil || conn.ctx.Err() != nil || holds.closed {
+	if conn.closedLocked() {
 		holds.close()
 		conn.sendMu.Unlock()
 		return net.ErrClosed
 	}
+	if rule.manual() && h.bit == 0 && ^holds.used == 0 {
+		conn.sendMu.Unlock()
+		return errTooManyHolds
+	}
+	delay := holds.delayWith(h, rule.Delay)
+	conn.sendMu.Unlock()
+	// Publish the delay before applying the rule: a Flush racing this Set must not submit the packets the
+	// rule lets go of under the previous delay. Publishing can write delayed packets to the transport, so
+	// it runs without sendMu.
+	err := conn.delay.set(delay)
+
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if conn.closedLocked() {
+		holds.close()
+		return errors.Join(err, net.ErrClosed)
+	}
 	switch {
 	case rule.manual() && h.bit == 0:
 		free := ^holds.used
-		if free == 0 {
-			conn.sendMu.Unlock()
-			return errTooManyHolds
-		}
 		h.bit = free & -free
 		holds.used |= h.bit
 		holds.manual = append(holds.manual, h)
@@ -145,9 +159,7 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 	if h.bit != 0 && h.count >= h.limit {
 		conn.releaseHeldLocked(h.bit)
 	}
-	delay := holds.delay()
-	conn.sendMu.Unlock()
-	return conn.delay.set(delay)
+	return err
 }
 
 // Release lets go of everything the hold keeps and keeps holding, like PacketHoldRelease. The packets it
@@ -160,7 +172,7 @@ func (h *PacketHold) Release() error {
 	conn := h.conn
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
-	if conn.ctx == nil || conn.ctx.Err() != nil || conn.holds.closed {
+	if conn.closedLocked() {
 		return net.ErrClosed
 	}
 	if h.bit != 0 {
@@ -208,13 +220,20 @@ type parkedPacket struct {
 	keptBy   uint64
 }
 
-// delay returns the largest Delay of any hold.
-func (h *packetHolds) delay() time.Duration {
-	var delay time.Duration
-	for _, hold := range h.delayed {
-		delay = max(delay, hold.rule.Delay)
+// delayWith returns the largest Delay of any hold once hold's Delay is d.
+func (h *packetHolds) delayWith(hold *PacketHold, d time.Duration) time.Duration {
+	delay := d
+	for _, other := range h.delayed {
+		if other != hold {
+			delay = max(delay, other.rule.Delay)
+		}
 	}
 	return delay
+}
+
+// closedLocked reports whether the Conn has shut down, so its holds hold nothing. The caller holds sendMu.
+func (conn *Conn) closedLocked() bool {
+	return conn.ctx == nil || conn.ctx.Err() != nil || conn.holds.closed
 }
 
 // close drops everything held and refuses later holds.
@@ -297,9 +316,10 @@ func (conn *Conn) closeHold() {
 	conn.holds.close()
 }
 
-// selectLocked asks every manual hold what to do with pk, letting go of what a hold releases, and returns
-// the bits of the holds keeping it. The caller holds sendMu.
+// selectLocked asks every manual hold what to do with pk, letting go of what the holds releasing on it
+// keep, and returns the bits of the holds keeping it. The caller holds sendMu.
 func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy uint64) {
+	var released uint64
 	for _, hold := range conn.holds.manual {
 		if hold.rule.SelectableOnly && !selectable {
 			continue
@@ -308,8 +328,12 @@ func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy uint64
 		case PacketHoldKeep:
 			keptBy |= hold.bit
 		case PacketHoldRelease:
-			conn.releaseHeldLocked(hold.bit)
+			released |= hold.bit
 		}
+	}
+	if released != 0 {
+		// One release for every hold letting go keeps the packets they release in the order written.
+		conn.releaseHeldLocked(released)
 	}
 	return keptBy
 }

@@ -679,3 +679,52 @@ func TestPacketHold_NilHoldsNothing(t *testing.T) {
 	}
 	hold.Discard()
 }
+
+// Holds letting go on the same packet release what they keep together, in the order it was written.
+func TestPacketHold_HoldsReleasingOnOnePacketKeepWriteOrder(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	releaseOn := func(keep uint32) PacketSelector {
+		return func(pk packet.Packet) PacketHoldDecision {
+			switch pk.(*packet.Unknown).PacketID {
+			case keep:
+				return PacketHoldKeep
+			case 702:
+				return PacketHoldRelease
+			default:
+				return PacketHoldSend
+			}
+		}
+	}
+	// The hold keeping 701 is asked first, so releasing hold by hold would send 701 before 700.
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releaseOn(701), Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releaseOn(700), Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	writeAll(t, conn, 700, 701, 702)
+	mustFlush(t, conn)
+	for _, want := range []uint32{700, 701, 702} {
+		expectSent(t, ids, want, 2*time.Second)
+	}
+}
+
+// A hold switching from keeping packets to delaying them releases what it kept under the new delay.
+func TestPacketHold_SwitchingToADelayDelaysWhatItReleases(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	hold := conn.NewPacketHold()
+	if err := hold.Set(PacketHoldRule{Select: holdIDs(700), Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	writeAll(t, conn, 700)
+	const d = 150 * time.Millisecond
+	start := time.Now()
+	if err := hold.Set(PacketHoldRule{Delay: d}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	mustFlush(t, conn)
+	expectSent(t, ids, 700, 2*time.Second)
+	if elapsed := time.Since(start); elapsed < d {
+		t.Fatalf("released packet sent after %v, want at least the new %v delay", elapsed, d)
+	}
+}
