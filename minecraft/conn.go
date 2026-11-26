@@ -711,7 +711,8 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // reaching them, and a buffered packet stays queued, but a WritePacketDirect call sends none of its batch.
 // When a release function panics, the packets released with it stay queued, the release functions after
 // it never run, and the rest of the write or PacketHold call that released them is skipped; a packet whose
-// PacketHoldRelease decision released them is written only if a hold keeps it. Close instead reports a
+// PacketHoldRelease decision released them is written only if a hold keeps it. When a capture panics and
+// the release it triggers panics as well, the capture's panic reaches the caller. Close instead reports a
 // release panic as an error and still flushes.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 

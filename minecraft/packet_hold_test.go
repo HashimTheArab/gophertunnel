@@ -979,3 +979,50 @@ func TestPacketHold_CapturePanicStillCountsHeldPacket(t *testing.T) {
 		t.Fatalf("sent %v, want %v", got, want)
 	}
 }
+
+// When a capture panics and the release its write triggers panics too, the capture's panic reaches the
+// caller, and the released and held packets still end up where they belong.
+func TestPacketHold_CapturePanicWinsOverReleasePanic(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return func() { panic("release") }
+		case 701:
+			panic("capture")
+		}
+		return nil
+	})
+	// a keeps 700 and lets go of it on 701, which b keeps below its limit.
+	a, b := conn.NewPacketHold(), conn.NewPacketHold()
+	if err := a.Set(PacketHoldRule{Select: func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return PacketHoldKeep
+		case 701:
+			return PacketHoldRelease
+		}
+		return PacketHoldSend
+	}, Limit: 10}); err != nil {
+		t.Fatalf("Set a: %v", err)
+	}
+	if err := b.Set(PacketHoldRule{Select: holdIDs(701), Limit: 10}); err != nil {
+		t.Fatalf("Set b: %v", err)
+	}
+	writeAll(t, conn, 700)
+	func() {
+		defer func() {
+			if r := recover(); r != "capture" {
+				t.Fatalf("recovered %v, want the capture panic", r)
+			}
+		}()
+		_ = conn.WritePacket(testPacket(701))
+	}()
+	writeAll(t, conn, 702)
+	if err := b.Release(); err != nil {
+		t.Fatalf("Release b: %v", err)
+	}
+	if got, want := drainIDs(t, conn, ids), []uint32{700, 702, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}

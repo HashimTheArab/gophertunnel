@@ -377,11 +377,23 @@ func (conn *Conn) parkLocked(pk packet.Packet, keptBy, release uint64) {
 		}
 	}
 	defer func() {
-		if release != 0 {
-			// The release queues what it lets go of behind the packets already pending, and the caller's
-			// next flush sends them. A direct write's own batch goes out before the pending batch.
-			conn.releaseHeldLocked(release)
+		if release == 0 {
+			return
 		}
+		// The release queues what it lets go of behind the packets already pending, and the caller's next
+		// flush sends them. A direct write's own batch goes out before the pending batch.
+		captured := recover()
+		if captured == nil {
+			conn.releaseHeldLocked(release)
+			return
+		}
+		// A capture panicked. The release still runs, so no hold keeps more than its limit, but the capture's
+		// panic is the one that reaches the caller, even if a release function panics as well.
+		func() {
+			defer func() { _ = recover() }()
+			conn.releaseHeldLocked(release)
+		}()
+		panic(captured)
 	}()
 	// Nothing parks or releases until the captures return, so i still indexes pk.
 	if conn.writeObserver != nil {
