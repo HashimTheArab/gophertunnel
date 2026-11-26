@@ -8,13 +8,11 @@ import (
 	"net"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
-	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -327,9 +325,9 @@ func TestConn_PacketHoldAbortDropsHeldReferences(t *testing.T) {
 	_ = conn.Close()
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
-	if len(conn.holds.parked) != 0 || len(conn.holds.manual) != 0 || len(conn.bufferedSend) != 0 || len(conn.bufferedObservers) != 0 {
-		t.Fatalf("after Abort and Close: %d held, %d manual holds, %d pending, %d pending completions; want none retained",
-			len(conn.holds.parked), len(conn.holds.manual), len(conn.bufferedSend), len(conn.bufferedObservers))
+	if len(conn.holds.parked) != 0 || conn.holds.manual != nil || len(conn.bufferedSend) != 0 || len(conn.bufferedObservers) != 0 {
+		t.Fatalf("after Abort and Close: %d held, manual hold %p, %d pending, %d pending completions; want none retained",
+			len(conn.holds.parked), conn.holds.manual, len(conn.bufferedSend), len(conn.bufferedObservers))
 	}
 }
 
@@ -347,7 +345,7 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 	}
 	// The writer passed its context check before the abort and releases what is held, as a
 	// PacketHoldRelease decision or the limit does. The connection is cancelled, so it stays held.
-	conn.releaseHeldLocked(^uint64(0))
+	conn.releaseHeldLocked()
 	conn.sendMu.Unlock()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -494,7 +492,7 @@ func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
 			}
 			if writerBusy {
 				// The writer releases what is held, as a PacketHoldRelease decision or the limit does.
-				conn.releaseHeldLocked(^uint64(0))
+				conn.releaseHeldLocked()
 				conn.sendMu.Unlock()
 			}
 			if got := log.snapshot(); !slices.Equal(got, []string{"h700"}) {
@@ -502,63 +500,6 @@ func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
 			}
 		})
 	}
-}
-
-// A packet two manual holds keep waits for both, while each hold's own packets go once it lets go.
-func TestPacketHold_PacketKeptByTwoHoldsWaitsForBoth(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	first, second := conn.NewPacketHold(), conn.NewPacketHold()
-	if err := first.Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := second.Set(PacketHoldRule{Select: holdIDs(701, 702), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	writeAll(t, conn, 700, 701, 702, 703)
-	if err := conn.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	expectSent(t, ids, 703, 2*time.Second)
-
-	if err := first.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	mustFlush(t, conn)
-	expectSent(t, ids, 700, 2*time.Second)
-	expectNothingSent(t, ids, 50*time.Millisecond)
-
-	if err := second.Set(PacketHoldRule{}); err != nil {
-		t.Fatalf("Set(zero): %v", err)
-	}
-	mustFlush(t, conn)
-	expectSent(t, ids, 701, 2*time.Second)
-	expectSent(t, ids, 702, 2*time.Second)
-}
-
-// Each hold counts the packets it keeps toward its own limit, and a hold reaching its limit leaves the
-// packets another hold keeps in place.
-func TestPacketHold_LimitsAreCountedPerHold(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	first, second := conn.NewPacketHold(), conn.NewPacketHold()
-	if err := first.Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 2}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := second.Set(PacketHoldRule{Select: holdIDs(701), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	// The second packet reaches the first hold's limit; 701 is still kept by the second hold.
-	writeAll(t, conn, 701, 700, 702)
-	if err := conn.Flush(); err != nil {
-		t.Fatalf("Flush: %v", err)
-	}
-	expectSent(t, ids, 700, 2*time.Second)
-	expectSent(t, ids, 702, 2*time.Second)
-	expectNothingSent(t, ids, 50*time.Millisecond)
-	if err := second.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	mustFlush(t, conn)
-	expectSent(t, ids, 701, 2*time.Second)
 }
 
 // Discard drops what the hold keeps, never completes or reports it, and leaves the hold holding.
@@ -571,18 +512,15 @@ func TestPacketHold_DiscardDropsKeptPacketsAndKeepsHolding(t *testing.T) {
 		id := pk.(*packet.Unknown).PacketID
 		return func() { completed = append(completed, id) }
 	})
-	hold, other := conn.NewPacketHold(), conn.NewPacketHold()
-	if err := hold.Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := other.Set(PacketHoldRule{Select: holdIDs(701, 702), Limit: 2}); err != nil {
+	hold := conn.NewPacketHold()
+	if err := hold.Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 3}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	writeAll(t, conn, 700, 701)
 	hold.Discard()
 
-	// The other hold no longer counts the discarded 701, so one more 702 stays under its limit.
-	writeAll(t, conn, 702, 700, 703)
+	// The discarded packets no longer count, so two more stay under the limit.
+	writeAll(t, conn, 700, 701, 703)
 	if err := conn.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -592,19 +530,15 @@ func TestPacketHold_DiscardDropsKeptPacketsAndKeepsHolding(t *testing.T) {
 	}
 	mustFlush(t, conn)
 	expectSent(t, ids, 700, 2*time.Second)
-	if err := other.Set(PacketHoldRule{}); err != nil {
-		t.Fatalf("Set(zero): %v", err)
-	}
-	mustFlush(t, conn)
-	expectSent(t, ids, 702, 2*time.Second)
+	expectSent(t, ids, 701, 2*time.Second)
 
 	conn.sendMu.Lock()
 	got := slices.Clone(completed)
 	conn.sendMu.Unlock()
-	if !slices.Equal(got, []uint32{703, 700, 702}) {
+	if !slices.Equal(got, []uint32{703, 700, 701}) {
 		t.Fatalf("completions = %v, want only the packets sent", got)
 	}
-	want := []string{"h700", "h701", "h702", "h700", "w703", "r700", "r702"}
+	want := []string{"h700", "h701", "h700", "h701", "w703", "r700", "r701"}
 	if got := log.snapshot(); !slices.Equal(got, want) {
 		t.Fatalf("queue events = %v, want %v", got, want)
 	}
@@ -674,31 +608,6 @@ func TestPacketHold_ReleasedPacketWaitsTheDelayBehindPacketsLetThrough(t *testin
 	}
 }
 
-// The delay is the largest any hold sets, and once no hold delays any more, everything delayed is sent.
-func TestPacketHold_DelayIsTheLargestOfAnyHold(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	short, long := conn.NewPacketHold(), conn.NewPacketHold()
-	if err := short.Set(PacketHoldRule{Delay: time.Millisecond}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := long.Set(PacketHoldRule{Delay: time.Hour}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
-		t.Fatalf("WritePacketImmediate: %v", err)
-	}
-	expectNothingSent(t, ids, 50*time.Millisecond)
-	if err := long.Set(PacketHoldRule{}); err != nil {
-		t.Fatalf("Set(zero): %v", err)
-	}
-	// Lowering the delay never reorders, so the packet keeps its due time until no delay is left.
-	expectNothingSent(t, ids, 50*time.Millisecond)
-	if err := short.Set(PacketHoldRule{}); err != nil {
-		t.Fatalf("Set(zero): %v", err)
-	}
-	expectSent(t, ids, 700, 2*time.Second)
-}
-
 func TestPacketHold_SetRejectsARuleThatDelaysAndSelects(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
 	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700), Delay: time.Second}); err == nil {
@@ -706,25 +615,26 @@ func TestPacketHold_SetRejectsARuleThatDelaysAndSelects(t *testing.T) {
 	}
 }
 
-func TestPacketHold_SetRefusesMoreManualHoldsThanTheConnCanTrack(t *testing.T) {
+// A Conn has one manual and one delay hold; a hold that stops frees its place.
+func TestPacketHold_SetRefusesASecondHoldOfTheSameKind(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
-	holds := make([]*PacketHold, maxManualHolds)
-	for i := range holds {
-		holds[i] = conn.NewPacketHold()
-		if err := holds[i].Set(PacketHoldRule{Select: holdIDs(700)}); err != nil {
-			t.Fatalf("Set hold %d: %v", i, err)
+	for _, rule := range []PacketHoldRule{{Select: holdIDs(700)}, {Delay: time.Millisecond}} {
+		first, second := conn.NewPacketHold(), conn.NewPacketHold()
+		if err := first.Set(rule); err != nil {
+			t.Fatalf("Set: %v", err)
 		}
-	}
-	extra := conn.NewPacketHold()
-	if err := extra.Set(PacketHoldRule{Select: holdIDs(700)}); !errors.Is(err, errTooManyHolds) {
-		t.Fatalf("Set beyond the limit = %v, want errTooManyHolds", err)
-	}
-	// A hold that stops holding frees its place.
-	if err := holds[3].Set(PacketHoldRule{}); err != nil {
-		t.Fatalf("Set(zero): %v", err)
-	}
-	if err := extra.Set(PacketHoldRule{Select: holdIDs(700)}); err != nil {
-		t.Fatalf("Set after a hold stopped: %v", err)
+		if err := second.Set(rule); !errors.Is(err, errHoldInUse) {
+			t.Fatalf("second Set(%+v) = %v, want errHoldInUse", rule, err)
+		}
+		if err := first.Set(PacketHoldRule{}); err != nil {
+			t.Fatalf("Set(zero): %v", err)
+		}
+		if err := second.Set(rule); err != nil {
+			t.Fatalf("Set after the first hold stopped: %v", err)
+		}
+		if err := second.Set(PacketHoldRule{}); err != nil {
+			t.Fatalf("Set(zero): %v", err)
+		}
 	}
 }
 
@@ -740,35 +650,6 @@ func TestPacketHold_NilHoldsNothing(t *testing.T) {
 		t.Fatalf("Release on nil = %v, want nil", err)
 	}
 	hold.Discard()
-}
-
-// Holds letting go on the same packet release what they keep together, in the order it was written.
-func TestPacketHold_HoldsReleasingOnOnePacketKeepWriteOrder(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	releaseOn := func(keep uint32) PacketSelector {
-		return func(pk packet.Packet) PacketHoldDecision {
-			switch pk.(*packet.Unknown).PacketID {
-			case keep:
-				return PacketHoldKeep
-			case 702:
-				return PacketHoldRelease
-			default:
-				return PacketHoldSend
-			}
-		}
-	}
-	// The hold keeping 701 is asked first, so releasing hold by hold would send 701 before 700.
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releaseOn(701), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releaseOn(700), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	writeAll(t, conn, 700, 701, 702)
-	mustFlush(t, conn)
-	for _, want := range []uint32{700, 701, 702} {
-		expectSent(t, ids, want, 2*time.Second)
-	}
 }
 
 // A hold switching from keeping packets to delaying them releases what it kept under the new delay.
@@ -788,289 +669,5 @@ func TestPacketHold_SwitchingToADelayDelaysWhatItReleases(t *testing.T) {
 	expectSent(t, ids, 700, 2*time.Second)
 	if elapsed := time.Since(start); elapsed < d {
 		t.Fatalf("released packet sent after %v, want at least the new %v delay", elapsed, d)
-	}
-}
-
-// A packet one hold releases on and another hold's limit releases leaves everything both let go of in the
-// order it was written.
-func TestPacketHold_ReleaseAndLimitOnOneWriteKeepWriteOrder(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	var log queueLog
-	conn.SetQueueObserver(log.observer)
-	releasing := func(pk packet.Packet) PacketHoldDecision {
-		switch pk.(*packet.Unknown).PacketID {
-		case 701:
-			return PacketHoldKeep
-		case 702:
-			return PacketHoldRelease
-		default:
-			return PacketHoldSend
-		}
-	}
-	// The releasing hold is asked first, so releasing it before the limit would send 701 before 700.
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: releasing, Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 702), Limit: 2}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	writeAll(t, conn, 700, 701, 702)
-	mustFlush(t, conn)
-	for _, want := range []uint32{700, 701, 702} {
-		expectSent(t, ids, want, 2*time.Second)
-	}
-	if got, want := log.snapshot(), []string{"h700", "h701", "h702", "r700", "r701", "r702"}; !slices.Equal(got, want) {
-		t.Fatalf("queue events = %v, want %v", got, want)
-	}
-}
-
-// drainIDs closes conn and returns every packet ID the transport received, in order.
-func drainIDs(t *testing.T, conn *Conn, ids <-chan uint32) []uint32 {
-	t.Helper()
-	_ = conn.Close()
-	var got []uint32
-	timeout := time.After(2 * time.Second)
-	for {
-		select {
-		case id, ok := <-ids:
-			if !ok {
-				return got
-			}
-			got = append(got, id)
-		case <-timeout:
-			t.Fatalf("transport still open after Close, received %v", got)
-		}
-	}
-}
-
-// A release function that panics leaves the connection usable, whichever call let go of the hold: the
-// send lock is free, every released packet is sent exactly once, and the next release runs only its own
-// functions.
-func TestPacketHold_ReleasePanicLeavesConnUsable(t *testing.T) {
-	tests := []struct {
-		name       string
-		limit      int
-		release    func(*Conn, *PacketHold)
-		wantEvents []string
-		wantSent   []uint32
-	}{
-		{
-			name:       "Set",
-			limit:      10,
-			release:    func(_ *Conn, h *PacketHold) { _ = h.Set(PacketHoldRule{}) },
-			wantEvents: []string{"h701", "h702", "r702"},
-			wantSent:   []uint32{700, 701, 702},
-		},
-		{
-			name:       "Release",
-			limit:      10,
-			release:    func(_ *Conn, h *PacketHold) { _ = h.Release() },
-			wantEvents: []string{"h701", "h702", "r702"},
-			wantSent:   []uint32{700, 701, 702},
-		},
-		{
-			// The packet whose decision released the hold is not written.
-			name:       "PacketHoldRelease",
-			limit:      10,
-			release:    func(conn *Conn, _ *PacketHold) { _ = conn.WritePacket(testPacket(709)) },
-			wantEvents: []string{"h701", "h702", "r702"},
-			wantSent:   []uint32{700, 701, 702},
-		},
-		{
-			// The packet that fills the hold is parked and captured before the release, so it goes out too.
-			name:       "limit",
-			limit:      3,
-			release:    func(conn *Conn, _ *PacketHold) { _ = conn.WritePacket(testPacket(708)) },
-			wantEvents: []string{"h701", "h708", "h702", "r702"},
-			wantSent:   []uint32{700, 701, 708, 702},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			conn, ids := newSendDelayConn(t)
-			var log queueLog
-			conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
-				if held && pk.(*packet.Unknown).PacketID == 700 {
-					return func() { panic("release") }
-				}
-				return log.observer(pk, held)
-			})
-			rule := PacketHoldRule{Limit: tt.limit, Select: func(pk packet.Packet) PacketHoldDecision {
-				if pk.(*packet.Unknown).PacketID == 709 {
-					return PacketHoldRelease
-				}
-				return PacketHoldKeep
-			}}
-			hold := conn.NewPacketHold()
-			if err := hold.Set(rule); err != nil {
-				t.Fatalf("Set: %v", err)
-			}
-			writeAll(t, conn, 700, 701)
-			func() {
-				defer func() {
-					if recover() == nil {
-						t.Fatal("release did not panic")
-					}
-				}()
-				tt.release(conn, hold)
-			}()
-			if !conn.sendMu.TryLock() {
-				// Free the leaked lock so Close in the cleanup does not hang.
-				conn.sendMu.Unlock()
-				t.Fatal("send lock still held after the panic")
-			}
-			conn.sendMu.Unlock()
-
-			if err := hold.Set(rule); err != nil {
-				t.Fatalf("Set after the panic: %v", err)
-			}
-			writeAll(t, conn, 702)
-			if err := hold.Release(); err != nil {
-				t.Fatalf("Release after the panic: %v", err)
-			}
-			if got := log.snapshot(); !slices.Equal(got, tt.wantEvents) {
-				t.Fatalf("queue events = %v, want %v", got, tt.wantEvents)
-			}
-			if got := drainIDs(t, conn, ids); !slices.Equal(got, tt.wantSent) {
-				t.Fatalf("sent %v, want %v", got, tt.wantSent)
-			}
-		})
-	}
-}
-
-// Close still flushes when a release function panics as it lets go of the holds: the pending packets and
-// the released ones go out in order, and Close reports the panic.
-func TestPacketHold_ReleasePanicOnCloseStillFlushes(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
-		return func() { panic("release") }
-	})
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	writeAll(t, conn, 700, 702, 701)
-	if err := conn.Close(); err == nil || !strings.Contains(err.Error(), "panic releasing held packets") {
-		t.Fatalf("Close = %v, want the release panic reported", err)
-	}
-	if got, want := drainIDs(t, conn, ids), []uint32{702, 700, 701}; !slices.Equal(got, want) {
-		t.Fatalf("sent %v, want %v", got, want)
-	}
-}
-
-// A capture that panics still parks and counts its held packet, so the limit lets go of it ahead of later
-// writes, and the next held packet is kept on its own.
-func TestPacketHold_CapturePanicStillCountsHeldPacket(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
-		if pk.(*packet.Unknown).PacketID == 700 {
-			panic("capture")
-		}
-		return nil
-	})
-	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 1}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("capture did not panic")
-			}
-		}()
-		_ = conn.WritePacket(testPacket(700))
-	}()
-	writeAll(t, conn, 702, 701)
-	if got, want := drainIDs(t, conn, ids), []uint32{700, 702, 701}; !slices.Equal(got, want) {
-		t.Fatalf("sent %v, want %v", got, want)
-	}
-}
-
-// When a capture panics and the release its write triggers panics too, the capture's panic reaches the
-// caller, and the released and held packets still end up where they belong.
-func TestPacketHold_CapturePanicWinsOverReleasePanic(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
-		switch pk.(*packet.Unknown).PacketID {
-		case 700:
-			return func() { panic("release") }
-		case 701:
-			panic("capture")
-		}
-		return nil
-	})
-	// a keeps 700 and lets go of it on 701, which b keeps below its limit.
-	a, b := conn.NewPacketHold(), conn.NewPacketHold()
-	if err := a.Set(PacketHoldRule{Select: func(pk packet.Packet) PacketHoldDecision {
-		switch pk.(*packet.Unknown).PacketID {
-		case 700:
-			return PacketHoldKeep
-		case 701:
-			return PacketHoldRelease
-		}
-		return PacketHoldSend
-	}, Limit: 10}); err != nil {
-		t.Fatalf("Set a: %v", err)
-	}
-	if err := b.Set(PacketHoldRule{Select: holdIDs(701), Limit: 10}); err != nil {
-		t.Fatalf("Set b: %v", err)
-	}
-	writeAll(t, conn, 700)
-	func() {
-		defer func() {
-			if r := recover(); r != "capture" {
-				t.Fatalf("recovered %v, want the capture panic", r)
-			}
-		}()
-		_ = conn.WritePacket(testPacket(701))
-	}()
-	writeAll(t, conn, 702)
-	if err := b.Release(); err != nil {
-		t.Fatalf("Release b: %v", err)
-	}
-	if got, want := drainIDs(t, conn, ids), []uint32{700, 702, 701}; !slices.Equal(got, want) {
-		t.Fatalf("sent %v, want %v", got, want)
-	}
-}
-
-// panicPacket fails to encode.
-type panicPacket struct{ id uint32 }
-
-func (p *panicPacket) ID() uint32          { return p.id }
-func (p *panicPacket) Marshal(protocol.IO) { panic("encode") }
-
-// splitProtocol converts packet 705 into itself followed by a packet that fails to encode.
-type splitProtocol struct{ Protocol }
-
-func (p splitProtocol) ConvertFromLatest(pk packet.Packet, conn *Conn) []packet.Packet {
-	if pk.ID() == 705 {
-		return []packet.Packet{pk, &panicPacket{id: 706}}
-	}
-	return p.Protocol.ConvertFromLatest(pk, conn)
-}
-
-// A held write whose encoding panics part way leaves nothing behind: the next held packet goes out on its
-// own, without the wire packets the failed write encoded before the panic.
-func TestPacketHold_EncodePanicLeavesNoWirePackets(t *testing.T) {
-	conn, ids := newSendDelayConn(t)
-	conn.sendMu.Lock()
-	conn.proto = splitProtocol{Protocol: conn.proto}
-	conn.sendMu.Unlock()
-	hold := conn.NewPacketHold()
-	if err := hold.Set(PacketHoldRule{Select: holdIDs(701, 705), Limit: 10}); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("encoding did not panic")
-			}
-		}()
-		_ = conn.WritePacket(&packet.Unknown{PacketID: 705})
-	}()
-	writeAll(t, conn, 701)
-	if err := hold.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	if got, want := drainIDs(t, conn, ids), []uint32{701}; !slices.Equal(got, want) {
-		t.Fatalf("sent %v, want %v", got, want)
 	}
 }

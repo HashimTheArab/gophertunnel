@@ -241,7 +241,7 @@ func TestConn_TransportFailureIsTerminal(t *testing.T) {
 					}
 					for _, delay := range []time.Duration{time.Hour, 0} {
 						if err := setSendDelay(conn, delay); !errors.Is(err, failure.err) {
-							t.Errorf("SetSendDelay(%v) = %v, want %v", delay, err, failure.err)
+							t.Errorf("setSendDelay(%v) = %v, want %v", delay, err, failure.err)
 						}
 					}
 					if transport.writes != 1 || completions != 0 {

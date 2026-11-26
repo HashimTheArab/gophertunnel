@@ -271,7 +271,7 @@ type Conn struct {
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
 	pool                 packet.Pool
-	// delay holds encoded batches for the largest PacketHold delay between enc and the network.
+	// delay holds encoded batches for the PacketHold delay between enc and the network.
 	delay                delayWriter
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
@@ -689,31 +689,11 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 	conn.sendMu.Unlock()
 }
 
-// QueueObserver sees each outgoing logical packet the WriteObserver sees, under the same lock and
-// conditions, and learns whether a manual PacketHold keeps it back. A packet not held joins the order
-// packets reach the transport in as it is written, behind everything queued before it; the function
-// returned for it is ignored. For a held packet, the returned function runs when no hold keeps the packet
-// any more and it joins that order, ahead of anything written after, which is before the WriteObserver's
-// completion when a PacketHold delay applies. It never runs for a packet discarded while it is held: by
-// Discard, by Abort, or by a release after the connection is cancelled. Like any queued packet, a released
-// one can still be dropped by an Abort before it is sent; the WriteObserver's completion reports that it
-// reached the transport.
-//
-// Queue order is the order of the pending batch. WritePacketDirect sends its own batch ahead of the
-// pending one, so a packet written with it overtakes packets already queued, held ones released before
-// it included.
-//
-// Both callbacks run synchronously under the connection's packet write lock: captures in write order,
-// release functions in the order their packets join the pending batch. They follow the WriteObserver's
-// rules: short, nonblocking, no writes to or reconfiguration of the connection, and no retained packet
-// data. A callback that panics leaves the connection usable, and the panic reaches the call that ran it.
-// When a capture panics, a held packet still counts toward its holds' limits, which release it as usual on
-// reaching them, and a buffered packet stays queued, but a WritePacketDirect call sends none of its batch.
-// When a release function panics, the packets released with it stay queued, the release functions after
-// it never run, and the rest of the write or PacketHold call that released them is skipped; a packet whose
-// PacketHoldRelease decision released them is written only if a hold keeps it. When a capture panics and
-// the release it triggers panics as well, the capture's panic reaches the caller. Close instead reports a
-// release panic as an error and still flushes.
+// QueueObserver sees each outgoing logical packet the WriteObserver sees, under the same lock and rules,
+// and whether the manual PacketHold keeps it. For a held packet, the returned function runs when the hold
+// lets it go into the pending batch, and never if it is dropped while held; for any other packet it is
+// ignored. The pending batch is the order packets reach the transport, except that WritePacketDirect
+// sends its own batch first. Callbacks must not panic.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
 // SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new
@@ -730,8 +710,8 @@ func (conn *Conn) WritePacket(pk packet.Packet) error {
 	return conn.writePackets(buffered, false, pk)
 }
 
-// WritePacketSelectable writes pk as WritePacket does, and also shows it to the manual PacketHolds whose
-// rule is SelectableOnly, which see no other packets. A writer passing packets through for someone else
+// WritePacketSelectable writes pk as WritePacket does, and also shows it to a manual PacketHold whose
+// rule is SelectableOnly, which sees no other packets. A writer passing packets through for someone else
 // uses it to let a hold select among those packets alone.
 func (conn *Conn) WritePacketSelectable(pk packet.Packet) error {
 	return conn.writePackets(buffered, true, pk)
@@ -813,21 +793,14 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	}()
 
 	for _, pk := range pks {
-		var keptBy, release uint64
-		if len(conn.holds.manual) != 0 {
-			keptBy, release = conn.selectLocked(pk, selectable)
+		decision := conn.selectLocked(pk, selectable)
+		if decision == PacketHoldRelease {
+			// What the hold keeps joins the pending batch before pk is queued.
+			conn.releaseHeldLocked()
 		}
-		held := keptBy != 0
-		if !held && release != 0 {
-			// The released packets go ahead of pk, which is not held.
-			conn.releaseHeldLocked(release)
-			release = 0
-		}
+		held := decision == PacketHoldKeep
 		target := dst
 		if held {
-			// A held packet's wire packets collect from an empty scratch: a held write whose encoding panicked
-			// part way may have left some there, and they must not be parked with this packet.
-			clear(conn.holds.scratch)
 			conn.holds.scratch = conn.holds.scratch[:0]
 			target = &conn.holds.scratch
 		}
@@ -845,13 +818,10 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 			*target = append(*target, append([]byte(nil), buf.Bytes()...))
 		}
 		if len(*target) == before {
-			if release != 0 {
-				conn.releaseHeldLocked(release)
-			}
 			continue
 		}
 		if held {
-			conn.parkLocked(pk, keptBy, release)
+			conn.parkLocked(pk)
 			continue
 		}
 		if conn.writeObserver != nil {
@@ -3085,11 +3055,8 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
-		// A QueueObserver release function that panics still leaves the released packets for the flush. Its
-		// error is kept before the flush, which can panic in turn.
-		conn.gracefulCloseErr = conn.closeHold()
-		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.Flush())
-		conn.dropPendingIfClosed()
+		conn.closeHold()
+		conn.gracefulCloseErr = conn.Flush()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
 			return
 		}
