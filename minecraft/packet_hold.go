@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -121,14 +122,21 @@ func (conn *Conn) dropPendingIfClosed() {
 
 // closeHold queues everything held for Close's final flush and stops holding, so a SetPacketHold racing
 // the rest of Close gets net.ErrClosed instead of holding packets nobody will send. A connection already
-// cancelled drops what it holds.
-func (conn *Conn) closeHold() {
+// cancelled drops what it holds. A QueueObserver release function that panics is returned as an error:
+// the packets are queued by then, and the hold is closed either way, so Close can still flush them.
+func (conn *Conn) closeHold() (err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
+	defer conn.hold.close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic releasing held packets: %v", recovered)
+		}
+	}()
 	if conn.ctx != nil && conn.ctx.Err() == nil {
 		conn.releaseHeldLocked()
 	}
-	conn.hold.close()
+	return nil
 }
 
 // set replaces the selector and its limit without touching what is already held.

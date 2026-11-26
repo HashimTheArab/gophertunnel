@@ -8,6 +8,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -569,5 +570,64 @@ func TestConn_QueueObserverReleasePanicLeavesConnUsable(t *testing.T) {
 				t.Fatalf("queue events = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// receiveIDs reads n packet IDs from the transport, failing if they do not arrive.
+func receiveIDs(t *testing.T, ids <-chan uint32, n int) []uint32 {
+	t.Helper()
+	var got []uint32
+	for range n {
+		select {
+		case id := <-ids:
+			got = append(got, id)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("received %v, want %d packets", got, n)
+		}
+	}
+	return got
+}
+
+// Close still flushes when a release function panics as it releases the hold: the pending packets and the
+// released ones go out in order, and Close reports the panic.
+func TestConn_QueueObserverReleasePanicOnCloseStillFlushes(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		return func() { panic("release") }
+	})
+	if err := conn.SetPacketHold(holdIDs(700, 701), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700, 702, 701)
+	if err := conn.Close(); err == nil || !strings.Contains(err.Error(), "panic releasing held packets") {
+		t.Fatalf("Close = %v, want the release panic reported", err)
+	}
+	if got, want := receiveIDs(t, ids, 3), []uint32{702, 700, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}
+
+// A capture that panics still counts its held packet toward the limit, so the limit releases it.
+func TestConn_QueueObserverCapturePanicStillCountsHeldPacket(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		panic("capture")
+	})
+	if err := conn.SetPacketHold(holdIDs(700), 1); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("capture did not panic")
+			}
+		}()
+		_ = conn.WritePacket(testPacket(700))
+	}()
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := receiveIDs(t, ids, 1); !slices.Equal(got, []uint32{700}) {
+		t.Fatalf("sent %v, want the held packet released by the limit", got)
 	}
 }

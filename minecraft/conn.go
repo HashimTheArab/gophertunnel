@@ -703,10 +703,11 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // Both callbacks run synchronously under the connection's packet write lock: captures in write order,
 // release functions in the order their packets join the pending batch. They follow the WriteObserver's
 // rules: short, nonblocking, no writes to or reconfiguration of the connection, and
-// no retained packet data. A release function that panics leaves the connection usable: the panic reaches
-// the call that released the hold, the released packets stay queued, and the release functions after it
-// never run. When a PacketHoldRelease decision released the hold, that packet and any after it in the same
-// write are not written.
+// no retained packet data. A callback that panics leaves the connection usable. A capture's packet stays
+// written as its PacketHold decided, held or not, and counts toward the hold's limit. A release function's
+// panic reaches the call that released the hold, the released packets stay queued, and the release
+// functions after it never run; when a PacketHoldRelease decision released the hold, that packet and any
+// after it in the same write are not written. Close instead reports the panic as an error and still flushes.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
 // SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new
@@ -797,45 +798,58 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	}()
 
 	for _, pk := range pks {
-		target, targetObservers := dst, observers
-		decision := conn.hold.decide(pk)
-		if decision == PacketHoldRelease {
-			conn.releaseHeldLocked()
+		conn.encodePacketTo(dst, observers, buf, pk)
+	}
+}
+
+// encodePacketTo marshals one logical packet for encodePacketsTo, into dst or, when the PacketHold keeps
+// it, into the hold. The caller holds sendMu.
+func (conn *Conn) encodePacketTo(dst *[][]byte, observers *[]packetCompletion, buf *bytes.Buffer, pk packet.Packet) {
+	target, targetObservers := dst, observers
+	decision := conn.hold.decide(pk)
+	if decision == PacketHoldRelease {
+		conn.releaseHeldLocked()
+	}
+	held := decision == PacketHoldKeep
+	if held {
+		target, targetObservers = &conn.hold.packets, &conn.hold.observers
+	}
+	before := len(*target)
+	if registry, ok := pk.(*packet.ItemRegistry); ok {
+		// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
+		conn.observeShield(registry.Items)
+	}
+	for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
+		buf.Reset()
+		l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
+		if conn.observes(conn.hdr.PacketID) {
+			conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 		}
-		held := decision == PacketHoldKeep
-		if held {
-			target, targetObservers = &conn.hold.packets, &conn.hold.observers
-		}
-		before := len(*target)
-		if registry, ok := pk.(*packet.ItemRegistry); ok {
-			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
-			conn.observeShield(registry.Items)
-		}
-		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-			buf.Reset()
-			l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
-			if conn.observes(conn.hdr.PacketID) {
-				conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
-			}
-			*target = append(*target, append([]byte(nil), buf.Bytes()...))
-		}
-		if conn.writeObserver != nil && len(*target) != before {
-			if sent := conn.writeObserver(pk); sent != nil {
-				*targetObservers = append(*targetObservers, packetCompletion{after: len(*target), sent: sent})
-			}
-		}
-		if conn.queueObserver != nil && len(*target) != before {
-			if released := conn.queueObserver(pk, held); held && released != nil {
-				conn.hold.released = append(conn.hold.released, released)
-			}
-		}
-		if held && len(*target) != before {
-			conn.hold.count++
+		*target = append(*target, append([]byte(nil), buf.Bytes()...))
+	}
+	if len(*target) == before {
+		return
+	}
+	if held {
+		// A held packet counts toward the limit before the captures run, and the limit is checked after them
+		// even if one panics, so the hold never keeps more than its limit.
+		conn.hold.count++
+		defer func() {
 			if conn.hold.count >= conn.hold.limit {
 				// The limit queues everything held behind the packets already pending, and the caller's
 				// next flush sends them. A direct write's own batch goes out before the pending batch.
 				conn.releaseHeldLocked()
 			}
+		}()
+	}
+	if conn.writeObserver != nil {
+		if sent := conn.writeObserver(pk); sent != nil {
+			*targetObservers = append(*targetObservers, packetCompletion{after: len(*target), sent: sent})
+		}
+	}
+	if conn.queueObserver != nil {
+		if released := conn.queueObserver(pk, held); held && released != nil {
+			conn.hold.released = append(conn.hold.released, released)
 		}
 	}
 }
@@ -3060,8 +3074,9 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
-		conn.closeHold()
-		conn.gracefulCloseErr = conn.Flush()
+		// A QueueObserver release function that panics still leaves the released packets for the flush.
+		releaseErr := conn.closeHold()
+		conn.gracefulCloseErr = errors.Join(releaseErr, conn.Flush())
 		conn.dropPendingIfClosed()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
 			return
