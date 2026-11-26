@@ -8,6 +8,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -816,5 +817,165 @@ func TestPacketHold_ReleaseAndLimitOnOneWriteKeepWriteOrder(t *testing.T) {
 	}
 	if got, want := log.snapshot(), []string{"h700", "h701", "h702", "r700", "r701", "r702"}; !slices.Equal(got, want) {
 		t.Fatalf("queue events = %v, want %v", got, want)
+	}
+}
+
+// drainIDs closes conn and returns every packet ID the transport received, in order.
+func drainIDs(t *testing.T, conn *Conn, ids <-chan uint32) []uint32 {
+	t.Helper()
+	_ = conn.Close()
+	var got []uint32
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case id, ok := <-ids:
+			if !ok {
+				return got
+			}
+			got = append(got, id)
+		case <-timeout:
+			t.Fatalf("transport still open after Close, received %v", got)
+		}
+	}
+}
+
+// A release function that panics leaves the connection usable, whichever call let go of the hold: the
+// send lock is free, every released packet is sent exactly once, and the next release runs only its own
+// functions.
+func TestPacketHold_ReleasePanicLeavesConnUsable(t *testing.T) {
+	tests := []struct {
+		name       string
+		limit      int
+		release    func(*Conn, *PacketHold)
+		wantEvents []string
+		wantSent   []uint32
+	}{
+		{
+			name:       "Set",
+			limit:      10,
+			release:    func(_ *Conn, h *PacketHold) { _ = h.Set(PacketHoldRule{}) },
+			wantEvents: []string{"h701", "h702", "r702"},
+			wantSent:   []uint32{700, 701, 702},
+		},
+		{
+			name:       "Release",
+			limit:      10,
+			release:    func(_ *Conn, h *PacketHold) { _ = h.Release() },
+			wantEvents: []string{"h701", "h702", "r702"},
+			wantSent:   []uint32{700, 701, 702},
+		},
+		{
+			// The packet whose decision released the hold is not written.
+			name:       "PacketHoldRelease",
+			limit:      10,
+			release:    func(conn *Conn, _ *PacketHold) { _ = conn.WritePacket(testPacket(709)) },
+			wantEvents: []string{"h701", "h702", "r702"},
+			wantSent:   []uint32{700, 701, 702},
+		},
+		{
+			// The packet that fills the hold is parked and captured before the release, so it goes out too.
+			name:       "limit",
+			limit:      3,
+			release:    func(conn *Conn, _ *PacketHold) { _ = conn.WritePacket(testPacket(708)) },
+			wantEvents: []string{"h701", "h708", "h702", "r702"},
+			wantSent:   []uint32{700, 701, 708, 702},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, ids := newSendDelayConn(t)
+			var log queueLog
+			conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+				if held && pk.(*packet.Unknown).PacketID == 700 {
+					return func() { panic("release") }
+				}
+				return log.observer(pk, held)
+			})
+			rule := PacketHoldRule{Limit: tt.limit, Select: func(pk packet.Packet) PacketHoldDecision {
+				if pk.(*packet.Unknown).PacketID == 709 {
+					return PacketHoldRelease
+				}
+				return PacketHoldKeep
+			}}
+			hold := conn.NewPacketHold()
+			if err := hold.Set(rule); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+			writeAll(t, conn, 700, 701)
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("release did not panic")
+					}
+				}()
+				tt.release(conn, hold)
+			}()
+			if !conn.sendMu.TryLock() {
+				// Free the leaked lock so Close in the cleanup does not hang.
+				conn.sendMu.Unlock()
+				t.Fatal("send lock still held after the panic")
+			}
+			conn.sendMu.Unlock()
+
+			if err := hold.Set(rule); err != nil {
+				t.Fatalf("Set after the panic: %v", err)
+			}
+			writeAll(t, conn, 702)
+			if err := hold.Release(); err != nil {
+				t.Fatalf("Release after the panic: %v", err)
+			}
+			if got := log.snapshot(); !slices.Equal(got, tt.wantEvents) {
+				t.Fatalf("queue events = %v, want %v", got, tt.wantEvents)
+			}
+			if got := drainIDs(t, conn, ids); !slices.Equal(got, tt.wantSent) {
+				t.Fatalf("sent %v, want %v", got, tt.wantSent)
+			}
+		})
+	}
+}
+
+// Close still flushes when a release function panics as it lets go of the holds: the pending packets and
+// the released ones go out in order, and Close reports the panic.
+func TestPacketHold_ReleasePanicOnCloseStillFlushes(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		return func() { panic("release") }
+	})
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	writeAll(t, conn, 700, 702, 701)
+	if err := conn.Close(); err == nil || !strings.Contains(err.Error(), "panic releasing held packets") {
+		t.Fatalf("Close = %v, want the release panic reported", err)
+	}
+	if got, want := drainIDs(t, conn, ids), []uint32{702, 700, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}
+
+// A capture that panics still parks and counts its held packet, so the limit lets go of it ahead of later
+// writes, and the next held packet is kept on its own.
+func TestPacketHold_CapturePanicStillCountsHeldPacket(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		if pk.(*packet.Unknown).PacketID == 700 {
+			panic("capture")
+		}
+		return nil
+	})
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(700, 701), Limit: 1}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("capture did not panic")
+			}
+		}()
+		_ = conn.WritePacket(testPacket(700))
+	}()
+	writeAll(t, conn, 702, 701)
+	if got, want := drainIDs(t, conn, ids), []uint32{700, 702, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
 	}
 }

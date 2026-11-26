@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"time"
@@ -135,6 +136,9 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		holds.close()
 		return errors.Join(err, net.ErrClosed)
 	}
+	// The rule is applied in full before anything is let go of, so a QueueObserver release function that
+	// panics leaves the hold set as asked.
+	var release uint64
 	switch {
 	case rule.manual() && h.bit == 0:
 		free := ^holds.used
@@ -142,10 +146,10 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 		holds.used |= h.bit
 		holds.manual = append(holds.manual, h)
 	case !rule.manual() && h.bit != 0:
-		conn.releaseHeldLocked(h.bit)
+		release = h.bit
 		holds.used &^= h.bit
 		holds.manual = slices.DeleteFunc(holds.manual, func(other *PacketHold) bool { return other == h })
-		h.bit = 0
+		h.bit, h.count = 0, 0
 	}
 	wasDelayed, delayed := h.rule.Delay > 0, rule.Delay > 0
 	if wasDelayed != delayed {
@@ -157,7 +161,10 @@ func (h *PacketHold) Set(rule PacketHoldRule) error {
 	}
 	h.rule, h.limit = rule, max(rule.Limit, 1)
 	if h.bit != 0 && h.count >= h.limit {
-		conn.releaseHeldLocked(h.bit)
+		release |= h.bit
+	}
+	if release != 0 {
+		conn.releaseHeldLocked(release)
 	}
 	return err
 }
@@ -206,6 +213,9 @@ type packetHolds struct {
 	parked []parkedPacket
 	// scratch collects the wire packets of the logical packet being held.
 	scratch [][]byte
+	// released is reused to collect the QueueObserver release functions of the packets one release lets go
+	// of.
+	released []func()
 	// closed is set once the connection shuts down; a closed Conn holds nothing.
 	closed bool
 }
@@ -306,14 +316,21 @@ func (conn *Conn) dropPendingIfClosed() {
 
 // closeHold queues everything held for Close's final flush and stops holding, so a Set racing the rest of
 // Close gets net.ErrClosed instead of holding packets nobody will send. A connection already cancelled
-// drops what it holds.
-func (conn *Conn) closeHold() {
+// drops what it holds. A QueueObserver release function that panics is returned as an error: the packets
+// are queued by then, and the holds are closed either way, so Close can still flush them.
+func (conn *Conn) closeHold() (err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
+	defer conn.holds.close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic releasing held packets: %v", recovered)
+		}
+	}()
 	if conn.ctx != nil && conn.ctx.Err() == nil {
 		conn.releaseHeldLocked(^uint64(0))
 	}
-	conn.holds.close()
+	return nil
 }
 
 // selectLocked asks every manual hold what to do with pk, and returns the bits of the holds keeping it and
@@ -335,18 +352,21 @@ func (conn *Conn) selectLocked(pk packet.Packet, selectable bool) (keptBy, relea
 	return keptBy, released
 }
 
-// parkLocked keeps the logical packet whose wire packets are in holds.scratch for the holds in keptBy,
-// then lets go, in one release, of what the holds in release keep and of every hold it fills. The caller
-// holds sendMu.
-func (conn *Conn) parkLocked(keptBy, release uint64, sent, released func()) {
+// parkLocked keeps the logical packet pk, whose wire packets are in holds.scratch, for the holds in keptBy
+// and runs its captures, then lets go, in one release, of what the holds in release keep and of every hold
+// pk fills. The packet is parked and counted before the captures run, and the release runs even if one of
+// them panics, so a capture that panics leaves no hold keeping more than its limit. The caller holds
+// sendMu.
+func (conn *Conn) parkLocked(pk packet.Packet, keptBy, release uint64) {
 	holds := &conn.holds
-	p := parkedPacket{data: holds.scratch[0], sent: sent, released: released, keptBy: keptBy}
+	p := parkedPacket{data: holds.scratch[0], keptBy: keptBy}
 	if len(holds.scratch) > 1 {
 		p.extra = slices.Clone(holds.scratch[1:])
 	}
 	clear(holds.scratch)
 	holds.scratch = holds.scratch[:0]
 	holds.parked = append(holds.parked, p)
+	i := len(holds.parked) - 1
 
 	for _, hold := range holds.manual {
 		if keptBy&hold.bit != 0 {
@@ -356,10 +376,19 @@ func (conn *Conn) parkLocked(keptBy, release uint64, sent, released func()) {
 			}
 		}
 	}
-	if release != 0 {
-		// The release queues what it lets go of behind the packets already pending, and the caller's next
-		// flush sends them. A direct write's own batch goes out before the pending batch.
-		conn.releaseHeldLocked(release)
+	defer func() {
+		if release != 0 {
+			// The release queues what it lets go of behind the packets already pending, and the caller's
+			// next flush sends them. A direct write's own batch goes out before the pending batch.
+			conn.releaseHeldLocked(release)
+		}
+	}()
+	// Nothing parks or releases until the captures return, so i still indexes pk.
+	if conn.writeObserver != nil {
+		holds.parked[i].sent = conn.writeObserver(pk)
+	}
+	if conn.queueObserver != nil {
+		holds.parked[i].released = conn.queueObserver(pk, true)
 	}
 }
 
@@ -378,6 +407,10 @@ func (conn *Conn) releaseHeldLocked(mask uint64) bool {
 			hold.count = 0
 		}
 	}
+	// The release functions are detached from the holds while they run: if one panics, the holds keep none
+	// of them, so a later release cannot run them again.
+	released := holds.released[:0]
+	holds.released = nil
 	queued, kept := 0, 0
 	for _, p := range holds.parked {
 		if p.keptBy &^= mask; p.keptBy != 0 {
@@ -390,14 +423,20 @@ func (conn *Conn) releaseHeldLocked(mask uint64) bool {
 		if p.sent != nil {
 			conn.bufferedObservers = append(conn.bufferedObservers, packetCompletion{after: len(conn.bufferedSend), sent: p.sent})
 		}
-		// The packet is queued now, so buffered writes that follow go out behind it; WritePacketDirect can
-		// still overtake it.
 		if p.released != nil {
-			p.released()
+			released = append(released, p.released)
 		}
 		queued++
 	}
 	clear(holds.parked[kept:])
 	holds.parked = holds.parked[:kept]
+	// Every packet let go of is queued and the holds are consistent before any release function runs, so
+	// one that panics leaves the packets queued and the holds usable. Buffered writes that follow go out
+	// behind the packets; WritePacketDirect can still overtake them.
+	for _, run := range released {
+		run()
+	}
+	clear(released)
+	holds.released = released[:0]
 	return queued != 0
 }

@@ -705,8 +705,14 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 //
 // Both callbacks run synchronously under the connection's packet write lock: captures in write order,
 // release functions in the order their packets join the pending batch. They follow the WriteObserver's
-// rules: short, nonblocking, no writes to or reconfiguration of the connection, and
-// no retained packet data.
+// rules: short, nonblocking, no writes to or reconfiguration of the connection, and no retained packet
+// data. A callback that panics leaves the connection usable, and the panic reaches the call that ran it.
+// When a capture panics, a held packet still counts toward its holds' limits, which release it as usual on
+// reaching them, and a buffered packet stays queued, but a WritePacketDirect call sends none of its batch.
+// When a release function panics, the packets released with it stay queued, the release functions after
+// it never run, and the rest of the write or PacketHold call that released them is skipped; a packet whose
+// PacketHoldRelease decision released them is written only if a hold keeps it. Close instead reports a
+// release panic as an error and still flushes.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
 // SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new
@@ -839,17 +845,17 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 			}
 			continue
 		}
-		var sent, released func()
+		if held {
+			conn.parkLocked(pk, keptBy, release)
+			continue
+		}
 		if conn.writeObserver != nil {
-			sent = conn.writeObserver(pk)
+			if sent := conn.writeObserver(pk); sent != nil {
+				*observers = append(*observers, packetCompletion{after: len(*target), sent: sent})
+			}
 		}
 		if conn.queueObserver != nil {
-			released = conn.queueObserver(pk, held)
-		}
-		if held {
-			conn.parkLocked(keptBy, release, sent, released)
-		} else if sent != nil {
-			*observers = append(*observers, packetCompletion{after: len(*target), sent: sent})
+			conn.queueObserver(pk, false)
 		}
 	}
 }
@@ -3074,8 +3080,10 @@ func (conn *Conn) close(cause error) error {
 			}
 			conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.release(cause, true))
 		}()
-		conn.closeHold()
-		conn.gracefulCloseErr = conn.Flush()
+		// A QueueObserver release function that panics still leaves the released packets for the flush. Its
+		// error is kept before the flush, which can panic in turn.
+		conn.gracefulCloseErr = conn.closeHold()
+		conn.gracefulCloseErr = errors.Join(conn.gracefulCloseErr, conn.Flush())
 		conn.dropPendingIfClosed()
 		if conn.ctx != nil && conn.ctx.Err() != nil {
 			return
