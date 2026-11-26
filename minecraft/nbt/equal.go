@@ -9,7 +9,7 @@ import (
 // containers are significant: a nil compound or list differs from an empty one,
 // and typed lists differ from []any lists. The container fast paths avoid the
 // allocations of reflect.DeepEqual for separately decoded compounds.
-func (a Compound) Equal(b Compound) bool {
+func Equal(a, b map[string]any) bool {
 	if (a == nil) != (b == nil) || len(a) != len(b) {
 		return false
 	}
@@ -26,12 +26,9 @@ func (a Compound) Equal(b Compound) bool {
 // values retain DeepEqual's comparison semantics, including value arrays.
 func equalValue(a, b any) bool {
 	switch a := a.(type) {
-	case Compound:
-		b, ok := b.(Compound)
-		return ok && a.Equal(b)
 	case map[string]any:
 		b, ok := b.(map[string]any)
-		return ok && Compound(a).Equal(b)
+		return ok && Equal(a, b)
 	case []any:
 		b, ok := b.([]any)
 		if !ok || (a == nil) != (b == nil) || len(a) != len(b) {
