@@ -1184,6 +1184,101 @@ func TestDialerNamesNetherNetHTTPWhenNoEndpointAnswers(t *testing.T) {
 		if _, ok := transportErr.Network.(NetherNetHTTP); !ok || IsRakNet(transportErr.Network) {
 			t.Fatalf("%T: failed transport = %T, want NetherNetHTTP", network, transportErr.Network)
 		}
+		if !errors.Is(err, ErrNoNetherNetEndpoint) {
+			t.Fatalf("%T: dial error = %v, want ErrNoNetherNetEndpoint", network, err)
+		}
+	}
+}
+
+// Status reads the probe answer by address or URL and names a missing endpoint or status.
+func TestNetherNetHTTPStatus(t *testing.T) {
+	t.Parallel()
+	const body = `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":1}`
+	want := endpoint.Status{ServerName: "Unstable world", Protocol: 2225, Version: "1.26.60", LevelName: "2", PlayerCount: 4, MaxPlayerCount: 50, GameType: endpoint.GameTypeCreative}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+	t.Cleanup(server.Close)
+	empty := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(empty.Close)
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html></html>") }))
+	t.Cleanup(page.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	if got, err := (NetherNetHTTP{}).Status(ctx, server.Listener.Addr().String()); err != nil || got != want {
+		t.Fatalf("Status by address = %+v, %v; want %+v", got, err, want)
+	}
+	if got, err := (NetherNetHTTP{URL: server.URL}).Status(ctx, "unused:1"); err != nil || got != want {
+		t.Fatalf("Status by URL = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := (NetherNetHTTP{}).Status(ctx, closedTCPAddress(t)); !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a server without an endpoint = %v, want ErrNoNetherNetEndpoint", err)
+	}
+	if _, err := (NetherNetHTTP{URL: "http://" + closedTCPAddress(t)}).Status(ctx, ""); err == nil || errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a URL that does not answer = %v, want its own failure", err)
+	}
+	if _, err := (NetherNetHTTP{URL: page.URL}).Status(ctx, ""); !errors.Is(err, errNotStatus) || errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("Status of a URL serving a page = %v, want errNotStatus alone", err)
+	}
+	if _, err := (NetherNetHTTP{}).Status(ctx, empty.Listener.Addr().String()); !errors.Is(err, errNoStatus) {
+		t.Fatalf("Status of an endpoint without a status = %v, want errNoStatus", err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := (NetherNetHTTP{URL: server.URL}).Status(cancelled, ""); err != context.Canceled {
+		t.Fatalf("Status with a cancelled context = %v, want context.Canceled itself", err)
+	}
+}
+
+// PingContext answers with Status as RakNet pong data and names a server without an endpoint.
+func TestNetherNetHTTPPingContext(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"Unstable world","protocol":2225,"version":"1.26.60","level":"2","players":4,"maxPlayers":50,"gameType":0}`)
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	for _, network := range []NetherNetHTTP{{}, {URL: server.URL}} {
+		pong, err := network.PingContext(ctx, server.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("PingContext with URL %q: %v", network.URL, err)
+		}
+		got, err := ParsePongAdvertisement(pong)
+		if err != nil {
+			t.Fatalf("ParsePongAdvertisement(%q): %v", pong, err)
+		}
+		if got.MOTD != "Unstable world" || got.ProtocolVersion != 2225 || got.VersionName != "1.26.60" || got.PlayerCount != 4 || got.MaxPlayerCount != 50 {
+			t.Fatalf("PingContext with URL %q advertised %+v, want the endpoint's status", network.URL, got)
+		}
+	}
+	if _, err := (NetherNetHTTP{}).PingContext(ctx, closedTCPAddress(t)); !errors.Is(err, ErrNoNetherNetEndpoint) {
+		t.Fatalf("PingContext of a server without an endpoint = %v, want ErrNoNetherNetEndpoint", err)
+	}
+}
+
+// The NetherNetHTTP an AddressNetwork selects reads its status with the configured client info.
+func TestAddressNetworkSelectCarriesProbeClientInfo(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("protocol") != "2300" {
+			http.NotFound(w, r)
+			return
+		}
+		answerStatus(w)
+	}))
+	t.Cleanup(server.Close)
+	network := AddressNetwork{ProbeClientInfo: endpoint.ClientInfo{Version: "1.26.70", Protocol: 2300, Platform: 1}}
+	selected, err := network.Select(t.Context(), server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	n, ok := selected.(NetherNetHTTP)
+	if !ok {
+		t.Fatalf("Select = %T, want NetherNetHTTP", selected)
+	}
+	if _, err := n.Status(t.Context(), ""); err != nil {
+		t.Fatalf("Status: %v", err)
 	}
 }
 
