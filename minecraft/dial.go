@@ -436,7 +436,7 @@ func (d Dialer) DialContextNetwork(ctx context.Context, network Network, address
 		conn.identityData = identityData
 	}
 
-	readyForLogin, connected := make(chan struct{}), make(chan struct{})
+	readyForLogin, connected := make(chan struct{}, 1), make(chan struct{}, 1)
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	go listenConn(conn, readyForLogin, connected, cancel)
