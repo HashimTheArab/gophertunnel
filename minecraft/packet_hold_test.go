@@ -2,10 +2,13 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -341,8 +344,8 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 		conn.sendMu.Unlock()
 		t.Fatalf("Abort: %v", err)
 	}
-	// The writer passed its context check before the abort and released what was held into the pending
-	// batch, as a PacketHoldRelease decision or the limit does. No flush sends it any more.
+	// The writer passed its context check before the abort and releases what is held, as a
+	// PacketHoldRelease decision or the limit does. The connection is cancelled, so it stays held.
 	conn.releaseHeldLocked()
 	conn.sendMu.Unlock()
 
@@ -358,5 +361,273 @@ func TestConn_PacketHoldAbortWhileWriterBusyStillDropsHeld(t *testing.T) {
 			t.Fatalf("after Abort with sendMu busy: %d packets still held, %d pending, closed=%v", held, pending, closed)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// queueLog records what a QueueObserver sees: "w<id>" for a packet joining the send order as it is
+// written, "h<id>" for a held capture and "r<id>" for its release.
+type queueLog struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *queueLog) add(event string) {
+	l.mu.Lock()
+	l.events = append(l.events, event)
+	l.mu.Unlock()
+}
+
+func (l *queueLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.events)
+}
+
+func (l *queueLog) observer(pk packet.Packet, held bool) func() {
+	id := pk.(*packet.Unknown).PacketID
+	if !held {
+		l.add("w" + strconv.Itoa(int(id)))
+		return func() { l.add("ignored") }
+	}
+	l.add("h" + strconv.Itoa(int(id)))
+	return func() { l.add("r" + strconv.Itoa(int(id))) }
+}
+
+// A QueueObserver learns when each packet joins the send order: as it is written, or for a held packet
+// when the hold releases it, in order and before anything written after the release.
+func TestConn_QueueObserverSeesHeldPacketsJoinTheSendOrder(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	hold := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 701:
+			return PacketHoldRelease
+		case 702:
+			return PacketHoldSend
+		default:
+			return PacketHoldKeep
+		}
+	}
+	if err := conn.SetPacketHold(hold, 3); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	// 702 overtakes the held 700; 701 releases 700 and 703 first; the third held packet, 706, hits the limit.
+	writeAll(t, conn, 700, 702, 703, 701, 704, 705, 706)
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	var sent []uint32
+	for range 7 {
+		select {
+		case id := <-ids:
+			sent = append(sent, id)
+		case <-time.After(2 * time.Second):
+			t.Fatal("packets were not sent")
+		}
+	}
+	if want := []uint32{702, 700, 703, 701, 704, 705, 706}; !slices.Equal(sent, want) {
+		t.Fatalf("sent %v, want %v", sent, want)
+	}
+	want := []string{"h700", "w702", "h703", "r700", "r703", "w701", "h704", "h705", "h706", "r704", "r705", "r706"}
+	if got := log.snapshot(); !slices.Equal(got, want) {
+		t.Fatalf("queue events = %v, want %v", got, want)
+	}
+}
+
+// An Abort that lands while a write is under way, before the transport closes, leaves what is held for
+// the drop: the write's release neither sends the held packets nor reports them as queued.
+func TestConn_PacketHoldReleaseAfterCancelLeavesHeldPackets(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	var log queueLog
+	conn.SetQueueObserver(log.observer)
+	hold := func(pk packet.Packet) PacketHoldDecision {
+		switch pk.(*packet.Unknown).PacketID {
+		case 700:
+			return PacketHoldKeep
+		case 701:
+			// The write passed its context check; the Abort cancels the connection now.
+			conn.cancel(net.ErrClosed)
+			return PacketHoldRelease
+		default:
+			return PacketHoldSend
+		}
+	}
+	if err := conn.SetPacketHold(hold, 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700)
+	if err := conn.WritePacketImmediate(testPacket(701)); err != nil {
+		t.Fatalf("WritePacketImmediate: %v", err)
+	}
+	select {
+	case id := <-ids:
+		if id != 701 {
+			t.Fatalf("sent %d first, want 701 alone: the held packet was released after the cancellation", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the write was not sent")
+	}
+	if got := log.snapshot(); !slices.Equal(got, []string{"h700", "w701"}) {
+		t.Fatalf("queue events = %v, want the held capture and the write alone", got)
+	}
+}
+
+// A held packet the connection discards never joins the send order, including one a writer that was
+// already past its context check releases after the Abort.
+func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
+	for _, writerBusy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("writerBusy=%t", writerBusy), func(t *testing.T) {
+			conn, _ := newSendDelayConn(t)
+			var log queueLog
+			conn.SetQueueObserver(log.observer)
+			if err := conn.SetPacketHold(holdIDs(700), 10); err != nil {
+				t.Fatalf("SetPacketHold: %v", err)
+			}
+			writeAll(t, conn, 700)
+			if writerBusy {
+				conn.sendMu.Lock()
+			}
+			if err := conn.Abort(); err != nil {
+				t.Fatalf("Abort: %v", err)
+			}
+			if writerBusy {
+				// The writer releases what is held, as a PacketHoldRelease decision or the limit does.
+				conn.releaseHeldLocked()
+				conn.sendMu.Unlock()
+			}
+			if got := log.snapshot(); !slices.Equal(got, []string{"h700"}) {
+				t.Fatalf("queue events = %v, want only the held capture", got)
+			}
+		})
+	}
+}
+
+// A release function that panics leaves the connection usable, whichever call released the hold: the send
+// lock is free, and the next release runs only its own functions.
+func TestConn_QueueObserverReleasePanicLeavesConnUsable(t *testing.T) {
+	tests := []struct {
+		name    string
+		release func(*Conn)
+	}{
+		{name: "SetPacketHold", release: func(conn *Conn) { _ = conn.SetPacketHold(nil, 0) }},
+		{name: "write", release: func(conn *Conn) { _ = conn.WritePacket(testPacket(709)) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, _ := newSendDelayConn(t)
+			var log queueLog
+			conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+				if held && pk.(*packet.Unknown).PacketID == 700 {
+					return func() { panic("release") }
+				}
+				return log.observer(pk, held)
+			})
+			hold := func(pk packet.Packet) PacketHoldDecision {
+				if pk.(*packet.Unknown).PacketID == 709 {
+					return PacketHoldRelease
+				}
+				return PacketHoldKeep
+			}
+			if err := conn.SetPacketHold(hold, 10); err != nil {
+				t.Fatalf("SetPacketHold: %v", err)
+			}
+			writeAll(t, conn, 700, 701)
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("release did not panic")
+					}
+				}()
+				tt.release(conn)
+			}()
+			if !conn.sendMu.TryLock() {
+				// Free the leaked lock so Close in the cleanup does not hang.
+				conn.sendMu.Unlock()
+				t.Fatal("send lock still held after the panic")
+			}
+			conn.sendMu.Unlock()
+
+			if err := conn.SetPacketHold(hold, 10); err != nil {
+				t.Fatalf("SetPacketHold after the panic: %v", err)
+			}
+			writeAll(t, conn, 702)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// Free the send lock, which this panic may have leaked, so Close in the cleanup
+						// does not hang.
+						conn.sendMu.TryLock()
+						conn.sendMu.Unlock()
+						t.Fatalf("release after the panic panicked: %v", r)
+					}
+				}()
+				if err := conn.SetPacketHold(nil, 0); err != nil {
+					t.Fatalf("release after the panic: %v", err)
+				}
+			}()
+			if got, want := log.snapshot(), []string{"h701", "h702", "r702"}; !slices.Equal(got, want) {
+				t.Fatalf("queue events = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// receiveIDs reads n packet IDs from the transport, failing if they do not arrive.
+func receiveIDs(t *testing.T, ids <-chan uint32, n int) []uint32 {
+	t.Helper()
+	var got []uint32
+	for range n {
+		select {
+		case id := <-ids:
+			got = append(got, id)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("received %v, want %d packets", got, n)
+		}
+	}
+	return got
+}
+
+// Close still flushes when a release function panics as it releases the hold: the pending packets and the
+// released ones go out in order, and Close reports the panic.
+func TestConn_QueueObserverReleasePanicOnCloseStillFlushes(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		return func() { panic("release") }
+	})
+	if err := conn.SetPacketHold(holdIDs(700, 701), 10); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	writeAll(t, conn, 700, 702, 701)
+	if err := conn.Close(); err == nil || !strings.Contains(err.Error(), "panic releasing held packets") {
+		t.Fatalf("Close = %v, want the release panic reported", err)
+	}
+	if got, want := receiveIDs(t, ids, 3), []uint32{702, 700, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}
+
+// A capture that panics still counts its held packet toward the limit, so the limit releases it.
+func TestConn_QueueObserverCapturePanicStillCountsHeldPacket(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+		panic("capture")
+	})
+	if err := conn.SetPacketHold(holdIDs(700), 1); err != nil {
+		t.Fatalf("SetPacketHold: %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("capture did not panic")
+			}
+		}()
+		_ = conn.WritePacket(testPacket(700))
+	}()
+	if err := conn.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := receiveIDs(t, ids, 1); !slices.Equal(got, []uint32{700}) {
+		t.Fatalf("sent %v, want the held packet released by the limit", got)
 	}
 }

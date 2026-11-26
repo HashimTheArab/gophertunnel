@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
@@ -33,27 +34,32 @@ const (
 // itself whenever it queues held packets, and then wait for any SendDelay like every other batch.
 //
 // The WriteObserver sees a held packet when it is written; its completion runs once the packet actually
-// reaches the transport. Close sends what is held, Abort discards it, and a hold set after shutdown holds
+// reaches the transport. A QueueObserver learns when the hold releases it into the send order. Close sends what is held, Abort discards it, and a hold set after shutdown holds
 // nothing. It returns any failure flushing the released packets, including an earlier send failure.
 func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
-	conn.sendMu.Lock()
-	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
-		conn.hold.close()
-		conn.sendMu.Unlock()
-		return net.ErrClosed
-	}
-	conn.hold.set(hold, limit)
-	released := hold == nil || conn.hold.count >= conn.hold.limit
-	if released {
-		released = conn.releaseHeldLocked()
-	}
-	conn.sendMu.Unlock()
-	if !released {
-		return nil
+	released, err := conn.setHold(hold, limit)
+	if err != nil || !released {
+		return err
 	}
 	return conn.flushLocked()
+}
+
+// setHold installs hold under sendMu and reports whether doing so released held packets into the pending
+// batch. sendMu is released by defer, so a QueueObserver release function that panics cannot leave it held.
+func (conn *Conn) setHold(hold PacketHold, limit int) (bool, error) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
+		conn.hold.close()
+		return false, net.ErrClosed
+	}
+	conn.hold.set(hold, limit)
+	if hold == nil || conn.hold.count >= conn.hold.limit {
+		return conn.releaseHeldLocked(), nil
+	}
+	return false, nil
 }
 
 // packetHold is the selector and the marshaled packets it holds. The connection's sendMu guards it.
@@ -63,6 +69,8 @@ type packetHold struct {
 	// packets are the held wire packets, and observers their completions, indexed as in the pending batch.
 	packets   [][]byte
 	observers []packetCompletion
+	// released are the QueueObserver's functions for the held packets, in the order they were held.
+	released []func()
 	// count is the number of logical packets held, which can be fewer than the wire packets in packets.
 	count int
 	// closed is set once the connection shuts down; a closed hold selects nothing.
@@ -114,14 +122,21 @@ func (conn *Conn) dropPendingIfClosed() {
 
 // closeHold queues everything held for Close's final flush and stops holding, so a SetPacketHold racing
 // the rest of Close gets net.ErrClosed instead of holding packets nobody will send. A connection already
-// cancelled drops what it holds.
-func (conn *Conn) closeHold() {
+// cancelled drops what it holds. A QueueObserver release function that panics is returned as an error:
+// the packets are queued by then, and the hold is closed either way, so Close can still flush them.
+func (conn *Conn) closeHold() (err error) {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
+	defer conn.hold.close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("panic releasing held packets: %v", recovered)
+		}
+	}()
 	if conn.ctx != nil && conn.ctx.Err() == nil {
 		conn.releaseHeldLocked()
 	}
-	conn.hold.close()
+	return nil
 }
 
 // set replaces the selector and its limit without touching what is already held.
@@ -138,9 +153,14 @@ func (h *packetHold) decide(pk packet.Packet) PacketHoldDecision {
 }
 
 // releaseHeldLocked queues every held packet, in order, behind the pending batch and reports whether any
-// were queued. The caller holds sendMu.
+// were queued. Once the connection is cancelled it releases nothing: a writer that passed its context
+// check before an Abort leaves what is held for the Abort to drop, so a held packet is never sent or
+// reported as queued after the cancellation. The caller holds sendMu.
 func (conn *Conn) releaseHeldLocked() bool {
 	h := &conn.hold
+	if conn.ctx != nil && conn.ctx.Err() != nil {
+		return false
+	}
 	if len(h.packets) == 0 {
 		h.count = 0
 		return false
@@ -154,5 +174,15 @@ func (conn *Conn) releaseHeldLocked() bool {
 	clear(h.packets)
 	clear(h.observers)
 	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
+	// The packets are queued now, so buffered writes that follow go out behind them; WritePacketDirect
+	// can still overtake them. The release functions are detached before they run: if one panics, the
+	// hold keeps none of them, so a later release cannot run them again or call a cleared entry.
+	released := h.released
+	h.released = nil
+	for _, run := range released {
+		run()
+	}
+	clear(released)
+	h.released = released[:0]
 	return true
 }
