@@ -257,7 +257,7 @@ func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
 	}
 }
 
-func TestConn_SetSendDelayReturnsReleaseFailure(t *testing.T) {
+func TestPacketHold_DelayChangeReturnsReleaseFailure(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
 	conn.delay.w = failingWriter{}
 	if err := setSendDelay(conn, time.Hour); err != nil {
@@ -345,5 +345,26 @@ func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	expectSent(t, ids, 701, time.Second)
 	if err := <-closed; err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+// A manual rule change leaves the delay writer alone, so it never reports that writer's earlier failure.
+func TestPacketHold_ManualSetSkipsTheDelayWriter(t *testing.T) {
+	conn, _ := newSendDelayConn(t)
+	conn.delay.w = failingWriter{}
+	if err := setSendDelay(conn, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
+		t.Fatal(err)
+	}
+	conn.delay.mu.Lock()
+	failed := conn.delay.releaseLocked(true)
+	conn.delay.mu.Unlock()
+	if failed == nil {
+		t.Fatal("releasing the delayed batch reported no failure")
+	}
+	if err := conn.NewPacketHold().Set(PacketHoldRule{Select: holdIDs(701)}); err != nil {
+		t.Fatalf("manual Set = %v, want nil: it reported the delay writer's failure", err)
 	}
 }

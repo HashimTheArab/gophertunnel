@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// delayWriter sits between the packet encoder and the network, holding each encoded batch for the largest
+// delayWriter sits between the packet encoder and the network, holding each encoded batch for the
 // PacketHold delay before writing it to w. Packets are encoded exactly as without a delay; only the encoded
 // bytes wait before they reach the network, in the order they were sent. A new delay applies to what is
 // sent afterwards and never reorders, so after lowering it new packets still wait for those held before
