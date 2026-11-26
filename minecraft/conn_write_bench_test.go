@@ -26,7 +26,7 @@ func BenchmarkConn_WritePacket(b *testing.B) {
 					_ = conn.Abort()
 					_ = peer.Close()
 				})
-				if err := conn.SetSendDelay(delay); err != nil {
+				if err := setSendDelay(conn, delay); err != nil {
 					b.Fatal(err)
 				}
 				var observed uint32
@@ -65,12 +65,16 @@ func BenchmarkConn_WritePacket(b *testing.B) {
 	}
 }
 
-// BenchmarkConn_WritePacketHeld writes a 16-packet batch with no hold, and with a hold keeping half of
-// it, released every 64 held packets as a holding caller's limit releases them, so the steady state
-// includes the releases.
+// BenchmarkConn_WritePacketHeld writes a 16-packet batch with no hold, with a manual hold keeping half of
+// it, released every 64 held packets as a holding caller's limit releases them, with a delay on every
+// packet, and with both. The steady state includes the releases; delayed batches are released explicitly
+// to bound retained memory without waiting for a wall-clock delay.
 func BenchmarkConn_WritePacketHeld(b *testing.B) {
-	for _, held := range []bool{false, true} {
-		b.Run(fmt.Sprintf("held=%t", held), func(b *testing.B) {
+	for _, mode := range []struct {
+		name          string
+		manual, delay bool
+	}{{"none", false, false}, {"manual", true, false}, {"delay", false, true}, {"manual+delay", true, true}} {
+		b.Run("hold="+mode.name, func(b *testing.B) {
 			client, peer := net.Pipe()
 			conn := newConn(client, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 			conn.delay.w = io.Discard
@@ -78,14 +82,19 @@ func BenchmarkConn_WritePacketHeld(b *testing.B) {
 				_ = conn.Abort()
 				_ = peer.Close()
 			})
-			if held {
+			if mode.manual {
 				hold := func(pk packet.Packet) PacketHoldDecision {
 					if pk.ID()%2 == 0 {
 						return PacketHoldKeep
 					}
 					return PacketHoldSend
 				}
-				if err := conn.SetPacketHold(hold, 64); err != nil {
+				if err := conn.NewPacketHold().Set(PacketHoldRule{Select: hold, Limit: 64}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if mode.delay {
+				if err := conn.NewPacketHold().Set(PacketHoldRule{Delay: time.Hour}); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -102,6 +111,14 @@ func BenchmarkConn_WritePacketHeld(b *testing.B) {
 				}
 				if err := conn.Flush(); err != nil {
 					b.Fatal(err)
+				}
+				if mode.delay {
+					conn.delay.mu.Lock()
+					err := conn.delay.releaseLocked(true)
+					conn.delay.mu.Unlock()
+					if err != nil {
+						b.Fatal(err)
+					}
 				}
 			}
 		})

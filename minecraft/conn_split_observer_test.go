@@ -51,7 +51,7 @@ func TestConn_SplitBatchesCompleteOnlyAcceptedLogicalPackets(t *testing.T) {
 					transport := &splitBatchTransport{failAt: failAt}
 					conn.delay.w = transport
 					conn.proto = expandingWriteProtocol{DefaultProtocol}
-					if err := conn.SetSendDelay(delay); err != nil {
+					if err := setSendDelay(conn, delay); err != nil {
 						t.Fatal(err)
 					}
 					var completed []uint32
@@ -59,7 +59,7 @@ func TestConn_SplitBatchesCompleteOnlyAcceptedLogicalPackets(t *testing.T) {
 						id := pk.ID()
 						return func() { completed = append(completed, id) }
 					})
-					err := conn.writePackets(mode, testPacket(700), testPacket(701), testPacket(702))
+					err := conn.writePackets(mode, false, testPacket(700), testPacket(701), testPacket(702))
 					if mode == buffered && err == nil {
 						err = conn.Flush()
 					}
@@ -84,7 +84,7 @@ func TestConn_SplitBatchesCompleteOnlyAcceptedLogicalPackets(t *testing.T) {
 						if !slices.Equal(completed, []uint32{700}) {
 							t.Fatalf("first split completed %v, want only packet 700", completed)
 						}
-						err = conn.SetSendDelay(0)
+						err = setSendDelay(conn, 0)
 					}
 					want := []uint32{700, 701, 702}
 					if failAt != 0 {
@@ -116,7 +116,7 @@ func TestConn_SplitBatchesKeepOwnersAcrossBufferedAndBypassWrites(t *testing.T) 
 			conn, _ := newSendDelayConn(t)
 			conn.delay.w = &splitBatchTransport{failAt: failAt}
 			conn.proto = expandingWriteProtocol{DefaultProtocol}
-			if err := conn.SetSendDelay(time.Hour); err != nil {
+			if err := setSendDelay(conn, time.Hour); err != nil {
 				t.Fatal(err)
 			}
 			var completed []string
@@ -132,7 +132,7 @@ func TestConn_SplitBatchesKeepOwnersAcrossBufferedAndBypassWrites(t *testing.T) 
 			if _, err := conn.Write(raw.Bytes()); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.writePackets(buffered, testPacket(700), testPacket(701)); err != nil {
+			if err := conn.writePackets(buffered, false, testPacket(700), testPacket(701)); err != nil {
 				t.Fatal(err)
 			}
 			conn.SetWriteObserver(func(pk packet.Packet) func() {
@@ -162,7 +162,7 @@ func TestConn_SplitBatchesKeepOwnersAcrossBufferedAndBypassWrites(t *testing.T) 
 			if !slices.Equal(completed, want) {
 				t.Fatalf("first two batches completed %v, want %v", completed, want)
 			}
-			err = conn.SetSendDelay(0)
+			err = setSendDelay(conn, 0)
 			if failAt == 0 {
 				if err != nil {
 					t.Fatal(err)

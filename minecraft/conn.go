@@ -271,7 +271,7 @@ type Conn struct {
 	// ListenConfig.AcceptNewerProtocols.
 	acceptNewerProtocols bool
 	pool                 packet.Pool
-	// delay holds encoded batches for the send delay between enc and the network. See SetSendDelay.
+	// delay holds encoded batches for the largest PacketHold delay between enc and the network.
 	delay                delayWriter
 	enc                  *packet.Encoder
 	dec                  *packet.Decoder
@@ -334,16 +334,19 @@ type Conn struct {
 	sendMu sync.Mutex
 	// encMu serializes encoder state changes and batch submissions (enc.Encode).
 	// Lock order (when both are needed): encMu → sendMu.
-	encMu             sync.Mutex
+	encMu sync.Mutex
+	// holdMu serializes PacketHold rule changes. Lock order: holdMu → sendMu.
+	holdMu            sync.Mutex
 	writeObserver     WriteObserver
 	queueObserver     QueueObserver
 	bufferedObservers []packetCompletion
 	// bufferedSend holds marshaled packets until the next Flush.
 	bufferedSend      [][]byte
 	bufferedSendSpare [][]byte
-	// hold keeps the packets SetPacketHold holds out of the pending batch. Guarded by sendMu.
-	hold packetHold
-	hdr  *packet.Header
+	// holds are the PacketHolds set on the Conn and the packets they keep out of the pending batch.
+	// Guarded by sendMu.
+	holds packetHolds
+	hdr   *packet.Header
 
 	// readyToLogin is a bool indicating if the connection is ready to login. This is used to ensure that the client
 	// has received the relevant network settings before the login sequence starts.
@@ -655,7 +658,7 @@ const (
 	// flushBuffered appends packets to the pending batch and submits that entire batch before returning.
 	flushBuffered
 	// bypassBuffered submits packets as a separate batch before packets still in the pending buffer.
-	// It never overtakes a batch already submitted to the encoder, including one held by SendDelay.
+	// It never overtakes a batch already submitted to the encoder, including one a PacketHold delays.
 	bypassBuffered
 )
 
@@ -687,12 +690,12 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 }
 
 // QueueObserver sees each outgoing logical packet the WriteObserver sees, under the same lock and
-// conditions, and learns whether a PacketHold keeps it back. A packet not held joins the order packets
-// reach the transport in as it is written, behind everything queued before it; the function returned for
-// it is ignored. For a held packet, the returned function runs when the hold releases the packet into
-// that order, ahead of anything written after the release, which is before the WriteObserver's
-// completion when a SendDelay applies. It never runs for a packet the connection discards while it is
-// held, by Abort or by a release after the connection is cancelled. Like any queued packet, a released
+// conditions, and learns whether a manual PacketHold keeps it back. A packet not held joins the order
+// packets reach the transport in as it is written, behind everything queued before it; the function
+// returned for it is ignored. For a held packet, the returned function runs when no hold keeps the packet
+// any more and it joins that order, ahead of anything written after, which is before the WriteObserver's
+// completion when a PacketHold delay applies. It never runs for a packet discarded while it is held: by
+// Discard, by Abort, or by a release after the connection is cancelled. Like any queued packet, a released
 // one can still be dropped by an Abort before it is sent; the WriteObserver's completion reports that it
 // reached the transport.
 //
@@ -704,11 +707,13 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // release functions in the order their packets join the pending batch. They follow the WriteObserver's
 // rules: short, nonblocking, no writes to or reconfiguration of the connection, and no retained packet
 // data. A callback that panics leaves the connection usable, and the panic reaches the call that ran it.
-// When a capture panics, a held packet still counts toward the hold's limit, which releases it as usual on
-// reaching it, and a buffered packet stays queued, but a WritePacketDirect call sends none of its batch.
-// When a release function panics, the released packets stay queued and the release functions after it
-// never run; if a PacketHoldRelease decision released the hold, that packet and any after it in the same
-// write are not written. Close instead reports a release panic as an error and still flushes.
+// When a capture panics, a held packet still counts toward its holds' limits, which release it as usual on
+// reaching them, and a buffered packet stays queued, but a WritePacketDirect call sends none of its batch.
+// When a release function panics, the packets released with it stay queued, the release functions after
+// it never run, and the rest of the write or PacketHold call that released them is skipped; a packet whose
+// PacketHoldRelease decision released them is written only if a hold keeps it. When a capture panics and
+// the release it triggers panics as well, the capture's panic reaches the caller. Close instead reports a
+// release panic as an error and still flushes.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
 // SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new
@@ -720,27 +725,35 @@ func (conn *Conn) SetQueueObserver(observer QueueObserver) {
 }
 
 // WritePacket marshals pk and appends it to the pending batch. The next Flush submits that batch,
-// respecting any configured SendDelay. The connection's WriteObserver observes the packet as usual.
+// respecting any PacketHold. The connection's WriteObserver observes the packet as usual.
 func (conn *Conn) WritePacket(pk packet.Packet) error {
-	return conn.writePackets(buffered, pk)
+	return conn.writePackets(buffered, false, pk)
+}
+
+// WritePacketSelectable writes pk as WritePacket does, and also shows it to the manual PacketHolds whose
+// rule is SelectableOnly, which see no other packets. A writer passing packets through for someone else
+// uses it to let a hold select among those packets alone.
+func (conn *Conn) WritePacketSelectable(pk packet.Packet) error {
+	return conn.writePackets(buffered, true, pk)
 }
 
 // WritePacketImmediate appends pks to the pending batch and submits the entire batch before returning.
-// It preserves the order of already buffered packets and respects any configured SendDelay.
+// It preserves the order of already buffered packets and respects any PacketHold.
 func (conn *Conn) WritePacketImmediate(pks ...packet.Packet) error {
-	return conn.writePackets(flushBuffered, pks...)
+	return conn.writePackets(flushBuffered, false, pks...)
 }
 
 // WritePacketDirect submits pks as a separate batch before packets still in the pending buffer.
-// It never overtakes a batch already submitted to the encoder, including one held by SendDelay.
+// It never overtakes a batch already submitted to the encoder, including one a PacketHold delays.
 // Use it only when ordering relative to packets still buffered does not matter.
 func (conn *Conn) WritePacketDirect(pks ...packet.Packet) error {
-	return conn.writePackets(bypassBuffered, pks...)
+	return conn.writePackets(bypassBuffered, false, pks...)
 }
 
-// writePackets marshals packets and queues or submits them according to mode. A successful buffered or
-// delayed write means the packets were accepted for sending, not that they reached the transport or peer.
-func (conn *Conn) writePackets(mode sendMode, pks ...packet.Packet) error {
+// writePackets marshals packets and queues or submits them according to mode. Selectable packets are
+// shown to SelectableOnly holds. A successful buffered or delayed write means the packets were accepted
+// for sending, not that they reached the transport or peer.
+func (conn *Conn) writePackets(mode sendMode, selectable bool, pks ...packet.Packet) error {
 	if conn.ctx == nil {
 		return net.ErrClosed
 	}
@@ -759,12 +772,12 @@ func (conn *Conn) writePackets(mode sendMode, pks ...packet.Packet) error {
 		var stackBuf [4][]byte
 		batch := stackBuf[:0]
 		var observers []packetCompletion
-		if err := conn.queuePackets(&batch, &observers, pks...); err != nil {
+		if err := conn.queuePackets(&batch, &observers, selectable, pks...); err != nil {
 			return err
 		}
 		return conn.encodeBatch(batch, observers, "write packet")
 	}
-	if err := conn.queuePackets(&conn.bufferedSend, &conn.bufferedObservers, pks...); err != nil {
+	if err := conn.queuePackets(&conn.bufferedSend, &conn.bufferedObservers, selectable, pks...); err != nil {
 		return err
 	}
 	if mode == flushBuffered {
@@ -775,22 +788,23 @@ func (conn *Conn) writePackets(mode sendMode, pks ...packet.Packet) error {
 
 // queuePackets serializes packet marshaling and observation, rejecting writes if shutdown began while
 // the caller waited for an encoder or packet write lock.
-func (conn *Conn) queuePackets(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) error {
+func (conn *Conn) queuePackets(dst *[][]byte, observers *[]packetCompletion, selectable bool, pks ...packet.Packet) error {
 	conn.sendMu.Lock()
 	defer conn.sendMu.Unlock()
 	if conn.ctx.Err() != nil {
 		return conn.closeErr("write packet")
 	}
-	conn.encodePacketsTo(dst, observers, pks...)
+	conn.encodePacketsTo(dst, observers, selectable, pks...)
 	return nil
 }
 
 // encodePacketsTo marshals the provided packet (including header) into one or more byte slices,
 // accounting for protocol conversions and invoking packetFunc callbacks. The resulting byte slices are
-// appended to dst. The appended slices are copies safe to retain beyond the call. Each logical packet
-// that produces bytes is observed once, and its optional completion is appended to observers. The caller
-// holds sendMu, so captures and buffered packet order cannot race.
-func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, pks ...packet.Packet) {
+// appended to dst, or kept back while a manual PacketHold keeps the packet. The appended slices are
+// copies safe to retain beyond the call. Each logical packet that produces bytes is observed once, and
+// its optional completion is appended to observers. The caller holds sendMu, so captures and buffered
+// packet order cannot race.
+func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, selectable bool, pks ...packet.Packet) {
 	buf := internal.BufferPool.Get().(*bytes.Buffer)
 	defer func() {
 		// Reset the buffer, so we can return it to the buffer pool safely.
@@ -799,58 +813,54 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	}()
 
 	for _, pk := range pks {
-		conn.encodePacketTo(dst, observers, buf, pk)
-	}
-}
-
-// encodePacketTo marshals one logical packet for encodePacketsTo, into dst or, when the PacketHold keeps
-// it, into the hold. The caller holds sendMu.
-func (conn *Conn) encodePacketTo(dst *[][]byte, observers *[]packetCompletion, buf *bytes.Buffer, pk packet.Packet) {
-	target, targetObservers := dst, observers
-	decision := conn.hold.decide(pk)
-	if decision == PacketHoldRelease {
-		conn.releaseHeldLocked()
-	}
-	held := decision == PacketHoldKeep
-	if held {
-		target, targetObservers = &conn.hold.packets, &conn.hold.observers
-	}
-	before := len(*target)
-	if registry, ok := pk.(*packet.ItemRegistry); ok {
-		// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
-		conn.observeShield(registry.Items)
-	}
-	for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
-		buf.Reset()
-		l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
-		if conn.observes(conn.hdr.PacketID) {
-			conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
+		var keptBy, release uint64
+		if len(conn.holds.manual) != 0 {
+			keptBy, release = conn.selectLocked(pk, selectable)
 		}
-		*target = append(*target, append([]byte(nil), buf.Bytes()...))
-	}
-	if len(*target) == before {
-		return
-	}
-	if held {
-		// A held packet counts toward the limit before the captures run, and the limit is checked after them
-		// even if one panics, so the hold never keeps more than its limit.
-		conn.hold.count++
-		defer func() {
-			if conn.hold.count >= conn.hold.limit {
-				// The limit queues everything held behind the packets already pending, and the caller's
-				// next flush sends them. A direct write's own batch goes out before the pending batch.
-				conn.releaseHeldLocked()
+		held := keptBy != 0
+		if !held && release != 0 {
+			// The released packets go ahead of pk, which is not held.
+			conn.releaseHeldLocked(release)
+			release = 0
+		}
+		target := dst
+		if held {
+			// A held packet's wire packets collect from an empty scratch: a held write whose encoding panicked
+			// part way may have left some there, and they must not be parked with this packet.
+			clear(conn.holds.scratch)
+			conn.holds.scratch = conn.holds.scratch[:0]
+			target = &conn.holds.scratch
+		}
+		before := len(*target)
+		if registry, ok := pk.(*packet.ItemRegistry); ok {
+			// A relaying listener learns the shield ID from the registry it forwards, as it sends no StartGame of its own.
+			conn.observeShield(registry.Items)
+		}
+		for _, converted := range conn.proto.ConvertFromLatest(pk, conn) {
+			buf.Reset()
+			l := EncodePacket(buf, conn.hdr, converted, conn.proto, conn.shieldID.Load(), conn.actorIDs.Load())
+			if conn.observes(conn.hdr.PacketID) {
+				conn.observe(*conn.hdr, buf.Bytes()[l:], conn.LocalAddr(), conn.RemoteAddr())
 			}
-		}()
-	}
-	if conn.writeObserver != nil {
-		if sent := conn.writeObserver(pk); sent != nil {
-			*targetObservers = append(*targetObservers, packetCompletion{after: len(*target), sent: sent})
+			*target = append(*target, append([]byte(nil), buf.Bytes()...))
 		}
-	}
-	if conn.queueObserver != nil {
-		if released := conn.queueObserver(pk, held); held && released != nil {
-			conn.hold.released = append(conn.hold.released, released)
+		if len(*target) == before {
+			if release != 0 {
+				conn.releaseHeldLocked(release)
+			}
+			continue
+		}
+		if held {
+			conn.parkLocked(pk, keptBy, release)
+			continue
+		}
+		if conn.writeObserver != nil {
+			if sent := conn.writeObserver(pk); sent != nil {
+				*observers = append(*observers, packetCompletion{after: len(*target), sent: sent})
+			}
+		}
+		if conn.queueObserver != nil {
+			conn.queueObserver(pk, false)
 		}
 	}
 }
@@ -1209,7 +1219,7 @@ func (conn *Conn) Read(b []byte) (n int, err error) {
 }
 
 // Flush submits the currently buffered packets to the batch encoder. Encoded batches still wait for any
-// configured SendDelay before reaching the transport; Flush does not bypass that delay. It returns
+// PacketHold delay before reaching the transport; Flush does not bypass that delay. It returns
 // any earlier send failure, even when no packets are buffered.
 func (conn *Conn) Flush() error {
 	if conn.ctx == nil {

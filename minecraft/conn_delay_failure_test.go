@@ -53,7 +53,7 @@ func TestConn_AbortDoesNotWaitForTransportShutdown(t *testing.T) {
 					t.Cleanup(func() { transport.unblock(); _ = client.Close(); _ = peer.Close() })
 					conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 					t.Cleanup(func() { _ = conn.Abort() })
-					if err := conn.SetSendDelay(delay); err != nil {
+					if err := setSendDelay(conn, delay); err != nil {
 						t.Fatal(err)
 					}
 					sent := make(chan struct{}, 4)
@@ -75,7 +75,7 @@ func TestConn_AbortDoesNotWaitForTransportShutdown(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						go func() { done <- conn.SetSendDelay(0) }()
+						go func() { done <- setSendDelay(conn, 0) }()
 					} else {
 						go func() { done <- write() }()
 					}
@@ -145,7 +145,7 @@ func TestConn_EmptyFlushReportsTimerFailure(t *testing.T) {
 			}
 			conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, flushRate, false)
 			t.Cleanup(func() { _ = conn.Abort() })
-			if err := conn.SetSendDelay(time.Millisecond); err != nil {
+			if err := setSendDelay(conn, time.Millisecond); err != nil {
 				t.Fatal(err)
 			}
 			sent := make(chan struct{}, 1)
@@ -231,7 +231,7 @@ func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
 				t.Cleanup(func() { transport.unblock(); _ = client.Close(); _ = peer.Close() })
 				conn := newConn(transport, nil, slog.New(internal.DiscardHandler{}), DefaultProtocol, -1, false)
 				t.Cleanup(func() { _ = conn.Abort() })
-				if err := conn.SetSendDelay(delay); err != nil {
+				if err := setSendDelay(conn, delay); err != nil {
 					t.Fatal(err)
 				}
 				sent := make(chan struct{}, 1)
@@ -241,7 +241,7 @@ func TestConn_CanceledCloseDoesNotWaitForTransportShutdown(t *testing.T) {
 					if err := conn.WritePacketDirect(testPacket(700)); err != nil {
 						t.Fatal(err)
 					}
-					go func() { written <- conn.SetSendDelay(0) }()
+					go func() { written <- setSendDelay(conn, 0) }()
 				} else {
 					go func() { written <- conn.WritePacketDirect(testPacket(700)) }()
 				}

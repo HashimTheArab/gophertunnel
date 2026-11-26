@@ -74,7 +74,7 @@ func testPacket(id uint32) packet.Packet { return &packet.Unknown{PacketID: id} 
 func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	const delay = 150 * time.Millisecond
-	conn.SetSendDelay(delay)
+	setSendDelay(conn, delay)
 	start := time.Now()
 	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
@@ -93,7 +93,7 @@ func TestConn_SendDelayHoldsFlushedPacketsUntilDue(t *testing.T) {
 
 func TestConn_SendDelayLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(50 * time.Millisecond)
+	setSendDelay(conn, 50*time.Millisecond)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestConn_SendDelayLeavesUnflushedPacketsToTheOwner(t *testing.T) {
 
 func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(100 * time.Millisecond)
+	setSendDelay(conn, 100*time.Millisecond)
 	if err := conn.WritePacket(testPacket(700)); err != nil {
 		t.Fatalf("WritePacket: %v", err)
 	}
@@ -137,15 +137,15 @@ func TestConn_SendDelayKeepsEveryWritePathInOrder(t *testing.T) {
 
 func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(time.Hour)
+	setSendDelay(conn, time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
 	expectNothingSent(t, ids, 50*time.Millisecond)
 
-	conn.SetSendDelay(0)
+	setSendDelay(conn, 0)
 	expectSent(t, ids, 700, time.Second)
-	if got := conn.SendDelay(); got != 0 {
+	if got := time.Duration(conn.delay.delay.Load()); got != 0 {
 		t.Fatalf("SendDelay after clearing = %v, want 0", got)
 	}
 
@@ -158,7 +158,7 @@ func TestConn_ClearingSendDelaySendsHeldPacketsNow(t *testing.T) {
 
 func TestConn_SendDelayKeepsTheEncodingPacketsWereSentWith(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(time.Hour)
+	setSendDelay(conn, time.Hour)
 	// Sent before compression is enabled, like NetworkSettings during login: the peer still reads
 	// uncompressed batches, so the held packet must stay uncompressed.
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
@@ -167,13 +167,13 @@ func TestConn_SendDelayKeepsTheEncodingPacketsWereSentWith(t *testing.T) {
 	if err := conn.handleNetworkSettings(&packet.NetworkSettings{CompressionAlgorithm: packet.FlateCompression.EncodeCompression()}); err != nil {
 		t.Fatalf("handleNetworkSettings: %v", err)
 	}
-	conn.SetSendDelay(0)
+	setSendDelay(conn, 0)
 	expectSent(t, ids, 700, time.Second)
 }
 
 func TestConn_SendDelayHoldsWhatWasSentNotTheCallersBuffer(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(time.Hour)
+	setSendDelay(conn, time.Hour)
 	var payload bytes.Buffer
 	(&packet.Header{PacketID: 700}).Write(&payload)
 	if _, err := conn.Write(payload.Bytes()); err != nil {
@@ -186,13 +186,13 @@ func TestConn_SendDelayHoldsWhatWasSentNotTheCallersBuffer(t *testing.T) {
 	payload.Reset()
 	(&packet.Header{PacketID: 701}).Write(&payload)
 
-	conn.SetSendDelay(0)
+	setSendDelay(conn, 0)
 	expectSent(t, ids, 700, time.Second)
 }
 
 func TestConn_AbortDiscardsPacketsHeldBySendDelay(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
-	conn.SetSendDelay(time.Hour)
+	setSendDelay(conn, time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
@@ -260,17 +260,17 @@ func TestDelayWriter_ReleaseReportsTheWriteFailure(t *testing.T) {
 func TestConn_SetSendDelayReturnsReleaseFailure(t *testing.T) {
 	conn, _ := newSendDelayConn(t)
 	conn.delay.w = failingWriter{}
-	if err := conn.SetSendDelay(time.Hour); err != nil {
+	if err := setSendDelay(conn, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatal(err)
 	}
 	for _, delay := range []time.Duration{0, time.Hour, -time.Second} {
-		if err := conn.SetSendDelay(delay); !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("SetSendDelay(%v) = %v, want net.ErrClosed", delay, err)
+		if err := setSendDelay(conn, delay); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("setSendDelay(%v) = %v, want net.ErrClosed", delay, err)
 		}
-		if got := conn.SendDelay(); got != max(delay, 0) {
+		if got := time.Duration(conn.delay.delay.Load()); got != max(delay, 0) {
 			t.Fatalf("SendDelay = %v, want %v", got, max(delay, 0))
 		}
 	}
@@ -331,7 +331,7 @@ func TestDelayWriter_DropRejectsWritesAfterDelayChanges(t *testing.T) {
 
 func TestConn_CloseSendsPacketsHeldBySendDelay(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
-	conn.SetSendDelay(time.Hour)
+	setSendDelay(conn, time.Hour)
 	if err := conn.WritePacketImmediate(testPacket(700)); err != nil {
 		t.Fatalf("WritePacketImmediate: %v", err)
 	}
