@@ -72,6 +72,19 @@ type AuthResult struct {
 	XBOXLiveAuthenticated bool
 }
 
+// TokenVerifier verifies the multiplayer token of a login, as an [oidc.IDTokenVerifier] does.
+type TokenVerifier interface {
+	Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error)
+}
+
+// nilVerifier returns nil for a nil *oidc.IDTokenVerifier, which callers pass to skip verification.
+func nilVerifier(v TokenVerifier) TokenVerifier {
+	if o, ok := v.(*oidc.IDTokenVerifier); ok && o == nil {
+		return nil
+	}
+	return v
+}
+
 // Parse parses and verifies the login request passed. The AuthResult returned holds the ecdsa.PublicKey that
 // was parsed (which is used for encryption) and a bool specifying if the request was authenticated by XBOX
 // Live.
@@ -79,7 +92,7 @@ type AuthResult struct {
 // the client. Rather, it is obtained from an authentication endpoint. The ClientData can, however, be edited
 // freely by the client.
 // The verifier will be used for parsing the OpenID token included in the first chain of the login request.
-func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, ClientData, AuthResult, error) {
+func Parse(request []byte, verifier TokenVerifier) (IdentityData, ClientData, AuthResult, error) {
 	var (
 		iData IdentityData
 		cData ClientData
@@ -95,10 +108,10 @@ func Parse(request []byte, verifier *oidc.IDTokenVerifier) (IdentityData, Client
 		authenticated bool
 		t             = time.Now()
 	)
+	verifier = nilVerifier(verifier)
 	switch {
 	case verifier != nil && req.Token != "":
-		// The context here is used for making requests via remote key set, which does not normally
-		// occur in this case since we use a custom-made OIDC verifier that has already static key set included.
+		// The verifier may fetch its issuer's configuration or signing keys the first time it sees one.
 		idt, err := verifier.Verify(context.Background(), req.Token)
 		if err != nil {
 			return iData, cData, res, fmt.Errorf("verify ID token: %w", err)
@@ -285,9 +298,9 @@ func parseLoginRequest(requestData []byte) (*request, error) {
 
 // ParseTokenIdentityData parses IdentityData from a modern multiplayer token.
 // If verifier is non-nil, the token is verified before its claims are used.
-func ParseTokenIdentityData(ctx context.Context, token string, verifier *oidc.IDTokenVerifier) (IdentityData, error) {
+func ParseTokenIdentityData(ctx context.Context, token string, verifier TokenVerifier) (IdentityData, error) {
 	var claims tokenClaims
-	if verifier != nil {
+	if verifier = nilVerifier(verifier); verifier != nil {
 		idt, err := verifier.Verify(ctx, token)
 		if err != nil {
 			return IdentityData{}, fmt.Errorf("verify ID token: %w", err)

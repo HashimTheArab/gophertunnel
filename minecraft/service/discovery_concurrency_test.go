@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/auth"
 )
@@ -23,7 +24,8 @@ func (f discoveryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func isolateDiscoveryCache(t *testing.T) {
 	clear := func() {
 		discoveryCacheMu.Lock()
-		discoveryCache = make(map[string]*Discovery)
+		discoveryCache = make(map[string]discoveryEntry)
+		discoveryRefreshing = make(map[string]bool)
 		discoveryCacheMu.Unlock()
 	}
 	clear()
@@ -32,7 +34,7 @@ func isolateDiscoveryCache(t *testing.T) {
 
 // discoveryOK is a successful, empty discovery reply.
 func discoveryOK() *http.Response {
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}
 }
 
 // Slow discovery must leave cached entries readable and let queued callers cancel.
@@ -46,7 +48,7 @@ func TestDiscoveryStallDoesNotBlockCacheOrCancellation(t *testing.T) {
 				close(started)
 				<-release
 			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}, nil
 		})})
 		if _, err := Discover(ctx, t.Name(), "cached"); err != nil {
 			t.Fatal(err)
@@ -90,7 +92,7 @@ func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
 			case <-r.Context().Done():
 				return nil, r.Context().Err()
 			}
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"auth":{"prod":{}}}}}`))}, nil
 		})})
 		ownerCtx, cancelOwner := context.WithCancel(base)
 		owner := make(chan error, 1)
@@ -110,7 +112,8 @@ func TestDiscoveryOwnerCancellationDoesNotFailWaiters(t *testing.T) {
 	})
 }
 
-// Callers using different HTTP clients must not share one request, so one client's failure is not another's.
+// Callers using different HTTP clients must not share one request, so one client's failure is not another's;
+// a failed request falls back to what another client cached meanwhile.
 func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 	isolateDiscoveryCache(t)
 	synctest.Test(t, func(t *testing.T) {
@@ -132,8 +135,37 @@ func TestDiscoveryDoesNotShareRequestsAcrossClients(t *testing.T) {
 			t.Fatalf("working client got %v", err)
 		}
 		close(release)
-		if err := <-failed; err == nil {
-			t.Fatal("failing client unexpectedly succeeded")
+		if err := <-failed; err != nil {
+			t.Fatalf("failing client got %v, want the result the working client cached", err)
+		}
+	})
+}
+
+// An answer to a request that started before another request answered does not replace that newer answer.
+func TestDiscoveryKeepsTheLaterRequestsAnswer(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		older := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			<-release
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{"old":{"prod":{}}}}}`))}, nil
+		})})
+		newer := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			return discoveryOK(), nil
+		})})
+		done := make(chan *Discovery, 1)
+		go func() { d, _ := Discover(older, t.Name(), "test"); done <- d }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		if _, err := Discover(newer, t.Name(), "test"); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if d := <-done; d == nil || d.ServiceEnvironments["auth"] == nil {
+			t.Fatalf("older request returned %+v, want the later request's answer", d)
+		}
+		if d, _ := Discover(newer, t.Name(), "test"); d.ServiceEnvironments["auth"] == nil {
+			t.Fatalf("cached %+v, want the later request's answer", d)
 		}
 	})
 }
@@ -198,6 +230,129 @@ func TestDiscoveryFinishesSharedRequestWithoutWaiters(t *testing.T) {
 		synctest.Wait()
 		if _, err := Discover(base, t.Name(), "test"); err != nil || calls != 1 || !bounded {
 			t.Fatalf("err = %v, network calls = %d, want 1; request bounded = %v", err, calls, bounded)
+		}
+	})
+}
+
+// After discoveryTTL a discovery is served while it refreshes in the background, and kept with a backoff when that fails.
+func TestDiscoveryRefreshesAfterTTL(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		var calls int
+		failing := false
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			if failing {
+				return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(""))}, nil
+			}
+			return discoveryOK(), nil
+		})})
+		discover := func() *Discovery {
+			t.Helper()
+			d, err := Discover(ctx, t.Name(), "1.0.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			return d
+		}
+		first := discover()
+		if discover() != first || calls != 1 {
+			t.Fatalf("within the TTL: %d requests, want 1 and the cached discovery", calls)
+		}
+		time.Sleep(discoveryTTL)
+		if discover() != first || calls != 2 {
+			t.Fatalf("after the TTL: %d requests, want the cached discovery while one refresh runs", calls)
+		}
+		refreshed := discover()
+		if refreshed == first || calls != 2 {
+			t.Fatalf("after the refresh: %d requests, refreshed = %v", calls, refreshed != first)
+		}
+		failing = true
+		time.Sleep(discoveryTTL)
+		if discover() != refreshed || calls != 3 {
+			t.Fatalf("failed refresh: %d requests, want 3 and the cached discovery", calls)
+		}
+		if discover() != refreshed || calls != 3 {
+			t.Fatalf("after a failed refresh: %d requests, want no retry before discoveryRetry", calls)
+		}
+		time.Sleep(discoveryRetry)
+		if discover() != refreshed || calls != 4 {
+			t.Fatalf("after discoveryRetry: %d requests, want a retry", calls)
+		}
+	})
+}
+
+// A refresh that fails after another stored a fresh result leaves that result fresh.
+func TestFailedRefreshKeepsAFreshResult(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		const requestURL = "https://discovery.test/fresh"
+		stale, fresh := &Discovery{}, &Discovery{}
+		discoveryCacheMu.Lock()
+		discoveryCache[requestURL] = discoveryEntry{d: stale, checked: time.Now().Add(-discoveryTTL)}
+		discoveryCacheMu.Unlock()
+		release := make(chan struct{})
+		client := &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			<-release
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})}
+		done := make(chan struct{})
+		go func() {
+			_, _ = refreshDiscovery(context.Background(), client, requestURL)
+			close(done)
+		}()
+		synctest.Wait()
+		discoveryCacheMu.Lock()
+		discoveryCache[requestURL] = discoveryEntry{d: fresh, checked: time.Now()}
+		discoveryCacheMu.Unlock()
+		close(release)
+		<-done
+		if d, isFresh := cachedDiscovery(requestURL); d != fresh || !isFresh {
+			t.Fatalf("cached discovery fresh = %v, same = %v, want the fresh result kept", isFresh, d == fresh)
+		}
+	})
+}
+
+// A background refresh releases its claim on the URL when it ends, so a later stale result is refreshed again.
+func TestBackgroundRefreshReleasesItsClaim(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			return discoveryOK(), nil
+		})})
+		for range 3 {
+			if _, err := Discover(ctx, t.Name(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			time.Sleep(discoveryTTL)
+		}
+		if calls != 3 {
+			t.Fatalf("discovery requests = %d, want 3", calls)
+		}
+	})
+}
+
+// A first discovery that lists no services is returned but fetched again after discoveryRetry.
+func TestEmptyFirstDiscoveryIsFetchedAgainSoon(t *testing.T) {
+	isolateDiscoveryCache(t)
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		ctx := auth.WithContextClient(context.Background(), &http.Client{Transport: discoveryTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":{"serviceEnvironments":{}}}`))}, nil
+		})})
+		if _, err := Discover(ctx, t.Name(), "1.0.0"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(discoveryRetry)
+		_, _ = Discover(ctx, t.Name(), "1.0.0")
+		synctest.Wait()
+		if calls != 2 {
+			t.Fatalf("requests = %d, want the empty answer fetched again after discoveryRetry", calls)
 		}
 	})
 }

@@ -45,8 +45,8 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 	for i := 0; i < value.NumField(); i++ {
 		field := value.Type().Field(i)
 		switch field.Name {
-		case "verifier", "keySet", "verifierMu":
-			// Cached verifier state and its lock belong to the original environment.
+		case "verifier", "keySet", "verifierMu", "verifierBuild":
+			// Cached verifier state, its lock and its in-flight build belong to the original environment.
 			continue
 		}
 		if !field.IsExported() || value.Field(i).IsZero() {
@@ -88,7 +88,7 @@ func TestAuthorizationEnvironmentNewTokenSourceCopiesConfiguration(t *testing.T)
 func TestNewTokenSourceBuildsStandardWorkflow(t *testing.T) {
 	discoveryCacheMu.Lock()
 	oldURL, oldCache := discoveryURL, discoveryCache
-	discoveryURL, discoveryCache = &url.URL{Scheme: "https", Host: "discovery.test"}, make(map[string]*Discovery)
+	discoveryURL, discoveryCache = &url.URL{Scheme: "https", Host: "discovery.test"}, make(map[string]discoveryEntry)
 	discoveryCacheMu.Unlock()
 	t.Cleanup(func() {
 		discoveryCacheMu.Lock()
