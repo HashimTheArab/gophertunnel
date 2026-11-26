@@ -251,6 +251,7 @@ func (conn *Conn) parkLocked(pk packet.Packet) {
 	if len(holds.scratch) > 1 {
 		p.extra = slices.Clone(holds.scratch[1:])
 	}
+	clear(holds.scratch)
 	if conn.writeObserver != nil {
 		p.sent = conn.writeObserver(pk)
 	}

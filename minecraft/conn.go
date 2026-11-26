@@ -691,8 +691,8 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 
 // QueueObserver sees each outgoing logical packet the WriteObserver sees, under the same lock and rules,
 // and whether the manual PacketHold keeps it. For a held packet, the returned function runs when the hold
-// lets it go into the pending batch, and never if it is discarded or dropped by Abort; for any other packet
-// it is ignored. The pending batch is the order packets reach the transport, except that WritePacketDirect
+// lets it go into the pending batch, and never if it is dropped while held; for any other packet it is
+// ignored. The pending batch is the order packets reach the transport, except that WritePacketDirect
 // sends its own batch first. Callbacks must not panic.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
@@ -795,7 +795,7 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 	for _, pk := range pks {
 		decision := conn.selectLocked(pk, selectable)
 		if decision == PacketHoldRelease {
-			// What the hold keeps goes ahead of pk.
+			// What the hold keeps joins the pending batch before pk is queued.
 			conn.releaseHeldLocked()
 		}
 		held := decision == PacketHoldKeep
