@@ -825,6 +825,10 @@ func (conn *Conn) encodePacketsTo(dst *[][]byte, observers *[]packetCompletion, 
 		}
 		target := dst
 		if held {
+			// A held packet's wire packets collect from an empty scratch: a held write whose encoding panicked
+			// part way may have left some there, and they must not be parked with this packet.
+			clear(conn.holds.scratch)
+			conn.holds.scratch = conn.holds.scratch[:0]
 			target = &conn.holds.scratch
 		}
 		before := len(*target)

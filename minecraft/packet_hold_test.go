@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sandertv/gophertunnel/minecraft/internal"
+	"github.com/sandertv/gophertunnel/minecraft/protocol"
 	"github.com/sandertv/gophertunnel/minecraft/protocol/packet"
 )
 
@@ -613,10 +614,10 @@ func TestPacketHold_DiscardDropsKeptPacketsAndKeepsHolding(t *testing.T) {
 func TestPacketHold_SelectableOnlySeesSelectableWritesAlone(t *testing.T) {
 	conn, ids := newSendDelayConn(t)
 	hold := conn.NewPacketHold()
-	if err := hold.Set(PacketHoldRule{Select: holdIDs(700), Limit: 10, SelectableOnly: true}); err != nil {
+	if err := hold.Set(PacketHoldRule{Select: holdIDs(700, 702), Limit: 10, SelectableOnly: true}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := conn.WritePacketSelectable(testPacket(700)); err != nil {
+	if err := conn.WritePacketSelectable(testPacket(702)); err != nil {
 		t.Fatalf("WritePacketSelectable: %v", err)
 	}
 	writeAll(t, conn, 700, 701)
@@ -631,7 +632,7 @@ func TestPacketHold_SelectableOnlySeesSelectableWritesAlone(t *testing.T) {
 	// Release leaves the batch boundary to its caller.
 	expectNothingSent(t, ids, 50*time.Millisecond)
 	mustFlush(t, conn)
-	expectSent(t, ids, 700, 2*time.Second)
+	expectSent(t, ids, 702, 2*time.Second)
 }
 
 // With a delay on top, a packet a manual hold lets go of waits the full delay from then, behind packets
@@ -731,6 +732,9 @@ func TestPacketHold_NilHoldsNothing(t *testing.T) {
 	var hold *PacketHold
 	if err := hold.Set(PacketHoldRule{Select: holdIDs(700)}); err != nil {
 		t.Fatalf("Set on nil = %v, want nil", err)
+	}
+	if err := hold.Set(PacketHoldRule{Select: holdIDs(700), Delay: time.Second}); err != nil {
+		t.Fatalf("Set on nil with a rule a hold rejects = %v, want nil", err)
 	}
 	if err := hold.Release(); err != nil {
 		t.Fatalf("Release on nil = %v, want nil", err)
@@ -1023,6 +1027,50 @@ func TestPacketHold_CapturePanicWinsOverReleasePanic(t *testing.T) {
 		t.Fatalf("Release b: %v", err)
 	}
 	if got, want := drainIDs(t, conn, ids), []uint32{700, 702, 701}; !slices.Equal(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+}
+
+// panicPacket fails to encode.
+type panicPacket struct{ id uint32 }
+
+func (p *panicPacket) ID() uint32          { return p.id }
+func (p *panicPacket) Marshal(protocol.IO) { panic("encode") }
+
+// splitProtocol converts packet 705 into itself followed by a packet that fails to encode.
+type splitProtocol struct{ Protocol }
+
+func (p splitProtocol) ConvertFromLatest(pk packet.Packet, conn *Conn) []packet.Packet {
+	if pk.ID() == 705 {
+		return []packet.Packet{pk, &panicPacket{id: 706}}
+	}
+	return p.Protocol.ConvertFromLatest(pk, conn)
+}
+
+// A held write whose encoding panics part way leaves nothing behind: the next held packet goes out on its
+// own, without the wire packets the failed write encoded before the panic.
+func TestPacketHold_EncodePanicLeavesNoWirePackets(t *testing.T) {
+	conn, ids := newSendDelayConn(t)
+	conn.sendMu.Lock()
+	conn.proto = splitProtocol{Protocol: conn.proto}
+	conn.sendMu.Unlock()
+	hold := conn.NewPacketHold()
+	if err := hold.Set(PacketHoldRule{Select: holdIDs(701, 705), Limit: 10}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("encoding did not panic")
+			}
+		}()
+		_ = conn.WritePacket(&packet.Unknown{PacketID: 705})
+	}()
+	writeAll(t, conn, 701)
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if got, want := drainIDs(t, conn, ids), []uint32{701}; !slices.Equal(got, want) {
 		t.Fatalf("sent %v, want %v", got, want)
 	}
 }

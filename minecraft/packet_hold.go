@@ -100,12 +100,12 @@ func (conn *Conn) NewPacketHold() *PacketHold {
 // sent afterwards; once no hold has a Delay, everything already delayed is sent. It returns any failure
 // sending delayed packets, including an earlier send failure, and net.ErrClosed once the Conn shuts down.
 func (h *PacketHold) Set(rule PacketHoldRule) error {
+	if h == nil {
+		return nil
+	}
 	rule.Delay = max(rule.Delay, 0)
 	if rule.Delay > 0 && (rule.manual() || rule.Limit != 0 || rule.SelectableOnly) {
 		return errors.New("minecraft: a packet hold rule cannot both delay and select packets")
-	}
-	if h == nil {
-		return nil
 	}
 	conn := h.conn
 	// holdMu serializes Sets, so the delay published below stays the one the holds need until the rule is
