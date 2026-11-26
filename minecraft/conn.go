@@ -703,7 +703,10 @@ func (conn *Conn) SetWriteObserver(observer WriteObserver) {
 // Both callbacks run synchronously under the connection's packet write lock: captures in write order,
 // release functions in the order their packets join the pending batch. They follow the WriteObserver's
 // rules: short, nonblocking, no writes to or reconfiguration of the connection, and
-// no retained packet data.
+// no retained packet data. A release function that panics leaves the connection usable: the panic reaches
+// the call that released the hold, the released packets stay queued, and the release functions after it
+// never run. When a PacketHoldRelease decision released the hold, that packet and any after it in the same
+// write are not written.
 type QueueObserver func(pk packet.Packet, held bool) (released func())
 
 // SetQueueObserver replaces the QueueObserver for future packet captures. Passing nil stops new

@@ -501,3 +501,73 @@ func TestConn_QueueObserverSkipsDiscardedPackets(t *testing.T) {
 		})
 	}
 }
+
+// A release function that panics leaves the connection usable, whichever call released the hold: the send
+// lock is free, and the next release runs only its own functions.
+func TestConn_QueueObserverReleasePanicLeavesConnUsable(t *testing.T) {
+	tests := []struct {
+		name    string
+		release func(*Conn)
+	}{
+		{name: "SetPacketHold", release: func(conn *Conn) { _ = conn.SetPacketHold(nil, 0) }},
+		{name: "write", release: func(conn *Conn) { _ = conn.WritePacket(testPacket(709)) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, _ := newSendDelayConn(t)
+			var log queueLog
+			conn.SetQueueObserver(func(pk packet.Packet, held bool) func() {
+				if held && pk.(*packet.Unknown).PacketID == 700 {
+					return func() { panic("release") }
+				}
+				return log.observer(pk, held)
+			})
+			hold := func(pk packet.Packet) PacketHoldDecision {
+				if pk.(*packet.Unknown).PacketID == 709 {
+					return PacketHoldRelease
+				}
+				return PacketHoldKeep
+			}
+			if err := conn.SetPacketHold(hold, 10); err != nil {
+				t.Fatalf("SetPacketHold: %v", err)
+			}
+			writeAll(t, conn, 700, 701)
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("release did not panic")
+					}
+				}()
+				tt.release(conn)
+			}()
+			if !conn.sendMu.TryLock() {
+				// Free the leaked lock so Close in the cleanup does not hang.
+				conn.sendMu.Unlock()
+				t.Fatal("send lock still held after the panic")
+			}
+			conn.sendMu.Unlock()
+
+			if err := conn.SetPacketHold(hold, 10); err != nil {
+				t.Fatalf("SetPacketHold after the panic: %v", err)
+			}
+			writeAll(t, conn, 702)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						// Free the send lock, which this panic may have leaked, so Close in the cleanup
+						// does not hang.
+						conn.sendMu.TryLock()
+						conn.sendMu.Unlock()
+						t.Fatalf("release after the panic panicked: %v", r)
+					}
+				}()
+				if err := conn.SetPacketHold(nil, 0); err != nil {
+					t.Fatalf("release after the panic: %v", err)
+				}
+			}()
+			if got, want := log.snapshot(), []string{"h701", "h702", "r702"}; !slices.Equal(got, want) {
+				t.Fatalf("queue events = %v, want %v", got, want)
+			}
+		})
+	}
+}

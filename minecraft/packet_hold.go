@@ -38,22 +38,27 @@ const (
 func (conn *Conn) SetPacketHold(hold PacketHold, limit int) error {
 	conn.encMu.Lock()
 	defer conn.encMu.Unlock()
-	conn.sendMu.Lock()
-	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
-		conn.hold.close()
-		conn.sendMu.Unlock()
-		return net.ErrClosed
-	}
-	conn.hold.set(hold, limit)
-	released := hold == nil || conn.hold.count >= conn.hold.limit
-	if released {
-		released = conn.releaseHeldLocked()
-	}
-	conn.sendMu.Unlock()
-	if !released {
-		return nil
+	released, err := conn.setHold(hold, limit)
+	if err != nil || !released {
+		return err
 	}
 	return conn.flushLocked()
+}
+
+// setHold installs hold under sendMu and reports whether doing so released held packets into the pending
+// batch. sendMu is released by defer, so a QueueObserver release function that panics cannot leave it held.
+func (conn *Conn) setHold(hold PacketHold, limit int) (bool, error) {
+	conn.sendMu.Lock()
+	defer conn.sendMu.Unlock()
+	if conn.ctx == nil || conn.ctx.Err() != nil || conn.hold.closed {
+		conn.hold.close()
+		return false, net.ErrClosed
+	}
+	conn.hold.set(hold, limit)
+	if hold == nil || conn.hold.count >= conn.hold.limit {
+		return conn.releaseHeldLocked(), nil
+	}
+	return false, nil
 }
 
 // packetHold is the selector and the marshaled packets it holds. The connection's sendMu guards it.
@@ -162,11 +167,14 @@ func (conn *Conn) releaseHeldLocked() bool {
 	clear(h.observers)
 	h.packets, h.observers, h.count = h.packets[:0], h.observers[:0], 0
 	// The packets are queued now, so buffered writes that follow go out behind them; WritePacketDirect
-	// can still overtake them.
-	for i, released := range h.released {
-		h.released[i] = nil
-		released()
+	// can still overtake them. The release functions are detached before they run: if one panics, the
+	// hold keeps none of them, so a later release cannot run them again or call a cleared entry.
+	released := h.released
+	h.released = nil
+	for _, run := range released {
+		run()
 	}
-	h.released = h.released[:0]
+	clear(released)
+	h.released = released[:0]
 	return true
 }
